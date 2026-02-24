@@ -1,0 +1,94 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 700">
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="2" dy="3" stdDeviation="3" flood-opacity="0.15"/>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="900" height="700" fill="#f8fafc"/>
+
+  <!-- Title -->
+  <text x="450" y="35" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="22" font-weight="700" fill="#1e293b">Understanding the Parse Tree</text>
+
+  <!-- Input Example -->
+  <rect x="30" y="60" width="280" height="60" rx="8" fill="#f1f5f9" stroke="#64748b" stroke-width="2" filter="url(#shadow)"/>
+  <text x="170" y="85" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="12" font-weight="600" fill="#1e293b">Input String</text>
+  <text x="170" y="105" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" fill="#475569">"hello 42"</text>
+
+  <!-- Grammar Example -->
+  <rect x="320" y="60" width="560" height="60" rx="8" fill="#dbeafe" stroke="#3b82f6" stroke-width="2" filter="url(#shadow)"/>
+  <text x="600" y="85" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="12" font-weight="600" fill="#1e40af">Grammar</text>
+  <text x="600" y="105" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="#1e40af">str("hello").then(str(" ").ignore()).then(re("[0-9]+").as("num"))</text>
+
+  <!-- Arrow -->
+  <path d="M 450 130 L 450 150" stroke="#94a3b8" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="470" y="145" font-family="Inter, system-ui, sans-serif" font-size="10" fill="#64748b">parse()</text>
+
+  <!-- Tree Visualization -->
+  <text x="450" y="185" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="16" font-weight="600" fill="#1e293b">Resulting Parse Tree</text>
+
+  <!-- Root Sequence Node -->
+  <rect x="300" y="210" width="300" height="60" rx="12" fill="#ede9fe" stroke="#8b5cf6" stroke-width="2" filter="url(#shadow)"/>
+  <text x="450" y="235" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="12" font-weight="600" fill="#6d28d9">Sequence</text>
+  <text x="450" y="255" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="10" fill="#6d28d9">2 children</text>
+
+  <!-- Child 1: "hello" -->
+  <line x1="350" y1="270" x2="200" y2="310" stroke="#8b5cf6" stroke-width="2"/>
+  <rect x="100" y="310" width="200" height="50" rx="8" fill="#dbeafe" stroke="#3b82f6" stroke-width="2" filter="url(#shadow)"/>
+  <text x="200" y="335" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="11" fill="#1d4ed8">"hello"</text>
+  <text x="200" y="350" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="9" fill="#64748b">Value(String)</text>
+
+  <!-- Child 2: Named -->
+  <line x1="550" y1="270" x2="700" y2="310" stroke="#8b5cf6" stroke-width="2"/>
+  <rect x="600" y="310" width="200" height="50" rx="8" fill="#fef3c7" stroke="#f59e0b" stroke-width="2" filter="url(#shadow)"/>
+  <text x="700" y="335" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="11" fill="#b45309">Named("num")</text>
+  <text x="700" y="350" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="9" fill="#64748b">Label from .as()</text>
+
+  <!-- Named's child: "42" -->
+  <line x1="700" y1="360" x2="700" y2="390" stroke="#f59e0b" stroke-width="2"/>
+  <rect x="600" y="390" width="200" height="50" rx="8" fill="#dbeafe" stroke="#3b82f6" stroke-width="2" filter="url(#shadow)"/>
+  <text x="700" y="415" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="11" fill="#1d4ed8">"42"</text>
+  <text x="700" y="430" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="9" fill="#64748b">Value(String)</text>
+
+  <!-- Tree Node Types -->
+  <text x="450" y="480" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="16" font-weight="600" fill="#1e293b">Node Types</text>
+
+  <!-- Value Node -->
+  <rect x="30" y="510" width="200" height="90" rx="8" fill="#dbeafe" stroke="#3b82f6" stroke-width="2" filter="url(#shadow)"/>
+  <text x="130" y="535" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" fill="#1d4ed8">Value(String)</text>
+  <text x="130" y="560" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="10" fill="#64748b">Leaf node</text>
+  <text x="130" y="580" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="9" fill="#64748b">Contains matched text</text>
+
+  <!-- Sequence Node -->
+  <rect x="250" y="510" width="200" height="90" rx="8" fill="#ede9fe" stroke="#8b5cf6" stroke-width="2" filter="url(#shadow)"/>
+  <text x="350" y="535" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" fill="#6d28d9">Sequence(Vec)</text>
+  <text x="350" y="560" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="10" fill="#64748b">Ordered children</text>
+  <text x="350" y="580" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="9" fill="#64748b">From .then()</text>
+
+  <!-- Named Node -->
+  <rect x="470" y="510" width="200" height="90" rx="8" fill="#fef3c7" stroke="#f59e0b" stroke-width="2" filter="url(#shadow)"/>
+  <text x="570" y="535" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" fill="#b45309">Named(name, node)</text>
+  <text x="570" y="560" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="10" fill="#64748b">Label for access</text>
+  <text x="570" y="580" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="9" fill="#64748b">From .as("name")</text>
+
+  <!-- Alternative Node -->
+  <rect x="690" y="510" width="200" height="90" rx="8" fill="#dcfce7" stroke="#10b981" stroke-width="2" filter="url(#shadow)"/>
+  <text x="790" y="535" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" fill="#059669">Alternative(idx)</text>
+  <text x="790" y="560" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="10" fill="#64748b">Choice made</text>
+  <text x="790" y="580" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="9" fill="#64748b">From .or()</text>
+
+  <!-- Accessing Values -->
+  <rect x="30" y="620" width="860" height="60" rx="8" fill="#f0fdf4" stroke="#10b981" stroke-width="2"/>
+  <text x="50" y="645" font-family="Inter, system-ui, sans-serif" font-size="12" font-weight="600" fill="#059669">Accessing Tree Values</text>
+  <text x="50" y="665" font-family="JetBrains Mono, monospace" font-size="10" fill="#475569">tree[0]     → "hello"        | tree["num"]  → "42"        | tree.as_str() → "hello 42"</text>
+  <text x="400" y="665" font-family="JetBrains Mono, monospace" font-size="10" fill="#475569">tree[0]     → "hello"        | tree["num"]  → "42"</text>
+  <text x="700" y="665" font-family="JetBrains Mono, monospace" font-size="10" fill="#475569">tree.as_str() → "hello 42"</text>
+
+  <!-- Arrowheads -->
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#8b5cf6"/>
+    </marker>
+  </defs>
+</svg>

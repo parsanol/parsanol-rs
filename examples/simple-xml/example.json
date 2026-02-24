@@ -1,0 +1,79 @@
+{
+  "id": "simple-xml",
+  "title": "Simple XML Parser",
+  "description": "Parse simplified XML structures with nested elements, text content, and tag matching validation. Educational example for understanding tree-based parsing.",
+  "category": "data-formats",
+  "tags": ["xml", "markup", "nested", "tags", "tree"],
+  "difficulty": "intermediate",
+
+  "motivation": {
+    "why": "XML remains important for enterprise systems, document formats, and configuration files. Understanding XML parsing helps with many real-world data interchange scenarios.",
+    "useCases": [
+      "Configuration file parsing",
+      "Document format processing",
+      "SOAP web services",
+      "RSS/Atom feed parsing",
+      "SVG graphics processing"
+    ]
+  },
+
+  "inputFormat": {
+    "description": "Simple XML with opening tags <name>, closing tags </name>, and self-closing tags <name />. Text content between tags. No attributes or namespaces in this simplified version.",
+    "syntax": "<tag>content</tag> | <tag /> | text",
+    "examples": [
+      {
+        "input": "<a>text</a>",
+        "description": "Simple element with text",
+        "valid": true
+      },
+      {
+        "input": "<a><b>content</b></a>",
+        "description": "Nested elements",
+        "valid": true
+      },
+      {
+        "input": "<a><b>nested</b><c>elements</c></a>",
+        "description": "Multiple nested elements",
+        "valid": true
+      },
+      {
+        "input": "<br />",
+        "description": "Self-closing element",
+        "valid": true
+      },
+      {
+        "input": "<div><p>Hello</p><br /><p>World</p></div>",
+        "description": "Mixed content",
+        "valid": true
+      },
+      {
+        "input": "<a><b>mismatch</a></b>",
+        "description": "Invalid: mismatched tags",
+        "valid": false
+      },
+      {
+        "input": "<a>unclosed",
+        "description": "Invalid: missing closing tag",
+        "valid": false
+      }
+    ]
+  },
+
+  "outputFormat": {
+    "description": "The parser returns XmlNode enum values representing elements, text, or empty elements, with validation results.",
+    "structure": {
+      "XmlNode": { "description": "Enum: Element { name, children, text }, Text(String), EmptyElement { name }" },
+      "validation": { "description": "Returns valid/invalid status with error messages" }
+    }
+  },
+
+  "concepts": [
+    "tag matching",
+    "nested structures",
+    "self-closing tags",
+    "tree construction",
+    "validation"
+  ],
+
+  "related": ["erb", "sexp", "markup"]
+}

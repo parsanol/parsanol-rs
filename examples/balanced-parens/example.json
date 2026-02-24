@@ -1,0 +1,89 @@
+{
+  "id": "balanced-parens",
+  "title": "Balanced Parentheses Parser",
+  "description": "Parse nested balanced parentheses structures, tracking depth and validating proper nesting. Demonstrates recursive structure handling.",
+  "category": "text-processing",
+  "tags": ["parentheses", "balanced", "nesting", "recursion", "depth"],
+  "difficulty": "beginner",
+
+  "motivation": {
+    "why": "Balanced delimiter parsing is fundamental to parsing programming languages, mathematical expressions, and any nested structure. It's a classic computer science problem with practical applications.",
+    "useCases": [
+      "Expression syntax validation",
+      "Code editor bracket matching",
+      "Mathematical expression parsing",
+      "S-expression parsing",
+      "Syntax highlighting support"
+    ]
+  },
+
+  "inputFormat": {
+    "description": "Text containing parentheses that must be properly balanced. Each opening '(' must have a matching closing ')'. Nesting is allowed.",
+    "syntax": "balanced = text | ( balanced ) | balanced balanced",
+    "examples": [
+      {
+        "input": "()",
+        "description": "Simplest balanced pair",
+        "valid": true
+      },
+      {
+        "input": "(())",
+        "description": "Nested depth 2",
+        "valid": true
+      },
+      {
+        "input": "((()))",
+        "description": "Nested depth 3",
+        "valid": true
+      },
+      {
+        "input": "(()())",
+        "description": "Branching structure",
+        "valid": true
+      },
+      {
+        "input": "()()()",
+        "description": "Sequential pairs",
+        "valid": true
+      },
+      {
+        "input": "(text)",
+        "description": "Content inside parentheses",
+        "valid": true
+      },
+      {
+        "input": "((text))",
+        "description": "Nested with content",
+        "valid": true
+      },
+      {
+        "input": "(()",
+        "description": "Invalid: unclosed",
+        "valid": false
+      },
+      {
+        "input": "())",
+        "description": "Invalid: extra closing",
+        "valid": false
+      }
+    ]
+  },
+
+  "outputFormat": {
+    "description": "The parser returns a ParenNode enum representing the structure with depth tracking.",
+    "structure": {
+      "type": { "description": "ParenNode enum: Balanced { content: Box<ParenNode>, depth: usize }, Text(String), Empty(usize)" },
+      "depth": { "description": "Maximum nesting depth can be calculated" }
+    }
+  },
+
+  "concepts": [
+    "recursive descent",
+    "depth tracking",
+    "balance validation",
+    "tree structure",
+    "nested content"
+  ],
+
+  "related": ["sentence", "comments"]
+}

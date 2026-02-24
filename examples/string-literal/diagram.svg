@@ -1,0 +1,56 @@
+<svg viewBox="0 0 400 200" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="strGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#059669"/>
+      <stop offset="100%" style="stop-color:#34d399"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="400" height="200" fill="#f8fafc"/>
+
+  <!-- Title -->
+  <text x="200" y="25" text-anchor="middle" font-family="system-ui" font-size="14" font-weight="600" fill="#1e293b">String Literals</text>
+
+  <!-- Input -->
+  <text x="20" y="55" font-family="system-ui" font-size="11" fill="#64748b">Input:</text>
+  <rect x="20" y="62" width="200" height="28" rx="4" fill="#e2e8f0"/>
+  <text x="30" y="80" font-family="monospace" font-size="11" fill="#059669">"Hello\nWorld\t!"</text>
+
+  <!-- Escape sequences -->
+  <rect x="20" y="105" width="180" height="70" rx="4" fill="#f1f5f9"/>
+  <text x="110" y="122" text-anchor="middle" font-family="system-ui" font-size="10" fill="#475569" font-weight="600">Escape Sequences</text>
+
+  <text x="30" y="140" font-family="monospace" font-size="9" fill="#7c3aed">\n</text>
+  <text x="55" y="140" font-family="system-ui" font-size="9" fill="#64748b">→ newline</text>
+
+  <text x="30" y="155" font-family="monospace" font-size="9" fill="#7c3aed">\t</text>
+  <text x="55" y="155" font-family="system-ui" font-size="9" fill="#64748b">→ tab</text>
+
+  <text x="30" y="170" font-family="monospace" font-size="9" fill="#7c3aed">\"</text>
+  <text x="55" y="170" font-family="system-ui" font-size="9" fill="#64748b">→ quote</text>
+
+  <text x="110" y="140" font-family="monospace" font-size="9" fill="#7c3aed">\\</text>
+  <text x="130" y="140" font-family="system-ui" font-size="9" fill="#64748b">→ backslash</text>
+
+  <text x="110" y="155" font-family="monospace" font-size="9" fill="#7c3aed">\uXXXX</text>
+  <text x="150" y="155" font-family="system-ui" font-size="9" fill="#64748b">→ unicode</text>
+
+  <!-- Output -->
+  <text x="220" y="55" font-family="system-ui" font-size="11" fill="#64748b">Parsed:</text>
+  <rect x="220" y="62" width="160" height="28" rx="4" fill="#dcfce7"/>
+  <text x="230" y="80" font-family="monospace" font-size="11" fill="#046f36">Hello↵World→!</text>
+
+  <!-- Quote types -->
+  <rect x="220" y="105" width="160" height="70" rx="4" fill="#f1f5f9"/>
+  <text x="300" y="122" text-anchor="middle" font-family="system-ui" font-size="10" fill="#475569" font-weight="600">Quote Types</text>
+
+  <text x="230" y="140" font-family="monospace" font-size="10" fill="#059669">"..."</text>
+  <text x="265" y="140" font-family="system-ui" font-size="9" fill="#64748b">double</text>
+
+  <text x="230" y="155" font-family="monospace" font-size="10" fill="#059669">'...'</text>
+  <text x="265" y="155" font-family="system-ui" font-size="9" fill="#64748b">single</text>
+
+  <text x="230" y="170" font-family="monospace" font-size="10" fill="#059669">`...`</text>
+  <text x="265" y="170" font-family="system-ui" font-size="9" fill="#64748b">backtick</text>
+</svg>

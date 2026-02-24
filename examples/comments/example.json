@@ -1,0 +1,74 @@
+{
+  "id": "comments",
+  "title": "Comments Parser",
+  "description": "Parse source code with line comments (//) and block comments (/* */), demonstrating how to handle nested structures and comment stripping.",
+  "category": "text-processing",
+  "tags": ["comments", "code", "parsing", "stripping", "block-comments"],
+  "difficulty": "beginner",
+
+  "motivation": {
+    "why": "Comment handling is essential for source code processing, documentation generation, and code analysis tools. Stripping comments is useful for minification and preprocessing.",
+    "useCases": [
+      "Source code preprocessing",
+      "Documentation extraction",
+      "Code minification",
+      "Static analysis tools",
+      "Syntax highlighting"
+    ]
+  },
+
+  "inputFormat": {
+    "description": "Source code containing line comments (// to end of line) and block comments (/* to */). Block comments can span multiple lines.",
+    "syntax": "line_comment = // text\\n | block_comment = /* text */",
+    "examples": [
+      {
+        "input": "// This is a line comment\\nvariable",
+        "description": "Line comment before code",
+        "valid": true
+      },
+      {
+        "input": "variable // inline comment",
+        "description": "Inline line comment",
+        "valid": true
+      },
+      {
+        "input": "/* This is a\\n   block comment */",
+        "description": "Multi-line block comment",
+        "valid": true
+      },
+      {
+        "input": "var1 /* inline block */ var2",
+        "description": "Inline block comment",
+        "valid": true
+      },
+      {
+        "input": "// comment\\nvar1\\n/* block\\ncomment */\\nvar2",
+        "description": "Mixed comment types",
+        "valid": true
+      },
+      {
+        "input": "/* unclosed comment",
+        "description": "Invalid: missing closing */",
+        "valid": false
+      }
+    ]
+  },
+
+  "outputFormat": {
+    "description": "The parser returns a list of CodeElement enum values distinguishing between identifiers, comments, and whitespace.",
+    "structure": {
+      "CodeElement": { "description": "Enum: Identifier(String), Comment(Comment), Newline" },
+      "Comment": { "description": "Enum: Line(String), Block(String)" }
+    }
+  },
+
+  "concepts": [
+    "line comments",
+    "block comments",
+    "comment stripping",
+    "code element extraction",
+    "multi-line handling"
+  ],
+
+  "related": ["string-literal", "erb"]
+}

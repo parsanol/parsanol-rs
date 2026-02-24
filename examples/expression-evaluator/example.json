@@ -1,0 +1,84 @@
+{
+  "id": "expression-evaluator",
+  "title": "Expression Evaluator",
+  "description": "Parse and evaluate complex expressions with variables, function calls, and multiple operator types including comparison and mathematical functions.",
+  "category": "expression-parsers",
+  "tags": ["expression", "evaluator", "variables", "functions", "precedence"],
+  "difficulty": "intermediate",
+
+  "motivation": {
+    "why": "Full expression evaluators are needed for spreadsheet formulas, business rule engines, and domain-specific languages. They combine parsing with runtime evaluation against a context.",
+    "useCases": [
+      "Spreadsheet formula evaluation",
+      "Business rule engine conditions",
+      "Configuration value computation",
+      "Template expression evaluation",
+      "Interactive REPL environments"
+    ]
+  },
+
+  "inputFormat": {
+    "description": "Complex expressions with numbers, variables, function calls, and operators including arithmetic, comparison, and exponentiation. Supports standard math functions.",
+    "syntax": "expr = number | variable | func(args) | expr op expr",
+    "examples": [
+      {
+        "input": "1 + 2 * 3",
+        "description": "Arithmetic with precedence",
+        "valid": true
+      },
+      {
+        "input": "2 ^ 3 ^ 2",
+        "description": "Right-associative exponent: 2^(3^2) = 512",
+        "valid": true
+      },
+      {
+        "input": "x + y",
+        "description": "Variable expression",
+        "valid": true
+      },
+      {
+        "input": "sin(PI / 2)",
+        "description": "Function call with constant",
+        "valid": true
+      },
+      {
+        "input": "sqrt(16)",
+        "description": "Square root function",
+        "valid": true
+      },
+      {
+        "input": "max(x, y)",
+        "description": "Multi-argument function",
+        "valid": true
+      },
+      {
+        "input": "x > y",
+        "description": "Comparison expression",
+        "valid": true
+      },
+      {
+        "input": "min(sin(0), cos(0))",
+        "description": "Nested function calls",
+        "valid": true
+      }
+    ]
+  },
+
+  "outputFormat": {
+    "description": "The parser returns an Expr enum that can be evaluated against an EvalContext containing variables and functions.",
+    "structure": {
+      "Expr": { "description": "Enum: Number(f64), Variable(String), BinaryOp{left, op, right}, UnaryOp{op, operand}, FunctionCall{name, args}" },
+      "EvalContext": { "description": "Contains variables (HashMap<String, f64>) and functions (HashMap<String, fn>)" }
+    }
+  },
+
+  "concepts": [
+    "operator precedence climbing",
+    "variable resolution",
+    "function dispatch",
+    "context evaluation",
+    "comparison operators"
+  ],
+
+  "related": ["calculator", "boolean-algebra"]
+}

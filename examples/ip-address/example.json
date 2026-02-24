@@ -1,0 +1,90 @@
+{
+  "id": "ip-address",
+  "title": "IP Address Parser",
+  "description": "Parse and validate IPv4 and IPv6 addresses, supporting various formats including compressed IPv6 notation and IPv4-mapped IPv6 addresses.",
+  "category": "urls-network",
+  "tags": ["ip", "ipv4", "ipv6", "network", "validation"],
+  "difficulty": "intermediate",
+
+  "motivation": {
+    "why": "IP address parsing is fundamental for network applications, security tools, log analysis, and access control systems. Proper validation prevents security issues from malformed addresses.",
+    "useCases": [
+      "Network security and firewall rules",
+      "Log file analysis and IP extraction",
+      "Geolocation services",
+      "Access control and rate limiting",
+      "Network configuration validation"
+    ]
+  },
+
+  "inputFormat": {
+    "description": "IPv4 addresses use dotted decimal notation (four octets 0-255). IPv6 addresses use eight groups of hexadecimal digits, with :: compression for consecutive zero groups.",
+    "syntax": "IPv4: n.n.n.n | IPv6: hhhh:hhhh:hhhh:hhhh:hhhh:hhhh:hhhh:hhhh",
+    "examples": [
+      {
+        "input": "192.168.1.1",
+        "description": "Private IPv4 address",
+        "valid": true
+      },
+      {
+        "input": "0.0.0.0",
+        "description": "Wildcard IPv4 address",
+        "valid": true
+      },
+      {
+        "input": "255.255.255.255",
+        "description": "Broadcast IPv4 address",
+        "valid": true
+      },
+      {
+        "input": "127.0.0.1",
+        "description": "Loopback IPv4 address",
+        "valid": true
+      },
+      {
+        "input": "::1",
+        "description": "Loopback IPv6 address",
+        "valid": true
+      },
+      {
+        "input": "2001:db8::1",
+        "description": "IPv6 with :: compression",
+        "valid": true
+      },
+      {
+        "input": "fe80::1",
+        "description": "Link-local IPv6 address",
+        "valid": true
+      },
+      {
+        "input": "256.1.1.1",
+        "description": "Invalid: octet > 255",
+        "valid": false
+      },
+      {
+        "input": "1.2.3",
+        "description": "Invalid: incomplete IPv4",
+        "valid": false
+      }
+    ]
+  },
+
+  "outputFormat": {
+    "description": "The parser returns an IpAddress enum distinguishing between IPv4 and IPv6, with optional component extraction for IPv4 octets.",
+    "structure": {
+      "type": { "description": "IpAddress enum with variants: Ipv4(String), Ipv6(String)" },
+      "Ipv4": { "description": "Can be decomposed into [u8; 4] octets" },
+      "Ipv6": { "description": "Can be decomposed into hex groups" }
+    }
+  },
+
+  "concepts": [
+    "octet validation",
+    "hexadecimal parsing",
+    "zero compression",
+    "address families",
+    "range validation"
+  ],
+
+  "related": ["url", "email"]
+}

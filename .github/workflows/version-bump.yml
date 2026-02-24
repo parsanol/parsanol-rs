@@ -1,0 +1,353 @@
+# Version Bump Workflow for Parsanol-rs
+#
+# This workflow provides automated version bumping following Semantic Versioning (SemVer).
+# It supports all version bump types as defined in the SemVer specification.
+#
+# Usage:
+#   1. Go to Actions > Version Bump
+#   2. Click "Run workflow"
+#   3. Select the bump type from the dropdown
+#   4. The workflow will:
+#      - Update version in all Cargo.toml files
+#      - Update CHANGELOG.md with a new section
+#      - Create a pull request with the changes
+#
+# Version Format: MAJOR.MINOR.PATCH[-PRERELEASE][+BUILD]
+# Examples:
+#   - 1.0.0
+#   - 1.0.0-alpha.1
+#   - 1.0.0-beta.2
+#   - 1.0.0-rc.1
+#   - 1.0.0+build.123
+
+name: Version Bump
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump_type:
+        description: 'Version bump type'
+        required: true
+        type: choice
+        options:
+          # Major version bump (incompatible API changes)
+          - 'major'
+          # Minor version bump (backward-compatible features)
+          - 'minor'
+          # Patch version bump (backward-compatible fixes)
+          - 'patch'
+          # Pre-release bump types
+          - 'pre-alpha'
+          - 'pre-beta'
+          - 'pre-rc'
+          # Pre-release version bumps
+          - 'alpha-bump'
+          - 'beta-bump'
+          - 'rc-bump'
+          # Graduate from pre-release
+          - 'graduate'
+        default: 'patch'
+      custom_version:
+        description: 'Custom version (overrides bump_type if provided, e.g., "1.2.3" or "1.0.0-beta.1")'
+        required: false
+        type: string
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ============================================================================
+  # Validate and Calculate Version
+  # ============================================================================
+  calculate-version:
+    name: Calculate New Version
+    runs-on: ubuntu-latest
+    outputs:
+      current_version: ${{ steps.current.outputs.version }}
+      new_version: ${{ steps.calculate.outputs.new_version }}
+      changelog_date: ${{ steps.calculate.outputs.changelog_date }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get current version
+        id: current
+        run: |
+          CURRENT=$(grep '^version =' Cargo.toml | head -1 | sed 's/.*"\([^"]*\)".*/\1/')
+          echo "version=$CURRENT" >> $GITHUB_OUTPUT
+          echo "Current version: $CURRENT"
+
+      - name: Install semver tool
+        run: |
+          cargo install cargo-edit --version 0.11.9 || true
+
+      - name: Calculate new version
+        id: calculate
+        env:
+          BUMP_TYPE: ${{ github.event.inputs.bump_type }}
+          CUSTOM_VERSION: ${{ github.event.inputs.custom_version }}
+          CURRENT_VERSION: ${{ steps.current.outputs.version }}
+        run: |
+          set -e
+
+          # Get changelog date
+          echo "changelog_date=$(date +%Y-%m-%d)" >> $GITHUB_OUTPUT
+
+          # If custom version provided, use it directly
+          if [[ -n "$CUSTOM_VERSION" ]]; then
+            echo "new_version=$CUSTOM_VERSION" >> $GITHUB_OUTPUT
+            echo "Using custom version: $CUSTOM_VERSION"
+            exit 0
+          fi
+
+          # Parse current version
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
+
+          # Handle pre-release versions
+          PRERELEASE=""
+          if [[ "$PATCH" == *"-"* ]]; then
+            PRERELEASE="${PATCH#*-}"
+            PATCH="${PATCH%%-*}"
+          fi
+
+          # Calculate new version based on bump type
+          case "$BUMP_TYPE" in
+            "major")
+              NEW_VERSION="$((MAJOR + 1)).0.0"
+              ;;
+            "minor")
+              NEW_VERSION="$MAJOR.$((MINOR + 1)).0"
+              ;;
+            "patch")
+              if [[ -n "$PRERELEASE" ]]; then
+                # If currently pre-release, just remove pre-release suffix
+                NEW_VERSION="$MAJOR.$MINOR.$PATCH"
+              else
+                NEW_VERSION="$MAJOR.$MINOR.$((PATCH + 1))"
+              fi
+              ;;
+            "pre-alpha")
+              NEW_VERSION="$MAJOR.$((MINOR + 1)).0-alpha.1"
+              ;;
+            "pre-beta")
+              NEW_VERSION="$MAJOR.$((MINOR + 1)).0-beta.1"
+              ;;
+            "pre-rc")
+              NEW_VERSION="$MAJOR.$((MINOR + 1)).0-rc.1"
+              ;;
+            "alpha-bump")
+              if [[ "$PRERELEASE" == alpha.* ]]; then
+                NUM="${PRERELEASE#alpha.}"
+                NEW_VERSION="$MAJOR.$MINOR.$PATCH-alpha.$((NUM + 1))"
+              else
+                NEW_VERSION="$MAJOR.$MINOR.$PATCH-alpha.1"
+              fi
+              ;;
+            "beta-bump")
+              if [[ "$PRERELEASE" == beta.* ]]; then
+                NUM="${PRERELEASE#beta.}"
+                NEW_VERSION="$MAJOR.$MINOR.$PATCH-beta.$((NUM + 1))"
+              else
+                NEW_VERSION="$MAJOR.$MINOR.$PATCH-beta.1"
+              fi
+              ;;
+            "rc-bump")
+              if [[ "$PRERELEASE" == rc.* ]]; then
+                NUM="${PRERELEASE#rc.}"
+                NEW_VERSION="$MAJOR.$MINOR.$PATCH-rc.$((NUM + 1))"
+              else
+                NEW_VERSION="$MAJOR.$MINOR.$PATCH-rc.1"
+              fi
+              ;;
+            "graduate")
+              # Remove pre-release suffix, keep current version
+              NEW_VERSION="$MAJOR.$MINOR.$PATCH"
+              ;;
+            *)
+              echo "Unknown bump type: $BUMP_TYPE"
+              exit 1
+              ;;
+          esac
+
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "Calculated new version: $NEW_VERSION"
+
+          # Validate version format
+          if ! [[ "$NEW_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
+            echo "Invalid version format: $NEW_VERSION"
+            exit 1
+          fi
+
+  # ============================================================================
+  # Update Version Files
+  # ============================================================================
+  update-version:
+    name: Update Version Files
+    runs-on: ubuntu-latest
+    needs: calculate-version
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Update version in Cargo.toml
+        env:
+          NEW_VERSION: ${{ needs.calculate-version.outputs.new_version }}
+        run: |
+          # Update main Cargo.toml
+          sed -i "s/^version = \".*\"/version = \"$NEW_VERSION\"/" Cargo.toml
+
+          # Update workspace.package.version
+          sed -i "s/^version = \".*\"/\nversion = \"$NEW_VERSION\"/" Cargo.toml || true
+
+          # Update crates/parsanol-ruby-derive/Cargo.toml if it exists
+          if [[ -f "crates/parsanol-ruby-derive/Cargo.toml" ]]; then
+            sed -i "s/^version = \".*\"/version = \"$NEW_VERSION\"/" crates/parsanol-ruby-derive/Cargo.toml
+            # Update parsanol dependency version
+            sed -i "s/parsanol = { path = \"..\", version = \"[^\"]*\"}/parsanol = { path = \"..\", version = \"$NEW_VERSION\" }/" crates/parsanol-ruby-derive/Cargo.toml
+          fi
+
+          echo "Updated version to $NEW_VERSION"
+
+      - name: Update Cargo.lock
+        run: |
+          cargo generate-lockfile
+
+      - name: Update CHANGELOG.md
+        env:
+          NEW_VERSION: ${{ needs.calculate-version.outputs.new_version }}
+          CHANGELOG_DATE: ${{ needs.calculate-version.outputs.changelog_date }}
+        run: |
+          if [[ -f "CHANGELOG.md" ]]; then
+            # Add new version section at the top (after the header)
+            sed -i "/^## /i \\
+            ## [$NEW_VERSION] - $CHANGELOG_DATE\\
+            \\
+            ### Added\\
+            - TBD\\
+            \\
+            ### Changed\\
+            - TBD\\
+            \\
+            ### Fixed\\
+            - TBD\\
+            \\
+            " CHANGELOG.md
+          else
+            # Create CHANGELOG.md if it doesn't exist
+            cat > CHANGELOG.md << 'EOF'
+          # Changelog
+
+          All notable changes to this project will be documented in this file.
+
+          The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+          and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+          ## [$NEW_VERSION] - $CHANGELOG_DATE
+
+          ### Added
+          - TBD
+
+          ### Changed
+          - TBD
+
+          ### Fixed
+          - TBD
+          EOF
+          fi
+
+      - name: Create branch and commit
+        env:
+          NEW_VERSION: ${{ needs.calculate-version.outputs.new_version }}
+        run: |
+          BRANCH_NAME="bump/v${NEW_VERSION}"
+          git checkout -b "$BRANCH_NAME"
+          git add -A
+          git commit -m "chore: bump version to ${NEW_VERSION}
+
+          This is an automated version bump.
+
+          Version bump type: ${{ github.event.inputs.bump_type }}"
+          git push -u origin "$BRANCH_NAME"
+
+      - name: Create pull request
+        env:
+          NEW_VERSION: ${{ needs.calculate-version.outputs.new_version }}
+          CURRENT_VERSION: ${{ needs.calculate-version.outputs.current_version }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BRANCH_NAME="bump/v${NEW_VERSION}"
+
+          # Create PR body
+          cat > pr_body.md << EOF
+          ## Summary
+
+          Bumps version from \`${CURRENT_VERSION}\` to \`${NEW_VERSION}\`.
+
+          **Bump type:** ${{ github.event.inputs.bump_type }}
+
+          ## Changes
+
+          - Updated version in \`Cargo.toml\`
+          - Updated version in \`crates/parsanol-ruby-derive/Cargo.toml\`
+          - Updated \`Cargo.lock\`
+          - Added new section to \`CHANGELOG.md\`
+
+          ## Checklist
+
+          - [ ] Update CHANGELOG.md with actual changes
+          - [ ] Update README.adoc if needed
+          - [ ] Run \`cargo test\` to verify everything works
+
+          ## Next Steps
+
+          After merging:
+          1. Create a tag: \`git tag -a v${NEW_VERSION} -m "Release v${NEW_VERSION}"\`
+          2. Push the tag: \`git push origin v${NEW_VERSION}\`
+          3. The release workflow will publish to crates.io automatically
+          EOF
+
+          gh pr create \
+            --title "chore: bump version to ${NEW_VERSION}" \
+            --body-file pr_body.md \
+            --label "version-bump" \
+            --base main
+
+  # ============================================================================
+  # Summary
+  # ============================================================================
+  summary:
+    name: Summary
+    runs-on: ubuntu-latest
+    needs: [calculate-version, update-version]
+    if: always()
+    steps:
+      - name: Report results
+        run: |
+          echo "## Version Bump Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Previous Version | \`${{ needs.calculate-version.outputs.current_version }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| New Version | \`${{ needs.calculate-version.outputs.new_version }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Bump Type | \`${{ github.event.inputs.bump_type }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [[ "${{ needs.update-version.result }}" == "success" ]]; then
+            echo "✅ Version bump completed successfully!" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "A pull request has been created. Please review and merge." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ Version bump failed!" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi

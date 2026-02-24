@@ -1,0 +1,84 @@
+{
+  "id": "calculator",
+  "title": "Calculator / Expression Evaluator",
+  "description": "Parse and evaluate mathematical expressions with proper operator precedence, supporting arithmetic operations and parenthesized subexpressions.",
+  "category": "expression-parsers",
+  "tags": ["calculator", "arithmetic", "precedence", "math", "evaluation"],
+  "difficulty": "intermediate",
+
+  "motivation": {
+    "why": "Expression parsing is fundamental to calculators, spreadsheets, configuration languages, and any system that accepts mathematical input. Proper precedence handling is critical for correct evaluation.",
+    "useCases": [
+      "Calculator applications",
+      "Spreadsheet formula parsing",
+      "Configuration language expressions",
+      "Query language predicates",
+      "Interactive math tools"
+    ]
+  },
+
+  "inputFormat": {
+    "description": "Mathematical expressions with operators (+, -, *, /), numbers, and parentheses. Follows standard precedence: parentheses > multiplication/division > addition/subtraction.",
+    "syntax": "expression = number | (expression) | expression op expression",
+    "examples": [
+      {
+        "input": "42",
+        "description": "Simple number",
+        "valid": true
+      },
+      {
+        "input": "1+2",
+        "description": "Addition",
+        "valid": true
+      },
+      {
+        "input": "1+2*3",
+        "description": "Mixed precedence: evaluates as 1+(2*3)=7",
+        "valid": true
+      },
+      {
+        "input": "(1+2)*3",
+        "description": "Parentheses override: evaluates as 9",
+        "valid": true
+      },
+      {
+        "input": "10/2+3*4",
+        "description": "Multiple operators: evaluates as 5+12=17",
+        "valid": true
+      },
+      {
+        "input": "2*3+4*5",
+        "description": "Left-to-right same precedence: 6+20=26",
+        "valid": true
+      },
+      {
+        "input": "1+",
+        "description": "Invalid: missing operand",
+        "valid": false
+      },
+      {
+        "input": "(1+2",
+        "description": "Invalid: unclosed parenthesis",
+        "valid": false
+      }
+    ]
+  },
+
+  "outputFormat": {
+    "description": "The parser returns an Expr enum representing the expression tree, which can be evaluated or serialized.",
+    "structure": {
+      "type": { "description": "Expr enum with variants: Number(i64), BinOp { left: Box<Expr>, op: String, right: Box<Expr> }" },
+      "BinOp": { "description": "Binary operation with left operand, operator string, and right operand" }
+    }
+  },
+
+  "concepts": [
+    "operator precedence",
+    "left/right associativity",
+    "recursive descent",
+    "AST construction",
+    "parenthesis handling"
+  ],
+
+  "related": ["boolean-algebra", "expression-evaluator"]
+}

@@ -1,0 +1,84 @@
+{
+  "id": "email",
+  "title": "Email Address Parser",
+  "description": "Parse and validate email addresses, including support for obfuscated formats commonly used to avoid spam harvesting (e.g., 'user at example dot com').",
+  "category": "urls-network",
+  "tags": ["email", "validation", "rfc5322", "sanitization", "anti-spam"],
+  "difficulty": "beginner",
+
+  "motivation": {
+    "why": "Email parsing is essential for user registration, contact forms, and communication systems. Handling obfuscated formats helps process user-submitted emails that try to avoid spam bots.",
+    "useCases": [
+      "User registration validation",
+      "Contact form processing",
+      "Email sanitization and normalization",
+      "Spam-resistant email collection",
+      "Data cleaning and deduplication"
+    ]
+  },
+
+  "inputFormat": {
+    "description": "Standard email format (user@domain) and obfuscated formats using 'at' and 'dot' words instead of symbols. Spaces and various delimiters are handled.",
+    "syntax": "username@domain.tld or username at domain dot tld",
+    "examples": [
+      {
+        "input": "user@example.com",
+        "description": "Standard email format",
+        "valid": true
+      },
+      {
+        "input": "john.doe@example.com",
+        "description": "Email with dot in username",
+        "valid": true
+      },
+      {
+        "input": "user at example dot com",
+        "description": "Obfuscated format (anti-spam)",
+        "valid": true
+      },
+      {
+        "input": "john-doe-at-example-dot-com",
+        "description": "Dash-delimited obfuscated format",
+        "valid": true
+      },
+      {
+        "input": "user AT example DOT com",
+        "description": "Uppercase obfuscated format",
+        "valid": true
+      },
+      {
+        "input": "user @ example . com",
+        "description": "Spaced standard format",
+        "valid": true
+      },
+      {
+        "input": "invalid-email",
+        "description": "Invalid: no @ or 'at' separator",
+        "valid": false
+      },
+      {
+        "input": "@example.com",
+        "description": "Invalid: missing username",
+        "valid": false
+      }
+    ]
+  },
+
+  "outputFormat": {
+    "description": "The parser returns an EmailParts struct with the sanitized username and domain components.",
+    "structure": {
+      "username": { "description": "String - the local part before @" },
+      "domain": { "description": "String - the domain part after @" }
+    }
+  },
+
+  "concepts": [
+    "obfuscation handling",
+    "sanitization",
+    "format normalization",
+    "spam-resistant parsing",
+    "flexible matching"
+  ],
+
+  "related": ["url", "ip-address"]
+}

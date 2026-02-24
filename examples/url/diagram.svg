@@ -1,0 +1,69 @@
+<svg viewBox="0 0 400 200" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="urlGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#2563eb"/>
+      <stop offset="100%" style="stop-color:#60a5fa"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="400" height="200" fill="#f8fafc"/>
+
+  <!-- Title -->
+  <text x="200" y="25" text-anchor="middle" font-family="system-ui" font-size="14" font-weight="600" fill="#1e293b">URL Parser</text>
+
+  <!-- Input URL -->
+  <text x="20" y="55" font-family="system-ui" font-size="11" fill="#64748b">Input:</text>
+  <rect x="20" y="62" width="360" height="28" rx="4" fill="#e2e8f0"/>
+
+  <!-- URL parts colored -->
+  <text x="30" y="80" font-family="monospace" font-size="11" fill="#7c3aed" font-weight="600">https</text>
+  <text x="70" y="80" font-family="monospace" font-size="11" fill="#64748b">://</text>
+  <text x="90" y="80" font-family="monospace" font-size="11" fill="#059669" font-weight="600">example.com</text>
+  <text x="185" y="80" font-family="monospace" font-size="11" fill="#0891b2">/path/to/page</text>
+  <text x="293" y="80" font-family="monospace" font-size="11" fill="#64748b">?</text>
+  <text x="300" y="80" font-family="monospace" font-size="11" fill="#f59e0b">id=123</text>
+  <text x="347" y="80" font-family="monospace" font-size="11" fill="#64748b">#</text>
+  <text x="352" y="80" font-family="monospace" font-size="11" fill="#dc2626">top</text>
+
+  <!-- Component boxes -->
+  <rect x="20" y="105" width="60" height="40" rx="4" fill="#f3e8ff" stroke="#7c3aed"/>
+  <text x="50" y="122" text-anchor="middle" font-family="system-ui" font-size="9" fill="#7c3aed" font-weight="600">Scheme</text>
+  <text x="50" y="136" text-anchor="middle" font-family="monospace" font-size="9" fill="#7c3aed">https</text>
+
+  <rect x="90" y="105" width="90" height="40" rx="4" fill="#dcfce7" stroke="#059669"/>
+  <text x="135" y="122" text-anchor="middle" font-family="system-ui" font-size="9" fill="#059669" font-weight="600">Host</text>
+  <text x="135" y="136" text-anchor="middle" font-family="monospace" font-size="9" fill="#059669">example.com</text>
+
+  <rect x="190" y="105" width="90" height="40" rx="4" fill="#cffafe" stroke="#0891b2"/>
+  <text x="235" y="122" text-anchor="middle" font-family="system-ui" font-size="9" fill="#0891b2" font-weight="600">Path</text>
+  <text x="235" y="136" text-anchor="middle" font-family="monospace" font-size="9" fill="#0891b2">/path/to/page</text>
+
+  <rect x="290" y="105" width="55" height="40" rx="4" fill="#fef3c7" stroke="#f59e0b"/>
+  <text x="317" y="122" text-anchor="middle" font-family="system-ui" font-size="9" fill="#f59e0b" font-weight="600">Query</text>
+  <text x="317" y="136" text-anchor="middle" font-family="monospace" font-size="9" fill="#f59e0b">id=123</text>
+
+  <rect x="355" y="105" width="30" height="40" rx="4" fill="#fee2e2" stroke="#dc2626"/>
+  <text x="370" y="122" text-anchor="middle" font-family="system-ui" font-size="9" fill="#dc2626" font-weight="600">Frag</text>
+  <text x="370" y="136" text-anchor="middle" font-family="monospace" font-size="9" fill="#dc2626">top</text>
+
+  <!-- Connecting lines -->
+  <line x1="50" y1="90" x2="50" y2="105" stroke="#7c3aed" stroke-width="1" stroke-dasharray="3,2"/>
+  <line x1="135" y1="90" x2="135" y2="105" stroke="#059669" stroke-width="1" stroke-dasharray="3,2"/>
+  <line x1="235" y1="90" x2="235" y2="105" stroke="#0891b2" stroke-width="1" stroke-dasharray="3,2"/>
+  <line x1="317" y1="90" x2="317" y2="105" stroke="#f59e0b" stroke-width="1" stroke-dasharray="3,2"/>
+  <line x1="370" y1="90" x2="370" y2="105" stroke="#dc2626" stroke-width="1" stroke-dasharray="3,2"/>
+
+  <!-- Output -->
+  <rect x="20" y="155" width="360" height="35" rx="4" fill="#f1f5f9"/>
+  <text x="30" y="175" font-family="system-ui" font-size="10" fill="#475569">Output: Struct with </text>
+  <text x="130" y="175" font-family="monospace" font-size="9" fill="#7c3aed">scheme</text>
+  <text x="165" y="175" font-family="system-ui" font-size="10" fill="#475569">, </text>
+  <text x="172" y="175" font-family="monospace" font-size="9" fill="#059669">host</text>
+  <text x="195" y="175" font-family="system-ui" font-size="10" fill="#475569">, </text>
+  <text x="202" y="175" font-family="monospace" font-size="9" fill="#0891b2">path</text>
+  <text x="222" y="175" font-family="system-ui" font-size="10" fill="#475569">, </text>
+  <text x="229" y="175" font-family="monospace" font-size="9" fill="#f59e0b">query</text>
+  <text x="258" y="175" font-family="system-ui" font-size="10" fill="#475569">, </text>
+  <text x="265" y="175" font-family="monospace" font-size="9" fill="#dc2626">fragment</text>
+</svg>

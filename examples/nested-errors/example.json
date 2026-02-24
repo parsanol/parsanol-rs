@@ -1,0 +1,55 @@
+{
+  "id": "nested-errors",
+  "title": "Nested Error Reporting",
+  "description": "Tree-structured error reporting showing all failure paths for comprehensive debugging.",
+  "category": "error-handling",
+  "tags": ["errors", "debugging", "tree", "nested"],
+  "difficulty": "intermediate",
+  "concepts": [
+    "error tree structure",
+    "failure path visualization",
+    "alternative tracking",
+    "debugging output"
+  ],
+
+  "motivation": {
+    "why": "Understanding all failure paths helps debug complex grammars. Tree-structured errors show which alternatives were tried and why they failed.",
+    "useCases": [
+      "Grammar development debugging",
+      "Complex parser troubleshooting",
+      "Teaching parser concepts",
+      "IDE integration for error visualization"
+    ]
+  },
+
+  "inputFormat": {
+    "description": "Any input that might fail parsing. The example uses a block-structured DSL.",
+    "examples": [
+      {
+        "input": "define f()\n  @res.name()\nend",
+        "description": "Valid definition block",
+        "valid": true
+      },
+      {
+        "input": "define f()\n  @res.name(\nend",
+        "description": "Unclosed function call",
+        "valid": false
+      }
+    ]
+  },
+
+  "outputFormat": {
+    "description": "Tree-structured error showing all failure paths.",
+    "structure": {
+      "message": { "description": "Error description" },
+      "position": { "description": "Byte offset" },
+      "children": { "description": "Nested error nodes" }
+    }
+  },
+
+  "related": ["error-reporting", "deepest-errors"],
+  "implementations": {
+    "rust": { "basic": "basic.rs" },
+    "ruby": { "basic": "basic.rb" }
+  }
+}

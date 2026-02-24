@@ -1,0 +1,69 @@
+{
+  "id": "toml",
+  "title": "TOML Parser",
+  "description": "Parse TOML (Tom's Obvious Minimal Language) configuration files. TOML is a minimal configuration file format that's easy to read and maps unambiguously to a hash table.",
+  "category": "data-formats",
+  "tags": ["toml", "configuration", "config", "cargo", "rust"],
+  "difficulty": "intermediate",
+
+  "motivation": {
+    "why": "TOML is the standard configuration format for Rust projects (Cargo.toml) and many modern tools. It's designed to be more readable than JSON while being more strictly defined than YAML.",
+    "useCases": [
+      "Rust project configuration (Cargo.toml)",
+      "Python project configuration (pyproject.toml)",
+      "Application settings files",
+      "Build system configuration",
+      "Environment-specific configuration"
+    ]
+  },
+
+  "inputFormat": {
+    "description": "TOML files contain key-value pairs, sections (tables), and support various data types including strings, integers, floats, booleans, arrays, and inline tables.",
+    "syntax": "key = value | [section] | [[array_table]]",
+    "examples": [
+      {
+        "input": "title = \"TOML Example\"\n[owner]\nname = \"Tom\"",
+        "description": "Basic key-value with section",
+        "valid": true
+      },
+      {
+        "input": "numbers = [1, 2, 3]\nmixed = [\"a\", 42, true]",
+        "description": "Arrays with mixed types",
+        "valid": true
+      },
+      {
+        "input": "config = { host = \"localhost\", port = 8080 }",
+        "description": "Inline table syntax",
+        "valid": true
+      },
+      {
+        "input": "[[items]]\nname = \"item1\"\n[[items]]\nname = \"item2\"",
+        "description": "Array of tables for repeated structures",
+        "valid": true
+      },
+      {
+        "input": "[server.ssl]\nenabled = true",
+        "description": "Nested table (dotted key)",
+        "valid": true
+      }
+    ]
+  },
+
+  "outputFormat": {
+    "description": "The parser returns a TomlDocument with root key-values and named sections, each containing typed TomlValue enums.",
+    "structure": {
+      "root": { "description": "Global key-value pairs before any section header" },
+      "tables": { "description": "Map of section names to their key-value pairs" }
+    }
+  },
+
+  "concepts": [
+    "key-value pairs",
+    "tables and nested tables",
+    "arrays and inline tables",
+    "type inference",
+    "comments"
+  ],
+
+  "related": ["ini", "json", "yaml"]
+}

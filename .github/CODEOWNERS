@@ -1,0 +1,31 @@
+# CODEOWNERS - Define code owners for this repository
+#
+# These owners will be automatically requested for review when a PR touches
+# files in their areas.
+#
+# For more information, see:
+# https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default owners for everything in the repo
+* @riboseinc/developers
+
+# Core library code
+/src/ @riboseinc/developers
+
+# Documentation
+/README.adoc @riboseinc/developers
+/CHANGELOG.md @riboseinc/developers
+/docs/ @riboseinc/developers
+
+# GitHub workflows
+/.github/workflows/ @riboseinc/developers
+
+# Cargo configuration
+/Cargo.toml @riboseinc/developers
+/Cargo.lock @riboseinc/developers
+
+# Examples
+/examples/ @riboseinc/developers
+
+# Tests
+/tests/ @riboseinc/developers

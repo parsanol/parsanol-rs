@@ -1,0 +1,49 @@
+<svg viewBox="0 0 400 200" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="exprGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#8b5cf6"/>
+      <stop offset="100%" style="stop-color:#a78bfa"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="400" height="200" fill="#f8fafc"/>
+
+  <!-- Title -->
+  <text x="200" y="25" text-anchor="middle" font-family="system-ui" font-size="14" font-weight="600" fill="#1e293b">Expression Evaluator</text>
+
+  <!-- Input -->
+  <text x="20" y="55" font-family="system-ui" font-size="11" fill="#64748b">Input:</text>
+  <rect x="20" y="62" width="180" height="28" rx="4" fill="#e2e8f0"/>
+  <text x="30" y="80" font-family="monospace" font-size="11" fill="#8b5cf6">let x = 5 in x * 2</text>
+
+  <!-- Features -->
+  <rect x="20" y="105" width="180" height="80" rx="4" fill="#f1f5f9"/>
+  <text x="110" y="122" text-anchor="middle" font-family="system-ui" font-size="10" fill="#475569" font-weight="600">Features</text>
+
+  <text x="30" y="140" font-family="system-ui" font-size="9" fill="#64748b">• Variables: let x = ... in ...</text>
+  <text x="30" y="155" font-family="system-ui" font-size="9" fill="#64748b">• Arithmetic: + - * /</text>
+  <text x="30" y="170" font-family="system-ui" font-size="9" fill="#64748b">• Functions: sqrt(x), pow(x,y)</text>
+  <text x="30" y="180" font-family="system-ui" font-size="9" fill="#64748b">• Parentheses: (expr)</text>
+
+  <!-- Evaluation -->
+  <text x="220" y="55" font-family="system-ui" font-size="11" fill="#64748b">Evaluation:</text>
+
+  <rect x="220" y="65" width="160" height="30" rx="4" fill="#f3e8ff" stroke="#8b5cf6"/>
+  <text x="230" y="84" font-family="monospace" font-size="10" fill="#8b5cf6">let x = 5 in x * 2</text>
+
+  <path d="M300 95 L300 105" stroke="#8b5cf6" stroke-width="1.5" marker-end="url(#exprArrow)"/>
+  <defs>
+    <marker id="exprArrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#8b5cf6"/>
+    </marker>
+  </defs>
+
+  <rect x="220" y="110" width="160" height="30" rx="4" fill="#ddd6fe"/>
+  <text x="230" y="129" font-family="monospace" font-size="10" fill="#7c3aed">5 * 2  (x → 5)</text>
+
+  <path d="M300 140 L300 150" stroke="#8b5cf6" stroke-width="1.5" marker-end="url(#exprArrow)"/>
+
+  <rect x="220" y="155" width="160" height="30" rx="4" fill="#dcfce7" stroke="#059669"/>
+  <text x="230" y="174" font-family="monospace" font-size="12" fill="#059669" font-weight="600">10</text>
+</svg>

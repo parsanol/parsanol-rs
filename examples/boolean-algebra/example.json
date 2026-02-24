@@ -1,0 +1,84 @@
+{
+  "id": "boolean-algebra",
+  "title": "Boolean Algebra Parser",
+  "description": "Parse boolean expressions with AND/OR operators, supporting proper precedence, parentheses, and variable evaluation.",
+  "category": "expression-parsers",
+  "tags": ["boolean", "logic", "and", "or", "dnf"],
+  "difficulty": "intermediate",
+
+  "motivation": {
+    "why": "Boolean expressions are fundamental to search queries, conditional logic, circuit design, and formal verification. Parsing them correctly enables powerful query and rule systems.",
+    "useCases": [
+      "Search engine query parsing",
+      "Rule engine condition evaluation",
+      "Digital circuit simulation",
+      "Database query predicates",
+      "Access control rule evaluation"
+    ]
+  },
+
+  "inputFormat": {
+    "description": "Boolean expressions using variables (varN), AND, and OR operators. AND has higher precedence than OR. Parentheses can override precedence.",
+    "syntax": "expression = variable | (expression) | expression AND expression | expression OR expression",
+    "examples": [
+      {
+        "input": "var1",
+        "description": "Simple variable",
+        "valid": true
+      },
+      {
+        "input": "var1 and var2",
+        "description": "AND expression",
+        "valid": true
+      },
+      {
+        "input": "var1 or var2",
+        "description": "OR expression",
+        "valid": true
+      },
+      {
+        "input": "var1 and var2 or var3",
+        "description": "Mixed precedence: (var1 AND var2) OR var3",
+        "valid": true
+      },
+      {
+        "input": "var1 or var2 and var3",
+        "description": "AND binds tighter: var1 OR (var2 AND var3)",
+        "valid": true
+      },
+      {
+        "input": "(var1 or var2) and var3",
+        "description": "Parentheses override precedence",
+        "valid": true
+      },
+      {
+        "input": "var1 and var2 and var3",
+        "description": "Chained AND",
+        "valid": true
+      },
+      {
+        "input": "var1 & var2",
+        "description": "Invalid: wrong operator syntax",
+        "valid": false
+      }
+    ]
+  },
+
+  "outputFormat": {
+    "description": "The parser returns a BoolExpr enum representing the expression tree that can be evaluated with variable bindings.",
+    "structure": {
+      "type": { "description": "BoolExpr enum with variants: Var(String), And(Box<BoolExpr>, Box<BoolExpr>), Or(Box<BoolExpr>, Box<BoolExpr>)" },
+      "evaluation": { "description": "Can be evaluated with HashMap<String, bool> bindings" }
+    }
+  },
+
+  "concepts": [
+    "operator precedence",
+    "variable binding",
+    "truth evaluation",
+    "DNF conversion",
+    "recursive structure"
+  ],
+
+  "related": ["calculator", "expression-evaluator"]
+}

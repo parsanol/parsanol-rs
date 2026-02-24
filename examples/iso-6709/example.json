@@ -1,0 +1,94 @@
+{
+  "id": "iso-6709",
+  "title": "ISO 6709 Geographic Coordinate Parser",
+  "description": "Parse ISO 6709 geographic point locations (latitude, longitude, and optional altitude). ISO 6709 is the international standard for representing geographic coordinates.",
+  "category": "data-formats",
+  "tags": ["iso6709", "geo", "coordinates", "latitude", "longitude", "gps", "location"],
+  "difficulty": "intermediate",
+
+  "motivation": {
+    "why": "ISO 6709 is the international standard for representing geographic point locations. It's used whenever you need to store, transmit, or display precise location data in a standardized format.",
+    "useCases": [
+      "GPS navigation applications - storing waypoints and routes",
+      "Photo geotagging - embedding location metadata in images",
+      "Location APIs - exchanging coordinate data between systems",
+      "GIS databases - storing points of interest",
+      "Emergency services - transmitting exact locations"
+    ]
+  },
+
+  "inputFormat": {
+    "description": "ISO 6709 represents coordinates as signed decimal or sexagesimal (DMS) values. Latitude comes first (-90 to +90), followed by longitude (-180 to +180), optional altitude, and optional coordinate reference system.",
+    "syntax": "±DD.DDDD±DDD.DDDD[±AAA.A][CRScode/]",
+    "examples": [
+      {
+        "input": "+40.6894-074.0447",
+        "description": "Statue of Liberty - basic latitude/longitude in decimal degrees",
+        "valid": true
+      },
+      {
+        "input": "+48.8584+002.2945",
+        "description": "Eiffel Tower - note longitude uses leading zeros for alignment",
+        "valid": true
+      },
+      {
+        "input": "-90+000",
+        "description": "South Pole - negative latitude for southern hemisphere",
+        "valid": true
+      },
+      {
+        "input": "+40.6894-074.0447+93.0",
+        "description": "Statue of Liberty with altitude (93 meters above sea level)",
+        "valid": true
+      },
+      {
+        "input": "+48.8584+002.2945+330CRSWGS_84/",
+        "description": "Eiffel Tower with altitude (330m) and coordinate reference system (WGS 84)",
+        "valid": true
+      },
+      {
+        "input": "+27.9881+086.9250+8848.86CRSWGS_84/",
+        "description": "Mount Everest summit - altitude 8848.86 meters",
+        "valid": true
+      },
+      {
+        "input": "+40 41 21.84-074 02 40.92",
+        "description": "Statue of Liberty in sexagesimal (DMS) format: 40°41'21.84\"N 74°02'40.92\"W",
+        "valid": true
+      },
+      {
+        "input": "+95-074",
+        "description": "Invalid - latitude cannot exceed 90 degrees",
+        "valid": false
+      }
+    ]
+  },
+
+  "outputFormat": {
+    "description": "The parser returns a GeoCoordinate struct containing the parsed values. Latitude and longitude are stored as f64 (double-precision floats). Altitude and CRS are optional.",
+    "structure": {
+      "latitude": {
+        "description": "Latitude in decimal degrees. Positive = North, Negative = South. Range: -90.0 to +90.0"
+      },
+      "longitude": {
+        "description": "Longitude in decimal degrees. Positive = East, Negative = West. Range: -180.0 to +180.0"
+      },
+      "altitude": {
+        "description": "Optional altitude in meters above sea level. Positive = above, Negative = below"
+      },
+      "crs": {
+        "description": "Optional coordinate reference system identifier (e.g., 'WGS_84', 'EPSG_4326')"
+      }
+    }
+  },
+
+  "concepts": [
+    "sign convention for hemispheres",
+    "latitude/longitude ranges",
+    "altitude support",
+    "coordinate reference systems",
+    "sexagesimal (DMS) format"
+  ],
+
+  "related": ["url", "csv", "json"]
+}

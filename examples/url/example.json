@@ -1,0 +1,83 @@
+{
+  "id": "url",
+  "title": "URL Parser",
+  "description": "Parse URLs (Uniform Resource Locators) into structured components including scheme, host, port, path, query parameters, and fragment.",
+  "category": "urls-network",
+  "tags": ["url", "uri", "http", "web", "routing"],
+  "difficulty": "beginner",
+
+  "motivation": {
+    "why": "URLs are fundamental to web development, API design, and routing systems. Parsing URLs correctly is essential for web servers, clients, routers, and security validation.",
+    "useCases": [
+      "Web server request routing",
+      "API endpoint parsing",
+      "Web crawler link extraction",
+      "Security validation of user-submitted URLs",
+      "Link normalization and canonicalization"
+    ]
+  },
+
+  "inputFormat": {
+    "description": "URLs follow a standard format: scheme://host[:port][/path][?query][#fragment]. The scheme is required, as is the host. Port, path, query, and fragment are optional.",
+    "syntax": "scheme://host[:port][/path][?query][#fragment]",
+    "examples": [
+      {
+        "input": "https://example.com",
+        "description": "Simple HTTPS URL",
+        "valid": true
+      },
+      {
+        "input": "http://localhost:8080/api/users",
+        "description": "URL with port and path",
+        "valid": true
+      },
+      {
+        "input": "https://github.com/user/repo?tab=issues",
+        "description": "URL with query parameters",
+        "valid": true
+      },
+      {
+        "input": "ftp://ftp.example.com:21/files/doc.pdf#page=5",
+        "description": "Full URL with all components",
+        "valid": true
+      },
+      {
+        "input": "https://search.example.com:443/search?q=rust+parser&page=1#results",
+        "description": "Complex URL with query and fragment",
+        "valid": true
+      },
+      {
+        "input": "example.com",
+        "description": "Invalid: missing scheme",
+        "valid": false
+      },
+      {
+        "input": "://example.com",
+        "description": "Invalid: missing scheme name",
+        "valid": false
+      }
+    ]
+  },
+
+  "outputFormat": {
+    "description": "The parser returns a ParsedUrl struct with each URL component as a separate field, with proper types for optional components.",
+    "structure": {
+      "scheme": { "description": "String - the protocol (http, https, ftp, etc.)" },
+      "host": { "description": "String - the domain or IP address" },
+      "port": { "description": "Option<u16> - optional port number" },
+      "path": { "description": "Option<String> - optional path component" },
+      "query": { "description": "Option<HashMap<String, String>> - parsed query parameters" },
+      "fragment": { "description": "Option<String> - optional fragment/anchor" }
+    }
+  },
+
+  "concepts": [
+    "scheme detection",
+    "host parsing",
+    "query string parsing",
+    "component extraction",
+    "optional parts"
+  ],
+
+  "related": ["email", "ip-address"]
+}

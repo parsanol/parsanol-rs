@@ -1,0 +1,64 @@
+{
+  "id": "sentence",
+  "title": "Sentence Parser",
+  "description": "Parse sentences in multiple languages (English, Japanese, Chinese) with Unicode support and language detection based on character sets.",
+  "category": "text-processing",
+  "tags": ["sentence", "unicode", "nlp", "multilingual", "cjk"],
+  "difficulty": "intermediate",
+
+  "motivation": {
+    "why": "Sentence boundary detection is essential for text processing, NLP pipelines, and multilingual applications. Different languages use different punctuation marks for sentence boundaries.",
+    "useCases": [
+      "Text-to-speech preprocessing",
+      "NLP pipeline tokenization",
+      "Multilingual document processing",
+      "Translation system input",
+      "Text summarization"
+    ]
+  },
+
+  "inputFormat": {
+    "description": "Text in various languages with language-specific sentence terminators: .!? for English, 。！？ for CJK languages.",
+    "syntax": "sentence = text + terminator (terminator varies by language)",
+    "examples": [
+      {
+        "input": "Hello world. This is a test! How are you?",
+        "description": "English sentences with mixed punctuation",
+        "valid": true
+      },
+      {
+        "input": "こんにちは世界。これはテストです。元気ですか？",
+        "description": "Japanese sentences with CJK punctuation",
+        "valid": true
+      },
+      {
+        "input": "你好世界。这是一个测试！你好吗？",
+        "description": "Chinese sentences",
+        "valid": true
+      },
+      {
+        "input": "Hello world. こんにちは。This is mixed! 混合文本。",
+        "description": "Mixed language text",
+        "valid": true
+      }
+    ]
+  },
+
+  "outputFormat": {
+    "description": "The parser returns a list of Sentence structs, each containing the text and detected language.",
+    "structure": {
+      "Sentence": { "description": "Struct with text: String and language: Language" },
+      "Language": { "description": "Enum: English, Japanese, Chinese, Unknown" }
+    }
+  },
+
+  "concepts": [
+    "Unicode handling",
+    "language detection",
+    "sentence boundary",
+    "CJK character ranges",
+    "mixed-language text"
+  ],
+
+  "related": ["balanced-parens", "string-literal"]
+}

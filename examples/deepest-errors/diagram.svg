@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 400">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1a1a2e"/>
+      <stop offset="100%" style="stop-color:#16213e"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="600" height="400" fill="url(#bg)"/>
+
+  <!-- Title -->
+  <text x="300" y="35" text-anchor="middle" fill="#fff" font-family="Arial, sans-serif" font-size="24" font-weight="bold">Deepest Error Reporting</text>
+
+  <!-- Input -->
+  <rect x="30" y="55" width="300" height="40" rx="6" fill="#2d3436" stroke="#636e72" stroke-width="1"/>
+  <text x="45" y="80" fill="#74b9ff" font-family="monospace" font-size="12">Input: </text>
+  <text x="95" y="80" fill="#dfe6e9" font-family="monospace" font-size="12">"function(1, 2, invalid!)"</text>
+
+  <!-- Parse attempts visualization -->
+  <text x="300" y="125" text-anchor="middle" fill="#fff" font-family="Arial" font-size="14" font-weight="bold">Parse Attempts (showing failures)</text>
+
+  <!-- Level 1: Root rule -->
+  <rect x="50" y="140" width="500" height="35" rx="4" fill="#2d3436" stroke="#636e72" stroke-width="1"/>
+  <text x="70" y="162" fill="#b2bec3" font-family="monospace" font-size="11">root: function_call | expression</text>
+  <rect x="450" y="148" width="90" height="20" rx="3" fill="#e17055"/>
+  <text x="495" y="162" text-anchor="middle" fill="#fff" font-family="Arial" font-size="9">Partial match</text>
+
+  <!-- Level 2: Function call -->
+  <rect x="70" y="185" width="460" height="35" rx="4" fill="#2d3436" stroke="#636e72" stroke-width="1"/>
+  <text x="90" y="207" fill="#b2bec3" font-family="monospace" font-size="11">function_call: 'function(' args ')'</text>
+  <rect x="410" y="193" width="110" height="20" rx="3" fill="#e17055"/>
+  <text x="465" y="207" text-anchor="middle" fill="#fff" font-family="Arial" font-size="9">Failed at args</text>
+
+  <!-- Level 3: Args -->
+  <rect x="90" y="230" width="420" height="35" rx="4" fill="#2d3436" stroke="#636e72" stroke-width="1"/>
+  <text x="110" y="252" fill="#b2bec3" font-family="monospace" font-size="11">args: expr (',' expr)*</text>
+  <rect x="340" y="238" width="160" height="20" rx="3" fill="#d63031"/>
+  <text x="420" y="252" text-anchor="middle" fill="#fff" font-family="Arial" font-size="9">Failed at position 18</text>
+
+  <!-- Level 4: Deepest - identifier -->
+  <rect x="110" y="275" width="380" height="35" rx="4" fill="#2d3436" stroke="#d63031" stroke-width="2"/>
+  <text x="130" y="297" fill="#b2bec3" font-family="monospace" font-size="11">identifier: [a-zA-Z_][a-zA-Z0-9_]*</text>
+  <rect x="360" y="283" width="120" height="20" rx="3" fill="#d63031"/>
+  <text x="420" y="297" text-anchor="middle" fill="#fff" font-family="Arial" font-size="9">DEEPEST ERROR</text>
+
+  <!-- Arrow pointing to error position -->
+  <path d="M310 310 L310 335 L180 335 L180 320" fill="none" stroke="#d63031" stroke-width="2"/>
+  <text x="310" y="350" text-anchor="middle" fill="#d63031" font-family="Arial" font-size="11" font-weight="bold">Position 18: '!' is not valid in identifier</text>
+
+  <!-- Error output box -->
+  <rect x="30" y="360" width="540" height="35" rx="6" fill="#1e1e3f" stroke="#d63031" stroke-width="2"/>
+  <text x="50" y="382" fill="#d63031" font-family="monospace" font-size="11">Error: Expected identifier at line 1, column 18 - found '!' in "invalid!"</text>
+</svg>

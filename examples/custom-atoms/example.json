@@ -1,0 +1,76 @@
+{
+  "id": "custom-atoms",
+  "title": "Custom Atom Patterns",
+  "description": "Learn patterns for extending Parsanol with custom validation and semantic checks.",
+  "category": "conceptual",
+  "tags": ["custom", "validation", "semantics", "extension"],
+  "difficulty": "advanced",
+  "concepts": [
+    "post-parse validation",
+    "semantic validation",
+    "grammar builder extensions",
+    "trait-based extensibility",
+    "separation of concerns"
+  ],
+
+  "motivation": {
+    "why": "While Parsanol's built-in atoms handle most parsing needs, some domains require custom validation logic. This example shows the preferred patterns for extending Parsanol.",
+    "useCases": [
+      "Validating reserved words",
+      "Range checking for numbers",
+      "Email and URL format validation",
+      "Custom identifier rules",
+      "Cross-field validation"
+    ]
+  },
+
+  "inputFormat": {
+    "description": "Configuration files with key-value pairs",
+    "syntax": "key = value (various types)",
+    "examples": [
+      {
+        "input": "server_port = 8080\nadmin_email = admin@example.com",
+        "description": "Valid configuration",
+        "valid": true
+      },
+      {
+        "input": "return = value\nport = 80",
+        "description": "Configuration with semantic issues",
+        "valid": false,
+        "issues": ["Reserved word 'return' used as key", "Port 80 requires privileges"]
+      }
+    ]
+  },
+
+  "outputFormat": {
+    "description": "Validated configuration with semantic checks",
+    "structure": {
+      "key": { "description": "Configuration key (validated as identifier)" },
+      "value": { "description": "Configuration value (type-validated)" },
+      "valid": { "description": "Whether the pair passed semantic validation" }
+    }
+  },
+
+  "patterns": [
+    {
+      "name": "Post-Parse Validation",
+      "description": "Validate semantics after parsing, not during parsing",
+      "when": "Most cases - cleaner separation of concerns"
+    },
+    {
+      "name": "Grammar Builder Extensions",
+      "description": "Add convenience methods to GrammarBuilder via trait",
+      "when": "You have reusable patterns that should be easy to construct"
+    },
+    {
+      "name": "Semantic Validator",
+      "description": "Encapsulate all validation rules in a single struct",
+      "when": "You have complex cross-field validation or many rules"
+    }
+  ],
+
+  "related": ["modularity", "error-reporting", "transform"],
+  "implementations": {
+    "rust": { "basic": "basic.rs" }
+  }
+}

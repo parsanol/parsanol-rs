@@ -1,0 +1,48 @@
+{
+  "id": "streaming",
+  "title": "Streaming Parser",
+  "description": "Parse large files without loading everything into memory using chunk-based processing.",
+  "category": "conceptual",
+  "tags": ["streaming", "memory", "large-files", "chunks"],
+  "difficulty": "intermediate",
+  "concepts": [
+    "chunk-based parsing",
+    "memory efficiency",
+    "streaming processing",
+    "buffered I/O"
+  ],
+
+  "motivation": {
+    "why": "Streaming parsing allows processing files larger than available memory by reading and processing in fixed-size chunks.",
+    "useCases": [
+      "Log file analysis (GBs of logs)",
+      "CSV/TSV processing for data pipelines",
+      "Real-time event stream parsing",
+      "Memory-constrained environments"
+    ]
+  },
+
+  "inputFormat": {
+    "description": "Large files processed in chunks.",
+    "syntax": "Any line-based format (CSV, JSON lines, logs)",
+    "examples": [
+      {
+        "input": "name,age,city\nAlice,30,NYC\nBob,25,LA\n...",
+        "description": "Large CSV file with millions of rows",
+        "valid": true
+      }
+    ]
+  },
+
+  "outputFormat": {
+    "description": "Rows processed one at a time, never all in memory.",
+    "structure": {
+      "row": { "description": "Individual parsed row emitted immediately" }
+    }
+  },
+
+  "related": ["csv", "incremental"],
+  "implementations": {
+    "rust": { "basic": "basic.rs" }
+  }
+}

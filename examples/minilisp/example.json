@@ -1,0 +1,73 @@
+{
+  "id": "minilisp",
+  "title": "Mini Lisp Parser",
+  "description": "Parse S-expressions for a mini Lisp language with identifiers, numbers, strings, and nested lists.",
+  "category": "code-template",
+  "tags": ["lisp", "s-expression", "list", "parentheses", "transform"],
+  "difficulty": "intermediate",
+  "concepts": [
+    "recursive list structure",
+    "s-expression syntax",
+    "atom types",
+    "transform to AST"
+  ],
+
+  "motivation": {
+    "why": "S-expressions are a simple yet powerful notation for nested data structures and code. They're used in Lisp dialects, configuration formats, and data interchange.",
+    "useCases": [
+      "Lisp/Scheme interpreters",
+      "Configuration files",
+      "Data serialization",
+      "AST representation"
+    ]
+  },
+
+  "inputFormat": {
+    "description": "S-expressions: atoms or parenthesized lists of expressions.",
+    "syntax": "atom | '(' expr* ')'",
+    "examples": [
+      {
+        "input": "(+ 1 2)",
+        "description": "Simple function call",
+        "valid": true
+      },
+      {
+        "input": "(define x 42)",
+        "description": "Variable definition",
+        "valid": true
+      },
+      {
+        "input": "(lambda (x) (* x x))",
+        "description": "Lambda expression",
+        "valid": true
+      },
+      {
+        "input": "(display \"Hello\")",
+        "description": "String argument",
+        "valid": true
+      },
+      {
+        "input": "(1 2 3",
+        "description": "Unclosed parenthesis",
+        "valid": false
+      }
+    ]
+  },
+
+  "outputFormat": {
+    "description": "Hierarchical AST representing the S-expression structure.",
+    "structure": {
+      "Identifier": { "description": "Symbol name" },
+      "Integer": { "description": "Whole number" },
+      "Float": { "description": "Decimal number" },
+      "String": { "description": "Quoted string" },
+      "List": { "description": "Sequence of expressions" }
+    }
+  },
+
+  "related": ["sexp", "calculator", "erb"],
+  "implementations": {
+    "rust": { "basic": "basic.rs" },
+    "ruby": { "basic": "basic.rb" }
+  }
+}

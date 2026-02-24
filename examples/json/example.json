@@ -1,0 +1,80 @@
+{
+  "id": "json",
+  "title": "JSON Parser",
+  "description": "Parse JSON (JavaScript Object Notation), a lightweight data interchange format that is easy for humans to read and write, and easy for machines to parse and generate.",
+  "category": "data-formats",
+  "tags": ["json", "serialization", "data", "api", "config"],
+  "difficulty": "beginner",
+
+  "motivation": {
+    "why": "JSON is the de facto standard for data exchange in web APIs, configuration files, and data storage. It's supported by virtually every programming language and is the backbone of modern web services.",
+    "useCases": [
+      "Web API request/response parsing",
+      "Configuration files for applications",
+      "Data serialization for storage",
+      "NoSQL database document format",
+      "Inter-service communication in microservices"
+    ]
+  },
+
+  "inputFormat": {
+    "description": "JSON supports primitive types (null, boolean, number, string), arrays, and objects (key-value maps). Strings use double quotes with escape sequences.",
+    "syntax": "value = null | true | false | number | string | array | object",
+    "examples": [
+      {
+        "input": "{\"name\": \"Alice\", \"age\": 30, \"active\": true}",
+        "description": "Object with mixed types",
+        "valid": true
+      },
+      {
+        "input": "[1, 2, 3, \"four\", null]",
+        "description": "Array with mixed types",
+        "valid": true
+      },
+      {
+        "input": "42",
+        "description": "Single number value",
+        "valid": true
+      },
+      {
+        "input": "\"Hello, World!\"",
+        "description": "Single string value",
+        "valid": true
+      },
+      {
+        "input": "{\"nested\": {\"deep\": {\"value\": true}}}",
+        "description": "Nested objects",
+        "valid": true
+      },
+      {
+        "input": "{name: 'Alice'}",
+        "description": "Invalid: unquoted keys and single quotes",
+        "valid": false
+      },
+      {
+        "input": "{",
+        "description": "Invalid: unclosed object",
+        "valid": false
+      }
+    ]
+  },
+
+  "outputFormat": {
+    "description": "The parser returns a JsonValue enum representing the parsed JSON structure with proper type distinctions.",
+    "structure": {
+      "type": { "description": "JsonValue enum with variants: Null, Bool(bool), Number(f64), String(String), Array(Vec<JsonValue>), Object(HashMap<String, JsonValue>)" },
+      "Object": { "description": "Key-value map where keys are strings and values are JsonValue" },
+      "Array": { "description": "Ordered list of JsonValue elements" }
+    }
+  },
+
+  "concepts": [
+    "recursive descent parsing",
+    "type discrimination",
+    "escape sequence handling",
+    "nested structures",
+    "key-value pairs"
+  ],
+
+  "related": ["yaml", "toml", "csv"]
+}

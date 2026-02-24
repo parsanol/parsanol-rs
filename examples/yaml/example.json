@@ -1,0 +1,70 @@
+{
+  "id": "yaml",
+  "title": "YAML Parser",
+  "description": "Parse a subset of YAML (YAML Ain't Markup Language), a human-friendly data serialization format commonly used for configuration files and data exchange.",
+  "category": "data-formats",
+  "tags": ["yaml", "configuration", "config", "serialization", "kubernetes"],
+  "difficulty": "intermediate",
+
+  "motivation": {
+    "why": "YAML is widely used for configuration in CI/CD pipelines, Kubernetes, Docker Compose, and static site generators. Its indentation-based structure makes it highly readable for humans.",
+    "useCases": [
+      "CI/CD pipeline configuration (GitHub Actions, GitLab CI)",
+      "Kubernetes resource definitions",
+      "Docker Compose files",
+      "Static site generator front matter (Jekyll, Hugo)",
+      "Application configuration files"
+    ]
+  },
+
+  "inputFormat": {
+    "description": "YAML uses indentation to define structure. Key-value pairs use `key: value` syntax, lists use `- item` prefix, and nested structures are defined by increased indentation.",
+    "syntax": "key: value | - list_item | # comment",
+    "examples": [
+      {
+        "input": "name: Example\nversion: 1.0\nenabled: true",
+        "description": "Basic key-value pairs with scalar types",
+        "valid": true
+      },
+      {
+        "input": "items:\n  - apple\n  - banana\n  - cherry",
+        "description": "List with nested items",
+        "valid": true
+      },
+      {
+        "input": "server:\n  host: localhost\n  port: 8080",
+        "description": "Nested map structure",
+        "valid": true
+      },
+      {
+        "input": "inline: [a, b, c]\nobject: { x: 1, y: 2 }",
+        "description": "Flow (inline) collections",
+        "valid": true
+      },
+      {
+        "input": "quoted: \"hello world\"\nsingle: 'single quotes'",
+        "description": "Quoted string values",
+        "valid": true
+      }
+    ]
+  },
+
+  "outputFormat": {
+    "description": "The parser returns a YamlValue enum that can be Null, Boolean, Integer, Float, String, Array, or Object, matching YAML's type system.",
+    "structure": {
+      "type": { "description": "YamlValue enum with variants: Null, Boolean, Integer, Float, String, Array, Object" },
+      "Object": { "description": "HashMap<String, YamlValue> for key-value mappings" },
+      "Array": { "description": "Vec<YamlValue> for sequences" }
+    }
+  },
+
+  "concepts": [
+    "indentation-based structure",
+    "key-value pairs",
+    "lists and maps",
+    "type inference",
+    "inline collections"
+  ],
+
+  "related": ["toml", "json", "ini"]
+}

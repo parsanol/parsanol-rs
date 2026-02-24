@@ -1,0 +1,58 @@
+<svg viewBox="0 0 400 200" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="csvGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#059669"/>
+      <stop offset="100%" style="stop-color:#34d399"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="400" height="200" fill="#f8fafc"/>
+
+  <!-- Title -->
+  <text x="200" y="25" text-anchor="middle" font-family="system-ui" font-size="14" font-weight="600" fill="#1e293b">CSV Parser</text>
+
+  <!-- Input CSV -->
+  <text x="20" y="55" font-family="system-ui" font-size="11" fill="#64748b">Input:</text>
+  <rect x="20" y="65" width="150" height="70" rx="4" fill="#e2e8f0" stroke="#cbd5e1"/>
+  <text x="30" y="85" font-family="monospace" font-size="10" fill="#059669" font-weight="600">name,age,city</text>
+  <text x="30" y="102" font-family="monospace" font-size="10" fill="#64748b">Alice,30,NYC</text>
+  <text x="30" y="119" font-family="monospace" font-size="10" fill="#64748b">Bob,25,LA</text>
+
+  <!-- Arrow -->
+  <path d="M180 100 L210 100" stroke="#046f36" stroke-width="2" marker-end="url(#arrowhead)"/>
+  <defs>
+    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#046f36"/>
+    </marker>
+  </defs>
+
+  <!-- Parser -->
+  <rect x="220" y="70" width="70" height="60" rx="8" fill="url(#csvGrad)"/>
+  <text x="255" y="95" text-anchor="middle" font-family="system-ui" font-size="11" fill="white" font-weight="600">Parse</text>
+  <text x="255" y="112" text-anchor="middle" font-family="system-ui" font-size="9" fill="white">CSV</text>
+
+  <!-- Arrow -->
+  <path d="M300 100 L330 100" stroke="#046f36" stroke-width="2" marker-end="url(#arrowhead)"/>
+
+  <!-- Output -->
+  <rect x="340" y="50" width="50" height="100" rx="4" fill="#dcfce7" stroke="#059669"/>
+  <text x="365" y="70" text-anchor="middle" font-family="system-ui" font-size="9" fill="#059669" font-weight="600">Records</text>
+
+  <!-- Record 1 -->
+  <rect x="345" y="78" width="40" height="30" rx="2" fill="#bbf7d0"/>
+  <text x="365" y="92" text-anchor="middle" font-family="monospace" font-size="7" fill="#059669">Alice</text>
+  <text x="365" y="102" text-anchor="middle" font-family="monospace" font-size="7" fill="#64748b">30, NYC</text>
+
+  <!-- Record 2 -->
+  <rect x="345" y="112" width="40" height="30" rx="2" fill="#bbf7d0"/>
+  <text x="365" y="126" text-anchor="middle" font-family="monospace" font-size="7" fill="#059669">Bob</text>
+  <text x="365" y="136" text-anchor="middle" font-family="monospace" font-size="7" fill="#64748b">25, LA</text>
+
+  <!-- Steps -->
+  <rect x="20" y="150" width="360" height="40" rx="4" fill="#f1f5f9"/>
+  <text x="30" y="168" font-family="system-ui" font-size="10" fill="#475569">1. Split by newlines → rows</text>
+  <text x="30" y="182" font-family="system-ui" font-size="10" fill="#475569">2. Split each row by commas → fields</text>
+  <text x="200" y="168" font-family="system-ui" font-size="10" fill="#475569">3. First row = headers</text>
+  <text x="200" y="182" font-family="system-ui" font-size="10" fill="#475569">4. Map fields to headers</text>
+</svg>

@@ -1,0 +1,65 @@
+{
+  "id": "modularity",
+  "title": "Grammar Modularity",
+  "description": "Demonstrate how to compose grammars from reusable modules in Rust and Ruby.",
+  "category": "conceptual",
+  "tags": ["modularity", "composition", "modules", "reuse"],
+  "difficulty": "beginner",
+  "concepts": [
+    "grammar composition",
+    "module isolation",
+    "rule namespacing",
+    "reusable components"
+  ],
+
+  "motivation": {
+    "why": "Large grammars benefit from modular organization. Splitting grammars into modules improves maintainability and enables reuse.",
+    "useCases": [
+      "Language implementations with multiple syntax levels",
+      "Shared grammar components (expressions, identifiers)",
+      "Plugin architectures for extensible parsers",
+      "Testing grammar parts in isolation"
+    ]
+  },
+
+  "inputFormat": {
+    "description": "Composed language with module prefixes.",
+    "syntax": "'a(' aaa ')' | 'b(' bbb ')' | 'c(' ccc ')'",
+    "examples": [
+      {
+        "input": "a(aaa)",
+        "description": "Module A syntax",
+        "valid": true
+      },
+      {
+        "input": "b(bbb)",
+        "description": "Module B syntax",
+        "valid": true
+      },
+      {
+        "input": "c(ccc)",
+        "description": "Module C syntax",
+        "valid": true
+      },
+      {
+        "input": "a(bbb)",
+        "description": "Wrong module content",
+        "valid": false
+      }
+    ]
+  },
+
+  "outputFormat": {
+    "description": "Match indicating which module was used.",
+    "structure": {
+      "module": { "description": "Which module matched (a, b, or c)" },
+      "content": { "description": "The matched content" }
+    }
+  },
+
+  "related": ["ip-address", "calculator"],
+  "implementations": {
+    "rust": { "basic": "basic.rs" },
+    "ruby": { "basic": "basic.rb" }
+  }
+}

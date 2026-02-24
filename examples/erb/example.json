@@ -1,0 +1,79 @@
+{
+  "id": "erb",
+  "title": "ERB Template Parser",
+  "description": "Parse ERB (Embedded Ruby) templates, extracting text content, expressions (<%= %>), code blocks (<% %>), and comments (<%# %>).",
+  "category": "code-template",
+  "tags": ["erb", "template", "ruby", "embedded", "rendering"],
+  "difficulty": "intermediate",
+
+  "motivation": {
+    "why": "ERB templates are widely used in Ruby on Rails, configuration management tools, and static site generators. Parsing templates enables analysis, transformation, and rendering.",
+    "useCases": [
+      "Ruby on Rails view processing",
+      "Configuration template rendering",
+      "Static site generation",
+      "Code generation templates",
+      "Email template processing"
+    ]
+  },
+
+  "inputFormat": {
+    "description": "ERB templates mix text with Ruby code in special tags: <%= expr %> for expressions, <% code %> for statements, <%# comment %> for comments.",
+    "syntax": "text | <%= expression %> | <% code %> | <%# comment %>",
+    "examples": [
+      {
+        "input": "The value of x is <%= x %>.",
+        "description": "Simple expression embedding",
+        "valid": true
+      },
+      {
+        "input": "<% 1 + 2 %>",
+        "description": "Code block (no output)",
+        "valid": true
+      },
+      {
+        "input": "<%# commented out %>",
+        "description": "Comment (not rendered)",
+        "valid": true
+      },
+      {
+        "input": "Hello <%= name %>, you have <%= count %> messages.",
+        "description": "Multiple expressions",
+        "valid": true
+      },
+      {
+        "input": "Text before <% code %> text after.",
+        "description": "Code with surrounding text",
+        "valid": true
+      },
+      {
+        "input": "<html><body><%= content %></body></html>",
+        "description": "HTML template",
+        "valid": true
+      },
+      {
+        "input": "<% unclosed",
+        "description": "Invalid: missing closing %>",
+        "valid": false
+      }
+    ]
+  },
+
+  "outputFormat": {
+    "description": "The parser returns a list of ErbElement enum values distinguishing between text, expressions, code, and comments.",
+    "structure": {
+      "ErbElement": { "description": "Enum: Text(String), Expression(String), Code(String), Comment(String)" },
+      "rendered": { "description": "Can be rendered with variable bindings" }
+    }
+  },
+
+  "concepts": [
+    "template syntax",
+    "embedded expressions",
+    "code extraction",
+    "comment handling",
+    "variable substitution"
+  ],
+
+  "related": ["sexp", "simple-xml"]
+}

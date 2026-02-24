@@ -1,0 +1,84 @@
+{
+  "id": "string-literal",
+  "title": "String Literal Parser",
+  "description": "Parse string literals with escape sequence handling, supporting common escape codes like \\n, \\t, \\\", and \\\\.",
+  "category": "text-processing",
+  "tags": ["string", "escape", "literal", "quoting", "parsing"],
+  "difficulty": "beginner",
+
+  "motivation": {
+    "why": "String literal parsing is fundamental to any programming language parser. Proper escape sequence handling ensures strings are interpreted correctly.",
+    "useCases": [
+      "Programming language lexers",
+      "Configuration file parsing",
+      "Template engine processing",
+      "Data format parsing",
+      "Source code analysis"
+    ]
+  },
+
+  "inputFormat": {
+    "description": "Quoted strings using double quotes with backslash escape sequences. Supported escapes: \\n, \\t, \\r, \\\\, \\\", \\0.",
+    "syntax": "\"text\" with escapes like \\n, \\t, \\\", \\\\",
+    "examples": [
+      {
+        "input": "\"hello\"",
+        "description": "Simple string",
+        "valid": true
+      },
+      {
+        "input": "\"hello world\"",
+        "description": "String with space",
+        "valid": true
+      },
+      {
+        "input": "\"line1\\nline2\"",
+        "description": "String with newline escape",
+        "valid": true
+      },
+      {
+        "input": "\"tab\\there\"",
+        "description": "String with tab escape",
+        "valid": true
+      },
+      {
+        "input": "\"quote: \\\"test\\\"\"",
+        "description": "String with escaped quotes",
+        "valid": true
+      },
+      {
+        "input": "\"backslash: \\\\\\\\\"",
+        "description": "String with escaped backslashes",
+        "valid": true
+      },
+      {
+        "input": "\"\"",
+        "description": "Empty string",
+        "valid": true
+      },
+      {
+        "input": "\"unclosed",
+        "description": "Invalid: missing closing quote",
+        "valid": false
+      }
+    ]
+  },
+
+  "outputFormat": {
+    "description": "The parser returns a Literal enum distinguishing between Integer and String types, with escape sequences processed.",
+    "structure": {
+      "Literal": { "description": "Enum: Integer(i64), String(String)" },
+      "escaped_value": { "description": "String with escape sequences replaced by their actual characters" }
+    }
+  },
+
+  "concepts": [
+    "escape sequences",
+    "quote handling",
+    "character decoding",
+    "mixed literals",
+    "verbatim strings"
+  ],
+
+  "related": ["comments", "sentence"]
+}

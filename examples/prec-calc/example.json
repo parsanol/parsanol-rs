@@ -1,0 +1,59 @@
+{
+  "id": "prec-calc",
+  "title": "Precedence Calculator",
+  "description": "Parse and evaluate mathematical expressions using precedence climbing for operator precedence handling.",
+  "category": "expression-parsers",
+  "tags": ["precedence", "infix", "calculator", "assignment"],
+  "difficulty": "intermediate",
+  "concepts": [
+    "precedence climbing",
+    "left vs right associativity",
+    "variable assignment",
+    "expression evaluation"
+  ],
+
+  "motivation": {
+    "why": "Precedence climbing is a classic algorithm for parsing infix expressions with proper operator precedence.",
+    "useCases": [
+      "Calculator applications",
+      "Expression evaluation in spreadsheets",
+      "Query language parsers",
+      "Configuration file expressions"
+    ]
+  },
+
+  "inputFormat": {
+    "description": "Variable assignments with mathematical expressions, one per line.",
+    "syntax": "identifier = expression",
+    "examples": [
+      {
+        "input": "a = 1 + 2 * 3",
+        "description": "Assignment with precedence (multiplication first)",
+        "valid": true
+      },
+      {
+        "input": "b = 10 - 3 - 2",
+        "description": "Left-associative subtraction",
+        "valid": true
+      },
+      {
+        "input": "c = 100",
+        "description": "Simple integer assignment",
+        "valid": true
+      }
+    ]
+  },
+
+  "outputFormat": {
+    "description": "Variable bindings mapping names to evaluated values.",
+    "structure": {
+      "bindings": { "description": "Map of variable names to integer values" }
+    }
+  },
+
+  "related": ["calculator", "expression-evaluator", "boolean-algebra"],
+  "implementations": {
+    "rust": { "basic": "basic.rs" },
+    "ruby": { "basic": "basic.rb" }
+  }
+}

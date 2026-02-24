@@ -1,0 +1,53 @@
+<svg viewBox="0 0 400 200" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="greenGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#046f36"/>
+      <stop offset="100%" style="stop-color:#0a9f52"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="400" height="200" fill="#f8fafc"/>
+
+  <!-- Title -->
+  <text x="200" y="25" text-anchor="middle" font-family="system-ui" font-size="14" font-weight="600" fill="#1e293b">Balanced Parentheses</text>
+
+  <!-- Input -->
+  <text x="20" y="60" font-family="monospace" font-size="12" fill="#64748b">Input:</text>
+  <rect x="60" y="45" width="120" height="25" rx="4" fill="#e2e8f0"/>
+  <text x="70" y="62" font-family="monospace" font-size="12" fill="#046f36">(())()</text>
+
+  <!-- Parse Tree -->
+  <text x="200" y="60" font-family="system-ui" font-size="11" fill="#64748b">Parse Tree:</text>
+
+  <!-- Root -->
+  <circle cx="200" cy="90" r="8" fill="url(#greenGrad)"/>
+  <text x="200" y="95" text-anchor="middle" font-family="monospace" font-size="8" fill="white">S</text>
+
+  <!-- Level 1 -->
+  <line x1="200" y1="98" x2="150" y2="120" stroke="#046f36" stroke-width="1.5"/>
+  <line x1="200" y1="98" x2="250" y2="120" stroke="#046f36" stroke-width="1.5"/>
+
+  <circle cx="150" cy="128" r="8" fill="url(#greenGrad)"/>
+  <text x="150" y="132" text-anchor="middle" font-family="monospace" font-size="8" fill="white">()</text>
+
+  <circle cx="250" cy="128" r="8" fill="url(#greenGrad)"/>
+  <text x="250" y="132" text-anchor="middle" font-family="monospace" font-size="8" fill="white">()</text>
+
+  <!-- Level 2 -->
+  <line x1="150" y1="136" x2="150" y2="155" stroke="#046f36" stroke-width="1.5"/>
+  <circle cx="150" cy="163" r="8" fill="#c89358"/>
+  <text x="150" y="167" text-anchor="middle" font-family="monospace" font-size="8" fill="white">()</text>
+
+  <!-- Legend -->
+  <rect x="290" y="70" width="100" height="60" rx="4" fill="#f1f5f9" stroke="#e2e8f0"/>
+  <circle cx="305" cy="85" r="5" fill="url(#greenGrad)"/>
+  <text x="315" y="88" font-family="system-ui" font-size="9" fill="#475569">Matched pair</text>
+  <circle cx="305" cy="105" r="5" fill="#c89358"/>
+  <text x="315" y="108" font-family="system-ui" font-size="9" fill="#475569">Nested pair</text>
+
+  <!-- Output -->
+  <text x="20" y="180" font-family="system-ui" font-size="11" fill="#64748b">Result:</text>
+  <rect x="70" y="165" width="180" height="25" rx="4" fill="#dcfce7" stroke="#046f36" stroke-width="1"/>
+  <text x="80" y="182" font-family="monospace" font-size="11" fill="#046f36">✓ Balanced (depth: 2)</text>
+</svg>

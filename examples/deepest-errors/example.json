@@ -1,0 +1,56 @@
+{
+  "id": "deepest-errors",
+  "title": "Deepest Error Reporting",
+  "description": "Find the deepest parse failure point for more helpful error messages.",
+  "category": "error-handling",
+  "tags": ["errors", "debugging", "reporting", "position"],
+  "difficulty": "intermediate",
+  "concepts": [
+    "deepest failure point",
+    "error position tracking",
+    "meaningful error messages",
+    "parse failure analysis"
+  ],
+
+  "motivation": {
+    "why": "PEG parsers can fail at many points. Finding the deepest failure provides the most useful error location for users.",
+    "useCases": [
+      "Compiler error messages",
+      "Configuration file validation",
+      "Query language debugging",
+      "DSL error reporting"
+    ]
+  },
+
+  "inputFormat": {
+    "description": "Any input that might fail parsing. The example uses a block-structured DSL.",
+    "examples": [
+      {
+        "input": "define f()\n  @res.name(\nend",
+        "description": "Unclosed function call - error at '('",
+        "valid": false
+      },
+      {
+        "input": "define f()\n  @res.name()\n",
+        "description": "Missing 'end' - error at EOF",
+        "valid": false
+      }
+    ]
+  },
+
+  "outputFormat": {
+    "description": "Position and context of the deepest parse failure.",
+    "structure": {
+      "position": { "description": "Byte offset where parsing failed" },
+      "line": { "description": "Line number of failure" },
+      "column": { "description": "Column number of failure" },
+      "context": { "description": "Surrounding input for display" }
+    }
+  },
+
+  "related": ["error-reporting", "nested-errors"],
+  "implementations": {
+    "rust": { "basic": "basic.rs" },
+    "ruby": { "basic": "basic.rb" }
+  }
+}

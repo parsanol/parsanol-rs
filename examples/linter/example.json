@@ -1,0 +1,58 @@
+{
+  "id": "linter",
+  "title": "Code Linter with Slice Positions",
+  "description": "Build a code linter that uses slice positions to report exact source locations for issues.",
+  "category": "conceptual",
+  "tags": ["linter", "positions", "source-mapping", "diagnostics"],
+  "difficulty": "advanced",
+  "concepts": [
+    "source position tracking",
+    "line/column conversion",
+    "diagnostic reporting",
+    "AST walking",
+    "lint rule implementation"
+  ],
+
+  "motivation": {
+    "why": "Linters need to report exact source locations for issues. Parsanol's slice position tracking makes this straightforward.",
+    "useCases": [
+      "Building custom linters for DSLs",
+      "Configuration file validation",
+      "IDE diagnostic integration",
+      "Code review automation"
+    ]
+  },
+
+  "inputFormat": {
+    "description": "Simple key=value configuration files",
+    "syntax": "key = value (one per line, # for comments)",
+    "examples": [
+      {
+        "input": "debug = yes\ndatabase-host = localhost\npath = /home/user/data",
+        "description": "Configuration with lint issues",
+        "valid": true
+      },
+      {
+        "input": "# Good config\nserver_port = 8080\nenable_ssl = true",
+        "description": "Configuration following best practices",
+        "valid": true
+      }
+    ]
+  },
+
+  "outputFormat": {
+    "description": "List of lint issues with positions and suggestions",
+    "structure": {
+      "severity": { "description": "Error, Warning, Info, or Hint" },
+      "code": { "description": "Lint rule code (e.g., W001)" },
+      "message": { "description": "Human-readable description" },
+      "position": { "description": "SourcePosition with line, column, offset" },
+      "suggestion": { "description": "Optional fix suggestion" }
+    }
+  },
+
+  "related": ["error-reporting", "source-map", "visitor"],
+  "implementations": {
+    "rust": { "basic": "basic.rs" }
+  }
+}

@@ -1,0 +1,57 @@
+<svg viewBox="0 0 400 200" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="boolGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0891b2"/>
+      <stop offset="100%" style="stop-color:#22d3ee"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="400" height="200" fill="#f8fafc"/>
+
+  <!-- Title -->
+  <text x="200" y="25" text-anchor="middle" font-family="system-ui" font-size="14" font-weight="600" fill="#1e293b">Boolean Algebra</text>
+
+  <!-- Input -->
+  <text x="20" y="55" font-family="system-ui" font-size="11" fill="#64748b">Input:</text>
+  <rect x="20" y="62" width="160" height="28" rx="4" fill="#e2e8f0"/>
+  <text x="30" y="80" font-family="monospace" font-size="11" fill="#0891b2">true AND false OR true</text>
+
+  <!-- Operators -->
+  <rect x="20" y="105" width="160" height="50" rx="4" fill="#f1f5f9" stroke="#e2e8f0"/>
+  <text x="100" y="122" text-anchor="middle" font-family="system-ui" font-size="10" fill="#475569" font-weight="600">Operators (precedence)</text>
+  <text x="50" y="142" font-family="monospace" font-size="10" fill="#7c3aed">NOT</text>
+  <text x="80" y="142" font-family="monospace" font-size="10" fill="#059669">AND</text>
+  <text x="115" y="142" font-family="monospace" font-size="10" fill="#0891b2">OR</text>
+  <text x="145" y="142" font-family="monospace" font-size="10" fill="#dc2626">XOR</text>
+
+  <!-- AST -->
+  <text x="220" y="55" font-family="system-ui" font-size="11" fill="#64748b">AST:</text>
+
+  <circle cx="280" cy="85" r="12" fill="url(#boolGrad)"/>
+  <text x="280" y="89" text-anchor="middle" font-family="monospace" font-size="9" fill="white">OR</text>
+
+  <line x1="268" y1="92" x2="240" y2="115" stroke="#0891b2" stroke-width="2"/>
+  <line x1="292" y1="92" x2="340" y2="115" stroke="#0891b2" stroke-width="2"/>
+
+  <!-- AND node -->
+  <circle cx="230" cy="127" r="10" fill="#059669"/>
+  <text x="230" y="131" text-anchor="middle" font-family="monospace" font-size="8" fill="white">AND</text>
+
+  <line x1="220" y1="134" x2="200" y2="155" stroke="#059669" stroke-width="1.5"/>
+  <line x1="240" y1="134" x2="260" y2="155" stroke="#059669" stroke-width="1.5"/>
+
+  <rect x="180" y="155" width="35" height="20" rx="3" fill="#dcfce7"/>
+  <text x="197" y="169" text-anchor="middle" font-family="monospace" font-size="9" fill="#059669">T</text>
+
+  <rect x="245" y="155" width="35" height="20" rx="3" fill="#fee2e2"/>
+  <text x="262" y="169" text-anchor="middle" font-family="monospace" font-size="9" fill="#dc2626">F</text>
+
+  <!-- True leaf -->
+  <rect x="325" y="115" width="35" height="22" rx="4" fill="#dcfce7"/>
+  <text x="342" y="130" text-anchor="middle" font-family="monospace" font-size="10" fill="#059669">T</text>
+
+  <!-- Evaluation -->
+  <rect x="20" y="165" width="360" height="25" rx="4" fill="#dcfce7"/>
+  <text x="30" y="182" font-family="system-ui" font-size="10" fill="#046f36">Evaluation: (T AND F) OR T → F OR T → T</text>
+</svg>

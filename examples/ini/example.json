@@ -1,0 +1,64 @@
+{
+  "id": "ini",
+  "title": "INI Parser",
+  "description": "Parse INI-style configuration files, a simple text-based format for configuration with sections and key-value pairs.",
+  "category": "data-formats",
+  "tags": ["ini", "configuration", "config", "windows", "legacy"],
+  "difficulty": "beginner",
+
+  "motivation": {
+    "why": "INI files are one of the simplest configuration formats, widely used in Windows applications and many cross-platform tools. They're easy for humans to read and edit.",
+    "useCases": [
+      "Application configuration files",
+      "Game settings and preferences",
+      "Legacy Windows application config",
+      "Simple tool configuration",
+      "Environment-specific settings"
+    ]
+  },
+
+  "inputFormat": {
+    "description": "INI files have sections in square brackets and key=value pairs. Comments start with ; or #. All values are strings (no type inference).",
+    "syntax": "[section]\nkey = value\n; comment",
+    "examples": [
+      {
+        "input": "[database]\nhost = localhost\nport = 5432",
+        "description": "Section with key-value pairs",
+        "valid": true
+      },
+      {
+        "input": "# Global setting\ndebug = true\n\n[server]\nhost = 0.0.0.0",
+        "description": "Global values before first section",
+        "valid": true
+      },
+      {
+        "input": "[section.subsection]\nkey = value",
+        "description": "Dotted section names (hierarchical)",
+        "valid": true
+      },
+      {
+        "input": "; This is a comment\n[settings]\n# Also a comment",
+        "description": "Comments with ; or #",
+        "valid": true
+      }
+    ]
+  },
+
+  "outputFormat": {
+    "description": "The parser returns an IniConfig struct with global key-values and a map of sections, each containing their own key-value pairs.",
+    "structure": {
+      "global": { "description": "HashMap<String, String> for key-values before any section" },
+      "sections": { "description": "HashMap<String, HashMap<String, String>> for sectioned values" }
+    }
+  },
+
+  "concepts": [
+    "key-value pairs",
+    "sections",
+    "comments",
+    "string-only values",
+    "global vs sectioned values"
+  ],
+
+  "related": ["toml", "yaml", "json"]
+}

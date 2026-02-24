@@ -1,0 +1,44 @@
+<svg viewBox="0 0 400 200" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="erbGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#dc2626"/>
+      <stop offset="100%" style="stop-color:#f87171"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="400" height="200" fill="#f8fafc"/>
+
+  <!-- Title -->
+  <text x="200" y="25" text-anchor="middle" font-family="system-ui" font-size="14" font-weight="600" fill="#1e293b">ERB Template</text>
+
+  <!-- Input ERB -->
+  <text x="20" y="55" font-family="system-ui" font-size="11" fill="#64748b">Input:</text>
+  <rect x="20" y="62" width="175" height="90" rx="4" fill="#e2e8f0" stroke="#cbd5e1"/>
+  <text x="30" y="80" font-family="system-ui" font-size="10" fill="#1e293b">Hello,</text>
+  <rect x="75" y="68" width="75" height="18" rx="2" fill="#fef2f2"/>
+  <text x="80" y="81" font-family="monospace" font-size="9" fill="#dc2626">&lt;%= name %&gt;</text>
+  <text x="30" y="98" font-family="system-ui" font-size="10" fill="#1e293b">!</text>
+  <text x="30" y="115" font-family="system-ui" font-size="10" fill="#1e293b">Items:</text>
+  <rect x="30" y="120" width="85" height="18" rx="2" fill="#fef2f2"/>
+  <text x="35" y="133" font-family="monospace" font-size="8" fill="#dc2626">&lt;% items.each %&gt;</text>
+  <text x="120" y="133" font-family="monospace" font-size="8" fill="#9ca3af">...</text>
+
+  <!-- Output -->
+  <text x="220" y="55" font-family="system-ui" font-size="11" fill="#64748b">Output:</text>
+  <rect x="220" y="62" width="160" height="90" rx="4" fill="#dcfce7" stroke="#059669"/>
+  <text x="230" y="80" font-family="system-ui" font-size="10" fill="#1e293b">Hello,</text>
+  <text x="275" y="80" font-family="monospace" font-size="10" fill="#059669" font-weight="600">Alice</text>
+  <text x="310" y="80" font-family="system-ui" font-size="10" fill="#1e293b">!</text>
+  <text x="230" y="98" font-family="system-ui" font-size="10" fill="#1e293b">Items:</text>
+  <text x="230" y="115" font-family="monospace" font-size="9" fill="#059669">- Apple</text>
+  <text x="230" y="130" font-family="monospace" font-size="9" fill="#059669">- Banana</text>
+  <text x="230" y="145" font-family="monospace" font-size="9" fill="#059669">- Orange</text>
+
+  <!-- Legend -->
+  <rect x="20" y="160" width="175" height="30" rx="4" fill="#f1f5f9"/>
+  <rect x="30" y="168" width="35" height="14" rx="2" fill="#fef2f2" stroke="#dc2626"/>
+  <text x="70" y="179" font-family="system-ui" font-size="9" fill="#475569">&lt;%= %&gt; output</text>
+  <rect x="130" y="168" width="35" height="14" rx="2" fill="#fef2f2" stroke="#dc2626"/>
+  <text x="170" y="179" font-family="system-ui" font-size="9" fill="#475569">&lt;% %&gt; code</text>
+</svg>

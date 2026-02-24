@@ -1,0 +1,74 @@
+{
+  "id": "markup",
+  "title": "Simple Markup Parser",
+  "description": "Parse a subset of Markdown-like markup with headers, lists, and inline formatting (bold, italic, code).",
+  "category": "data-formats",
+  "tags": ["markup", "markdown", "formatting", "headers", "lists"],
+  "difficulty": "beginner",
+
+  "motivation": {
+    "why": "Lightweight markup languages are essential for documentation, blogging, and content management. Understanding how to parse them enables building custom documentation tools.",
+    "useCases": [
+      "Documentation generation",
+      "Blog and CMS content parsing",
+      "README file processing",
+      "Wiki markup conversion",
+      "Custom markup extensions"
+    ]
+  },
+
+  "inputFormat": {
+    "description": "Simple markup with ATX-style headers (#, ##, ###), unordered lists (- or *), and inline formatting (**bold**, *italic*, `code`).",
+    "syntax": "# Header | - list item | **bold** | *italic* | `code`",
+    "examples": [
+      {
+        "input": "# Main Title",
+        "description": "Level 1 header",
+        "valid": true
+      },
+      {
+        "input": "## Section",
+        "description": "Level 2 header",
+        "valid": true
+      },
+      {
+        "input": "- List item",
+        "description": "Unordered list item",
+        "valid": true
+      },
+      {
+        "input": "Text with **bold** and *italic*",
+        "description": "Inline formatting",
+        "valid": true
+      },
+      {
+        "input": "Use `code` inline",
+        "description": "Inline code",
+        "valid": true
+      },
+      {
+        "input": "# Title\\n\\nParagraph text.\\n\\n- Item 1\\n- Item 2",
+        "description": "Full document",
+        "valid": true
+      }
+    ]
+  },
+
+  "outputFormat": {
+    "description": "The parser returns a MarkupDocument containing MarkupElement enum values for each parsed element.",
+    "structure": {
+      "MarkupDocument": { "description": "Struct with elements: Vec<MarkupElement>" },
+      "MarkupElement": { "description": "Enum: Header{level, text}, Paragraph(String), ListItem(String), Bold(String), Italic(String), Code(String)" }
+    }
+  },
+
+  "concepts": [
+    "inline formatting",
+    "block elements",
+    "header levels",
+    "list detection",
+    "mixed content"
+  ],
+
+  "related": ["simple-xml", "erb"]
+}

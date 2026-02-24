@@ -1,0 +1,89 @@
+{
+  "id": "sexp",
+  "title": "S-Expression Parser",
+  "description": "Parse S-expressions (symbolic expressions), the nested list structure used in Lisp-family languages. Supports symbols, numbers, strings, and nested lists.",
+  "category": "code-template",
+  "tags": ["sexp", "lisp", "s-expression", "nested", "symbolic"],
+  "difficulty": "intermediate",
+
+  "motivation": {
+    "why": "S-expressions are a fundamental data structure in Lisp languages and are used for code-as-data representation, configuration files, and data interchange in functional programming communities.",
+    "useCases": [
+      "Lisp/Scheme interpreter implementation",
+      "Configuration file parsing",
+      "Code transformation tools",
+      "Symbolic computation",
+      "Data serialization"
+    ]
+  },
+
+  "inputFormat": {
+    "description": "S-expressions are recursively defined: atoms (symbols, numbers, strings) or lists of s-expressions in parentheses. Whitespace separates elements.",
+    "syntax": "sexp = atom | ( sexp* ) where atom = symbol | number | \"string\"",
+    "examples": [
+      {
+        "input": "42",
+        "description": "Number atom",
+        "valid": true
+      },
+      {
+        "input": "-3.14",
+        "description": "Negative float atom",
+        "valid": true
+      },
+      {
+        "input": "hello",
+        "description": "Symbol atom",
+        "valid": true
+      },
+      {
+        "input": "\"hello world\"",
+        "description": "String atom",
+        "valid": true
+      },
+      {
+        "input": "(+ 1 2)",
+        "description": "Simple list (addition)",
+        "valid": true
+      },
+      {
+        "input": "(+ (* 2 3) (- 10 5))",
+        "description": "Nested lists",
+        "valid": true
+      },
+      {
+        "input": "(defun factorial (n) (if (<= n 1) 1 (* n (factorial (- n 1)))))",
+        "description": "Function definition",
+        "valid": true
+      },
+      {
+        "input": "(list 1 2 3 \"four\" (quote five))",
+        "description": "Mixed types in list",
+        "valid": true
+      },
+      {
+        "input": "(unclosed",
+        "description": "Invalid: missing closing paren",
+        "valid": false
+      }
+    ]
+  },
+
+  "outputFormat": {
+    "description": "The parser returns an SExp enum representing the expression tree with proper type distinctions.",
+    "structure": {
+      "SExp": { "description": "Enum: Symbol(String), Int(i64), Float(f64), String(String), List(Vec<SExp>)" },
+      "List": { "description": "Recursive structure containing nested SExp values" }
+    }
+  },
+
+  "concepts": [
+    "recursive grammar",
+    "atom types",
+    "list structure",
+    "nested parsing",
+    "code-as-data"
+  ],
+
+  "related": ["erb", "simple-xml"]
+}

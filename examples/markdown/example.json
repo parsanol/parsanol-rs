@@ -1,0 +1,89 @@
+{
+  "id": "markdown",
+  "title": "Markdown Parser",
+  "description": "Parse a comprehensive subset of Markdown including headers, paragraphs, code blocks, lists, blockquotes, links, images, and inline formatting.",
+  "category": "data-formats",
+  "tags": ["markdown", "documentation", "markup", "formatting", "blog"],
+  "difficulty": "intermediate",
+
+  "motivation": {
+    "why": "Markdown is the most widely used lightweight markup language for documentation, blogging, and content management. A robust parser enables custom documentation tooling.",
+    "useCases": [
+      "Static site generators",
+      "Documentation systems",
+      "README rendering",
+      "Blog post processing",
+      "Content management systems"
+    ]
+  },
+
+  "inputFormat": {
+    "description": "Markdown with ATX headers (# to ######), code blocks (```), blockquotes (>), unordered lists (- or *), ordered lists (1.), horizontal rules (---), links [text](url), images ![alt](url), and inline formatting.",
+    "syntax": "# Header | ```code``` | > quote | - list | [link](url) | **bold** | *italic* | `code`",
+    "examples": [
+      {
+        "input": "# Title\\n\\nParagraph text.",
+        "description": "Header and paragraph",
+        "valid": true
+      },
+      {
+        "input": "```rust\\nfn main() {}\\n```",
+        "description": "Fenced code block",
+        "valid": true
+      },
+      {
+        "input": "- Item 1\\n- Item 2\\n- Item 3",
+        "description": "Unordered list",
+        "valid": true
+      },
+      {
+        "input": "1. First\\n2. Second\\n3. Third",
+        "description": "Ordered list",
+        "valid": true
+      },
+      {
+        "input": "> This is a blockquote",
+        "description": "Blockquote",
+        "valid": true
+      },
+      {
+        "input": "[Link text](https://example.com)",
+        "description": "Link",
+        "valid": true
+      },
+      {
+        "input": "![Alt text](image.png)",
+        "description": "Image",
+        "valid": true
+      },
+      {
+        "input": "---",
+        "description": "Horizontal rule",
+        "valid": true
+      },
+      {
+        "input": "# Full\\n\\nText with **bold**, *italic*, and `code`.\\n\\n- List\\n- Items",
+        "description": "Full document",
+        "valid": true
+      }
+    ]
+  },
+
+  "outputFormat": {
+    "description": "The parser returns a MarkdownDocument containing MdBlock enum values for each block element.",
+    "structure": {
+      "MarkdownDocument": { "description": "Struct with blocks: Vec<MdBlock>" },
+      "MdBlock": { "description": "Enum: Heading{level, text}, Paragraph{text}, CodeBlock{language, code}, Blockquote{text}, List{ordered, items}, HorizontalRule, Blank" }
+    }
+  },
+
+  "concepts": [
+    "block parsing",
+    "inline formatting",
+    "fenced code blocks",
+    "list detection",
+    "link/image parsing"
+  ],
+
+  "related": ["markup", "simple-xml", "erb"]
+}

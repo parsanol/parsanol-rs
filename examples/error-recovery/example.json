@@ -1,0 +1,55 @@
+{
+  "id": "error-recovery",
+  "title": "Error Recovery",
+  "description": "Demonstrates strategies for handling parse errors gracefully and continuing to parse after failures.",
+  "category": "conceptual",
+  "tags": ["error", "recovery", "resilient", "synchronization"],
+  "difficulty": "advanced",
+  "concepts": [
+    "error recovery",
+    "synchronization points",
+    "error collection",
+    "graceful degradation"
+  ],
+
+  "motivation": {
+    "why": "Real-world input often contains errors. A good parser should recover and continue rather than stopping at the first error.",
+    "useCases": [
+      "IDE integration with multiple error markers",
+      "Linting tools that report all issues at once",
+      "Data validation with comprehensive error reporting",
+      "Robust parsing of user-generated content"
+    ]
+  },
+
+  "inputFormat": {
+    "description": "Input that may contain syntax errors mixed with valid content.",
+    "syntax": "Mixed valid and invalid segments",
+    "examples": [
+      {
+        "input": "1+2, 3*, 5+6",
+        "description": "Three segments, middle one is invalid",
+        "valid": false
+      },
+      {
+        "input": "name: Alice, @#$%, age: 30",
+        "description": "Key-value pairs with corrupted middle segment",
+        "valid": false
+      }
+    ]
+  },
+
+  "outputFormat": {
+    "description": "Parse results with error information and recovery status.",
+    "structure": {
+      "segments": { "type": "array", "description": "Parsed segments with status" },
+      "errors": { "type": "array", "description": "Collected errors with positions" },
+      "recovered": { "type": "boolean", "description": "Whether recovery was attempted" }
+    }
+  },
+
+  "related": ["error-reporting", "nested-errors"],
+  "implementations": {
+    "rust": { "basic": "basic.rs" }
+  }
+}

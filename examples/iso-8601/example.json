@@ -1,0 +1,101 @@
+{
+  "id": "iso-8601",
+  "title": "ISO 8601 Date/Time Parser",
+  "description": "Parse ISO 8601 date, time, and datetime strings - the international standard for date and time representations used across systems and languages.",
+  "category": "data-formats",
+  "tags": ["iso8601", "date", "time", "datetime", "duration", "standard"],
+  "difficulty": "intermediate",
+
+  "motivation": {
+    "why": "ISO 8601 is the international standard for date and time interchange. It's used in APIs, databases, logs, and any system that needs unambiguous date/time representation across cultures and timezones.",
+    "useCases": [
+      "API date/time parsing and validation",
+      "Database timestamp handling",
+      "Log file timestamp parsing",
+      "Calendar application development",
+      "Cross-system data interchange"
+    ]
+  },
+
+  "inputFormat": {
+    "description": "ISO 8601 supports multiple formats: calendar dates (YYYY-MM-DD), week dates (YYYY-Www-D), ordinal dates (YYYY-DDD), times with optional fractions and timezones, and durations (PnYnMnDTnHnMnS).",
+    "syntax": "YYYY-MM-DD | YYYY-Www-D | YYYY-DDD | HH:MM:SS | YYYY-MM-DDTHH:MM:SSZ | PnYnMnDTnHnMnS",
+    "examples": [
+      {
+        "input": "2024-01-15",
+        "description": "Calendar date",
+        "valid": true
+      },
+      {
+        "input": "20240115",
+        "description": "Compact calendar date (no separators)",
+        "valid": true
+      },
+      {
+        "input": "2024-W02-1",
+        "description": "Week date (2nd week, Monday)",
+        "valid": true
+      },
+      {
+        "input": "2024-015",
+        "description": "Ordinal date (15th day of year)",
+        "valid": true
+      },
+      {
+        "input": "10:30:00",
+        "description": "Time",
+        "valid": true
+      },
+      {
+        "input": "10:30:00.123",
+        "description": "Time with fractional seconds",
+        "valid": true
+      },
+      {
+        "input": "2024-01-15T10:30:00Z",
+        "description": "UTC datetime",
+        "valid": true
+      },
+      {
+        "input": "2024-01-15T10:30:00+09:00",
+        "description": "Datetime with timezone offset",
+        "valid": true
+      },
+      {
+        "input": "P1Y2M3DT4H5M6S",
+        "description": "Duration (1 year, 2 months, 3 days, 4 hours, 5 minutes, 6 seconds)",
+        "valid": true
+      },
+      {
+        "input": "PT30M",
+        "description": "Duration (30 minutes)",
+        "valid": true
+      },
+      {
+        "input": "2024-13-45",
+        "description": "Invalid: out of range values",
+        "valid": false
+      }
+    ]
+  },
+
+  "outputFormat": {
+    "description": "The parser returns structured types for dates (IsoDate), times (IsoTime), datetimes (IsoDateTime), and durations (IsoDuration), each with properly typed fields.",
+    "structure": {
+      "IsoDate": { "description": "year, month, day, week, weekday, ordinal_day fields" },
+      "IsoTime": { "description": "hour, minute, second, fraction, timezone fields" },
+      "IsoDateTime": { "description": "date (IsoDate), time (Option<IsoTime>)" },
+      "IsoDuration": { "description": "years, months, days, hours, minutes, seconds fields" }
+    }
+  },
+
+  "concepts": [
+    "calendar dates",
+    "week dates",
+    "ordinal dates",
+    "timezone handling",
+    "duration parsing"
+  ],
+
+  "related": ["iso-6709", "json", "toml"]
+}

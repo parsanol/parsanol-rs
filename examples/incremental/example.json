@@ -1,0 +1,54 @@
+{
+  "id": "incremental",
+  "title": "Incremental Parsing",
+  "description": "Demonstrates how to reparse only affected regions after edits for editor integration.",
+  "category": "conceptual",
+  "tags": ["incremental", "editor", "ide", "reparse"],
+  "difficulty": "advanced",
+  "concepts": [
+    "incremental parsing",
+    "region tracking",
+    "edit application",
+    "partial reparse"
+  ],
+
+  "motivation": {
+    "why": "Incremental parsing enables fast response in editors by only reparsing changed portions of the input.",
+    "useCases": [
+      "IDE integration with real-time parsing",
+      "Code editors with syntax highlighting",
+      "Collaborative editing tools",
+      "Live preview systems"
+    ]
+  },
+
+  "inputFormat": {
+    "description": "Any text that can be edited incrementally.",
+    "syntax": "text with edit operations",
+    "examples": [
+      {
+        "input": "Hello\\nWorld\\nTest",
+        "description": "Initial input with three lines",
+        "valid": true
+      },
+      {
+        "input": "Hello\\nBeautiful World\\nTest",
+        "description": "After inserting 'Beautiful ' at position 6",
+        "valid": true
+      }
+    ]
+  },
+
+  "outputFormat": {
+    "description": "Parse results with region tracking for incremental updates.",
+    "structure": {
+      "regions": { "type": "array", "description": "List of parsed regions with validity status" },
+      "invalid_count": { "type": "integer", "description": "Number of regions needing reparse" }
+    }
+  },
+
+  "related": ["error-reporting", "streaming"],
+  "implementations": {
+    "rust": { "basic": "basic.rs" }
+  }
+}

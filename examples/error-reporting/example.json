@@ -1,0 +1,64 @@
+{
+  "id": "error-reporting",
+  "title": "Error Reporting",
+  "description": "Demonstrate rich error reporting techniques including position-to-line/column conversion, context extraction, and formatted error messages.",
+  "category": "error-handling",
+  "tags": ["error", "reporting", "debugging", "position", "context"],
+  "difficulty": "intermediate",
+
+  "motivation": {
+    "why": "Good error messages are critical for developer experience. Parser errors should clearly indicate what went wrong and where, with helpful context for debugging.",
+    "useCases": [
+      "Compiler error messages",
+      "Linter diagnostics",
+      "IDE error highlighting",
+      "Configuration file validation",
+      "Debugging parser failures"
+    ]
+  },
+
+  "inputFormat": {
+    "description": "Any parseable input that demonstrates error conditions. Focus is on the error output quality, not the input format.",
+    "syntax": "various - errors are the focus",
+    "examples": [
+      {
+        "input": "valid_identifier",
+        "description": "Valid input - no error",
+        "valid": true
+      },
+      {
+        "input": "42",
+        "description": "Valid number",
+        "valid": true
+      },
+      {
+        "input": "hello world!",
+        "description": "Invalid: unexpected character",
+        "valid": false
+      },
+      {
+        "input": "# comment\\nidentifier\\n42\\nbad@symbol",
+        "description": "Multi-line with error",
+        "valid": false
+      }
+    ]
+  },
+
+  "outputFormat": {
+    "description": "The parser produces detailed ParseErrorInfo with position, line/column, and surrounding context.",
+    "structure": {
+      "ParseErrorInfo": { "description": "Struct with message, position, line, column, context" },
+      "context": { "description": "String showing surrounding lines with error highlighted" }
+    }
+  },
+
+  "concepts": [
+    "position tracking",
+    "line/column conversion",
+    "context extraction",
+    "error formatting",
+    "failure point detection"
+  ],
+
+  "related": ["sentence", "comments"]
+}
