@@ -67,7 +67,7 @@ jobs:
       new_version: ${{ steps.calculate.outputs.new_version }}
       changelog_date: ${{ steps.calculate.outputs.changelog_date }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -190,7 +190,7 @@ jobs:
       contents: write
       pull-requests: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0

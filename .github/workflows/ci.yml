@@ -39,7 +39,7 @@ jobs:
     outputs:
       should_run: ${{ steps.check.outputs.should_run }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 2
 
@@ -63,7 +63,7 @@ jobs:
     needs: preflight
     if: needs.preflight.outputs.should_run == 'true'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Run cargo-audit
         uses: rustsec/audit-check@v2
@@ -87,7 +87,7 @@ jobs:
     needs: preflight
     if: needs.preflight.outputs.should_run == 'true'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -125,7 +125,7 @@ jobs:
     needs: preflight
     if: needs.preflight.outputs.should_run == 'true'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install cargo-machete
         uses: taiki-e/install-action@v2
@@ -166,7 +166,7 @@ jobs:
             continue-on-error: true
     continue-on-error: ${{ matrix.continue-on-error || false }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust ${{ matrix.rust }}
         uses: dtolnay/rust-toolchain@v1
@@ -206,7 +206,7 @@ jobs:
           - ""
           - "logging"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -228,7 +228,7 @@ jobs:
     needs: [preflight, lint]
     if: needs.preflight.outputs.should_run == 'true'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -253,7 +253,7 @@ jobs:
     needs: [preflight, lint]
     if: needs.preflight.outputs.should_run == 'true'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -292,7 +292,7 @@ jobs:
     needs: [preflight, lint]
     if: needs.preflight.outputs.should_run == 'true'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -327,7 +327,7 @@ jobs:
     needs: [preflight, lint]
     if: needs.preflight.outputs.should_run == 'true'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -358,7 +358,7 @@ jobs:
     needs: [preflight, lint]
     if: needs.preflight.outputs.should_run == 'true' && github.event_name == 'pull_request'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
