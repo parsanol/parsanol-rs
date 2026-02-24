@@ -1,0 +1,362 @@
+# Release Workflow for Parsanol-rs
+#
+# This workflow:
+# 1. Validates the build and tests
+# 2. Builds release artifacts for multiple platforms
+# 3. Publishes to crates.io
+# 4. Creates GitHub release with artifacts
+#
+# Triggered by version tags (v*.*.*)
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-alpha.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-beta.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-rc.[0-9]+'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (skip publishing)'
+        required: false
+        type: boolean
+        default: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: short
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  # ============================================================================
+  # Validate Release
+  # ============================================================================
+  validate:
+    name: Validate Release
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      is_prerelease: ${{ steps.version.outputs.is_prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Extract version info
+        id: version
+        run: |
+          # Get version from tag or Cargo.toml
+          if [[ -n "${{ github.ref_name }}" ]]; then
+            TAG_VERSION="${GITHUB_REF#refs/tags/v}"
+          else
+            TAG_VERSION=$(grep '^version =' Cargo.toml | head -1 | sed 's/.*"\([^"]*\)".*/\1/')
+          fi
+
+          CARGO_VERSION=$(grep '^version =' Cargo.toml | head -1 | sed 's/.*"\([^"]*\)".*/\1/')
+
+          echo "version=$TAG_VERSION" >> $GITHUB_OUTPUT
+          echo "Tag version: $TAG_VERSION"
+          echo "Cargo version: $CARGO_VERSION"
+
+          # Check if prerelease
+          if [[ "$TAG_VERSION" == *"-alpha"* ]] || [[ "$TAG_VERSION" == *"-beta"* ]] || [[ "$TAG_VERSION" == *"-rc"* ]]; then
+            echo "is_prerelease=true" >> $GITHUB_OUTPUT
+          else
+            echo "is_prerelease=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run clippy
+        run: cargo clippy --all-targets --no-default-features -- -D warnings
+
+      - name: Run tests (no features)
+        run: cargo test --no-default-features
+
+      - name: Run tests (all features)
+        run: cargo test --all-features
+
+      - name: Verify version matches tag
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          TAG_VERSION="${GITHUB_REF#refs/tags/v}"
+          CARGO_VERSION=$(grep '^version =' Cargo.toml | head -1 | sed 's/.*"\([^"]*\)".*/\1/')
+          if [ "$TAG_VERSION" != "$CARGO_VERSION" ]; then
+            echo "Error: Tag version ($TAG_VERSION) does not match Cargo.toml version ($CARGO_VERSION)"
+            exit 1
+          fi
+
+      - name: Verify CHANGELOG updated
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          if ! grep -q "$VERSION" CHANGELOG.md; then
+            echo "Warning: CHANGELOG.md does not contain version $VERSION"
+            echo "Please ensure CHANGELOG.md is updated."
+          fi
+
+  # ============================================================================
+  # Build Native Libraries (for FFI) - Multi-platform, Multi-arch
+  # ============================================================================
+  build-native:
+    name: Build Native (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux x64
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-22.04
+            artifact: linux-x64
+          # Linux ARM64
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-22.04-arm
+            artifact: linux-arm64
+          # macOS (Intel)
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            artifact: macos-x64
+          # macOS (Apple Silicon)
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            artifact: macos-arm64
+          # Windows x64
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            artifact: windows-x64
+          # Windows ARM64
+          - target: aarch64-pc-windows-msvc
+            os: windows-11-arm
+            artifact: windows-arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+          cache-on-failure: true
+
+      - name: Build release library
+        run: cargo build --release --target ${{ matrix.target }} --no-default-features
+
+      - name: Prepare artifact (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p artifacts
+          cp target/${{ matrix.target }}/release/libparsanol.* artifacts/ || true
+          cp target/${{ matrix.target }}/release/libparsanol.rlib artifacts/ || true
+
+      - name: Prepare artifact (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          mkdir artifacts
+          copy target\${{ matrix.target }}\release\parsanol.* artifacts\ || true
+          copy target\${{ matrix.target }}\release\parsanol.lib artifacts\ || true
+          copy target\${{ matrix.target }}\release\parsanol.dll artifacts\ || true
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: artifacts/
+          retention-days: 30
+
+  # ============================================================================
+  # Build Documentation
+  # ============================================================================
+  build-docs:
+    name: Build Documentation
+    runs-on: ubuntu-latest
+    needs: validate
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Build documentation
+        run: |
+          cargo doc --no-deps --all-features
+          cp -r target/doc docs
+
+      - name: Create documentation archive
+        run: tar -czf docs.tar.gz -C target doc
+
+      - name: Upload documentation
+        uses: actions/upload-artifact@v4
+        with:
+          name: documentation
+          path: docs.tar.gz
+          retention-days: 30
+
+  # ============================================================================
+  # Package for crates.io
+  # ============================================================================
+  package:
+    name: Package Crate
+    runs-on: ubuntu-latest
+    needs: validate
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Package crate
+        run: |
+          cargo package --no-verify
+          mkdir -p crate-package
+          cp target/package/*.crate crate-package/ || true
+
+      - name: Upload crate package
+        uses: actions/upload-artifact@v4
+        with:
+          name: crate-package
+          path: crate-package/
+          retention-days: 30
+
+  # ============================================================================
+  # Publish to crates.io
+  # ============================================================================
+  publish:
+    name: Publish to crates.io
+    runs-on: ubuntu-latest
+    needs: [validate, build-native, build-docs, package]
+    if: ${{ !inputs.dry_run && startsWith(github.ref, 'refs/tags/') }}
+    environment: crates.io
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Publish to crates.io
+        run: cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Wait for crates.io index
+        run: sleep 60
+
+  # ============================================================================
+  # Create GitHub Release
+  # ============================================================================
+  github-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: [validate, build-native, build-docs, package, publish]
+    if: always() && (needs.publish.result == 'success' || inputs.dry_run)
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Extract changelog
+        id: changelog
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          if [[ -f "CHANGELOG.md" ]]; then
+            # Extract changelog section for this version
+            CHANGELOG=$(sed -n "/^## \[$VERSION\]/,/^## \[/p" CHANGELOG.md | sed '$d' || echo "Release $VERSION")
+            echo "release_notes<<EOF" >> $GITHUB_OUTPUT
+            echo "$CHANGELOG" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          else
+            echo "release_notes=Release $VERSION" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release-assets
+          # Copy native libraries (x64 and ARM64)
+          cp -r artifacts/linux-x64 release-assets/ || true
+          cp -r artifacts/linux-arm64 release-assets/ || true
+          cp -r artifacts/macos-x64 release-assets/ || true
+          cp -r artifacts/macos-arm64 release-assets/ || true
+          cp -r artifacts/windows-x64 release-assets/ || true
+          cp -r artifacts/windows-arm64 release-assets/ || true
+          # Copy documentation
+          cp artifacts/documentation/docs.tar.gz release-assets/ || true
+          # Copy crate package
+          cp artifacts/crate-package/*.crate release-assets/ || true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Release ${{ github.ref_name }}
+          body: ${{ steps.changelog.outputs.release_notes }}
+          draft: false
+          prerelease: ${{ needs.validate.outputs.is_prerelease == 'true' }}
+          generate_release_notes: true
+          files: |
+            release-assets/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ============================================================================
+  # Notify
+  # ============================================================================
+  notify:
+    name: Notify
+    runs-on: ubuntu-latest
+    needs: [validate, publish, github-release]
+    if: always()
+    steps:
+      - name: Report status
+        run: |
+          echo "## Release Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Step | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Validation | ${{ needs.validate.result == 'success' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Publish | ${{ needs.publish.result == 'success' && '✅' || '⏭️ Skipped' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| GitHub Release | ${{ needs.github-release.result == 'success' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [[ "${{ needs.publish.result }}" == "success" ]]; then
+            echo "📦 View on crates.io: https://crates.io/crates/parsanol" >> $GITHUB_STEP_SUMMARY
+            echo "📖 View on docs.rs: https://docs.rs/parsanol" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [[ "${{ needs.publish.result }}" == "failure" ]]; then
+            exit 1
+          fi

@@ -1,0 +1,65 @@
+# Auto-merge workflow for approved PRs
+#
+# This workflow automatically merges PRs that:
+# - Have been approved by reviewers
+# - Pass all CI checks
+# - Have the "auto-merge" label
+
+name: Auto Merge
+
+on:
+  pull_request_review:
+    types: [submitted]
+  pull_request:
+    types: [labeled, synchronize]
+  check_suite:
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    name: Auto Merge
+    runs-on: ubuntu-latest
+    if: |
+      github.event.pull_request.draft == false &&
+      contains(github.event.pull_request.labels.*.name, 'auto-merge')
+    steps:
+      - name: Check PR status
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+
+          # Check if PR is approved
+          APPROVED=$(gh pr view "$PR_NUMBER" --json reviews --jq '
+            [.reviews[] | select(.state == "APPROVED")] | length > 0
+          ')
+
+          if [[ "$APPROVED" != "true" ]]; then
+            echo "PR is not approved, skipping auto-merge"
+            echo "can_merge=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Check if all CI checks pass
+          CHECKS=$(gh pr checks "$PR_NUMBER" 2>/dev/null || echo "pending")
+
+          if echo "$CHECKS" | grep -q "fail\|pending"; then
+            echo "CI checks not all passing, skipping auto-merge"
+            echo "can_merge=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          echo "can_merge=true" >> $GITHUB_OUTPUT
+
+      - name: Enable auto-merge
+        if: steps.check.outputs.can_merge == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          gh pr merge "$PR_NUMBER" --squash --auto --delete-branch

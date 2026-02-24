@@ -1,0 +1,404 @@
+# Continuous Integration for Parsanol-rs
+#
+# This workflow implements Rust best practices for CI:
+# - Security audit with cargo-deny and cargo-audit
+# - Multi-platform testing (Linux, Windows, macOS)
+# - Multiple Rust version testing (MSRV, stable, beta)
+# - Code coverage with llvm-cov
+# - Performance regression testing
+# - Documentation building
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  merge_group:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  CARGO_BUILD_JOBS: 4
+  RUST_BACKTRACE: short
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  # ============================================================================
+  # Pre-flight Checks
+  # ============================================================================
+  preflight:
+    name: Pre-flight Checks
+    runs-on: ubuntu-latest
+    outputs:
+      should_run: ${{ steps.check.outputs.should_run }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Check if code changed
+        id: check
+        run: |
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            echo "should_run=true" >> $GITHUB_OUTPUT
+          elif git diff --name-only HEAD^ HEAD | grep -qE '\.(rs|toml|lock)$'; then
+            echo "should_run=true" >> $GITHUB_OUTPUT
+          else
+            echo "should_run=false" >> $GITHUB_OUTPUT
+          fi
+
+  # ============================================================================
+  # Security Audit
+  # ============================================================================
+  security:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    needs: preflight
+    if: needs.preflight.outputs.should_run == 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run cargo-audit
+        uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+
+      - name: Check licenses and advisories
+        run: cargo deny check --disable-fetch licenses advisories bans sources
+
+  # ============================================================================
+  # Format and Lint
+  # ============================================================================
+  lint:
+    name: Format and Lint
+    runs-on: ubuntu-latest
+    needs: preflight
+    if: needs.preflight.outputs.should_run == 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo tools
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run clippy (default features)
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Run clippy (no features)
+        run: cargo clippy --all-targets --no-default-features -- -D warnings
+
+      - name: Run clippy (all features)
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Check documentation
+        run: cargo doc --no-deps --all-features
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+
+  # ============================================================================
+  # Check Unused Dependencies
+  # ============================================================================
+  machete:
+    name: Check Unused Dependencies
+    runs-on: ubuntu-latest
+    needs: preflight
+    if: needs.preflight.outputs.should_run == 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cargo-machete
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-machete
+
+      - name: Check for unused dependencies
+        run: cargo machete
+
+  # ============================================================================
+  # Test Matrix (Multi-platform, Multi-arch)
+  # ============================================================================
+  test:
+    name: Test (${{ matrix.os }}, ${{ matrix.rust }})
+    runs-on: ${{ matrix.os }}
+    needs: [preflight, lint]
+    if: needs.preflight.outputs.should_run == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-22.04           # Linux x64
+          - ubuntu-22.04-arm       # Linux ARM64
+          - windows-latest         # Windows x64
+          - windows-11-arm         # Windows ARM64
+          - macos-15               # macOS (Apple Silicon)
+          - macos-15-intel         # macOS Intel
+        rust: [stable]
+        include:
+          # MSRV check
+          - os: ubuntu-22.04
+            rust: "1.70"
+            name: Test MSRV
+          # Beta for early warning
+          - os: ubuntu-22.04
+            rust: beta
+            name: Test Beta
+            continue-on-error: true
+    continue-on-error: ${{ matrix.continue-on-error || false }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust ${{ matrix.rust }}
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: ${{ matrix.rust }}
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.os }}-${{ matrix.rust }}
+          cache-on-failure: true
+
+      - name: Build
+        run: cargo build --no-default-features --verbose
+
+      - name: Run tests
+        run: cargo test --no-default-features --verbose
+
+      - name: Build examples
+        run: cargo build --examples --no-default-features
+
+      - name: Run doc tests
+        run: cargo test --doc --no-default-features
+
+  # ============================================================================
+  # Feature Matrix Testing
+  # ============================================================================
+  features:
+    name: Test Features
+    runs-on: ubuntu-latest
+    needs: [preflight, lint]
+    if: needs.preflight.outputs.should_run == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        feature:
+          - ""
+          - "logging"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Test with ${{ matrix.feature || 'no features' }}
+        run: cargo test --no-default-features --features "${{ matrix.feature }}"
+
+  # ============================================================================
+  # Workspace Testing
+  # ============================================================================
+  workspace:
+    name: Test Workspace
+    runs-on: ubuntu-latest
+    needs: [preflight, lint]
+    if: needs.preflight.outputs.should_run == 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+          workspaces: |
+            .
+            crates/parsanol-ruby-derive
+
+      - name: Test all workspace crates
+        run: cargo test --workspace --no-default-features
+
+  # ============================================================================
+  # Code Coverage
+  # ============================================================================
+  coverage:
+    name: Code Coverage
+    runs-on: ubuntu-latest
+    needs: [preflight, lint]
+    if: needs.preflight.outputs.should_run == 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+
+      - name: Generate coverage report
+        run: |
+          cargo llvm-cov --no-default-features --all-features --lcov --output-path lcov.info
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: lcov.info
+          fail_ci_if_error: false
+          flags: unittests
+          name: codecov-umbrella
+
+  # ============================================================================
+  # Benchmarks
+  # ============================================================================
+  benchmarks:
+    name: Benchmarks
+    runs-on: ubuntu-latest
+    needs: [preflight, lint]
+    if: needs.preflight.outputs.should_run == 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Build benchmarks
+        run: cargo build --bench comparison --no-default-features
+
+      - name: Run benchmarks (test mode)
+        run: cargo bench --bench comparison --no-default-features -- --test
+
+      - name: Run benchmarks with baseline
+        run: cargo bench --bench comparison --no-default-features -- --save-baseline ci-${{ github.sha }}
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: target/criterion
+          retention-days: 7
+
+  # ============================================================================
+  # Documentation
+  # ============================================================================
+  docs:
+    name: Build Documentation
+    runs-on: ubuntu-latest
+    needs: [preflight, lint]
+    if: needs.preflight.outputs.should_run == 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Build documentation
+        run: cargo doc --no-deps --all-features
+        env:
+          RUSTDOCFLAGS: "-D warnings --cfg docsrs"
+
+      - name: Upload documentation
+        uses: actions/upload-artifact@v4
+        with:
+          name: documentation
+          path: target/doc
+          retention-days: 7
+
+  # ============================================================================
+  # Semver Check
+  # ============================================================================
+  semver:
+    name: Semver Compatibility
+    runs-on: ubuntu-latest
+    needs: [preflight, lint]
+    if: needs.preflight.outputs.should_run == 'true' && github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Install cargo-semver-checks
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-semver-checks
+
+      - name: Check semver compatibility
+        run: cargo semver-checks --baseline-rev ${{ github.base_ref }}
+
+  # ============================================================================
+  # Summary
+  # ============================================================================
+  ci-success:
+    name: CI Success
+    runs-on: ubuntu-latest
+    needs: [security, lint, machete, test, features, workspace, coverage, benchmarks, docs]
+    if: always() && !contains(needs.*.result, 'failure')
+    steps:
+      - name: Report success
+        run: |
+          echo "## CI Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ All CI checks passed!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Check | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Security Audit | ✅ |" >> $GITHUB_STEP_SUMMARY
+          echo "| Format & Lint | ✅ |" >> $GITHUB_STEP_SUMMARY
+          echo "| Unused Dependencies | ✅ |" >> $GITHUB_STEP_SUMMARY
+          echo "| Tests | ✅ |" >> $GITHUB_STEP_SUMMARY
+          echo "| Features | ✅ |" >> $GITHUB_STEP_SUMMARY
+          echo "| Workspace | ✅ |" >> $GITHUB_STEP_SUMMARY
+          echo "| Coverage | ✅ |" >> $GITHUB_STEP_SUMMARY
+          echo "| Benchmarks | ✅ |" >> $GITHUB_STEP_SUMMARY
+          echo "| Documentation | ✅ |" >> $GITHUB_STEP_SUMMARY

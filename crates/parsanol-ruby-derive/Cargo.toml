@@ -1,0 +1,22 @@
+[package]
+name = "parsanol-ruby-derive"
+version = "0.1.0"
+edition = "2021"
+authors = ["Ribose Inc. <open.source@ribose.com>"]
+license = "MIT"
+description = "Proc macro for deriving RubyObject trait in parsanol-rs"
+repository = "https://github.com/parsanol/parsanol-rs"
+readme = "README.md"
+keywords = ["parser", "peg", "ruby", "ffi", "macro"]
+categories = ["parsing", "development-tools::ffi"]
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "2.0", features = ["full", "parsing", "extra-traits"] }
+quote = "1.0"
+proc-macro2 = "1.0"
+
+[dev-dependencies]
+parsanol = { path = "../.." }
