@@ -312,7 +312,7 @@ jobs:
         run: cargo bench --bench comparison --no-default-features -- --save-baseline ci-${{ github.sha }}
 
       - name: Upload benchmark results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: benchmark-results
           path: target/criterion
@@ -343,7 +343,7 @@ jobs:
           RUSTDOCFLAGS: "-D warnings --cfg docsrs"
 
       - name: Upload documentation
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: documentation
           path: target/doc

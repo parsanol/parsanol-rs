@@ -175,7 +175,7 @@ jobs:
           copy target\${{ matrix.target }}\release\parsanol.dll artifacts\ || true
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.artifact }}
           path: artifacts/
@@ -208,7 +208,7 @@ jobs:
         run: tar -czf docs.tar.gz -C target doc
 
       - name: Upload documentation
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: documentation
           path: docs.tar.gz
@@ -239,7 +239,7 @@ jobs:
           cp target/package/*.crate crate-package/ || true
 
       - name: Upload crate package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: crate-package
           path: crate-package/
