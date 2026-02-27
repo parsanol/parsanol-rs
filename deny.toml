@@ -25,6 +25,7 @@ allow = [
     "ISC",
     "Zlib",
     "Unicode-DFS-2016",
+    "Unicode-3.0",
     "CC0-1.0",
 ]
 
@@ -62,9 +63,8 @@ allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 # Allow git sources for specific repositories
 allow-git = []
 
-[sources.unknown-org]
-# Require approval for unknown git sources
-require-specifier = true
+# Require specifiers for git sources
+unknown-git = "deny"
 
 [output]
 # Output format
