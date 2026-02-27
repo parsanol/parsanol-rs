@@ -207,19 +207,13 @@ jobs:
         feature:
           - ""
           - "logging"
-          - "ruby"
           - "wasm"
+          - "parallel"
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
-
-      - name: Setup Ruby
-        if: matrix.feature == 'ruby'
-        uses: ruby/setup-ruby@v1
-        with:
-          ruby-version: '3.2'
 
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2

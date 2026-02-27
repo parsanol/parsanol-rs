@@ -1,0 +1,56 @@
+# Ruby FFI Integration Tests
+#
+# This workflow runs Ruby-specific tests that require Ruby runtime and development libraries.
+# It runs on demand or can be triggered separately from the main CI.
+
+name: Ruby FFI
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '**.rs'
+      - 'Cargo.toml'
+      - '.github/workflows/ruby-ffi.yml'
+
+# Cancel in-progress runs for the same branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  ruby-ffi:
+    name: Ruby FFI Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Ruby 3.2 with dev libraries
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.2'
+          bundler-version: 'default'
+
+      - name: Install Ruby development headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ruby-dev
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build with Ruby feature
+        run: cargo build --no-default-features --features ruby
+
+      - name: Run Ruby FFI tests
+        run: cargo test --no-default-features --features ruby --test ruby_ffi
+
+      - name: Run clippy with Ruby
+        run: cargo clippy --no-default-features --features ruby -- -D warnings
