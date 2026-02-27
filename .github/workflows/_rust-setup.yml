@@ -47,7 +47,9 @@ jobs:
           fetch-depth: ${{ inputs.checkout-fetch-depth }}
 
       - name: Install Rust ${{ inputs.rust }}
-        uses: dtolnay/rust-toolchain@${{ inputs.rust }}
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ inputs.rust }}
 
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@v2
