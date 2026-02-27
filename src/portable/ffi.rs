@@ -99,7 +99,7 @@ pub fn flatten_ast_to_u64(node: &AstNode, arena: &AstArena, _input: &str, output
             output.push(len);
 
             // Write string bytes as u64 chunks (same format as hash keys)
-            let chunks = (bytes.len() + 7) / 8;
+            let chunks = bytes.len().div_ceil(8);
             for chunk_idx in 0..chunks {
                 let mut chunk: u64 = 0;
                 for byte_idx in 0..8 {
@@ -137,7 +137,7 @@ pub fn flatten_ast_to_u64(node: &AstNode, arena: &AstArena, _input: &str, output
                 output.push(len);
 
                 // Calculate number of u64 chunks needed (ceil(len / 8))
-                let chunks = (key_bytes.len() + 7) / 8;
+                let chunks = key_bytes.len().div_ceil(8);
                 for chunk_idx in 0..chunks {
                     let mut chunk: u64 = 0;
                     for byte_idx in 0..8 {

@@ -107,8 +107,11 @@ jobs:
       - name: Run clippy (no features)
         run: cargo clippy --all-targets --no-default-features -- -D warnings
 
-      - name: Run clippy (all features)
-        run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: Run clippy (logging feature)
+        run: cargo clippy --all-targets --no-default-features --features logging -- -D warnings
+
+      - name: Run clippy (wasm feature)
+        run: cargo clippy --all-targets --no-default-features --features wasm -- -D warnings
 
       - name: Check documentation
         run: cargo doc --no-deps --all-features
@@ -154,9 +157,9 @@ jobs:
           - macos-15-intel         # macOS Intel
         rust: [stable]
         include:
-          # MSRV check
+          # MSRV check - Rust 1.82+ required for 2024 edition dependencies
           - os: ubuntu-22.04
-            rust: "1.71"
+            rust: "1.82"
             name: Test MSRV
           # Beta for early warning
           - os: ubuntu-22.04
