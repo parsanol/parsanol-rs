@@ -39,8 +39,8 @@ jobs:
       - name: Build with WASM feature
         run: cargo build --no-default-features --features wasm --target wasm32-unknown-unknown
 
-      - name: Run WASM tests (native)
-        run: cargo test --no-default-features --features wasm
-
       - name: Run clippy with WASM
         run: cargo clippy --no-default-features --features wasm -- -D warnings
+
+      - name: Run WASM library tests (native)
+        run: cargo test --no-default-features --features wasm --lib

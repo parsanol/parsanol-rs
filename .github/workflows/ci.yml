@@ -273,7 +273,7 @@ jobs:
 
       - name: Generate coverage report
         run: |
-          cargo llvm-cov --no-default-features --all-features --lcov --output-path lcov.info
+          cargo llvm-cov --no-default-features --features "logging,parallel" --lcov --output-path lcov.info
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
