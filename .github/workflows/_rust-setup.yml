@@ -1,0 +1,55 @@
+# Reusable workflow for Rust project setup
+#
+# This workflow provides common setup steps used across CI and release workflows.
+# It handles:
+# - Checkout
+# - Rust toolchain installation
+# - Cargo cache
+#
+# Usage:
+#   jobs:
+#     my-job:
+#       uses: ./.github/workflows/_rust-setup.yml
+#       with:
+#         rust: stable
+#         cache-key: ${{ matrix.os }}-${{ matrix.rust }}
+
+name: Rust Setup
+
+on:
+  workflow_call:
+    inputs:
+      rust:
+        description: 'Rust version (stable, beta, 1.70, etc.)'
+        type: string
+        default: stable
+      cache-key:
+        description: 'Cache key suffix'
+        type: string
+        default: ''
+      cache-on-failure:
+        description: 'Cache on failure'
+        type: boolean
+        default: true
+      checkout-fetch-depth:
+        description: 'Git fetch depth'
+        type: number
+        default: 1
+
+jobs:
+  setup:
+    name: Setup Rust ${{ inputs.rust }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: ${{ inputs.checkout-fetch-depth }}
+
+      - name: Install Rust ${{ inputs.rust }}
+        uses: dtolnay/rust-toolchain@${{ inputs.rust }}
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: ${{ inputs.cache-on-failure }}

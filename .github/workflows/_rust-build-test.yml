@@ -1,0 +1,78 @@
+# Reusable workflow for Rust build and test
+#
+# This workflow provides common build and test steps.
+#
+# Usage:
+#   jobs:
+#     my-job:
+#       uses: ./.github/workflows/_rust-build-test.yml
+#       with:
+#         features: "ruby,wasm"
+#         no-default-features: true
+
+name: Rust Build Test
+
+on:
+  workflow_call:
+    inputs:
+      features:
+        description: 'Features to test (comma-separated)'
+        type: string
+        default: ''
+      no-default-features:
+        description: 'Build without default features'
+        type: boolean
+        default: false
+      target:
+        description: 'Build target (e.g., x86_64-unknown-linux-gnu)'
+        type: string
+        default: ''
+      test-args:
+        description: 'Additional test arguments'
+        type: string
+        default: ''
+
+jobs:
+  build-test:
+    name: Build and Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Build
+        run: |
+          if [[ "${{ inputs.no-default-features }}" == "true" ]]; then
+            cargo build --no-default-features --target "${{ inputs.target }}"
+          else
+            cargo build --features "${{ inputs.features }}" --target "${{ inputs.target }}"
+          fi
+
+      - name: Run tests
+        run: |
+          if [[ "${{ inputs.no-default-features }}" == "true" ]]; then
+            cargo test --no-default-features ${{ inputs.test-args }}
+          else
+            cargo test --features "${{ inputs.features }}" ${{ inputs.test-args }}
+          fi
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run clippy
+        run: |
+          if [[ "${{ inputs.no-default-features }}" == "true" ]]; then
+            cargo clippy --all-targets --no-default-features -- -D warnings
+          else
+            cargo clippy --all-targets --features "${{ inputs.features }}" -- -D warnings
+          fi

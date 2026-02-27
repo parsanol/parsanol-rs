@@ -1,0 +1,15 @@
+# Release-plz configuration for parsanol-rs
+#
+# This file configures automatic versioning and changelog generation.
+# See: https://release-plz.dev/docs/config
+
+[workspace]
+# Workspace members to release
+members = ["."]
+
+# Conventional commits configuration
+# See: https://www.conventionalcommits.org/
+# - feat: minor version bump
+# - fix: patch version bump
+# - feat! or fix!: major version bump (breaking change)
+# - docs, chore, refactor, test: no version bump (just changelog)
