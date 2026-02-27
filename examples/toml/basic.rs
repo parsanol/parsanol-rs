@@ -17,7 +17,7 @@
 
 use parsanol::portable::{
     parser_dsl::{choice, dynamic, re, seq, str, GrammarBuilder, ParsletExt},
-    AstArena, AstNode, Grammar, PortableParser,
+    AstArena, Grammar, PortableParser,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

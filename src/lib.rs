@@ -96,6 +96,8 @@ pub use portable::{
 // Conditional compilation for Ruby FFI
 #[cfg(feature = "ruby")]
 pub mod ruby_ffi {
+    #![allow(missing_docs)]
+
     //! Ruby FFI module for direct Ruby object construction
     //!
     //! This module provides the `RubyObject` trait and related utilities
@@ -169,7 +171,7 @@ pub mod ruby_ffi {
 
     impl RubyObject for bool {
         fn to_ruby(&self, ruby: &Ruby) -> Result<Value, Error> {
-            Ok((*self as bool).into_value_with(ruby))
+            Ok((*self).into_value_with(ruby))
         }
     }
 
@@ -181,7 +183,7 @@ pub mod ruby_ffi {
 
     impl RubyObject for &str {
         fn to_ruby(&self, ruby: &Ruby) -> Result<Value, Error> {
-            Ok(ruby.str_new(*self).as_value())
+            Ok(ruby.str_new(self).as_value())
         }
     }
 
@@ -257,7 +259,7 @@ pub mod ruby_ffi {
 
         /// Call a method on the Ruby callback object
         fn call_method(&self, method: &str, args: &[Value]) -> BuildResult<()> {
-            let ruby = Ruby::get().map_err(|e| BuildError::Custom {
+            let _ruby = Ruby::get().map_err(|e| BuildError::Custom {
                 message: format!("Ruby not available: {}", e),
             })?;
 
@@ -419,7 +421,7 @@ pub mod ruby_ffi {
         }
 
         fn finish(&mut self) -> BuildResult<Value> {
-            let ruby = Ruby::get().map_err(|e| BuildError::Custom {
+            let _ruby = Ruby::get().map_err(|e| BuildError::Custom {
                 message: format!("Ruby not available: {}", e),
             })?;
 
@@ -506,7 +508,7 @@ pub mod ruby_ffi {
     use std::sync::Mutex;
 
     use crate::portable::ffi::flatten_ast_to_u64;
-    use crate::portable::{AstArena, AstNode, Grammar, PortableParser};
+    use crate::portable::{AstArena, Grammar, PortableParser};
 
     // Thread-safe global grammar cache
     static GRAMMAR_CACHE: Lazy<Mutex<hashbrown::HashMap<u64, Grammar>>> =
@@ -645,6 +647,7 @@ pub mod ruby_ffi {
         Ok(removed.into_value_with(&ruby))
     }
 
+    /// Initialize the Ruby native extension module
     #[magnus::init]
     pub fn init(ruby: &Ruby) -> Result<(), Error> {
         let module = ruby.define_module("Parsanol")?;

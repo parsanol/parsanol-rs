@@ -55,7 +55,7 @@ impl WasmParser {
         // Reset arena, re-sizing if needed for significantly different input sizes
         let input_len = input.len();
         let current_capacity = self.arena.capacity();
-        let optimal_capacity = (input_len / 10).max(64).min(100_000) * 2;
+        let optimal_capacity = (input_len / 10).clamp(64, 100_000) * 2;
 
         // Re-create arena if size difference is significant (> 4x)
         if current_capacity < optimal_capacity / 4 || current_capacity > optimal_capacity * 4 {

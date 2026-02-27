@@ -20,10 +20,9 @@
 
 use parsanol::portable::{
     parser_dsl::{choice, dynamic, re, seq, str, GrammarBuilder, ParsletExt},
-    AstArena, AstNode, Grammar, PortableParser,
+    AstArena, Grammar, PortableParser,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 /// Build Markdown grammar (subset)
 fn build_markdown_grammar() -> Grammar {
@@ -321,7 +320,7 @@ fn parse_markdown_document(input: &str) -> Result<MarkdownDocument, String> {
         // Blockquote
         if trimmed.starts_with('>') {
             flush_list(&mut current_list, &mut blocks);
-            let text = trimmed[1..].trim().to_string();
+            let text = trimmed.strip_prefix('>').unwrap_or("").trim().to_string();
             blocks.push(MdBlock::Blockquote { text });
             continue;
         }

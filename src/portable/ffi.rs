@@ -157,7 +157,7 @@ pub fn flatten_ast_to_u64(node: &AstNode, arena: &AstArena, _input: &str, output
     }
 }
 
-/// Flatten an AST to a new Vec<u64>
+/// Flatten an AST to a new `Vec<u64>`
 ///
 /// Convenience function that creates a new vector and flattens the AST into it.
 #[inline]
@@ -197,7 +197,7 @@ mod tests {
         let arena = AstArena::new();
         let mut output = Vec::new();
         flatten_ast_to_u64(&AstNode::Nil, &arena, "", &mut output);
-        assert_eq!(output, vec![TAG_NIL as u64]);
+        assert_eq!(output, vec![TAG_NIL]);
     }
 
     #[test]
@@ -206,11 +206,11 @@ mod tests {
 
         let mut output = Vec::new();
         flatten_ast_to_u64(&AstNode::Bool(true), &arena, "", &mut output);
-        assert_eq!(output, vec![TAG_BOOL as u64, 1]);
+        assert_eq!(output, vec![TAG_BOOL, 1]);
 
         let mut output = Vec::new();
         flatten_ast_to_u64(&AstNode::Bool(false), &arena, "", &mut output);
-        assert_eq!(output, vec![TAG_BOOL as u64, 0]);
+        assert_eq!(output, vec![TAG_BOOL, 0]);
     }
 
     #[test]
@@ -218,17 +218,17 @@ mod tests {
         let arena = AstArena::new();
         let mut output = Vec::new();
         flatten_ast_to_u64(&AstNode::Int(42), &arena, "", &mut output);
-        assert_eq!(output, vec![TAG_INT as u64, 42]);
+        assert_eq!(output, vec![TAG_INT, 42]);
     }
 
     #[test]
     fn test_flatten_float() {
         let arena = AstArena::new();
         let mut output = Vec::new();
-        flatten_ast_to_u64(&AstNode::Float(3.14), &arena, "", &mut output);
-        assert_eq!(output[0], TAG_FLOAT as u64);
+        flatten_ast_to_u64(&AstNode::Float(1.5), &arena, "", &mut output);
+        assert_eq!(output[0], TAG_FLOAT);
         // Check the bits
         let bits = output[1];
-        assert_eq!(f64::from_bits(bits), 3.14);
+        assert_eq!(f64::from_bits(bits), 1.5);
     }
 }

@@ -314,7 +314,6 @@ impl SourceMapBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::portable::source_location::SourcePosition;
 
     #[test]
     fn test_source_mapped_new() {

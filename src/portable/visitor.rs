@@ -353,7 +353,7 @@ mod tests {
         let nil_node = AstNode::Nil;
         let bool_node = AstNode::Bool(true);
         let int_node = AstNode::Int(42);
-        let float_node = AstNode::Float(3.14);
+        let float_node = AstNode::Float(1.5);
         let string_node = arena.intern_string("hello");
 
         // Create an array

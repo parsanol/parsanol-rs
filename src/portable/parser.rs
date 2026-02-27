@@ -1565,7 +1565,8 @@ mod tests {
 
     #[test]
     fn test_parse_with_builder() {
-        use super::super::streaming_builder::{DebugBuilder, StreamingBuilder};
+        #[allow(unused_imports)]
+        use super::super::streaming_builder::{DebugBuilder, StreamingBuilder as _};
 
         let grammar = GrammarBuilder::new().rule("test", str("hello")).build();
 
@@ -1583,7 +1584,8 @@ mod tests {
 
     #[test]
     fn test_parse_with_builder_collects_strings() {
-        use super::super::streaming_builder::{BuilderStringCollector, StreamingBuilder};
+        #[allow(unused_imports)]
+        use super::super::streaming_builder::{BuilderStringCollector, StreamingBuilder as _};
 
         let grammar = GrammarBuilder::new().rule("test", str("hello")).build();
 

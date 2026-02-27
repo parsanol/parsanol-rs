@@ -28,7 +28,7 @@
 
 #![cfg(feature = "ruby")]
 
-use magnus::{value::ReprValue, Error, Ruby, Value};
+use magnus::{value::ReprValue, Ruby, Value};
 
 /// Test that RubyBuilder can be created
 #[test]
@@ -78,7 +78,7 @@ fn test_primitive_conversions() {
     let _ruby_int = ruby.integer_from_i64(int_val);
 
     // Test float conversion - float_from_f64 returns Float directly
-    let float_val: f64 = 3.14159;
+    let float_val: f64 = 1.5;
     let _ruby_float = ruby.float_from_f64(float_val);
 
     // Test string conversion
@@ -145,7 +145,7 @@ fn test_streaming_builder_impl() {
     // Test primitive callbacks
     builder.on_string("hello", 0, 5).expect("on_string failed");
     builder.on_int(42).expect("on_int failed");
-    builder.on_float(3.14).expect("on_float failed");
+    builder.on_float(1.5).expect("on_float failed");
     builder.on_bool(true).expect("on_bool failed");
     builder.on_nil().expect("on_nil failed");
 

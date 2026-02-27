@@ -353,8 +353,8 @@ mod tests {
 
     #[test]
     fn test_ast_node_float() {
-        let node = AstNode::Float(3.14);
-        assert_eq!(node, AstNode::Float(3.14));
+        let node = AstNode::Float(1.5);
+        assert_eq!(node, AstNode::Float(1.5));
         assert_ne!(node, AstNode::Float(0.0));
     }
 
@@ -659,6 +659,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::clone_on_copy)]
     fn test_ast_node_clone() {
         let node = AstNode::Int(42);
         let node_clone = node.clone();

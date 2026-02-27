@@ -14,6 +14,7 @@ use parsanol::portable::{
 
 /// Represents a region of parsed content
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct Region {
     start: usize,
     end: usize,
@@ -22,6 +23,7 @@ struct Region {
 }
 
 /// Incremental parser that tracks regions and can reparse affected areas
+#[allow(dead_code)]
 struct IncrementalParser {
     grammar: Grammar,
     regions: Vec<Region>,

@@ -146,7 +146,7 @@ impl ConfigParser {
                     value
                         .parse::<u16>()
                         .ok()
-                        .map_or(false, |p| validate_port(p).is_ok())
+                        .is_some_and(|p| validate_port(p).is_ok())
                 } else if key.contains("email") || key.contains("mail") {
                     validate_email(value).is_ok()
                 } else {

@@ -1053,7 +1053,7 @@ pub mod direct_helpers {
         T::from_ast(&field_node, arena, input)
     }
 
-    /// Transform an array of AstNodes to a Vec<T>
+    /// Transform an array of AstNodes to a `Vec<T>`
     #[inline]
     pub fn transform_array<T: super::DirectTransform>(
         node: &AstNode,
@@ -1273,10 +1273,10 @@ mod tests {
     #[test]
     fn test_direct_transform_float() {
         let arena = AstArena::new();
-        let node = AstNode::Float(3.14);
+        let node = AstNode::Float(1.5);
 
         let result: f64 = DirectTransform::from_ast(&node, &arena, "").unwrap();
-        assert!((result - 3.14).abs() < 0.001);
+        assert!((result - 1.5).abs() < 0.001);
     }
 
     #[test]
@@ -1381,7 +1381,7 @@ mod tests {
         assert!(ast_node_span(&AstNode::Nil, "").is_none());
         assert!(ast_node_span(&AstNode::Bool(true), "").is_none());
         assert!(ast_node_span(&AstNode::Int(42), "").is_none());
-        assert!(ast_node_span(&AstNode::Float(3.14), "").is_none());
+        assert!(ast_node_span(&AstNode::Float(1.5), "").is_none());
     }
 
     #[test]
@@ -1417,7 +1417,7 @@ mod tests {
 
         // Check the span (should be default start span)
         assert_eq!(mapped.span().start.offset, 0);
-        assert_eq!(mapped.span().is_empty(), true);
+        assert!(mapped.span().is_empty());
     }
 
     #[test]

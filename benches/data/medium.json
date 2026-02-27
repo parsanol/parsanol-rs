@@ -1,0 +1,21 @@
+{
+  "users": [
+    {"id": 1, "name": "Alice", "email": "alice@example.com", "age": 30, "active": true},
+    {"id": 2, "name": "Bob", "email": "bob@example.com", "age": 25, "active": false},
+    {"id": 3, "name": "Charlie", "email": "charlie@example.com", "age": 35, "active": true},
+    {"id": 4, "name": "Diana", "email": "diana@example.com", "age": 28, "active": true},
+    {"id": 5, "name": "Eve", "email": "eve@example.com", "age": 32, "active": false}
+  ],
+  "products": [
+    {"id": 101, "name": "Widget", "price": 9.99, "inStock": true},
+    {"id": 102, "name": "Gadget", "price": 19.99, "inStock": true},
+    {"id": 103, "name": "Gizmo", "price": 14.99, "inStock": false},
+    {"id": 104, "name": "Doohickey", "price": 7.99, "inStock": true},
+    {"id": 105, "name": "Thingamajig", "price": 12.99, "inStock": true}
+  ],
+  "metadata": {
+    "version": "1.0",
+    "generated": "2024-01-15T10:30:00Z",
+    "count": 10
+  }
+}

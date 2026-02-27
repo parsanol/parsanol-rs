@@ -42,3 +42,10 @@ perf.data.old
 # Claude Code instruction files - NEVER commit these
 CLAUDE.md
 CLAUDE.local.md
+
+# Temporary planning/TODO files - NEVER commit these
+TODO*.md
+PROPOSALS/
+API_STABILITY.md
+CHANGELOG.md
+PRODUCTION-READINESS.md

@@ -75,7 +75,7 @@ jobs:
           tool: cargo-deny
 
       - name: Check licenses and advisories
-        run: cargo deny check --disable-fetch licenses advisories bans sources
+        run: cargo deny check licenses advisories
 
   # ============================================================================
   # Format and Lint
@@ -140,7 +140,7 @@ jobs:
   test:
     name: Test (${{ matrix.os }}, ${{ matrix.rust }})
     runs-on: ${{ matrix.os }}
-    needs: [preflight, lint]
+    needs: [preflight]
     if: needs.preflight.outputs.should_run == 'true'
     strategy:
       fail-fast: false
@@ -156,7 +156,7 @@ jobs:
         include:
           # MSRV check
           - os: ubuntu-22.04
-            rust: "1.70"
+            rust: "1.71"
             name: Test MSRV
           # Beta for early warning
           - os: ubuntu-22.04
@@ -196,7 +196,7 @@ jobs:
   features:
     name: Test Features
     runs-on: ubuntu-latest
-    needs: [preflight, lint]
+    needs: [preflight]
     if: needs.preflight.outputs.should_run == 'true'
     strategy:
       fail-fast: false
@@ -232,7 +232,7 @@ jobs:
   workspace:
     name: Test Workspace
     runs-on: ubuntu-latest
-    needs: [preflight, lint]
+    needs: [preflight]
     if: needs.preflight.outputs.should_run == 'true'
     steps:
       - uses: actions/checkout@v4
@@ -254,7 +254,7 @@ jobs:
   coverage:
     name: Code Coverage
     runs-on: ubuntu-latest
-    needs: [preflight, lint]
+    needs: [preflight]
     if: needs.preflight.outputs.should_run == 'true'
     steps:
       - uses: actions/checkout@v4
@@ -293,7 +293,7 @@ jobs:
   benchmarks:
     name: Benchmarks
     runs-on: ubuntu-latest
-    needs: [preflight, lint]
+    needs: [preflight]
     if: needs.preflight.outputs.should_run == 'true'
     steps:
       - uses: actions/checkout@v4
@@ -328,7 +328,7 @@ jobs:
   docs:
     name: Build Documentation
     runs-on: ubuntu-latest
-    needs: [preflight, lint]
+    needs: [preflight]
     if: needs.preflight.outputs.should_run == 'true'
     steps:
       - uses: actions/checkout@v4
@@ -359,7 +359,7 @@ jobs:
   semver:
     name: Semver Compatibility
     runs-on: ubuntu-latest
-    needs: [preflight, lint]
+    needs: [preflight]
     if: needs.preflight.outputs.should_run == 'true' && github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v4

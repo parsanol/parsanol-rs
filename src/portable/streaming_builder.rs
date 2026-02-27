@@ -753,7 +753,7 @@ mod tests {
         counter.on_string("test", 0, 4).unwrap();
         counter.on_int(1).unwrap();
         counter.on_int(2).unwrap();
-        counter.on_float(3.14).unwrap();
+        counter.on_float(1.5).unwrap();
         counter.on_bool(true).unwrap();
         counter.on_nil().unwrap();
         counter.on_array_start(Some(3)).unwrap();

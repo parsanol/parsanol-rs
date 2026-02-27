@@ -236,8 +236,8 @@ pub fn parse_iso6709(input: &str) -> Result<String, String> {
 
     // Parse optional CRS
     let remaining: String = chars.collect();
-    if remaining.starts_with("CRS") {
-        coord.crs = Some(remaining[3..].to_string());
+    if let Some(stripped) = remaining.strip_prefix("CRS") {
+        coord.crs = Some(stripped.to_string());
     }
 
     serde_json::to_string_pretty(&coord).map_err(|e| e.to_string())

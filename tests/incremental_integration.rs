@@ -335,7 +335,8 @@ fn test_incremental_result_reuse_metrics() {
     // Should have some cache reuse (positions 0-3 could be reused)
     // Note: actual reuse depends on cache implementation
     assert!(matches!(result2.ast, AstNode::InputRef { .. }));
-    assert!(result2.reused_cache_entries >= 0);
+    // reused_cache_entries is usize, always >= 0
+    let _reused = result2.reused_cache_entries;
 }
 
 // ============================================================================

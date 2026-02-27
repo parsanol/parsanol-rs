@@ -30,8 +30,7 @@ use wasm_bindgen::prelude::*;
 #[test]
 fn test_wasm_exports_exist() {
     // This test verifies the module structure is correct
-    // Actual functionality tests are below
-    assert!(true, "WASM module exports exist");
+    // If this compiles, the WASM bindings are correctly set up
 }
 
 /// Test grammar construction
@@ -42,7 +41,7 @@ fn test_grammar_construction() {
     let grammar = GrammarBuilder::new().rule("hello", str("hello")).build();
 
     // Verify grammar was built correctly
-    assert!(grammar.atoms.len() >= 1, "Should have atoms");
+    assert!(!grammar.atoms.is_empty(), "Should have atoms");
 }
 
 /// Test parse result works
@@ -57,10 +56,8 @@ fn test_parse_result() {
     let mut arena = AstArena::for_input(input.len());
     let mut parser = PortableParser::new(&grammar, input, &mut arena);
 
-    let result = parser.parse().expect("Parse failed");
-
-    // Verify result exists
-    assert!(true, "Parse completed successfully");
+    let _result = parser.parse().expect("Parse failed");
+    // Test passes if parse succeeds
 }
 
 /// Test error handling
@@ -146,6 +143,5 @@ fn test_jsvalue_conversions() {
     // Test that we can create JsValues from Rust types
     let _string = JsValue::from_str("hello");
     let _number = JsValue::from_f64(42.0);
-
-    assert!(true, "JsValue conversions work");
+    // JsValue conversions work if we got here
 }

@@ -16,10 +16,9 @@
 
 use parsanol::portable::{
     parser_dsl::{choice, dynamic, re, seq, str, GrammarBuilder, ParsletExt},
-    AstArena, AstNode, Grammar, PortableParser,
+    AstArena, Grammar, PortableParser,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 /// Build ISO 8601 grammar
 fn build_iso8601_grammar() -> Grammar {
@@ -221,7 +220,7 @@ pub fn parse_iso8601(input: &str) -> Result<String, String> {
     }
 
     // Try datetime
-    if let Some(sep_pos) = input.find(|c| c == 'T' || c == ' ') {
+    if let Some(sep_pos) = input.find(['T', ' ']) {
         let date_str = &input[..sep_pos];
         let time_str = &input[sep_pos + 1..];
 
@@ -321,15 +320,14 @@ fn parse_date(input: &str) -> Result<IsoDate, String> {
 /// Parse time portion
 fn parse_time(input: &str) -> Result<IsoTime, String> {
     // Extract timezone
-    let (time_part, timezone) = if let Some(pos) = input.rfind(|c| c == 'Z' || c == '+' || c == '-')
-    {
+    let (time_part, timezone) = if let Some(pos) = input.rfind(['Z', '+', '-']) {
         if input.chars().nth(pos) == Some('Z') {
             (&input[..pos], Some("Z".to_string()))
         } else if pos > 8 {
             // Ensure it's not the date separator
             let tz = &input[pos..];
             // Validate it looks like a timezone
-            if tz.chars().nth(0) == Some('+') || tz.chars().nth(0) == Some('-') {
+            if tz.starts_with(['+', '-']) {
                 (&input[..pos], Some(tz.to_string()))
             } else {
                 (input, None)

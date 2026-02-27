@@ -8,7 +8,7 @@
 #![allow(clippy::print_literal)]
 
 use parsanol::portable::{
-    parser_dsl::{dynamic, re, GrammarBuilder},
+    parser_dsl::{re, GrammarBuilder},
     AstArena, Grammar, PortableParser,
 };
 
