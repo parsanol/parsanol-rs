@@ -195,6 +195,7 @@ jobs:
 
   # ============================================================================
   # Feature Matrix Testing
+  # Note: Ruby and WASM features are tested in separate workflows
   # ============================================================================
   features:
     name: Test Features
@@ -207,17 +208,12 @@ jobs:
         feature:
           - ""
           - "logging"
-          - "wasm"
           - "parallel"
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
-
-      - name: Install wasm32 target
-        if: matrix.feature == 'wasm'
-        run: rustup target add wasm32-unknown-unknown
 
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
