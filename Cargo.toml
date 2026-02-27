@@ -42,6 +42,10 @@ once_cell = "1.19"
 # Pin getrandom to avoid 2024 edition requirement (needs Rust 1.83+)
 getrandom = "0.2"
 
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# For WASM builds, use getrandom with wasm_js feature
+getrandom = { version = "0.3", features = ["wasm_js"] }
+
 # Logging (optional)
 log = { version = "0.4", optional = true }
 
