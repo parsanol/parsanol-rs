@@ -1,55 +1,39 @@
 # Release Workflow for Parsanol-rs
 #
-# This workflow handles:
-# - Version bumping (manual selection or skip)
-# - Building and testing
-# - Publishing to crates.io
-# - Creating GitHub releases with artifacts
+# Uses release-plz for the complete release process:
 #
-# Usage:
-#   1. Push to main: Runs release-plz to auto-create Release PR
-#   2. Manual dispatch: Select version bump type and run
-#   3. Tag push: Builds and publishes to crates.io
+# 1. On push to main: release-plz creates/maintains Release PR
+#    - The PR contains version bumps, changelog updates
+#    - User reviews and merges the PR
 #
-# Manual Version Bump Options:
-#   - skip: Just build/test (no version change)
-#   - major: Incompatible API changes (1.0.0 → 2.0.0)
-#   - minor: Backward-compatible features (1.0.0 → 1.1.0)
-#   - patch: Backward-compatible fixes (1.0.0 → 1.0.1)
-#   - pre-alpha: Pre-release alpha (1.0.0 → 1.1.0-alpha.1)
-#   - pre-beta: Pre-release beta
-#   - pre-rc: Release candidate
-#   - graduate: Remove pre-release suffix (1.0.0-alpha.1 → 1.0.0)
+# 2. When Release PR is merged: release-plz release runs automatically
+#    - Creates git tag
+#    - Publishes to crates.io
+#    - Creates GitHub release
+#
+# Manual dispatch options:
+#   - release: Force a release (run release-plz release)
+#   - release-pr: Create/update the Release PR
 
 name: Release
 
 on:
-  # Manual dispatch with version bump options
+  # Run on push to main (for both release-pr and release)
+  push:
+    branches:
+      - main
+  # Manual dispatch
   workflow_dispatch:
     inputs:
-      version_bump:
-        description: 'Version bump type'
+      action:
+        description: 'Release action'
         required: true
         type: choice
-        default: skip
+        default: auto
         options:
-          - skip
-          - major
-          - minor
-          - patch
-          - pre-alpha
-          - pre-beta
-          - pre-rc
-          - graduate
-        # Custom version overrides version_bump
-      custom_version:
-        description: 'Custom version (overrides version_bump) - e.g. 1.2.3 or 1.0.0-beta.1'
-        required: false
-        type: string
-  # Run on tag push for releases
-  push:
-    tags:
-      - 'v*'
+          - auto         # Auto-detect: release-pr if no version change, release if version changed
+          - release-pr   # Just create/update the Release PR
+          - release      # Force release (tag + publish to crates.io)
 
 # Required permissions
 permissions:
@@ -61,160 +45,22 @@ env:
   CARGO_TERM_COLOR: always
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   # ============================================================================
-  # Version Bumping (conditional - can be skipped)
-  # ============================================================================
-  bump-version:
-    name: Bump Version
-    runs-on: ubuntu-latest
-    # Run if: manual trigger with version_bump != 'skip'
-    if: |
-      github.event_name == 'workflow_dispatch' &&
-      github.event.inputs.version_bump != 'skip'
-    outputs:
-      new_version: ${{ steps.version.outputs.new_version }}
-      changelog_date: ${{ steps.version.outputs.changelog_date }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Fetch all tags
-        run: git fetch --tags origin
-
-      - name: Get current version
-        id: current
-        run: |
-          CURRENT=$(grep '^version =' Cargo.toml | head -1 | sed 's/.*"\([^"]*\)".*/\1/')
-          echo "Current version: $CURRENT"
-          echo "current=$CURRENT" >> $GITHUB_OUTPUT
-
-      - name: Calculate new version
-        id: version
-        env:
-          BUMP_TYPE: ${{ github.event.inputs.version_bump }}
-          CUSTOM_VERSION: ${{ github.event.inputs.custom_version }}
-          CURRENT_VERSION: ${{ steps.current.outputs.current }}
-        run: |
-          set -e
-
-          # Get changelog date
-          echo "changelog_date=$(date +%Y-%m-%d)" >> $GITHUB_OUTPUT
-
-          # If custom version provided, use it directly
-          if [[ -n "$CUSTOM_VERSION" ]]; then
-            echo "new_version=$CUSTOM_VERSION" >> $GITHUB_OUTPUT
-            echo "Using custom version: $CUSTOM_VERSION"
-            exit 0
-          fi
-
-          # Parse current version
-          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
-
-          # Handle pre-release versions
-          PRERELEASE=""
-          if [[ "$PATCH" == *"-"* ]]; then
-            PRERELEASE="${PATCH#*-}"
-            PATCH="${PATCH%%-*}"
-          fi
-
-          # Calculate new version based on bump type
-          case "$BUMP_TYPE" in
-            "major")
-              NEW_VERSION="$((MAJOR + 1)).0.0"
-              ;;
-            "minor")
-              NEW_VERSION="$MAJOR.$((MINOR + 1)).0"
-              ;;
-            "patch")
-              if [[ -n "$PRERELEASE" ]]; then
-                NEW_VERSION="$MAJOR.$MINOR.$PATCH"
-              else
-                NEW_VERSION="$MAJOR.$MINOR.$((PATCH + 1))"
-              fi
-              ;;
-            "pre-alpha")
-              NEW_VERSION="$MAJOR.$((MINOR + 1)).0-alpha.1"
-              ;;
-            "pre-beta")
-              NEW_VERSION="$MAJOR.$((MINOR + 1)).0-beta.1"
-              ;;
-            "pre-rc")
-              NEW_VERSION="$MAJOR.$((MINOR + 1)).0-rc.1"
-              ;;
-            "graduate")
-              NEW_VERSION="$MAJOR.$MINOR.$PATCH"
-              ;;
-            *)
-              echo "Unknown bump type: $BUMP_TYPE"
-              exit 1
-              ;;
-          esac
-
-          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
-          echo "Calculated new version: $NEW_VERSION"
-
-      - name: Update version in Cargo.toml
-        env:
-          NEW_VERSION: ${{ steps.version.outputs.new_version }}
-        run: |
-          sed -i "s/^version = \".*\"/version = \"$NEW_VERSION\"/" Cargo.toml
-          echo "Updated version to $NEW_VERSION"
-
-      - name: Update CHANGELOG.md
-        env:
-          NEW_VERSION: ${{ steps.version.outputs.new_version }}
-          CHANGELOG_DATE: ${{ steps.version.outputs.changelog_date }}
-        run: |
-          if [[ -f "CHANGELOG.md" ]]; then
-            sed -i "/^## /i \\
-            ## [$NEW_VERSION] - $CHANGELOG_DATE\\
-            \\
-            ### Added\\
-            - TBD\\
-            \\
-            ### Changed\\
-            - TBD\\
-            \\
-            ### Fixed\\
-            - TBD\\
-            \\
-            " CHANGELOG.md
-          fi
-
-      - name: Configure git
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-      - name: Create version commit
-        env:
-          NEW_VERSION: ${{ steps.version.outputs.new_version }}
-        run: |
-          git add -A
-          git commit -m "chore: bump version to ${NEW_VERSION}" || echo "No changes to commit"
-
-          # Push the commit to main (release-plz will handle tagging)
-          git push origin main
-
-  # ============================================================================
-  # Auto Release PR (conventional commits - runs on tag or manual)
+  # Release PR: Create/update the Release PR
   # ============================================================================
   release-pr:
     name: Create Release PR
     runs-on: ubuntu-latest
-    # Run on tag push OR manual dispatch
+    # Run on push to main OR manual dispatch with release-pr action
     if: |
-      startsWith(github.ref, 'refs/tags/') ||
-      github.event_name == 'workflow_dispatch'
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'release-pr')
     concurrency:
-      group: release-plz-${{ github.ref }}
+      group: release-plz-pr
       cancel-in-progress: false
     steps:
       - name: Checkout repository
@@ -226,8 +72,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Run release-plz
-        if: github.event_name == 'push'
+      - name: Run release-plz (release-pr)
         uses: release-plz/action@v0.5
         with:
           command: release-pr
@@ -235,14 +80,57 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # ============================================================================
-  # Build Native Libraries (for FFI) - Multi-platform, Multi-arch
+  # Release: Create tag, publish to crates.io, create GitHub release
+  # ============================================================================
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    # Run on push to main OR manual dispatch with release action
+    # This runs AFTER the Release PR is merged (version is already in Cargo.toml)
+    if: |
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && (github.event.inputs.action == 'release' || github.event.inputs.action == 'auto'))
+    concurrency:
+      group: release-plz-release
+      cancel-in-progress: false
+    outputs:
+      released: ${{ steps.release.outputs.released }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Run release-plz (release)
+        id: release
+        uses: release-plz/action@v0.5
+        with:
+          command: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Wait for crates.io
+        if: steps.release.outputs.released == 'true'
+        run: sleep 30
+
+  # ============================================================================
+  # Build Native Libraries (for FFI) - Multi-platform
   # ============================================================================
   build-native:
     name: Build Native (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
-    needs: bump-version
-    # Run on tag push OR after version bump success
-    if: always() && (startsWith(github.ref, 'refs/tags/') || needs.bump-version.result == 'success')
+    needs: release
+    # Only build if a release actually happened
+    if: needs.release.outputs.released == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -273,6 +161,8 @@ jobs:
             artifact: windows-arm64
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.release.outputs.version }}
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -300,12 +190,9 @@ jobs:
         shell: bash
         run: |
           mkdir -p artifacts
-          # Copy any .rlib, .lib, .dll files that exist
           cp target/${{ matrix.target }}/release/*.rlib artifacts/ 2>/dev/null || true
           cp target/${{ matrix.target }}/release/*.lib artifacts/ 2>/dev/null || true
           cp target/${{ matrix.target }}/release/*.dll artifacts/ 2>/dev/null || true
-          # List what we got
-          ls -la artifacts/ || true
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -320,10 +207,12 @@ jobs:
   build-docs:
     name: Build Documentation
     runs-on: ubuntu-latest
-    needs: bump-version
-    if: always() && (startsWith(github.ref, 'refs/tags/') || needs.bump-version.result == 'success')
+    needs: release
+    if: needs.release.outputs.released == 'true'
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.release.outputs.version }}
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -334,9 +223,7 @@ jobs:
           cache-on-failure: true
 
       - name: Build documentation
-        run: |
-          cargo doc --no-deps --all-features
-          cp -r target/doc docs
+        run: cargo doc --no-deps --all-features
 
       - name: Create documentation archive
         run: tar -czf docs.tar.gz -C target doc
@@ -349,15 +236,17 @@ jobs:
           retention-days: 30
 
   # ============================================================================
-  # Package for crates.io
+  # Package for crates.io (for artifact upload only - already published by release-plz)
   # ============================================================================
   package:
     name: Package Crate
     runs-on: ubuntu-latest
-    needs: bump-version
-    if: always() && (startsWith(github.ref, 'refs/tags/') || needs.bump-version.result == 'success')
+    needs: release
+    if: needs.release.outputs.released == 'true'
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.release.outputs.version }}
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -381,71 +270,17 @@ jobs:
           retention-days: 30
 
   # ============================================================================
-  # Publish to crates.io (via release-plz with Trusted Publishing)
+  # Update GitHub Release with artifacts
   # ============================================================================
-  publish:
-    name: Publish to crates.io
+  update-release:
+    name: Update GitHub Release
     runs-on: ubuntu-latest
-    needs: [build-native, build-docs, package]
-    if: always() && needs.build-native.result == 'success' && needs.build-docs.result == 'success' && needs.package.result == 'success'
-    environment: crates.io
-    permissions:
-      id-token: write  # Trusted publishing
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          ref: main
-
-      - name: Pull latest changes
-        run: git pull origin main
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo artifacts
-        uses: Swatinem/rust-cache@v2
-        with:
-          cache-on-failure: true
-
-      - name: Run release-plz
-        uses: release-plz/action@v0.5
-        with:
-          command: release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Wait for crates.io index
-        run: sleep 60
-
-  # ============================================================================
-  # Create GitHub Release with artifacts
-  # ============================================================================
-  github-release:
-    name: Create GitHub Release
-    runs-on: ubuntu-latest
-    needs: [bump-version, build-native, build-docs, package, publish]
-    if: always() && needs.build-native.result == 'success' && needs.build-docs.result == 'success' && needs.package.result == 'success' && needs.publish.result == 'success'
+    needs: [release, build-native, build-docs, package]
+    if: needs.release.outputs.released == 'true'
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
-
-      - name: Get version
-        id: version
-        run: |
-          # Use the version from bump-version job if available
-          if [[ -n "${{ needs.bump-version.outputs.new_version }}" ]]; then
-            VERSION="${{ needs.bump-version.outputs.new_version }}"
-          elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
-            # Tag push - use the tag
-            VERSION="${{ github.ref_name }}"
-          else
-            # Fallback: get from Cargo.toml
-            VERSION=$(grep '^version =' Cargo.toml | head -1 | sed 's/.*"\([^"]*\)".*/\1/')
-          fi
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "tag=v$VERSION" >> $GITHUB_OUTPUT
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -455,25 +290,19 @@ jobs:
       - name: Prepare release assets
         run: |
           mkdir -p release-assets
-          # Copy native libraries
           cp -r artifacts/linux-x64 release-assets/ || true
           cp -r artifacts/linux-arm64 release-assets/ || true
           cp -r artifacts/macos-x64 release-assets/ || true
           cp -r artifacts/macos-arm64 release-assets/ || true
           cp -r artifacts/windows-x64 release-assets/ || true
           cp -r artifacts/windows-arm64 release-assets/ || true
-          # Copy documentation
           cp artifacts/documentation/docs.tar.gz release-assets/ || true
-          # Copy crate package
           cp artifacts/crate-package/*.crate release-assets/ || true
 
-      - name: Create GitHub Release
+      - name: Upload release assets
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.version.outputs.tag }}
-          name: Release ${{ steps.version.outputs.tag }}
-          draft: false
-          generate_release_notes: true
+          tag_name: v${{ needs.release.outputs.version }}
           files: |
             release-assets/*
         env:
@@ -485,7 +314,7 @@ jobs:
   notify:
     name: Notify
     runs-on: ubuntu-latest
-    needs: [publish, github-release]
+    needs: [release, update-release]
     if: always()
     steps:
       - name: Report status
@@ -494,17 +323,18 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Step | Status |" >> $GITHUB_STEP_SUMMARY
           echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Version Bump | ${{ needs.bump-version.result == 'success' && '✅' || '⏭️ Skipped' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Release PR | ${{ needs.release-pr.result == 'success' && '✅' || '⏭️ Skipped' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Publish | ${{ needs.publish.result == 'success' && '✅' || '⏭️ Skipped' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| GitHub Release | ${{ needs.github-release.result == 'success' && '✅' || '⏭️ Skipped' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Release | ${{ needs.release.outputs.released == 'true' && '✅ Published' || '⏭️ Skipped (no changes)' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Build Native | ${{ needs.build-native.result == 'success' && '✅' || '⏭️ Skipped' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Build Docs | ${{ needs.build-docs.result == 'success' && '✅' || '⏭️ Skipped' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Package | ${{ needs.package.result == 'success' && '✅' || '⏭️ Skipped' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Update Release | ${{ needs.update-release.result == 'success' && '✅' || '⏭️ Skipped' }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
-          if [[ "${{ needs.publish.result }}" == "success" ]]; then
+          if [[ "${{ needs.release.outputs.released }}" == "true" ]]; then
             echo "📦 View on crates.io: https://crates.io/crates/parsanol" >> $GITHUB_STEP_SUMMARY
             echo "📖 View on docs.rs: https://docs.rs/parsanol" >> $GITHUB_STEP_SUMMARY
           fi
 
-          if [[ "${{ needs.publish.result }}" == "failure" ]]; then
+          if [[ "${{ needs.release.result }}" == "failure" ]]; then
             exit 1
           fi

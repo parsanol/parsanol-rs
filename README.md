@@ -968,6 +968,81 @@ cargo test --examples
 cargo test -- --ignored
 ```
 
+# Release Process
+
+This project uses [release-plz](https://release-plz.dev/) for automated releases.
+
+## How It Works
+
+1. **Push to main** → release-plz creates/updates a Release PR
+
+2. **Review and merge the Release PR** → Version is updated in main
+
+3. **After merge** → release-plz automatically:
+   - Creates a git tag (e.g., `v0.1.2`)
+   - Publishes to crates.io
+   - Creates a GitHub release
+
+4. **Build artifacts** → CI builds native libraries and uploads them to the GitHub release
+
+## Maintainer Workflow
+
+### Normal Release (Recommended)
+
+Just push commits with conventional commit messages:
+
+```bash
+git commit -m "feat: add new parser combinator"
+git push origin main
+```
+
+release-plz will:
+1. Create a Release PR with version bump (e.g., `0.1.1` → `0.1.2` for `feat:`)
+2. Wait for you to review and merge
+3. Publish automatically after merge
+
+### Manual Release
+
+If you need to trigger a release manually:
+
+1. Go to **Actions** → **Release** workflow
+2. Click **Run workflow**
+3. Select action:
+   - `auto` (default): Let release-plz decide
+   - `release-pr`: Just create/update the Release PR
+   - `release`: Force a release immediately
+
+### Version Bump Rules
+
+release-plz uses [conventional commits](https://www.conventionalcommits.org/):
+
+| Commit Type | Version Bump |
+|-------------|--------------|
+| `feat:` | Minor (0.1.0 → 0.2.0) |
+| `fix:` | Patch (0.1.0 → 0.1.1) |
+| `feat!:` or `fix!:` | Major (0.1.0 → 1.0.0) |
+| `docs:`, `chore:`, etc. | No bump (changelog only) |
+
+### What Gets Released
+
+- **crates.io**: `parsanol` crate
+- **GitHub Release**: With release notes
+- **Build Artifacts**: Native libraries for Linux, macOS, Windows (x64, ARM64)
+
+### Troubleshooting
+
+**"Already published" error:**
+- release-plz sees an existing tag and thinks the version is already published
+- Solution: Ensure Cargo.toml version matches what you want to publish
+
+**No Release PR created:**
+- Check that commits follow conventional commit format
+- Check GitHub Actions logs for the `release-pr` job
+
+**Publish failed:**
+- Check crates.io API token is valid
+- Check version doesn't already exist on crates.io
+
 ## FFI Feature Testing
 
 This crate supports optional Ruby and WebAssembly (WASM) FFI features.
@@ -1038,6 +1113,118 @@ strategy:
 
 The Ruby and WASM feature tests run on every push to catch FFI
 regressions early.
+
+# Release Process
+
+This project uses [release-plz](https://release-plz.dev/) for automated releases.
+
+## How It Works
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         RELEASE-PLZ WORKFLOW                                │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+  Push to main
+       │
+       ▼
+  ┌─────────────────┐
+  │  release-pr job │  Creates/updates Release PR
+  └────────┬────────┘
+           │
+           ▼
+  ┌─────────────────┐
+  │   Release PR    │  Contains version bump + changelog
+  │   (on GitHub)   │
+  └────────┬────────┘
+           │
+           │  Maintainer reviews and merges
+           ▼
+  ┌─────────────────┐
+  │  release job    │  Runs release-plz release
+  └────────┬────────┘
+           │
+           ├──────────────────────────────┐
+           │                              │
+           ▼                              ▼
+  ┌─────────────────┐          ┌─────────────────┐
+  │  Create tag     │          │ Publish to      │
+  │  (v0.1.2)       │          │ crates.io       │
+  └────────┬────────┘          └─────────────────┘
+           │
+           ▼
+  ┌─────────────────┐
+  │  GitHub Release │  With release notes
+  └────────┬────────┘
+           │
+           ▼
+  ┌─────────────────┐
+  │  Build jobs     │  Build native libraries
+  └────────┬────────┘
+           │
+           ▼
+  ┌─────────────────┐
+  │  Update Release │  Upload artifacts
+  └─────────────────┘
+```
+
+## Maintainer Workflow
+
+### Normal Release (Recommended)
+
+Just push commits with conventional commit messages:
+
+```bash
+git commit -m "feat: add new parser combinator"
+git push origin main
+```
+
+release-plz will:
+1. Create a Release PR with version bump (e.g., `0.1.1` → `0.1.2` for `feat:`)
+2. Wait for you to review and merge
+3. Publish automatically after merge
+
+### Manual Release
+
+If you need to trigger a release manually:
+
+1. Go to **Actions** → **Release** workflow
+2. Click **Run workflow**
+3. Select action:
+   - `auto` (default): Let release-plz decide
+   - `release-pr`: Just create/update the Release PR
+   - `release`: Force a release immediately
+
+### Version Bump Rules
+
+release-plz uses [conventional commits](https://www.conventionalcommits.org/):
+
+| Commit Type | Version Bump |
+|-------------|--------------|
+| `feat:` | Minor (0.1.0 → 0.2.0) |
+| `fix:` | Patch (0.1.0 → 0.1.1) |
+| `feat!:` or `fix!:` | Major (0.1.0 → 1.0.0) |
+| `docs:`, `chore:`, etc. | No bump (changelog only) |
+
+### What Gets Released
+
+- **crates.io**: `parsanol` crate
+- **GitHub Release**: With release notes
+- **Build Artifacts**: Native libraries for Linux, macOS, Windows (x64, ARM64)
+
+### Troubleshooting
+
+**"Already published" error:**
+- release-plz sees an existing tag and thinks the version is already published
+- Solution: Ensure Cargo.toml version matches what you want to publish
+
+**No Release PR created:**
+- Check that commits follow conventional commit format
+- Check GitHub Actions logs for the `release-pr` job
+
+**Publish failed:**
+- Check that the `crates.io` environment is configured in repository settings
+- Check that trusted publishing is enabled
 
 # See Also
 
