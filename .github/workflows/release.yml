@@ -1,343 +1,52 @@
-# Release Workflow for Parsanol-rs
-#
-# Uses release-plz for the complete release process:
-#
-# 1. On push to main: release-plz creates/maintains Release PR
-#    - The PR contains version bumps, changelog updates
-#    - User reviews and merges the PR
-#
-# 2. When Release PR is merged: release-plz release runs automatically
-#    - Creates git tag
-#    - Publishes to crates.io
-#    - Creates GitHub release
-#
-# Manual dispatch options:
-#   - release: Force a release (run release-plz release)
-#   - release-pr: Create/update the Release PR
-
 name: Release
 
 on:
-  # Run on push to main (for both release-pr and release)
   push:
     branches:
       - main
-  # Manual dispatch
-  workflow_dispatch:
-    inputs:
-      action:
-        description: 'Release action'
-        required: true
-        type: choice
-        default: auto
-        options:
-          - auto         # Auto-detect: release-pr if no version change, release if version changed
-          - release-pr   # Just create/update the Release PR
-          - release      # Force release (tag + publish to crates.io)
-
-# Required permissions
-permissions:
-  contents: write
-  pull-requests: write
-  id-token: write  # Required for trusted publishing to crates.io
-
-env:
-  CARGO_TERM_COLOR: always
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false
 
 jobs:
-  # ============================================================================
-  # Release PR: Create/update the Release PR
-  # ============================================================================
-  release-pr:
-    name: Create Release PR
+
+  # Release unpublished packages.
+  release-plz-release:
+    name: Release-plz release
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      pull-requests: write
-    # Run on push to main OR manual dispatch with release-pr action
-    if: |
-      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-      (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'release-pr')
-    concurrency:
-      group: release-plz-pr
-      cancel-in-progress: false
     steps:
-      - name: Checkout repository
+      - &checkout
+        name: Checkout repository
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
           persist-credentials: false
-
-      - name: Install Rust toolchain
+      - &install-rust
+        name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-
-      - name: Run release-plz (release-pr)
-        uses: release-plz/action@v0.5
-        with:
-          command: release-pr
-        env:
-          GITHUB_TOKEN: ${{ secrets.PARSANOL_CI_PAT_TOKEN }}
-
-  # ============================================================================
-  # Release: Create tag, publish to crates.io, create GitHub release
-  # ============================================================================
-  release:
-    name: Release
-    runs-on: ubuntu-latest
-    # Run on push to main OR manual dispatch with release action
-    # This runs AFTER the Release PR is merged (version is already in Cargo.toml)
-    if: |
-      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-      (github.event_name == 'workflow_dispatch' && (github.event.inputs.action == 'release' || github.event.inputs.action == 'auto'))
-    concurrency:
-      group: release-plz-release
-      cancel-in-progress: false
-    outputs:
-      released: ${{ steps.release.outputs.released }}
-      version: ${{ steps.release.outputs.version }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo artifacts
-        uses: Swatinem/rust-cache@v2
-        with:
-          cache-on-failure: true
-
-      - name: Run release-plz (release)
-        id: release
+      - name: Run release-plz
         uses: release-plz/action@v0.5
         with:
           command: release
         env:
           GITHUB_TOKEN: ${{ secrets.PARSANOL_CI_PAT_TOKEN }}
 
-      - name: Wait for crates.io
-        if: steps.release.outputs.released == 'true'
-        run: sleep 30
-
-  # ============================================================================
-  # Build Native Libraries (for FFI) - Multi-platform
-  # ============================================================================
-  build-native:
-    name: Build Native (${{ matrix.target }})
-    runs-on: ${{ matrix.os }}
-    needs: release
-    # Only build if a release actually happened
-    if: needs.release.outputs.released == 'true'
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # Linux x64
-          - target: x86_64-unknown-linux-gnu
-            os: ubuntu-22.04
-            artifact: linux-x64
-          # Linux ARM64
-          - target: aarch64-unknown-linux-gnu
-            os: ubuntu-22.04-arm
-            artifact: linux-arm64
-          # macOS (Intel)
-          - target: x86_64-apple-darwin
-            os: macos-latest
-            artifact: macos-x64
-          # macOS (Apple Silicon)
-          - target: aarch64-apple-darwin
-            os: macos-latest
-            artifact: macos-arm64
-          # Windows x64
-          - target: x86_64-pc-windows-msvc
-            os: windows-latest
-            artifact: windows-x64
-          # Windows ARM64
-          - target: aarch64-pc-windows-msvc
-            os: windows-11-arm
-            artifact: windows-arm64
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: v${{ needs.release.outputs.version }}
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-
-      - name: Cache cargo artifacts
-        uses: Swatinem/rust-cache@v2
-        with:
-          key: ${{ matrix.target }}
-          cache-on-failure: true
-
-      - name: Build release library
-        run: cargo build --release --target ${{ matrix.target }} --no-default-features
-
-      - name: Prepare artifact (Unix)
-        if: runner.os != 'Windows'
-        run: |
-          mkdir -p artifacts
-          cp target/${{ matrix.target }}/release/libparsanol.* artifacts/ || true
-          cp target/${{ matrix.target }}/release/libparsanol.rlib artifacts/ || true
-
-      - name: Prepare artifact (Windows)
-        if: runner.os == 'Windows'
-        shell: bash
-        run: |
-          mkdir -p artifacts
-          cp target/${{ matrix.target }}/release/*.rlib artifacts/ 2>/dev/null || true
-          cp target/${{ matrix.target }}/release/*.lib artifacts/ 2>/dev/null || true
-          cp target/${{ matrix.target }}/release/*.dll artifacts/ 2>/dev/null || true
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact }}
-          path: artifacts/
-          retention-days: 30
-
-  # ============================================================================
-  # Build Documentation
-  # ============================================================================
-  build-docs:
-    name: Build Documentation
+  # Create a PR with the new versions and changelog, preparing the next release.
+  release-plz-pr:
+    name: Release-plz PR
     runs-on: ubuntu-latest
-    needs: release
-    if: needs.release.outputs.released == 'true'
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: v${{ needs.release.outputs.version }}
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo artifacts
-        uses: Swatinem/rust-cache@v2
-        with:
-          cache-on-failure: true
-
-      - name: Build documentation
-        run: cargo doc --no-deps --all-features
-
-      - name: Create documentation archive
-        run: tar -czf docs.tar.gz -C target doc
-
-      - name: Upload documentation
-        uses: actions/upload-artifact@v4
-        with:
-          name: documentation
-          path: docs.tar.gz
-          retention-days: 30
-
-  # ============================================================================
-  # Package for crates.io (for artifact upload only - already published by release-plz)
-  # ============================================================================
-  package:
-    name: Package Crate
-    runs-on: ubuntu-latest
-    needs: release
-    if: needs.release.outputs.released == 'true'
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: v${{ needs.release.outputs.version }}
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo artifacts
-        uses: Swatinem/rust-cache@v2
-        with:
-          cache-on-failure: true
-
-      - name: Package crate
-        run: |
-          cargo package --no-verify
-          mkdir -p crate-package
-          cp target/package/*.crate crate-package/ || true
-
-      - name: Upload crate package
-        uses: actions/upload-artifact@v4
-        with:
-          name: crate-package
-          path: crate-package/
-          retention-days: 30
-
-  # ============================================================================
-  # Update GitHub Release with artifacts
-  # ============================================================================
-  update-release:
-    name: Update GitHub Release
-    runs-on: ubuntu-latest
-    needs: [release, build-native, build-docs, package]
-    if: needs.release.outputs.released == 'true'
     permissions:
       contents: write
+      pull-requests: write
+    concurrency:
+      group: release-plz-${{ github.ref }}
+      cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
+      - *checkout
+      - *install-rust
+      - name: Run release-plz
+        uses: release-plz/action@v0.5
         with:
-          path: artifacts
-
-      - name: Prepare release assets
-        run: |
-          mkdir -p release-assets
-          cp -r artifacts/linux-x64 release-assets/ || true
-          cp -r artifacts/linux-arm64 release-assets/ || true
-          cp -r artifacts/macos-x64 release-assets/ || true
-          cp -r artifacts/macos-arm64 release-assets/ || true
-          cp -r artifacts/windows-x64 release-assets/ || true
-          cp -r artifacts/windows-arm64 release-assets/ || true
-          cp artifacts/documentation/docs.tar.gz release-assets/ || true
-          cp artifacts/crate-package/*.crate release-assets/ || true
-
-      - name: Upload release assets
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v${{ needs.release.outputs.version }}
-          files: |
-            release-assets/*
+          command: release-pr
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  # ============================================================================
-  # Notify
-  # ============================================================================
-  notify:
-    name: Notify
-    runs-on: ubuntu-latest
-    needs: [release, update-release]
-    if: always()
-    steps:
-      - name: Report status
-        run: |
-          echo "## Release Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Step | Status |" >> $GITHUB_STEP_SUMMARY
-          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Release | ${{ needs.release.outputs.released == 'true' && '✅ Published' || '⏭️ Skipped (no changes)' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Build Native | ${{ needs.build-native.result == 'success' && '✅' || '⏭️ Skipped' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Build Docs | ${{ needs.build-docs.result == 'success' && '✅' || '⏭️ Skipped' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Package | ${{ needs.package.result == 'success' && '✅' || '⏭️ Skipped' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Update Release | ${{ needs.update-release.result == 'success' && '✅' || '⏭️ Skipped' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-
-          if [[ "${{ needs.release.outputs.released }}" == "true" ]]; then
-            echo "📦 View on crates.io: https://crates.io/crates/parsanol" >> $GITHUB_STEP_SUMMARY
-            echo "📖 View on docs.rs: https://docs.rs/parsanol" >> $GITHUB_STEP_SUMMARY
-          fi
-
-          if [[ "${{ needs.release.result }}" == "failure" ]]; then
-            exit 1
-          fi
+          GITHUB_TOKEN: ${{ secrets.PARSANOL_CI_PAT_TOKEN }}
+          # CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
