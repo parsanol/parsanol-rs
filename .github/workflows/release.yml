@@ -249,8 +249,8 @@ jobs:
     name: Build Native (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
     needs: bump-version
-    # Only run on tag push (release)
-    if: startsWith(github.ref, 'refs/tags/')
+    # Run on tag push OR after version bump success
+    if: always() && (startsWith(github.ref, 'refs/tags/') || needs.bump-version.result == 'success')
     strategy:
       fail-fast: false
       matrix:
@@ -325,7 +325,7 @@ jobs:
     name: Build Documentation
     runs-on: ubuntu-latest
     needs: bump-version
-    if: startsWith(github.ref, 'refs/tags/')
+    if: always() && (startsWith(github.ref, 'refs/tags/') || needs.bump-version.result == 'success')
     steps:
       - uses: actions/checkout@v4
 
@@ -359,7 +359,7 @@ jobs:
     name: Package Crate
     runs-on: ubuntu-latest
     needs: bump-version
-    if: startsWith(github.ref, 'refs/tags/')
+    if: always() && (startsWith(github.ref, 'refs/tags/') || needs.bump-version.result == 'success')
     steps:
       - uses: actions/checkout@v4
 
@@ -391,7 +391,7 @@ jobs:
     name: Publish to crates.io
     runs-on: ubuntu-latest
     needs: [build-native, build-docs, package]
-    if: startsWith(github.ref, 'refs/tags/')
+    if: always() && needs.build-native.result == 'success' && needs.build-docs.result == 'success' && needs.package.result == 'success'
     environment: crates.io
     permissions:
       id-token: write  # Trusted publishing
@@ -423,7 +423,7 @@ jobs:
     name: Create GitHub Release
     runs-on: ubuntu-latest
     needs: [build-native, build-docs, package, publish]
-    if: startsWith(github.ref, 'refs/tags/')
+    if: always() && needs.build-native.result == 'success' && needs.build-docs.result == 'success' && needs.package.result == 'success' && needs.publish.result == 'success'
     permissions:
       contents: write
     steps:
