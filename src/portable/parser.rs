@@ -739,6 +739,7 @@ impl<'a> PortableParser<'a> {
         &mut self,
         builder: &mut B,
     ) -> Result<B::Output, ParseError> {
+        use super::parslet_transform::to_parslet_compatible;
         use super::streaming_builder::walk_ast;
 
         // Initialize builder
@@ -748,11 +749,16 @@ impl<'a> PortableParser<'a> {
                 message: e.to_string(),
             })?;
 
-        // Parse to get the AST
-        let ast = self.parse()?;
+        // Parse to get the raw AST
+        let raw_ast = self.parse()?;
 
-        // Walk the AST and send events to the builder
-        walk_ast(&ast, self.arena, self.input, builder).map_err(|e| ParseError::BuilderError {
+        // Transform to Parslet-compatible format FIRST
+        // This ensures the streaming builder sees the same structure as
+        // parse_parslet_compatible produces
+        let transformed_ast = to_parslet_compatible(&raw_ast, self.arena, self.input);
+
+        // Walk the TRANSFORMED AST and send events to the builder
+        walk_ast(&transformed_ast, self.arena, self.input, builder).map_err(|e| ParseError::BuilderError {
             message: e.to_string(),
         })?;
 

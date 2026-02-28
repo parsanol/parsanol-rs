@@ -216,7 +216,21 @@ fn flatten_sequence(items: &[AstNode], arena: &mut AstArena, input: &str) -> Ast
         };
     }
 
+    // DON'T unwrap single items - let the caller handle this
+    // This preserves repetition results like [{:x => 1}]
+    // The caller (transform_single_key_hash or parent sequence) will decide
+    // whether to merge or keep as array based on context
     if items.len() == 1 {
+        // Check if this single item is a hash (repetition result)
+        // If so, return it as an array to preserve the repetition structure
+        if matches!(items[0], AstNode::Hash { .. }) {
+            let (pool_idx, len) = arena.store_array(items);
+            return AstNode::Array {
+                pool_index: pool_idx,
+                length: len,
+            };
+        }
+        // Non-hash single item: return as-is
         return items[0];
     }
 
