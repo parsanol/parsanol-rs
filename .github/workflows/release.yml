@@ -55,6 +55,9 @@ jobs:
   release-pr:
     name: Create Release PR
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
     # Run on push to main OR manual dispatch with release-pr action
     if: |
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
