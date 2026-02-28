@@ -305,11 +305,15 @@ jobs:
 
       - name: Prepare artifact (Windows)
         if: runner.os == 'Windows'
+        shell: bash
         run: |
-          mkdir artifacts
-          copy target\${{ matrix.target }}\release\parsanol.* artifacts\ || true
-          copy target\${{ matrix.target }}\release\parsanol.lib artifacts\ || true
-          copy target\${{ matrix.target }}\release\parsanol.dll artifacts\ || true
+          mkdir -p artifacts
+          # Copy any .rlib, .lib, .dll files that exist
+          cp target/${{ matrix.target }}/release/*.rlib artifacts/ 2>/dev/null || true
+          cp target/${{ matrix.target }}/release/*.lib artifacts/ 2>/dev/null || true
+          cp target/${{ matrix.target }}/release/*.dll artifacts/ 2>/dev/null || true
+          # List what we got
+          ls -la artifacts/ || true
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
