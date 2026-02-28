@@ -78,6 +78,8 @@
 //! // parslet_ast is now: {:name => "test"}
 //! ```
 
+use std::collections::HashMap;
+
 use super::arena::AstArena;
 use super::ast::AstNode;
 
@@ -218,7 +220,49 @@ fn flatten_sequence(items: &[AstNode], arena: &mut AstArena, input: &str) -> Ast
         return items[0];
     }
 
-    // First pass: collect all data without mutating arena
+    // FIRST PASS: Detect repetition patterns
+    // If any key appears more than once across all hashes, this is a repetition
+    // pattern and we should keep items as an array instead of merging.
+    let mut key_counts: HashMap<String, usize> = HashMap::new();
+
+    fn count_keys_in_item(item: &AstNode, arena: &AstArena, counts: &mut HashMap<String, usize>) {
+        match item {
+            AstNode::Hash { pool_index, length } => {
+                let pairs = arena.get_hash_items(*pool_index as usize, *length as usize);
+                for (k, _) in pairs {
+                    *counts.entry(k.to_string()).or_insert(0) += 1;
+                }
+            }
+            AstNode::Array { pool_index, length } => {
+                let nested = arena.get_array(*pool_index as usize, *length as usize);
+                for nested_item in nested {
+                    count_keys_in_item(&nested_item, arena, counts);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    for item in items {
+        count_keys_in_item(item, arena, &mut key_counts);
+    }
+
+    // Check for repetition pattern: any key appearing more than once
+    let has_repetition = key_counts.values().any(|&count| count > 1);
+
+    if has_repetition {
+        // REPETITION PATTERN: keep as array of hashes
+        // Each item in the sequence should remain as-is
+        // This matches Parslet's behavior for repetition with separator patterns
+        let (pool_idx, len) = arena.store_array(items);
+        return AstNode::Array {
+            pool_index: pool_idx,
+            length: len,
+        };
+    }
+
+    // SEQUENCE PATTERN: proceed with existing merge logic
+    // Second pass: collect all data without mutating arena
     // Use owned Strings for keys to avoid lifetime issues
     let mut merged_hash: Vec<(String, AstNode)> = Vec::new();
     let mut string_parts: Vec<String> = Vec::new();
@@ -258,37 +302,8 @@ fn flatten_sequence(items: &[AstNode], arena: &mut AstArena, input: &str) -> Ast
                 // Flatten nested arrays
                 let nested = arena.get_array(*pool_index as usize, *length as usize);
                 for nested_item in nested {
-                    match nested_item {
-                        AstNode::Hash {
-                            pool_index: p,
-                            length: l,
-                        } => {
-                            let pairs = arena.get_hash_items(p as usize, l as usize);
-                            for (k, v) in pairs {
-                                if let Some(pos) = merged_hash.iter().position(|(key, _)| *key == k)
-                                {
-                                    merged_hash[pos] = (k.clone(), v);
-                                } else {
-                                    merged_hash.push((k.clone(), v));
-                                }
-                            }
-                            hash_count += 1;
-                        }
-                        AstNode::InputRef { offset, length } => {
-                            let start = offset as usize;
-                            let end = start + length as usize;
-                            if let Some(s) = input.get(start..end) {
-                                string_parts.push(s.to_string());
-                            }
-                        }
-                        AstNode::StringRef { pool_index } => {
-                            let (s, _, _) = arena.get_string_parts(pool_index as usize);
-                            string_parts.push(s.to_string());
-                        }
-                        _ => {}
-                    }
+                    count_keys_in_item(&nested_item, arena, &mut key_counts);
                 }
-                total_items += 1;
             }
             AstNode::Nil => {
                 // Skip nil values (from lookahead or optional)
