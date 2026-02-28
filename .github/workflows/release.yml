@@ -200,13 +200,13 @@ jobs:
           git add -A
           git commit -m "chore: bump version to ${NEW_VERSION}" || echo "No changes to commit"
 
-          # Check if tag already exists
-          if git tag -l "v${NEW_VERSION}" | grep -q .; then
-            echo "Tag v${NEW_VERSION} already exists, skipping tag creation"
-            echo "Deleting existing tag and recreating..."
-            git tag -d "v${NEW_VERSION}"
-            git push origin --delete "v${NEW_VERSION}" || true
-          fi
+          # Push the commit first
+          git push origin main || echo "Commit push may have failed"
+
+          # Delete existing tag if it exists (locally and remotely)
+          git fetch origin --tags --force
+          git tag -d "v${NEW_VERSION}" 2>/dev/null || true
+          git push origin --delete "v${NEW_VERSION}" 2>/dev/null || true
 
           git tag -a "v${NEW_VERSION}" -m "Release v${NEW_VERSION}"
           git push origin "v${NEW_VERSION}"
@@ -436,11 +436,14 @@ jobs:
       - name: Get version
         id: version
         run: |
-          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+          # Use the version from bump-version job if available
+          if [[ -n "${{ needs.bump-version.outputs.new_version }}" ]]; then
+            VERSION="${{ needs.bump-version.outputs.new_version }}"
+          elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
             # Tag push - use the tag
             VERSION="${{ github.ref_name }}"
           else
-            # Manual dispatch - get from Cargo.toml
+            # Fallback: get from Cargo.toml
             VERSION=$(grep '^version =' Cargo.toml | head -1 | sed 's/.*"\([^"]*\)".*/\1/')
           fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
