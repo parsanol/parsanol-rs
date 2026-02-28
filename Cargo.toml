@@ -18,7 +18,10 @@ homepage = "https://github.com/parsanol/parsanol-rs"
 ignored = ["winnow"]
 
 [lib]
-crate-type = ["cdylib", "rlib"]
+# Build as rlib for normal usage
+# Ruby extensions are built via parsanol-ruby which links this crate as a dependency
+# WASM builds are handled separately
+crate-type = ["rlib"]
 
 [features]
 default = []
