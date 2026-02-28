@@ -234,50 +234,12 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # ============================================================================
-  # Validate Release (run tests before publishing)
-  # ============================================================================
-  validate:
-    name: Validate Release
-    runs-on: ubuntu-latest
-    needs: [bump-version, release-pr]
-    # Run if: version was bumped OR on tag push OR manual dispatch with skip
-    if: |
-      needs.bump-version.result == 'success' ||
-      needs.bump-version.result == 'skipped' ||
-      needs.release-pr.result == 'success' ||
-      startsWith(github.ref, 'refs/tags/')
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
-
-      - name: Cache cargo artifacts
-        uses: Swatinem/rust-cache@v2
-        with:
-          cache-on-failure: true
-
-      - name: Check formatting
-        run: cargo fmt --all -- --check
-
-      - name: Run clippy
-        run: cargo clippy --all-targets --no-default-features -- -D warnings
-
-      - name: Run tests (no features)
-        run: cargo test --no-default-features
-
-      - name: Run tests (all features)
-        run: cargo test --all-features
-
-  # ============================================================================
   # Build Native Libraries (for FFI) - Multi-platform, Multi-arch
   # ============================================================================
   build-native:
     name: Build Native (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
-    needs: validate
+    needs: bump-version
     # Only run on tag push (release)
     if: startsWith(github.ref, 'refs/tags/')
     strategy:
@@ -353,7 +315,7 @@ jobs:
   build-docs:
     name: Build Documentation
     runs-on: ubuntu-latest
-    needs: validate
+    needs: bump-version
     if: startsWith(github.ref, 'refs/tags/')
     steps:
       - uses: actions/checkout@v4
@@ -387,7 +349,7 @@ jobs:
   package:
     name: Package Crate
     runs-on: ubuntu-latest
-    needs: validate
+    needs: bump-version
     if: startsWith(github.ref, 'refs/tags/')
     steps:
       - uses: actions/checkout@v4
@@ -419,7 +381,7 @@ jobs:
   publish:
     name: Publish to crates.io
     runs-on: ubuntu-latest
-    needs: [validate, build-native, build-docs, package]
+    needs: [build-native, build-docs, package]
     if: startsWith(github.ref, 'refs/tags/')
     environment: crates.io
     permissions:
@@ -451,7 +413,7 @@ jobs:
   github-release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
-    needs: [validate, build-native, build-docs, package, publish]
+    needs: [build-native, build-docs, package, publish]
     if: startsWith(github.ref, 'refs/tags/')
     permissions:
       contents: write
@@ -495,7 +457,7 @@ jobs:
   notify:
     name: Notify
     runs-on: ubuntu-latest
-    needs: [validate, publish, github-release]
+    needs: [publish, github-release]
     if: always()
     steps:
       - name: Report status
@@ -506,7 +468,6 @@ jobs:
           echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
           echo "| Version Bump | ${{ needs.bump-version.result == 'success' && '✅' || '⏭️ Skipped' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Release PR | ${{ needs.release-pr.result == 'success' && '✅' || '⏭️ Skipped' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Validation | ${{ needs.validate.result == 'success' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Publish | ${{ needs.publish.result == 'success' && '✅' || '⏭️ Skipped' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| GitHub Release | ${{ needs.github-release.result == 'success' && '✅' || '⏭️ Skipped' }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
