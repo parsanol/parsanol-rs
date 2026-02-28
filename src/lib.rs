@@ -503,7 +503,9 @@ pub mod ruby_ffi {
 
     // --- Native extension functions ---
 
-    use magnus::{function, value::ReprValue, Class, IntoValue, Module, RArray, RClass, TryConvert};
+    use magnus::{
+        function, value::ReprValue, Class, IntoValue, Module, RArray, RClass, TryConvert,
+    };
     use once_cell::sync::Lazy;
     use std::sync::Mutex;
 
@@ -653,10 +655,8 @@ pub mod ruby_ffi {
 
                 // Get Parsanol::Slice class via const_get
                 // First get the Parsanol module, then get the Slice class from it
-                let parsanol_module: magnus::RModule = ruby
-                    .class_object()
-                    .const_get("Parsanol")
-                    .map_err(|e| {
+                let parsanol_module: magnus::RModule =
+                    ruby.class_object().const_get("Parsanol").map_err(|e| {
                         Error::new(
                             ruby.exception_runtime_error(),
                             format!("Parsanol module not found: {}", e),
@@ -797,10 +797,8 @@ pub mod ruby_ffi {
 
         native_module.define_module_function("is_available", function!(is_available, 0))?;
         native_module.define_module_function("parse_batch", function!(parse_batch, 2))?;
-        native_module.define_module_function(
-            "parse_to_ruby_objects",
-            function!(parse_to_ruby_objects, 2),
-        )?;
+        native_module
+            .define_module_function("parse_to_ruby_objects", function!(parse_to_ruby_objects, 2))?;
         native_module
             .define_module_function("parse_with_builder", function!(parse_with_builder, 3))?;
         native_module.define_module_function("create_lexer", function!(create_lexer, 1))?;

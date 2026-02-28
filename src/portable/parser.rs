@@ -758,8 +758,10 @@ impl<'a> PortableParser<'a> {
         let transformed_ast = to_parslet_compatible(&raw_ast, self.arena, self.input);
 
         // Walk the TRANSFORMED AST and send events to the builder
-        walk_ast(&transformed_ast, self.arena, self.input, builder).map_err(|e| ParseError::BuilderError {
-            message: e.to_string(),
+        walk_ast(&transformed_ast, self.arena, self.input, builder).map_err(|e| {
+            ParseError::BuilderError {
+                message: e.to_string(),
+            }
         })?;
 
         // Finalize

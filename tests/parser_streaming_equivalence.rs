@@ -6,8 +6,8 @@
 use parsanol::portable::arena::AstArena;
 use parsanol::portable::ast::AstNode;
 use parsanol::portable::parser::PortableParser;
+use parsanol::portable::parser_dsl::{re, str, GrammarBuilder, ParsletExt};
 use parsanol::portable::parslet_transform::to_parslet_compatible;
-use parsanol::portable::parser_dsl::{GrammarBuilder, ParsletExt, re, str};
 
 /// Helper to convert AST to debug string for comparison
 fn ast_to_debug_string(node: &AstNode, arena: &AstArena, input: &str) -> String {
@@ -23,19 +23,25 @@ fn ast_to_debug_string(node: &AstNode, arena: &AstArena, input: &str) -> String 
         AstNode::InputRef { offset, length } => {
             let start = *offset as usize;
             let end = start + (*length as usize);
-            let s = if end <= input.len() { &input[start..end] } else { "" };
+            let s = if end <= input.len() {
+                &input[start..end]
+            } else {
+                ""
+            };
             format!("input_ref({:?} @ {})", s, offset)
         }
         AstNode::Array { pool_index, length } => {
             let items = arena.get_array(*pool_index as usize, *length as usize);
-            let inner: Vec<String> = items.iter()
+            let inner: Vec<String> = items
+                .iter()
                 .map(|item| ast_to_debug_string(item, arena, input))
                 .collect();
             format!("[{}]", inner.join(", "))
         }
         AstNode::Hash { pool_index, length } => {
             let pairs = arena.get_hash_items(*pool_index as usize, *length as usize);
-            let inner: Vec<String> = pairs.iter()
+            let inner: Vec<String> = pairs
+                .iter()
                 .map(|(k, v)| format!("{:?}: {}", k, ast_to_debug_string(v, arena, input)))
                 .collect();
             format!("{{{}}}", inner.join(", "))
@@ -44,7 +50,10 @@ fn ast_to_debug_string(node: &AstNode, arena: &AstArena, input: &str) -> String 
 }
 
 /// Parse input and transform to Parslet-compatible format
-fn parse_and_transform(input: &str, grammar: &parsanol::portable::grammar::Grammar) -> (AstNode, AstArena) {
+fn parse_and_transform(
+    input: &str,
+    grammar: &parsanol::portable::grammar::Grammar,
+) -> (AstNode, AstArena) {
     let mut arena = AstArena::for_input(input.len());
     let mut parser = PortableParser::new(grammar, input, &mut arena);
     let raw = parser.parse().unwrap();
@@ -59,9 +68,7 @@ fn parse_and_transform(input: &str, grammar: &parsanol::portable::grammar::Gramm
 #[test]
 fn test_simple_string_match() {
     // Grammar: str("hello")
-    let grammar = GrammarBuilder::new()
-        .rule("test", str("hello"))
-        .build();
+    let grammar = GrammarBuilder::new().rule("test", str("hello")).build();
 
     let input = "hello";
     let (result, arena) = parse_and_transform(input, &grammar);
@@ -114,7 +121,11 @@ fn test_repetition_with_named_captures() {
 
         // Each item should be a hash with key "letter"
         for (i, item) in items.iter().enumerate() {
-            if let AstNode::Hash { pool_index: h_p, length: h_l } = item {
+            if let AstNode::Hash {
+                pool_index: h_p,
+                length: h_l,
+            } = item
+            {
                 let pairs = arena.get_hash_items(*h_p as usize, *h_l as usize);
                 assert_eq!(pairs.len(), 1, "Item {} should have 1 key", i);
                 assert_eq!(pairs[0].0, "letter", "Item {} should have 'letter' key", i);
@@ -212,7 +223,11 @@ fn test_word_repetition() {
         assert_eq!(items.len(), 1, "Expected 1 item");
 
         // The item should be a hash with key "word"
-        if let AstNode::Hash { pool_index: h_p, length: h_l } = &items[0] {
+        if let AstNode::Hash {
+            pool_index: h_p,
+            length: h_l,
+        } = &items[0]
+        {
             let pairs = arena.get_hash_items(*h_p as usize, *h_l as usize);
             assert_eq!(pairs[0].0, "word");
         }
@@ -266,30 +281,53 @@ fn test_streaming_builder_uses_transformed_ast() {
     let array_start_idx = events.iter().position(|e| e.starts_with("array_start"));
     let array_end_idx = events.iter().position(|e| e.starts_with("array_end"));
 
-    assert!(array_start_idx.is_some(), "Should have array_start event, got: {:?}", events);
+    assert!(
+        array_start_idx.is_some(),
+        "Should have array_start event, got: {:?}",
+        events
+    );
     assert!(array_end_idx.is_some(), "Should have array_end event");
 
     // Should have 3 hash_start events (one for each letter)
-    let hash_starts: Vec<_> = events.iter().filter(|e| e.starts_with("hash_start")).collect();
-    assert_eq!(hash_starts.len(), 3, "Should have 3 hash_start events for repetition pattern, got: {:?}", events);
+    let hash_starts: Vec<_> = events
+        .iter()
+        .filter(|e| e.starts_with("hash_start"))
+        .collect();
+    assert_eq!(
+        hash_starts.len(),
+        3,
+        "Should have 3 hash_start events for repetition pattern, got: {:?}",
+        events
+    );
 
     // Should have 3 hash_key("letter") events
-    let letter_keys: Vec<_> = events.iter().filter(|e| e.contains("hash_key(letter)")).collect();
-    assert_eq!(letter_keys.len(), 3, "Should have 3 hash_key(letter) events, got: {:?}", events);
+    let letter_keys: Vec<_> = events
+        .iter()
+        .filter(|e| e.contains("hash_key(letter)"))
+        .collect();
+    assert_eq!(
+        letter_keys.len(),
+        3,
+        "Should have 3 hash_key(letter) events, got: {:?}",
+        events
+    );
 }
 
 /// Test that streaming builder matches regular parser output for sequence with named captures
 #[test]
 fn test_streaming_builder_sequence_with_names() {
+    use parsanol::portable::parser_dsl::{dynamic, seq};
     use parsanol::portable::streaming_builder::DebugBuilder;
-    use parsanol::portable::parser_dsl::{seq, dynamic};
 
     // Grammar: str("hello ").label("greeting") >> re("[a-z]+").label("name")
     let grammar = GrammarBuilder::new()
-        .rule("test", seq(vec![
-            dynamic(str("hello ").label("greeting")),
-            dynamic(re("[a-z]+").label("name")),
-        ]))
+        .rule(
+            "test",
+            seq(vec![
+                dynamic(str("hello ").label("greeting")),
+                dynamic(re("[a-z]+").label("name")),
+            ]),
+        )
         .build();
 
     let input = "hello world";
@@ -326,12 +364,26 @@ fn test_streaming_builder_sequence_with_names() {
     assert!(array_end_idx.is_some(), "Should have array_end");
 
     // Should have 2 hash_starts (one for each item in the array)
-    let hash_starts: Vec<_> = events.iter().filter(|e| e.starts_with("hash_start")).collect();
-    assert_eq!(hash_starts.len(), 2, "Should have 2 hash_starts for array of 2 items, got: {:?}", events);
+    let hash_starts: Vec<_> = events
+        .iter()
+        .filter(|e| e.starts_with("hash_start"))
+        .collect();
+    assert_eq!(
+        hash_starts.len(),
+        2,
+        "Should have 2 hash_starts for array of 2 items, got: {:?}",
+        events
+    );
 
     // Should have both greeting and name keys
-    let greeting_keys: Vec<_> = events.iter().filter(|e| e.contains("hash_key(greeting)")).collect();
-    let name_keys: Vec<_> = events.iter().filter(|e| e.contains("hash_key(name)")).collect();
+    let greeting_keys: Vec<_> = events
+        .iter()
+        .filter(|e| e.contains("hash_key(greeting)"))
+        .collect();
+    let name_keys: Vec<_> = events
+        .iter()
+        .filter(|e| e.contains("hash_key(name)"))
+        .collect();
     assert_eq!(greeting_keys.len(), 1, "Should have 1 greeting key");
     assert_eq!(name_keys.len(), 1, "Should have 1 name key");
 }
