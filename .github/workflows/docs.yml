@@ -89,67 +89,433 @@ jobs:
 
       - name: Run benchmarks
         run: |
-          cargo bench -- --save-baseline main || true
+          # Run benchmarks - Criterion generates HTML reports automatically
+          cargo bench -- --save-baseline main 2>&1 | tee benchmark_output.txt
 
-      - name: Create benchmark index
+      - name: Extract benchmark results
+        id: extract
         run: |
-          mkdir -p target/criterion/html
-          cat > target/criterion/html/index.html << 'EOF'
+          # Create output directory
+          mkdir -p benchmark_data
+
+          # Extract timing data from benchmark output
+          python3 << 'PYEOF'
+          import re
+          import json
+          import os
+          from pathlib import Path
+
+          # Read benchmark output
+          with open('benchmark_output.txt', 'r') as f:
+              output = f.read()
+
+          # Parse benchmark results
+          # Format: "test bench_name ... bench: 1,234 ns/iter (+/- 56)"
+          pattern = r'test\s+(\S+)\s+.*bench:\s+([0-9,]+)\s+ns/iter\s+\(\+/-\s+([0-9,]+)\)'
+          matches = re.findall(pattern, output)
+
+          results = []
+          for name, time_ns, variance in matches:
+              time = int(time_ns.replace(',', ''))
+              var = int(variance.replace(',', ''))
+              results.append({
+                  'name': name,
+                  'time_ns': time,
+                  'variance_ns': var,
+                  'time_us': time / 1000,
+                  'time_ms': time / 1_000_000,
+              })
+
+          # Sort by time
+          results.sort(key=lambda x: x['time_ns'])
+
+          # Save as JSON
+          with open('benchmark_data/results.json', 'w') as f:
+              json.dump(results, f, indent=2)
+
+          # Print summary
+          print(f"Extracted {len(results)} benchmark results")
+          for r in results:
+              print(f"  {r['name']}: {r['time_ns']} ns")
+          PYEOF
+
+      - name: Generate benchmark dashboard
+        run: |
+          mkdir -p _benchmarks
+
+          # Copy Criterion HTML reports if they exist
+          if [ -d "target/criterion" ]; then
+            # Find all benchmark report directories and copy them
+            for bench_dir in target/criterion/*/; do
+              if [ -d "$bench_dir/report" ]; then
+                bench_name=$(basename "$bench_dir")
+                mkdir -p "_benchmarks/criterion/$bench_name"
+                cp -r "$bench_dir/report/"* "_benchmarks/criterion/$bench_name/"
+              fi
+            done
+          fi
+
+          # Create main dashboard with Chart.js
+          cat > _benchmarks/index.html << 'HTMLEOF'
           <!DOCTYPE html>
-          <html>
+          <html lang="en">
           <head>
             <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
             <title>Parsanol Benchmarks</title>
             <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
+            <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
             <style>
-              :root { color-scheme: light dark; }
-              body {
-                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
-                max-width: 900px;
-                margin: 0 auto;
-                padding: 2rem;
-                line-height: 1.6;
-              }
-              h1 { color: #2563eb; border-bottom: 2px solid #e5e7eb; padding-bottom: 0.5rem; }
-              .card {
-                background: #f8fafc;
-                border: 1px solid #e2e8f0;
-                border-radius: 8px;
-                padding: 1.5rem;
-                margin: 1rem 0;
+              :root {
+                color-scheme: light dark;
+                --bg: #ffffff;
+                --fg: #1a1a1a;
+                --card-bg: #f8fafc;
+                --card-border: #e2e8f0;
+                --accent: #2563eb;
+                --accent-light: #60a5fa;
+                --muted: #64748b;
               }
               @media (prefers-color-scheme: dark) {
-                body { background: #1a1a1a; color: #e5e5e5; }
-                .card { background: #262626; border-color: #404040; }
-                h1 { color: #60a5fa; }
+                :root {
+                  --bg: #1a1a1a;
+                  --fg: #e5e5e5;
+                  --card-bg: #262626;
+                  --card-border: #404040;
+                  --accent: #60a5fa;
+                  --accent-light: #93c5fd;
+                  --muted: #94a3b8;
+                }
+              }
+              * { box-sizing: border-box; margin: 0; padding: 0; }
+              body {
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+                background: var(--bg);
+                color: var(--fg);
+                line-height: 1.6;
+                padding: 2rem;
+              }
+              .container { max-width: 1200px; margin: 0 auto; }
+              h1 {
+                color: var(--accent);
+                margin-bottom: 0.5rem;
+                display: flex;
+                align-items: center;
+                gap: 0.5rem;
+              }
+              .subtitle { color: var(--muted); margin-bottom: 2rem; }
+
+              .stats-grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+                gap: 1rem;
+                margin-bottom: 2rem;
+              }
+              .stat-card {
+                background: var(--card-bg);
+                border: 1px solid var(--card-border);
+                border-radius: 12px;
+                padding: 1.5rem;
+                text-align: center;
+              }
+              .stat-value {
+                font-size: 2rem;
+                font-weight: 700;
+                color: var(--accent);
+              }
+              .stat-label {
+                color: var(--muted);
+                font-size: 0.875rem;
+                margin-top: 0.25rem;
+              }
+
+              .chart-container {
+                background: var(--card-bg);
+                border: 1px solid var(--card-border);
+                border-radius: 12px;
+                padding: 1.5rem;
+                margin-bottom: 2rem;
+              }
+              .chart-title {
+                font-size: 1.125rem;
+                font-weight: 600;
+                margin-bottom: 1rem;
+              }
+              .chart-wrapper {
+                position: relative;
+                height: 400px;
+              }
+
+              .table-container {
+                background: var(--card-bg);
+                border: 1px solid var(--card-border);
+                border-radius: 12px;
+                overflow: hidden;
+                margin-bottom: 2rem;
+              }
+              table {
+                width: 100%;
+                border-collapse: collapse;
+              }
+              th, td {
+                padding: 0.75rem 1rem;
+                text-align: left;
+                border-bottom: 1px solid var(--card-border);
+              }
+              th {
+                background: var(--bg);
+                font-weight: 600;
+                position: sticky;
+                top: 0;
+              }
+              tr:hover { background: rgba(37, 99, 235, 0.05); }
+              .time-bar {
+                display: inline-block;
+                height: 1rem;
+                background: var(--accent);
+                border-radius: 4px;
+                margin-right: 0.5rem;
+              }
+              .criterion-link {
+                display: inline-block;
+                padding: 0.25rem 0.5rem;
+                background: var(--accent);
+                color: white;
+                border-radius: 4px;
+                text-decoration: none;
+                font-size: 0.75rem;
+              }
+              .criterion-link:hover { background: var(--accent-light); }
+
+              .footer {
+                text-align: center;
+                color: var(--muted);
+                padding-top: 2rem;
+                border-top: 1px solid var(--card-border);
+              }
+              .footer a { color: var(--accent); }
+
+              #loading {
+                text-align: center;
+                padding: 3rem;
+                color: var(--muted);
               }
             </style>
           </head>
           <body>
-            <h1>⚡ Parsanol Benchmarks</h1>
-            <p>Performance benchmarks generated by Criterion.rs</p>
+            <div class="container">
+              <h1><span>⚡</span> Parsanol Benchmarks</h1>
+              <p class="subtitle">Performance metrics from Criterion.rs benchmarks</p>
 
-            <div class="card">
-              <h3>Running Benchmarks Locally</h3>
-              <pre><code>cargo bench</code></pre>
+              <div id="loading">Loading benchmark data...</div>
+
+              <div id="content" style="display: none;">
+                <div class="stats-grid" id="stats"></div>
+
+                <div class="chart-container">
+                  <h2 class="chart-title">Execution Time Comparison</h2>
+                  <div class="chart-wrapper">
+                    <canvas id="timeChart"></canvas>
+                  </div>
+                </div>
+
+                <div class="chart-container">
+                  <h2 class="chart-title">Performance Distribution</h2>
+                  <div class="chart-wrapper">
+                    <canvas id="distributionChart"></canvas>
+                  </div>
+                </div>
+
+                <div class="table-container">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Benchmark</th>
+                        <th>Time</th>
+                        <th>Throughput</th>
+                        <th>Details</th>
+                      </tr>
+                    </thead>
+                    <tbody id="benchmarkTable"></tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div class="footer">
+                <p>Generated on <span id="timestamp"></span></p>
+                <p>
+                  <a href="../">← Back to Documentation</a>
+                  &nbsp;|&nbsp;
+                  <a href="criterion/">Criterion Reports</a>
+                </p>
+              </div>
             </div>
 
-            <div class="card">
-              <h3>Last Updated</h3>
-              <p id="timestamp"></p>
-              <script>document.getElementById('timestamp').textContent = new Date().toISOString();</script>
-            </div>
+            <script>
+              // Format time with appropriate units
+              function formatTime(ns) {
+                if (ns < 1000) return ns.toFixed(0) + ' ns';
+                if (ns < 1_000_000) return (ns / 1000).toFixed(2) + ' µs';
+                if (ns < 1_000_000_000) return (ns / 1_000_000).toFixed(2) + ' ms';
+                return (ns / 1_000_000_000).toFixed(2) + ' s';
+              }
 
-            <p><a href="../">← Back to Documentation</a></p>
+              // Format throughput (assuming bytes per nanosecond -> MB/s)
+              function formatThroughput(ns) {
+                // This is a placeholder - real throughput would need bytes processed
+                return (1_000_000_000 / ns).toFixed(0) + ' ops/s';
+              }
+
+              // Shorten benchmark name for display
+              function shortName(name) {
+                return name.replace(/^bench_/, '').replace(/_/g, ' ');
+              }
+
+              // Fetch and display benchmark data
+              async function loadBenchmarks() {
+                try {
+                  const response = await fetch('results.json');
+                  if (!response.ok) throw new Error('No benchmark data');
+
+                  const data = await response.json();
+                  displayBenchmarks(data);
+                } catch (e) {
+                  document.getElementById('loading').innerHTML =
+                    '<p>No benchmark data available.</p><p>Run <code>cargo bench</code> to generate benchmarks.</p>';
+                }
+              }
+
+              function displayBenchmarks(data) {
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('content').style.display = 'block';
+
+                // Stats
+                const totalTime = data.reduce((sum, b) => sum + b.time_ns, 0);
+                const avgTime = totalTime / data.length;
+                const minTime = Math.min(...data.map(b => b.time_ns));
+                const maxTime = Math.max(...data.map(b => b.time_ns));
+
+                document.getElementById('stats').innerHTML = `
+                  <div class="stat-card">
+                    <div class="stat-value">${data.length}</div>
+                    <div class="stat-label">Benchmarks</div>
+                  </div>
+                  <div class="stat-card">
+                    <div class="stat-value">${formatTime(avgTime)}</div>
+                    <div class="stat-label">Average Time</div>
+                  </div>
+                  <div class="stat-card">
+                    <div class="stat-value">${formatTime(minTime)}</div>
+                    <div class="stat-label">Fastest</div>
+                  </div>
+                  <div class="stat-card">
+                    <div class="stat-value">${formatTime(maxTime)}</div>
+                    <div class="stat-label">Slowest</div>
+                  </div>
+                `;
+
+                // Time chart
+                const labels = data.map(b => shortName(b.name));
+                const times = data.map(b => b.time_ns);
+                const maxTimeVal = Math.max(...times);
+
+                new Chart(document.getElementById('timeChart'), {
+                  type: 'bar',
+                  data: {
+                    labels: labels,
+                    datasets: [{
+                      label: 'Execution Time',
+                      data: times,
+                      backgroundColor: 'rgba(37, 99, 235, 0.7)',
+                      borderColor: 'rgba(37, 99, 235, 1)',
+                      borderWidth: 1
+                    }]
+                  },
+                  options: {
+                    indexAxis: 'y',
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                      tooltip: {
+                        callbacks: {
+                          label: (ctx) => formatTime(ctx.raw)
+                        }
+                      }
+                    },
+                    scales: {
+                      x: {
+                        type: 'logarithmic',
+                        title: { display: true, text: 'Time (nanoseconds, log scale)' }
+                      }
+                    }
+                  }
+                });
+
+                // Distribution chart (pie chart showing time distribution)
+                new Chart(document.getElementById('distributionChart'), {
+                  type: 'doughnut',
+                  data: {
+                    labels: labels,
+                    datasets: [{
+                      data: times,
+                      backgroundColor: [
+                        '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6',
+                        '#ec4899', '#06b6d4', '#84cc16', '#f97316', '#6366f1'
+                      ]
+                    }]
+                  },
+                  options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                      legend: {
+                        position: 'right',
+                        labels: { boxWidth: 12, font: { size: 11 } }
+                      },
+                      tooltip: {
+                        callbacks: {
+                          label: (ctx) => `${ctx.label}: ${formatTime(ctx.raw)} (${((ctx.raw/totalTime)*100).toFixed(1)}%)`
+                        }
+                      }
+                    }
+                  }
+                });
+
+                // Table
+                const tableBody = document.getElementById('benchmarkTable');
+                data.forEach(b => {
+                  const barWidth = (b.time_ns / maxTimeVal) * 100;
+                  const row = document.createElement('tr');
+                  row.innerHTML = `
+                    <td><strong>${shortName(b.name)}</strong></td>
+                    <td>
+                      <span class="time-bar" style="width: ${barWidth}%"></span>
+                      ${formatTime(b.time_ns)} ± ${formatTime(b.variance_ns)}
+                    </td>
+                    <td>${formatThroughput(b.time_ns)}</td>
+                    <td><a href="criterion/${b.name}/" class="criterion-link">Report</a></td>
+                  `;
+                  tableBody.appendChild(row);
+                });
+
+                // Timestamp
+                document.getElementById('timestamp').textContent = new Date().toISOString().split('T')[0];
+              }
+
+              loadBenchmarks();
+            </script>
           </body>
           </html>
-          EOF
+          HTMLEOF
+
+          # Copy results.json
+          cp benchmark_data/results.json _benchmarks/
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: benchmarks
-          path: target/criterion/html
+          path: _benchmarks
           retention-days: 1
 
   # ============================================================================
