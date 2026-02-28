@@ -401,6 +401,12 @@ jobs:
       id-token: write  # Trusted publishing
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Pull latest changes
+        run: git pull origin main
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
