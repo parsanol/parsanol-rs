@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Parsanol Benchmarks</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #ffffff;
+      --fg: #1a1a1a;
+      --card-bg: #f8fafc;
+      --card-border: #e2e8f0;
+      --accent: #2563eb;
+      --accent-light: #60a5fa;
+      --muted: #64748b;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #1a1a1a;
+        --fg: #e5e5e5;
+        --card-bg: #262626;
+        --card-border: #404040;
+        --accent: #60a5fa;
+        --accent-light: #93c5fd;
+        --muted: #94a3b8;
+      }
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+      background: var(--bg);
+      color: var(--fg);
+      line-height: 1.6;
+      padding: 2rem;
+    }
+    .container { max-width: 1200px; margin: 0 auto; }
+    h1 {
+      color: var(--accent);
+      margin-bottom: 0.5rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .subtitle { color: var(--muted); margin-bottom: 2rem; }
+
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 1rem;
+      margin-bottom: 2rem;
+    }
+    .stat-card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      padding: 1.5rem;
+      text-align: center;
+    }
+    .stat-value {
+      font-size: 2rem;
+      font-weight: 700;
+      color: var(--accent);
+    }
+    .stat-label {
+      color: var(--muted);
+      font-size: 0.875rem;
+      margin-top: 0.25rem;
+    }
+
+    .chart-container {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      padding: 1.5rem;
+      margin-bottom: 2rem;
+    }
+    .chart-title {
+      font-size: 1.125rem;
+      font-weight: 600;
+      margin-bottom: 1rem;
+    }
+    .chart-wrapper {
+      position: relative;
+      height: 400px;
+    }
+
+    .table-container {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      overflow: hidden;
+      margin-bottom: 2rem;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    th, td {
+      padding: 0.75rem 1rem;
+      text-align: left;
+      border-bottom: 1px solid var(--card-border);
+    }
+    th {
+      background: var(--bg);
+      font-weight: 600;
+      position: sticky;
+      top: 0;
+    }
+    tr:hover { background: rgba(37, 99, 235, 0.05); }
+    .time-bar {
+      display: inline-block;
+      height: 1rem;
+      background: var(--accent);
+      border-radius: 4px;
+      margin-right: 0.5rem;
+    }
+    .criterion-link {
+      display: inline-block;
+      padding: 0.25rem 0.5rem;
+      background: var(--accent);
+      color: white;
+      border-radius: 4px;
+      text-decoration: none;
+      font-size: 0.75rem;
+    }
+    .criterion-link:hover { background: var(--accent-light); }
+
+    .footer {
+      text-align: center;
+      color: var(--muted);
+      padding-top: 2rem;
+      border-top: 1px solid var(--card-border);
+    }
+    .footer a { color: var(--accent); }
+
+    #loading {
+      text-align: center;
+      padding: 3rem;
+      color: var(--muted);
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1><span>⚡</span> Parsanol Benchmarks</h1>
+    <p class="subtitle">Performance metrics from Criterion.rs benchmarks</p>
+
+    <div id="loading">Loading benchmark data...</div>
+
+    <div id="content" style="display: none;">
+      <div class="stats-grid" id="stats"></div>
+
+      <div class="chart-container">
+        <h2 class="chart-title">Execution Time Comparison</h2>
+        <div class="chart-wrapper">
+          <canvas id="timeChart"></canvas>
+        </div>
+      </div>
+
+      <div class="chart-container">
+        <h2 class="chart-title">Performance Distribution</h2>
+        <div class="chart-wrapper">
+          <canvas id="distributionChart"></canvas>
+        </div>
+      </div>
+
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>Benchmark</th>
+              <th>Time</th>
+              <th>Throughput</th>
+              <th>Details</th>
+            </tr>
+          </thead>
+          <tbody id="benchmarkTable"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="footer">
+      <p>Generated on <span id="timestamp"></span></p>
+      <p>
+        <a href="../">← Back to Documentation</a>
+        &nbsp;|&nbsp;
+        <a href="criterion/">Criterion Reports</a>
+      </p>
+    </div>
+  </div>
+
+  <script>
+    // Format time with appropriate units
+    function formatTime(ns) {
+      if (ns < 1000) return ns.toFixed(0) + ' ns';
+      if (ns < 1_000_000) return (ns / 1000).toFixed(2) + ' µs';
+      if (ns < 1_000_000_000) return (ns / 1_000_000).toFixed(2) + ' ms';
+      return (ns / 1_000_000_000).toFixed(2) + ' s';
+    }
+
+    // Format throughput (assuming bytes per nanosecond -> MB/s)
+    function formatThroughput(ns) {
+      return (1_000_000_000 / ns).toFixed(0) + ' ops/s';
+    }
+
+    // Shorten benchmark name for display
+    function shortName(name) {
+      return name.replace(/^bench_/, '').replace(/_/g, ' ');
+    }
+
+    // Fetch and display benchmark data
+    async function loadBenchmarks() {
+      try {
+        const response = await fetch('results.json');
+        if (!response.ok) throw new Error('No benchmark data');
+
+        const data = await response.json();
+        displayBenchmarks(data);
+      } catch (e) {
+        document.getElementById('loading').innerHTML =
+          '<p>No benchmark data available.</p><p>Run <code>cargo bench</code> to generate benchmarks.</p>';
+      }
+    }
+
+    function displayBenchmarks(data) {
+      document.getElementById('loading').style.display = 'none';
+      document.getElementById('content').style.display = 'block';
+
+      // Stats
+      const totalTime = data.reduce((sum, b) => sum + b.time_ns, 0);
+      const avgTime = totalTime / data.length;
+      const minTime = Math.min(...data.map(b => b.time_ns));
+      const maxTime = Math.max(...data.map(b => b.time_ns));
+
+      document.getElementById('stats').innerHTML = `
+        <div class="stat-card">
+          <div class="stat-value">${data.length}</div>
+          <div class="stat-label">Benchmarks</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value">${formatTime(avgTime)}</div>
+          <div class="stat-label">Average Time</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value">${formatTime(minTime)}</div>
+          <div class="stat-label">Fastest</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value">${formatTime(maxTime)}</div>
+          <div class="stat-label">Slowest</div>
+        </div>
+      `;
+
+      // Time chart
+      const labels = data.map(b => shortName(b.name));
+      const times = data.map(b => b.time_ns);
+      const maxTimeVal = Math.max(...times);
+
+      new Chart(document.getElementById('timeChart'), {
+        type: 'bar',
+        data: {
+          labels: labels,
+          datasets: [{
+            label: 'Execution Time',
+            data: times,
+            backgroundColor: 'rgba(37, 99, 235, 0.7)',
+            borderColor: 'rgba(37, 99, 235, 1)',
+            borderWidth: 1
+          }]
+        },
+        options: {
+          indexAxis: 'y',
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            tooltip: {
+              callbacks: {
+                label: (ctx) => formatTime(ctx.raw)
+              }
+            }
+          },
+          scales: {
+            x: {
+              type: 'logarithmic',
+              title: { display: true, text: 'Time (nanoseconds, log scale)' }
+            }
+          }
+        }
+      });
+
+      // Distribution chart (pie chart showing time distribution)
+      new Chart(document.getElementById('distributionChart'), {
+        type: 'doughnut',
+        data: {
+          labels: labels,
+          datasets: [{
+            data: times,
+            backgroundColor: [
+              '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6',
+              '#ec4899', '#06b6d4', '#84cc16', '#f97316', '#6366f1'
+            ]
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: {
+              position: 'right',
+              labels: { boxWidth: 12, font: { size: 11 } }
+            },
+            tooltip: {
+              callbacks: {
+                label: (ctx) => `${ctx.label}: ${formatTime(ctx.raw)} (${((ctx.raw/totalTime)*100).toFixed(1)}%)`
+              }
+            }
+          }
+        }
+      });
+
+      // Table
+      const tableBody = document.getElementById('benchmarkTable');
+      data.forEach(b => {
+        const barWidth = (b.time_ns / maxTimeVal) * 100;
+        const row = document.createElement('tr');
+        row.innerHTML = `
+          <td><strong>${shortName(b.name)}</strong></td>
+          <td>
+            <span class="time-bar" style="width: ${barWidth}%"></span>
+            ${formatTime(b.time_ns)} ± ${formatTime(b.variance_ns)}
+          </td>
+          <td>${formatThroughput(b.time_ns)}</td>
+          <td><a href="criterion/${b.name}/" class="criterion-link">Report</a></td>
+        `;
+        tableBody.appendChild(row);
+      });
+
+      // Timestamp
+      document.getElementById('timestamp').textContent = new Date().toISOString().split('T')[0];
+    }
+
+    loadBenchmarks();
+  </script>
+</body>
+</html>
