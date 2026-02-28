@@ -80,7 +80,7 @@ jobs:
         with:
           command: release-pr
         env:
-          GITHUB_TOKEN: ${{ secrets.PARSANOL_CI_PAT_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # ============================================================================
   # Release: Create tag, publish to crates.io, create GitHub release
