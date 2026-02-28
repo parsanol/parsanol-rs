@@ -1,6 +1,6 @@
 [package]
 name = "parsanol"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["Ribose Inc. <open.source@ribose.com>"]
 license = "MIT"
@@ -236,7 +236,7 @@ wasm-opt = ["-Oz", "--enable-mutable-globals"]
 resolver = "2"
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["Ribose Inc. <open.source@ribose.com>"]
 license = "MIT"
