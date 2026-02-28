@@ -3,9 +3,8 @@
 # This file configures automatic versioning and changelog generation.
 # See: https://release-plz.dev/docs/config
 
-[workspace]
-# Workspace members to release
-members = ["."]
+# For a single package in the root directory, no workspace config needed
+# The package is automatically detected from Cargo.toml
 
 # Conventional commits configuration
 # See: https://www.conventionalcommits.org/
