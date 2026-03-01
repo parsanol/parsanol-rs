@@ -1,6 +1,6 @@
 //! RubyObject trait for converting Rust types to Ruby objects
 
-use magnus::{Error, Ruby, Value};
+use magnus::{value::ReprValue, Error, IntoValue, Ruby, Value};
 
 /// Trait for types that can be converted to Ruby objects
 ///

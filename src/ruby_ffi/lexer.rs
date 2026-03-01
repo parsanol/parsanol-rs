@@ -1,6 +1,6 @@
 //! Lexer functions for Ruby FFI
 
-use magnus::{value::ReprValue, Error, IntoValue, Module, RArray, Ruby, TryConvert, Value};
+use magnus::{value::ReprValue, Error, IntoValue, RArray, Ruby, TryConvert, Value};
 
 /// Create a cached lexer from token definitions
 pub fn create_lexer(definitions: Value) -> Result<Value, Error> {

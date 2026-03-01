@@ -25,7 +25,7 @@ crate-type = ["rlib"]
 
 [features]
 default = []
-ruby = ["magnus", "rb-sys"]
+ruby = ["magnus", "rb-sys", "once_cell"]
 wasm = ["wasm-bindgen", "js-sys", "console_error_panic_hook"]
 logging = ["log"]
 parallel = ["rayon"]
@@ -55,6 +55,7 @@ parsanol-derive = { path = "parsanol-derive", version = "0.1.0", optional = true
 
 # Ruby FFI (optional)
 magnus = { version = "0.7", optional = true }
+once_cell = { version = "1.21", optional = true }
 
 # WASM bindings (optional)
 wasm-bindgen = { version = "0.2", optional = true }

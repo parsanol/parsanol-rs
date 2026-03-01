@@ -2,7 +2,7 @@
 
 use crate::portable::ast::ParseError;
 use crate::portable::streaming_builder::{BuildError, BuildResult, StreamingBuilder};
-use magnus::{Error, Ruby, Value};
+use magnus::{value::ReprValue, IntoValue, Ruby, Value};
 
 /// Ruby callback wrapper for streaming builder
 ///

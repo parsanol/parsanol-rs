@@ -2,7 +2,7 @@
 
 use crate::portable::ffi::flatten_ast_to_u64;
 use crate::portable::{AstArena, AstNode, Grammar, PortableParser};
-use magnus::{value::ReprValue, Class, Error, IntoValue, RClass, Ruby, Value};
+use magnus::{value::ReprValue, Class, Error, IntoValue, Module, RClass, Ruby, Value};
 use std::hash::{Hash, Hasher};
 use std::sync::Mutex;
 
