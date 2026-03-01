@@ -147,12 +147,7 @@ impl AtomRegistry {
     ///
     /// `true` if the atom was registered, `false` if an atom with that name
     /// already exists.
-    pub fn register(
-        &mut self,
-        name: &str,
-        atom: Box<dyn CustomAtom>,
-        plugin: &str,
-    ) -> bool {
+    pub fn register(&mut self, name: &str, atom: Box<dyn CustomAtom>, plugin: &str) -> bool {
         if self.atoms.contains_key(name) {
             return false;
         }
@@ -196,7 +191,13 @@ impl AtomRegistry {
     pub fn list(&self) -> Vec<(&str, &str, &str)> {
         self.atoms
             .iter()
-            .map(|(name, entry)| (name.as_str(), entry.plugin.as_str(), entry.description.as_str()))
+            .map(|(name, entry)| {
+                (
+                    name.as_str(),
+                    entry.plugin.as_str(),
+                    entry.description.as_str(),
+                )
+            })
             .collect()
     }
 
@@ -303,7 +304,13 @@ impl TransformRegistry {
     pub fn list(&self) -> Vec<(&str, &str, &str)> {
         self.transforms
             .iter()
-            .map(|(name, entry)| (name.as_str(), entry.plugin.as_str(), entry.description.as_str()))
+            .map(|(name, entry)| {
+                (
+                    name.as_str(),
+                    entry.plugin.as_str(),
+                    entry.description.as_str(),
+                )
+            })
             .collect()
     }
 

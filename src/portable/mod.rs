@@ -186,8 +186,6 @@ pub use parallel::{parse_batch_parallel, parse_batch_parallel_owned, ParallelCon
 // ============================================================================
 
 pub use plugin::{
-    AtomRegistry, ParsanolPlugin, PluginInfo, PluginRegistry, TransformRegistry,
     clear_plugins, get_plugin_info, has_plugin, list_plugins, plugin_count, register_plugin,
-    unregister_plugin,
+    unregister_plugin, AtomRegistry, ParsanolPlugin, PluginInfo, PluginRegistry, TransformRegistry,
 };
-

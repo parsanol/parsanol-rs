@@ -50,9 +50,7 @@
 // Core Types
 // ============================================================================
 
-pub use crate::portable::{
-    AstArena, AstNode, Grammar, ParseError, ParseResult, PortableParser,
-};
+pub use crate::portable::{AstArena, AstNode, Grammar, ParseError, ParseResult, PortableParser};
 
 // ============================================================================
 // Parser DSL

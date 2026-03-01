@@ -4,10 +4,7 @@
 
 use proc_macro2::TokenStream;
 use quote::quote;
-use syn::{
-    Data, DeriveInput, Fields, Ident, Lit, Expr,
-    parse::Parse, parse::ParseStream, Token,
-};
+use syn::{parse::Parse, parse::ParseStream, Data, DeriveInput, Expr, Fields, Ident, Lit, Token};
 
 /// Custom attribute structure for parsanol attributes
 #[derive(Debug, Default)]
@@ -116,9 +113,7 @@ pub fn derive_from_ast_impl(input: &DeriveInput) -> syn::Result<TokenStream> {
             let variants: Vec<_> = data.variants.iter().collect();
             generate_enum_from_ast(name, &variants)?
         }
-        Data::Struct(data) => {
-            generate_struct_from_ast(name, &data.fields, transparent)?
-        }
+        Data::Struct(data) => generate_struct_from_ast(name, &data.fields, transparent)?,
         Data::Union(data) => {
             return Err(syn::Error::new_spanned(
                 data.union_token,
@@ -198,11 +193,15 @@ fn generate_enum_from_ast(name: &Ident, variants: &[&syn::Variant]) -> syn::Resu
         // Generate the conversion for this variant
         let conversion = match &variant.fields {
             Fields::Named(fields) => {
-                let field_conversions: Vec<TokenStream> = fields.named.iter()
+                let field_conversions: Vec<TokenStream> = fields
+                    .named
+                    .iter()
                     .map(|f| generate_field_extraction(f))
                     .collect::<syn::Result<Vec<_>>>()?;
 
-                let field_names: Vec<&Ident> = fields.named.iter()
+                let field_names: Vec<&Ident> = fields
+                    .named
+                    .iter()
                     .map(|f| f.ident.as_ref().unwrap())
                     .collect();
 
@@ -264,11 +263,15 @@ fn generate_struct_from_ast(
 ) -> syn::Result<TokenStream> {
     match fields {
         Fields::Named(fields) => {
-            let field_conversions: Vec<TokenStream> = fields.named.iter()
+            let field_conversions: Vec<TokenStream> = fields
+                .named
+                .iter()
                 .map(|f| generate_field_extraction(f))
                 .collect::<syn::Result<Vec<_>>>()?;
 
-            let field_names: Vec<&Ident> = fields.named.iter()
+            let field_names: Vec<&Ident> = fields
+                .named
+                .iter()
                 .map(|f| f.ident.as_ref().unwrap())
                 .collect();
 
@@ -294,7 +297,10 @@ fn generate_struct_from_ast(
             }
 
             // Extract from array
-            let conversions: Vec<TokenStream> = fields.unnamed.iter().enumerate()
+            let conversions: Vec<TokenStream> = fields
+                .unnamed
+                .iter()
+                .enumerate()
                 .map(|(i, _)| {
                     quote! {
                         arr.get(#i)
@@ -312,9 +318,7 @@ fn generate_struct_from_ast(
                 Ok(#name(#(#conversions),*))
             })
         }
-        Fields::Unit => {
-            Ok(quote! { Ok(#name) })
-        }
+        Fields::Unit => Ok(quote! { Ok(#name) }),
     }
 }
 

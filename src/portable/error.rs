@@ -344,7 +344,10 @@ impl ParseError {
             ParseError::Failed { position } => (*position, "Parse failed".to_string()),
             ParseError::Incomplete { expected, actual } => {
                 return RichError::at(
-                    format!("Parse incomplete: expected {} bytes, parsed {}", expected, actual),
+                    format!(
+                        "Parse incomplete: expected {} bytes, parsed {}",
+                        expected, actual
+                    ),
                     Span::default(),
                 );
             }

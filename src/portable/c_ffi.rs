@@ -347,7 +347,11 @@ pub unsafe extern "C" fn parsanol_result_success(result: *const ParsanolResult) 
     }
 
     let result = &*result;
-    if result.success { 1 } else { 0 }
+    if result.success {
+        1
+    } else {
+        0
+    }
 }
 
 /// Get the end position from a parse result
@@ -472,7 +476,8 @@ mod tests {
 
     #[test]
     fn test_grammar_new_and_free() {
-        let json = CString::new(r#"{"root": 0, "atoms": [{"Str": {"pattern": "hello"}}]}"#).unwrap();
+        let json =
+            CString::new(r#"{"root": 0, "atoms": [{"Str": {"pattern": "hello"}}]}"#).unwrap();
         let grammar = unsafe { parsanol_grammar_new(json.as_ptr()) };
         assert!(!grammar.is_null());
         unsafe { parsanol_grammar_free(grammar) };
@@ -486,7 +491,8 @@ mod tests {
 
     #[test]
     fn test_parse_simple() {
-        let json = CString::new(r#"{"root": 0, "atoms": [{"Str": {"pattern": "hello"}}]}"#).unwrap();
+        let json =
+            CString::new(r#"{"root": 0, "atoms": [{"Str": {"pattern": "hello"}}]}"#).unwrap();
         let grammar = unsafe { parsanol_grammar_new(json.as_ptr()) };
         assert!(!grammar.is_null());
 
@@ -509,7 +515,8 @@ mod tests {
 
     #[test]
     fn test_parse_with_result() {
-        let json = CString::new(r#"{"root": 0, "atoms": [{"Str": {"pattern": "hello"}}]}"#).unwrap();
+        let json =
+            CString::new(r#"{"root": 0, "atoms": [{"Str": {"pattern": "hello"}}]}"#).unwrap();
         let grammar = unsafe { parsanol_grammar_new(json.as_ptr()) };
         assert!(!grammar.is_null());
 
