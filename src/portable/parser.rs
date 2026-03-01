@@ -24,10 +24,104 @@ macro_rules! log_debug {
     ($($arg:tt)*) => { log::debug!($($arg)*) };
 }
 
-/// SIMD-optimized functions for bulk character operations
+/// SIMD-optimized functions for bulk character operations using memchr
+///
+/// These functions provide optimized byte-level operations that can be used
+/// for fast parsing. The core parser uses `skip_while` for bulk character
+/// class matching in repetitions.
+///
+/// The other functions are provided as utilities for custom parsers or
+/// future optimizations.
+#[allow(dead_code)]
 mod simd_helpers {
+    /// Whitespace bytes for fast lookup
+    const WHITESPACE: &[u8] = b" \t\n\r\x0b\x0c";
+
+    /// Skip all whitespace characters, returning the new position
+    ///
+    /// Uses memchr to find the first non-whitespace byte efficiently.
+    #[inline]
+    pub fn skip_whitespace(input: &[u8], pos: usize) -> usize {
+        let slice = &input[pos..];
+
+        // Find first byte that is NOT whitespace
+        for (i, &b) in slice.iter().enumerate() {
+            if !WHITESPACE.contains(&b) {
+                return pos + i;
+            }
+        }
+
+        input.len()
+    }
+
+    /// Find the position of a specific byte using memchr
+    ///
+    /// Returns None if the byte is not found after pos.
+    #[inline]
+    pub fn find_byte(input: &[u8], pos: usize, byte: u8) -> Option<usize> {
+        if pos >= input.len() {
+            return None;
+        }
+        memchr::memchr(byte, &input[pos..]).map(|i| pos + i)
+    }
+
+    /// Find the position of one of two bytes using memchr2
+    ///
+    /// Returns (position, which_byte) where which_byte is 0 for byte1, 1 for byte2.
+    #[inline]
+    pub fn find_byte2(input: &[u8], pos: usize, byte1: u8, byte2: u8) -> Option<(usize, usize)> {
+        if pos >= input.len() {
+            return None;
+        }
+        memchr::memchr2(byte1, byte2, &input[pos..]).map(|i| {
+            let found_byte = input[pos + i];
+            let which = if found_byte == byte1 { 0 } else { 1 };
+            (pos + i, which)
+        })
+    }
+
+    /// Find the position of one of three bytes using memchr3
+    ///
+    /// Returns (position, which_byte) where which_byte is 0, 1, or 2.
+    #[inline]
+    pub fn find_byte3(
+        input: &[u8],
+        pos: usize,
+        byte1: u8,
+        byte2: u8,
+        byte3: u8,
+    ) -> Option<(usize, usize)> {
+        if pos >= input.len() {
+            return None;
+        }
+        memchr::memchr3(byte1, byte2, byte3, &input[pos..]).map(|i| {
+            let found_byte = input[pos + i];
+            let which = if found_byte == byte1 {
+                0
+            } else if found_byte == byte2 {
+                1
+            } else {
+                2
+            };
+            (pos + i, which)
+        })
+    }
+
+    /// Find a substring pattern using memmem
+    ///
+    /// Returns the position of the first occurrence after pos.
+    #[inline]
+    pub fn find_pattern(input: &[u8], pos: usize, pattern: &[u8]) -> Option<usize> {
+        if pos >= input.len() || pattern.is_empty() {
+            return None;
+        }
+        memchr::memmem::find(&input[pos..], pattern).map(|i| pos + i)
+    }
+
     /// Skip all characters matching a predicate, returning the new position
-    /// Uses SIMD when available via memchr for common patterns
+    ///
+    /// For common patterns (whitespace), use the specialized functions above.
+    /// This is a fallback for arbitrary predicates.
     #[inline]
     pub fn skip_while<F: Fn(u8) -> bool>(input: &[u8], pos: usize, predicate: F) -> usize {
         let mut current = pos;
@@ -56,6 +150,55 @@ mod simd_helpers {
         }
 
         current
+    }
+
+    /// Skip digits (0-9), returning the new position
+    #[inline]
+    pub fn skip_digits(input: &[u8], pos: usize) -> usize {
+        skip_while(input, pos, |b| b.is_ascii_digit())
+    }
+
+    /// Skip hex digits (0-9, a-f, A-F), returning the new position
+    #[inline]
+    pub fn skip_hex(input: &[u8], pos: usize) -> usize {
+        skip_while(input, pos, |b| b.is_ascii_hexdigit())
+    }
+
+    /// Skip alphabetic characters (a-z, A-Z), returning the new position
+    #[inline]
+    pub fn skip_alpha(input: &[u8], pos: usize) -> usize {
+        skip_while(input, pos, |b| b.is_ascii_alphabetic())
+    }
+
+    /// Skip alphanumeric characters (a-z, A-Z, 0-9), returning the new position
+    #[inline]
+    pub fn skip_alphanumeric(input: &[u8], pos: usize) -> usize {
+        skip_while(input, pos, |b| b.is_ascii_alphanumeric())
+    }
+
+    /// Find the end of a quoted string, handling escape sequences
+    ///
+    /// Returns the position after the closing quote, or None if not found.
+    /// Handles escaped quotes (e.g., "hello \"world\"")
+    #[inline]
+    pub fn find_string_end(input: &[u8], pos: usize, quote: u8, escape: u8) -> Option<usize> {
+        let mut current = pos;
+        let len = input.len();
+
+        while current < len {
+            // Find the next quote or escape character
+            let next = find_byte2(input, current, quote, escape)?;
+
+            if input[next.0] == escape {
+                // Skip the escape character and the next character
+                current = next.0 + 2;
+            } else {
+                // Found the closing quote
+                return Some(next.0 + 1);
+            }
+        }
+
+        None
     }
 }
 
@@ -667,6 +810,33 @@ impl<'a> PortableParser<'a> {
         }
     }
 
+    /// Parse and return the result with end position
+    ///
+    /// This is similar to `parse()` but returns the full `ParseResult`
+    /// which includes both the AST and the end position.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(ParseResult)` on success, containing the AST and end position
+    /// * `Err(ParseError)` on failure
+    #[inline]
+    pub fn parse_with_end_pos(&mut self) -> Result<ParseResult, ParseError> {
+        // Check input size limit first
+        self.check_input_size()?;
+
+        // Start timeout timer
+        self.start_timeout_timer();
+
+        log_debug!(
+            "Starting parse: input_len={}, root_atom={}",
+            self.input.len(),
+            self.grammar.root
+        );
+
+        // Use try_atom directly to get the full result
+        self.try_atom(self.grammar.root, 0)
+    }
+
     /// Parse with custom configuration
     ///
     /// This method applies the configuration from `config` before parsing.
@@ -867,6 +1037,27 @@ impl<'a> PortableParser<'a> {
                         value: AstNode::Nil,
                         end_pos: result.end_pos,
                     })
+                }
+                super::grammar::Atom::Custom { id } => {
+                    // Use the custom atom registry to parse
+                    let input_str = std::str::from_utf8(self.input_bytes).map_err(|_| {
+                        ParseError::Internal {
+                            message: "Invalid UTF-8 in input".to_string(),
+                        }
+                    })?;
+                    match super::custom::parse_custom_atom(*id, input_str, pos) {
+                        Some(result) => {
+                            let value = match result.value {
+                                Some(node) => node,
+                                None => self.arena.input_ref(pos, result.end_pos - pos),
+                            };
+                            Ok(ParseResult {
+                                value,
+                                end_pos: result.end_pos,
+                            })
+                        }
+                        None => Err(ParseError::Failed { position: pos }),
+                    }
                 }
             },
             None => Err(ParseError::Internal {

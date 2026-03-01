@@ -10,11 +10,26 @@
 //!    `- Expected one of ['+', '-', '*', '/']
 //!       `- Unexpected end of input
 //! ```
+//!
+//! # Error Type Conversion
+//!
+//! This module provides seamless conversion from [`ParseError`] (the internal
+//! error type) to [`RichError`] (the user-facing error type):
+//!
+//! ```
+//! use parsanol::portable::{ParseError, RichError};
+//!
+//! let parse_error = ParseError::at_position(10);
+//! let rich_error: RichError = parse_error.into_rich("input text");
+//! ```
 
 use std::fmt;
 
 // Re-export SourceSpan from source_location for use in errors
 pub use super::source_location::SourceSpan as Span;
+
+// Import ParseError for conversion
+use super::ast::ParseError;
 
 /// A rich, tree-structured parse error
 #[derive(Debug, Clone)]
@@ -298,6 +313,110 @@ impl ErrorBuilder {
 
 // Re-export offset_to_line_col from source_location for backward compatibility
 pub use super::source_location::offset_to_line_col;
+
+// ============================================================================
+// ParseError to RichError Conversion
+// ============================================================================
+
+impl ParseError {
+    /// Convert this parse error to a rich error with source context
+    ///
+    /// This method creates a user-friendly error message with line/column
+    /// information derived from the source input.
+    ///
+    /// # Arguments
+    ///
+    /// * `input` - The source input that was being parsed
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use parsanol::portable::{ParseError, RichError};
+    ///
+    /// let error = ParseError::at_position(5);
+    /// let rich = error.into_rich("hello world");
+    /// println!("{}", rich);
+    /// ```
+    pub fn into_rich(self, input: &str) -> RichError {
+        use super::source_location::SourcePosition;
+
+        let (position, message) = match &self {
+            ParseError::Failed { position } => (*position, "Parse failed".to_string()),
+            ParseError::Incomplete { expected, actual } => {
+                return RichError::at(
+                    format!("Parse incomplete: expected {} bytes, parsed {}", expected, actual),
+                    Span::default(),
+                );
+            }
+            ParseError::InvalidGrammar { reason } => {
+                return RichError::at(format!("Invalid grammar: {}", reason), Span::default());
+            }
+            ParseError::Internal { message } => {
+                return RichError::at(format!("Internal error: {}", message), Span::default());
+            }
+            ParseError::InputTooLarge {
+                input_size,
+                max_size,
+            } => {
+                return RichError::at(
+                    format!(
+                        "Input too large: {} bytes exceeds limit of {} bytes",
+                        input_size, max_size
+                    ),
+                    Span::default(),
+                );
+            }
+            ParseError::RecursionLimitExceeded { depth, max_depth } => {
+                return RichError::at(
+                    format!(
+                        "Recursion limit exceeded: depth {} exceeds limit of {}",
+                        depth, max_depth
+                    ),
+                    Span::default(),
+                );
+            }
+            ParseError::TimeoutExceeded {
+                elapsed_ms,
+                timeout_ms,
+            } => {
+                return RichError::at(
+                    format!(
+                        "Timeout exceeded: {}ms exceeds limit of {}ms",
+                        elapsed_ms, timeout_ms
+                    ),
+                    Span::default(),
+                );
+            }
+            ParseError::MemoryLimitExceeded {
+                used_bytes,
+                max_bytes,
+            } => {
+                return RichError::at(
+                    format!(
+                        "Memory limit exceeded: {} bytes exceeds limit of {} bytes",
+                        used_bytes, max_bytes
+                    ),
+                    Span::default(),
+                );
+            }
+            ParseError::BuilderError { message } => {
+                return RichError::at(format!("Builder error: {}", message), Span::default());
+            }
+        };
+
+        // Convert byte offset to line/column
+        let pos = SourcePosition::from_offset(input, position);
+        let span = Span::at(position, pos.line, pos.column);
+
+        RichError::at(message, span)
+    }
+}
+
+impl From<ParseError> for RichError {
+    fn from(error: ParseError) -> Self {
+        error.into_rich("")
+    }
+}
 
 #[cfg(test)]
 mod tests {

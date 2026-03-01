@@ -270,6 +270,7 @@ fn remap_atom(atom: &Atom, offset: usize) -> Atom {
         Atom::Ignore { atom } => Atom::Ignore {
             atom: atom + offset,
         },
+        Atom::Custom { id } => Atom::Custom { id: *id },
     }
 }
 
@@ -874,6 +875,106 @@ macro_rules! grammar {
 
 // Re-export at crate root
 pub use crate::grammar;
+
+// ============================================================================
+// Ergonomic Macros for Arbitrary-Length Sequences and Alternatives
+// ============================================================================
+
+/// Create a sequence of parslets with dynamic boxing (ergonomic macro)
+///
+/// This macro provides an ergonomic way to create sequences of any length.
+/// It wraps each element in `dynamic()` for heterogeneous type support.
+///
+/// # When to use
+///
+/// - **Use `all![]` when**: You need >5 elements, or heterogeneous parslet types
+/// - **Use `.then()` / `>>` when**: You have <=5 elements of different types and want zero-allocation
+/// - **Use `seq()` when**: All elements are the same type and you want Vec-based construction
+///
+/// # Examples
+///
+/// ```
+/// use parsanol::portable::parser_dsl::*;
+///
+/// // Works for any length
+/// let parser = all![str("a"), str("b"), str("c"), str("d"), str("e"), str("f")];
+///
+/// // Heterogeneous types work too
+/// let parser = all![str("hello"), re("[0-9]+"), str("world")];
+///
+/// // Trailing comma is allowed
+/// let parser = all![
+///     str("a"),
+///     str("b"),
+///     str("c"),
+/// ];
+/// ```
+#[macro_export]
+macro_rules! parsanol_all {
+    ($($p:expr),+ $(,)?) => {
+        $crate::portable::parser_dsl::Sequence(vec![
+            $($crate::portable::parser_dsl::dynamic($p)),+
+        ])
+    };
+}
+
+/// Create a choice/alternative of parslets with dynamic boxing (ergonomic macro)
+///
+/// This macro provides an ergonomic way to create alternatives of any length.
+/// It wraps each element in `dynamic()` for heterogeneous type support.
+///
+/// # When to use
+///
+/// - **Use `oneof![]` when**: You need >5 alternatives, or heterogeneous parslet types
+/// - **Use `.or()` / `|` when**: You have <=5 alternatives of different types and want zero-allocation
+/// - **Use `choice()` when**: All alternatives are the same type and you want Vec-based construction
+///
+/// # Examples
+///
+/// ```
+/// use parsanol::portable::parser_dsl::*;
+///
+/// // Works for any length
+/// let parser = oneof![str("+"), str("-"), str("*"), str("/"), str("%"), str("^")];
+///
+/// // Heterogeneous types work too
+/// let parser = oneof![str("true"), str("false"), re("yes|no")];
+///
+/// // Trailing comma is allowed
+/// let parser = oneof![
+///     str("a"),
+///     str("b"),
+///     str("c"),
+/// ];
+/// ```
+#[macro_export]
+macro_rules! parsanol_oneof {
+    ($($p:expr),+ $(,)?) => {
+        $crate::portable::parser_dsl::Choice(vec![
+            $($crate::portable::parser_dsl::dynamic($p)),+
+        ])
+    };
+}
+
+// Re-export macros with shorter names at crate root
+/// Alias for `parsanol_all!` - create a sequence of any length
+#[macro_export]
+macro_rules! all {
+    ($($p:expr),+ $(,)?) => {
+        $crate::parsanol_all![$($p),+]
+    };
+}
+
+/// Alias for `parsanol_oneof!` - create a choice of any length
+#[macro_export]
+macro_rules! oneof {
+    ($($p:expr),+ $(,)?) => {
+        $crate::parsanol_oneof![$($p),+]
+    };
+}
+
+// Re-export macros at module level
+pub use crate::{all, oneof, parsanol_all, parsanol_oneof};
 
 #[cfg(test)]
 mod tests {

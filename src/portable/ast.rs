@@ -12,7 +12,7 @@ pub use super::source_location::SourcePosition;
 /// AST node types - optimized for arena allocation
 ///
 /// Nodes store references to arena-allocated data using indices.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub enum AstNode {
     /// Nil/null value
     Nil,

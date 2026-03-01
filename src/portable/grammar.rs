@@ -81,6 +81,33 @@ pub enum Atom {
         /// Index into atoms array
         atom: usize,
     },
+
+    /// Custom atom extension point
+    ///
+    /// References a custom parsing implementation registered via
+    /// `parsanol::portable::custom::register_custom_atom()`.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use parsanol::portable::custom::{CustomAtom, CustomResult, register_custom_atom};
+    ///
+    /// struct MyMatcher;
+    /// impl CustomAtom for MyMatcher {
+    ///     fn parse(&self, input: &str, pos: usize) -> Option<CustomResult> {
+    ///         // Custom parsing logic
+    ///         None
+    ///     }
+    ///     fn description(&self) -> &str { "my matcher" }
+    /// }
+    ///
+    /// let id = register_custom_atom(1000, Box::new(MyMatcher));
+    /// let atom = Atom::Custom { id };
+    /// ```
+    Custom {
+        /// Unique identifier for the custom atom
+        id: u64,
+    },
 }
 
 /// A complete grammar
@@ -165,6 +192,7 @@ impl Grammar {
                 Atom::Lookahead { .. } => "lookahead",
                 Atom::Cut => "cut",
                 Atom::Ignore { .. } => "ignore",
+                Atom::Custom { .. } => "custom",
             };
             *atom_types.entry(ty).or_insert(0) += 1;
         }
@@ -239,6 +267,30 @@ impl Grammar {
         let mut arena = AstArena::for_input(input.len());
         let mut parser = PortableParser::new(self, input, &mut arena);
         parser.parse()
+    }
+
+    /// Parse input and return the AST with end position
+    ///
+    /// This is similar to `parse()` but also returns the end position,
+    /// which is useful for partial parsing or when you need to know
+    /// how much input was consumed.
+    ///
+    /// # Arguments
+    /// * `input` - The input string to parse
+    ///
+    /// # Returns
+    /// * `Ok(ParseResult)` on success, containing the AST and end position
+    /// * `Err(ParseError)` on failure
+    pub fn parse_with_pos(
+        &self,
+        input: &str,
+    ) -> Result<crate::portable::ast::ParseResult, crate::portable::ast::ParseError> {
+        use crate::portable::arena::AstArena;
+        use crate::portable::parser::PortableParser;
+
+        let mut arena = AstArena::for_input(input.len());
+        let mut parser = PortableParser::new(self, input, &mut arena);
+        parser.parse_with_end_pos()
     }
 
     /// Parse multiple inputs in batch mode
@@ -460,6 +512,9 @@ pub trait AtomVisitor {
 
     /// Visit an ignore atom (called after visiting child)
     fn visit_ignore_post(&mut self, _atom: usize) {}
+
+    /// Visit a custom atom
+    fn visit_custom(&mut self, _id: u64) {}
 }
 
 impl Grammar {
@@ -522,6 +577,9 @@ impl Grammar {
                     visitor.visit_ignore_pre(*atom);
                     self.visit_atom(*atom, visitor);
                     visitor.visit_ignore_post(*atom);
+                }
+                Atom::Custom { id } => {
+                    visitor.visit_custom(*id);
                 }
             }
         }

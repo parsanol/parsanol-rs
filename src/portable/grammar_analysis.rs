@@ -266,7 +266,7 @@ impl<'a> GrammarAnalyzer<'a> {
                     None
                 }
             }
-            Atom::Str { .. } | Atom::Re { .. } | Atom::Cut => None,
+            Atom::Str { .. } | Atom::Re { .. } | Atom::Cut | Atom::Custom { .. } => None,
         }
     }
 
@@ -311,6 +311,7 @@ impl<'a> GrammarAnalyzer<'a> {
             | Atom::Ignore { atom }
             | Atom::Lookahead { atom, .. } => self.is_nullable(*atom),
             Atom::Cut => false,
+            Atom::Custom { .. } => false, // Custom atoms are not nullable by default
         }
     }
 
@@ -342,7 +343,7 @@ impl<'a> GrammarAnalyzer<'a> {
         };
 
         match atom {
-            Atom::Str { .. } | Atom::Re { .. } | Atom::Cut => {}
+            Atom::Str { .. } | Atom::Re { .. } | Atom::Cut | Atom::Custom { .. } => {}
             Atom::Sequence { atoms } | Atom::Alternative { atoms } => {
                 for &child in atoms {
                     self.collect_reachable(child, reachable);

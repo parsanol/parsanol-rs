@@ -242,6 +242,7 @@ impl<'a> GrammarVisualizer<'a> {
             }
             Atom::Cut => "cut".to_string(),
             Atom::Ignore { atom } => format!("ignore(a{})", atom),
+            Atom::Custom { id } => format!("custom({})", id),
         }
     }
 }

@@ -29,6 +29,7 @@ ruby = ["magnus", "rb-sys"]
 wasm = ["wasm-bindgen", "js-sys", "console_error_panic_hook"]
 logging = ["log"]
 parallel = ["rayon"]
+derive = ["dep:parsanol-derive"]
 # Benchmark comparison features
 compare-nom = ["nom"]
 compare-winnow = ["winnow"]
@@ -40,7 +41,7 @@ serde_json = "1.0"
 regex = "1.10"
 hashbrown = "0.14"
 ahash = "0.8"
-once_cell = "1.19"
+memchr = "2.7"
 
 # Logging (optional)
 log = { version = "0.4", optional = true }
@@ -48,6 +49,9 @@ log = { version = "0.4", optional = true }
 # Benchmark comparison libraries (optional)
 nom = { version = "7", optional = true }
 winnow = { version = "0.6", optional = true }
+
+# Derive macros (optional)
+parsanol-derive = { path = "parsanol-derive", version = "0.1.0", optional = true }
 
 # Ruby FFI (optional)
 magnus = { version = "0.7", optional = true }
@@ -237,6 +241,7 @@ wasm-opt = ["-Oz", "--enable-mutable-globals"]
 
 [workspace]
 resolver = "2"
+members = ["parsanol-derive"]
 
 [workspace.package]
 version = "0.1.2"

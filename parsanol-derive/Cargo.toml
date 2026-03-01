@@ -1,0 +1,21 @@
+[package]
+name = "parsanol-derive"
+version = "0.1.0"
+edition = "2021"
+description = "Derive macros for parsanol - typed AST generation from parser output"
+license = "MIT"
+repository = "https://github.com/parsanol/parsanol-rs"
+keywords = ["parser", "peg", "derive", "macro", "ast"]
+categories = ["parsing", "development-tools::procedural-macro-helpers"]
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "2.0", features = ["full", "parsing", "extra-traits"] }
+quote = "1.0"
+proc-macro2 = "1.0"
+
+[dev-dependencies]
+parsanol = { path = ".." }
+serde_json = "1.0"
