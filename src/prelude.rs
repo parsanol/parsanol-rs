@@ -18,19 +18,19 @@
 //! - [`ParseResult`] - Result of a parse operation
 //!
 //! ## Parser DSL
-//! - [`str`] - Match a literal string
-//! - [`re`] - Match a regex pattern
-//! - [`seq`] - Match a sequence of patterns
-//! - [`choice`] - Match one of several patterns
-//! - [`any`] - Match any single character
-//! - [`ref_]` - Reference to another rule
-//! - [`dynamic`] - Dynamic pattern matching
+//! - [`str()`] - Match a literal string
+//! - [`re()`] - Match a regex pattern
+//! - [`seq()`] - Match a sequence of patterns
+//! - [`choice()`] - Match one of several patterns
+//! - [`any()`] - Match any single character
+//! - [`ref_()`] - Reference to another rule
+//! - [`dynamic()`] - Dynamic pattern matching
 //! - [`GrammarBuilder`] - Builder for constructing grammars
 //! - [`Parslet`] - Trait for parslet types
 //! - [`ParsletExt`] - Extension trait for parslet combinators
 //!
 //! ## Infix Parsing
-//! - [`infix`] - Create infix expression parser
+//! - [`infix()`] - Create infix expression parser
 //! - [`InfixBuilder`] - Builder for infix expressions
 //! - [`Operator`] - Operator definition
 //! - [`Assoc`] - Operator associativity
