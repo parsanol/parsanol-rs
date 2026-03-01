@@ -38,7 +38,7 @@ thread_local! {
     static REGEX_CACHE: RefCell<HashMap<String, Regex>> = RefCell::new(HashMap::new());
 
     /// Thread-local cache statistics
-    static CACHE_STATS: RefCell<CacheStats> = RefCell::new(CacheStats { hits: 0, misses: 0, size: 0 });
+    static CACHE_STATS: RefCell<CacheStats> = const { RefCell::new(CacheStats { hits: 0, misses: 0, size: 0 }) };
 }
 
 /// Get or compile a regex pattern
@@ -114,7 +114,7 @@ pub fn cache_size() -> usize {
 /// Returns hit/miss counts and current cache size for the current thread.
 pub fn stats() -> CacheStats {
     CACHE_STATS.with(|stats| {
-        let mut s = stats.borrow().clone();
+        let mut s = *stats.borrow();
         s.size = cache_size();
         s
     })
