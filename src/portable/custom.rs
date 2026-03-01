@@ -487,6 +487,7 @@ pub mod well_known {
 /// Initialize built-in custom atoms
 ///
 /// This is called automatically when the first custom atom operation is performed.
+#[allow(dead_code)]
 fn init_builtin_atoms() {
     static INIT: std::sync::Once = std::sync::Once::new();
     INIT.call_once(|| {
@@ -498,6 +499,7 @@ fn init_builtin_atoms() {
 }
 
 // Ensure built-in atoms are initialized when the module is first used
+#[allow(dead_code)]
 fn ensure_init() {
     init_builtin_atoms();
 }

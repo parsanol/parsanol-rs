@@ -117,6 +117,7 @@ pub struct AtomInfo {
 }
 
 /// Entry in the atom registry
+#[allow(dead_code)]
 struct AtomEntry {
     /// The custom atom implementation
     atom: Box<dyn CustomAtom>,
