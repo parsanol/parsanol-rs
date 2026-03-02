@@ -3,8 +3,38 @@
 # This file configures automatic versioning and changelog generation.
 # See: https://release-plz.dev/docs/config
 
-# For a single package in the root directory, no workspace config needed
-# The package is automatically detected from Cargo.toml
+# Workspace configuration for multi-crate publishing
+[[workspace]]
+# Path to the workspace root (default: ".")
+# This detects all workspace members automatically
+
+# Main parsanol crate
+[[package]]
+name = "parsanol"
+# Changelog path (default: "CHANGELOG.md")
+changelog_path = "CHANGELOG.md"
+# Version bump configuration
+version_config = { require_conventional = true }
+
+# Derive macro crate
+[[package]]
+name = "parsanol-derive"
+changelog_path = "parsanol-derive/CHANGELOG.md"
+version_config = { require_conventional = true }
+
+# Global changelog configuration
+[changelog]
+# Include commit body in changelog
+body = """
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | upper_first }}
+{% for commit in commits %}
+- {{ commit.message | upper_first }}\
+{% if commit.breaking %} (BREAKING){% endif %}\
+{% if commit.author != "github-actions[bot]" %} by @{{ commit.author }}{% endif %}\
+{% endfor %}
+{% endfor %}
+"""
 
 # Conventional commits configuration
 # See: https://www.conventionalcommits.org/

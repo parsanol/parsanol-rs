@@ -29,7 +29,6 @@ ruby = ["magnus", "rb-sys", "once_cell"]
 wasm = ["wasm-bindgen", "js-sys", "console_error_panic_hook"]
 logging = ["log"]
 parallel = ["rayon"]
-derive = ["dep:parsanol-derive"]
 # Benchmark comparison features
 compare-nom = ["nom"]
 compare-winnow = ["winnow"]
@@ -50,8 +49,8 @@ log = { version = "0.4", optional = true }
 nom = { version = "7", optional = true }
 winnow = { version = "0.6", optional = true }
 
-# Derive macros (optional)
-parsanol-derive = { path = "parsanol-derive", version = "0.1.0", optional = true }
+# Derive macros (required)
+parsanol-derive = { path = "parsanol-derive", version = "0.1.0" }
 
 # Ruby FFI (optional)
 magnus = { version = "0.7", optional = true }

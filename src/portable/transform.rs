@@ -178,6 +178,21 @@ impl Value {
         }
     }
 
+    /// Get a hash field by key (alias for get, returns reference)
+    pub fn get_hash_field(&self, key: &str) -> Option<&Value> {
+        self.get(key)
+    }
+
+    /// Get the tag from a hash value (looks for "tag" key)
+    ///
+    /// This is used by the derive macro for enum variant matching.
+    pub fn get_tag(&self) -> Option<&str> {
+        match self {
+            Value::Hash(h) => h.get("tag").and_then(|v| v.as_str()),
+            _ => None,
+        }
+    }
+
     /// Get an array element by index
     pub fn get_index(&self, index: usize) -> Option<&Value> {
         match self {
@@ -218,6 +233,148 @@ impl fmt::Display for Value {
         }
     }
 }
+
+// ============================================================================
+// TryFrom implementations for Value conversion
+// ============================================================================
+
+impl TryFrom<Value> for i64 {
+    type Error = FromAstError;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::Int(n) => Ok(n),
+            Value::Float(f) => Ok(f as i64),
+            _ => Err(FromAstError::TypeMismatch {
+                expected: "int",
+                actual: value.type_name(),
+            }),
+        }
+    }
+}
+
+impl TryFrom<Value> for i32 {
+    type Error = FromAstError;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        i64::try_from(value).map(|n| n as i32)
+    }
+}
+
+impl TryFrom<Value> for usize {
+    type Error = FromAstError;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        i64::try_from(value).and_then(|n| {
+            if n >= 0 {
+                Ok(n as usize)
+            } else {
+                Err(FromAstError::ConversionError)
+            }
+        })
+    }
+}
+
+impl TryFrom<Value> for f64 {
+    type Error = FromAstError;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::Float(f) => Ok(f),
+            Value::Int(n) => Ok(n as f64),
+            _ => Err(FromAstError::TypeMismatch {
+                expected: "float",
+                actual: value.type_name(),
+            }),
+        }
+    }
+}
+
+impl TryFrom<Value> for bool {
+    type Error = FromAstError;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::Bool(b) => Ok(b),
+            _ => Err(FromAstError::TypeMismatch {
+                expected: "bool",
+                actual: value.type_name(),
+            }),
+        }
+    }
+}
+
+impl TryFrom<Value> for String {
+    type Error = FromAstError;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::String(s) => Ok(s),
+            Value::Nil => Ok(String::new()),
+            _ => Err(FromAstError::TypeMismatch {
+                expected: "string",
+                actual: value.type_name(),
+            }),
+        }
+    }
+}
+
+impl TryFrom<Value> for () {
+    type Error = FromAstError;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::Nil => Ok(()),
+            _ => Err(FromAstError::TypeMismatch {
+                expected: "nil",
+                actual: value.type_name(),
+            }),
+        }
+    }
+}
+
+impl<T: TryFrom<Value, Error = FromAstError>> TryFrom<Value> for Option<T> {
+    type Error = FromAstError;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::Nil => Ok(None),
+            v => T::try_from(v).map(Some),
+        }
+    }
+}
+
+impl<T: TryFrom<Value, Error = FromAstError>> TryFrom<Value> for Vec<T> {
+    type Error = FromAstError;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::Array(arr) => arr.into_iter().map(T::try_from).collect(),
+            _ => Err(FromAstError::TypeMismatch {
+                expected: "array",
+                actual: value.type_name(),
+            }),
+        }
+    }
+}
+
+impl Value {
+    /// Get the type name of this value for error messages
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            Value::Nil => "nil",
+            Value::Bool(_) => "bool",
+            Value::Int(_) => "int",
+            Value::Float(_) => "float",
+            Value::String(_) => "string",
+            Value::Array(_) => "array",
+            Value::Hash(_) => "hash",
+        }
+    }
+}
+
+// Re-export FromAstError for TryFrom implementations
+use super::super::derive::FromAstError;
 
 // ============================================================================
 // Pattern Matching System (Parslet-style)

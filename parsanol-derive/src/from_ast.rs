@@ -1,6 +1,7 @@
 //! Implementation of the FromAst derive macro
 //!
-//! Uses syn 2.x API for attribute parsing
+//! Uses syn 2.x API for attribute parsing.
+//! Works with parsanol::portable::transform::Value type.
 
 use proc_macro2::TokenStream;
 use quote::quote;
@@ -123,12 +124,12 @@ pub fn derive_from_ast_impl(input: &DeriveInput) -> syn::Result<TokenStream> {
     };
 
     Ok(quote! {
-        impl #impl_generics ::std::convert::TryFrom<parsanol::portable::AstNode>
+        impl #impl_generics ::std::convert::TryFrom<parsanol::portable::transform::Value>
             for #name #ty_generics #where_clause
         {
             type Error = parsanol::derive::FromAstError;
 
-            fn try_from(node: parsanol::portable::AstNode) -> Result<Self, Self::Error> {
+            fn try_from(value: parsanol::portable::transform::Value) -> Result<Self, Self::Error> {
                 #from_ast_impl
             }
         }
@@ -196,7 +197,7 @@ fn generate_enum_from_ast(name: &Ident, variants: &[&syn::Variant]) -> syn::Resu
                 let field_conversions: Vec<TokenStream> = fields
                     .named
                     .iter()
-                    .map(|f| generate_field_extraction(f))
+                    .map(|f| generate_field_extraction_named(f))
                     .collect::<syn::Result<Vec<_>>>()?;
 
                 let field_names: Vec<&Ident> = fields
@@ -207,37 +208,39 @@ fn generate_enum_from_ast(name: &Ident, variants: &[&syn::Variant]) -> syn::Resu
 
                 quote! {
                     #(#field_conversions)*
-                    #name::#variant_name {
+                    Ok(#name::#variant_name {
                         #(#field_names),*
-                    }
+                    })
                 }
             }
             Fields::Unnamed(fields) => {
                 if fields.unnamed.is_empty() {
-                    quote! { #name::#variant_name }
+                    quote! { Ok(#name::#variant_name) }
                 } else if fields.unnamed.len() == 1 {
                     quote! {
-                        #name::#variant_name(
-                            ::std::convert::TryInto::try_into(node)
+                        Ok(#name::#variant_name(
+                            ::std::convert::TryInto::try_into(value.clone())
                                 .map_err(|_| parsanol::derive::FromAstError::ConversionError)?
-                        )
+                        ))
                     }
                 } else {
-                    // Multi-field tuple variant
+                    // Multi-field tuple variant - extract from array
                     let indices: Vec<usize> = (0..fields.unnamed.len()).collect();
                     quote! {
-                        #name::#variant_name(
-                            #(
-                                arr.get(#indices)
-                                    .and_then(|v| ::std::convert::TryInto::try_into(*v).ok())
-                                    .ok_or(parsanol::derive::FromAstError::ConversionError)?
-                            ),*
-                        )
+                        {
+                            let arr = value.as_array().ok_or(parsanol::derive::FromAstError::ExpectedArray)?;
+                            Ok(#name::#variant_name(
+                                #(
+                                    ::std::convert::TryInto::try_into(arr.get(#indices).cloned().unwrap_or(parsanol::portable::transform::Value::Nil))
+                                        .map_err(|_| parsanol::derive::FromAstError::ConversionError)?
+                                ),*
+                            ))
+                        }
                     }
                 }
             }
             Fields::Unit => {
-                quote! { #name::#variant_name }
+                quote! { Ok(#name::#variant_name) }
             }
         };
 
@@ -247,7 +250,8 @@ fn generate_enum_from_ast(name: &Ident, variants: &[&syn::Variant]) -> syn::Resu
     }
 
     Ok(quote! {
-        let tag: Option<&str> = None; // TODO: Extract tag from hash
+        // Get the tag from the value
+        let tag = value.get_tag();
         match tag.map(|s| s.to_string()) {
             #(#match_arms)*
             _ => Err(parsanol::derive::FromAstError::UnknownTag),
@@ -266,7 +270,7 @@ fn generate_struct_from_ast(
             let field_conversions: Vec<TokenStream> = fields
                 .named
                 .iter()
-                .map(|f| generate_field_extraction(f))
+                .map(|f| generate_field_extraction_named(f))
                 .collect::<syn::Result<Vec<_>>>()?;
 
             let field_names: Vec<&Ident> = fields
@@ -287,34 +291,32 @@ fn generate_struct_from_ast(
                 return Ok(quote! { Ok(#name) });
             }
 
-            if fields.unnamed.len() == 1 && transparent {
+            // Single-field tuple struct - transparent conversion by default
+            if fields.unnamed.len() == 1 {
                 return Ok(quote! {
                     Ok(#name(
-                        ::std::convert::TryInto::try_into(node)
-                            .map_err(|_| parsanol::derive::FromAstError::ConversionError)?
+                        ::std::convert::TryInto::try_into(value)
+                            .map_err(|e: parsanol::derive::FromAstError| e)?
                     ))
                 });
             }
 
-            // Extract from array
+            // Multi-field tuple struct - extract from array
             let conversions: Vec<TokenStream> = fields
                 .unnamed
                 .iter()
                 .enumerate()
                 .map(|(i, _)| {
                     quote! {
-                        arr.get(#i)
-                            .and_then(|v| ::std::convert::TryInto::try_into(*v).ok())
-                            .ok_or(parsanol::derive::FromAstError::ConversionError)?
+                        arr.get(#i).cloned()
+                            .ok_or(parsanol::derive::FromAstError::ExpectedArray)
+                            .and_then(|v| ::std::convert::TryInto::try_into(v).map_err(|_| parsanol::derive::FromAstError::ConversionError))?
                     }
                 })
                 .collect();
 
             Ok(quote! {
-                let arr: &[parsanol::portable::AstNode] = match node {
-                    parsanol::portable::AstNode::Array { .. } => &[],
-                    _ => return Err(parsanol::derive::FromAstError::ExpectedArray),
-                };
+                let arr = value.as_array().ok_or(parsanol::derive::FromAstError::ExpectedArray)?;
                 Ok(#name(#(#conversions),*))
             })
         }
@@ -322,29 +324,41 @@ fn generate_struct_from_ast(
     }
 }
 
-/// Generate field extraction code
-fn generate_field_extraction(field: &syn::Field) -> syn::Result<TokenStream> {
+/// Generate field extraction code for named fields
+fn generate_field_extraction_named(field: &syn::Field) -> syn::Result<TokenStream> {
     let fname = field.ident.as_ref().unwrap();
     let attrs = parse_attrs(&field.attrs)?;
-    let _field_name = attrs.field.unwrap_or_else(|| fname.to_string());
+    let field_name = attrs.field.unwrap_or_else(|| fname.to_string());
     let field_ty = &field.ty;
 
     let extract = match attrs.default {
         Some(DefaultKind::Simple) => {
             quote! {
-                let #fname: #field_ty = ::std::convert::TryInto::try_into(node)
+                let #fname: #field_ty = value
+                    .get_hash_field(#field_name)
+                    .cloned()
+                    .unwrap_or_default()
+                    .try_into()
                     .unwrap_or_default();
             }
         }
         Some(DefaultKind::Expr(expr)) => {
             quote! {
-                let #fname: #field_ty = ::std::convert::TryInto::try_into(node)
+                let #fname: #field_ty = value
+                    .get_hash_field(#field_name)
+                    .cloned()
+                    .unwrap_or_else(|| #expr)
+                    .try_into()
                     .unwrap_or_else(|_| #expr);
             }
         }
         None => {
             quote! {
-                let #fname: #field_ty = ::std::convert::TryInto::try_into(node)
+                let #fname: #field_ty = value
+                    .get_hash_field(#field_name)
+                    .ok_or_else(|| parsanol::derive::FromAstError::MissingField(#field_name.to_string()))?
+                    .clone()
+                    .try_into()
                     .map_err(|_| parsanol::derive::FromAstError::ConversionError)?;
             }
         }

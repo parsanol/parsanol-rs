@@ -49,6 +49,7 @@
 //! - `ruby` - Enable Ruby FFI bindings via magnus
 //! - `wasm` - Enable WebAssembly bindings
 //! - `logging` - Enable debug logging using the `log` crate
+//! - `parallel` - Enable parallel parsing with rayon
 
 // Lint configuration for production quality
 #![warn(missing_docs)]
@@ -62,8 +63,7 @@
 // Prelude module for convenient imports
 pub mod prelude;
 
-// Derive macro support (requires derive feature)
-#[cfg(feature = "derive")]
+// Derive macro support
 pub mod derive;
 
 // Conditional compilation for Ruby FFI
