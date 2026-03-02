@@ -1,12 +1,7 @@
-# Release pipeline for parsanol-rs
-#
-# This workflow handles publishing to crates.io.
-# It does NOT create release PRs.
-# Releases are created directly when changes are pushed to main.
-#
-# See: https://release-plz.dev/docs/config
+# Release-plz pipeline for publishing
+# a new GitHub + crates.io release
 
-name: Release
+name: Release-plz
 
 permissions:
   pull-requests: write
@@ -32,8 +27,6 @@ jobs:
 
       - name: Run release-plz
         uses: MarcoIeni/release-plz-action@v0.5
-        with:
-          command: release
         env:
-          GITHUB_TOKEN: ${{ secrets.PARSANOL_CI_PAT_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
