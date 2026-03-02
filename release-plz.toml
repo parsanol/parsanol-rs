@@ -4,14 +4,13 @@
 # See: https://release-plz.dev/docs/config
 
 # Workspace configuration for multi-crate publishing
-[workspace]
+[[workspace]]
 # Path to the workspace root (default: ".")
 # This detects all workspace members automatically
 
 # Main parsanol crate
 [[package]]
 name = "parsanol"
-# Changelog path (default: "CHANGELOG.md")
 changelog_path = "CHANGELOG.md"
 
 # Derive macro crate
@@ -28,7 +27,7 @@ body = """
 {% for commit in commits %}
 - {{ commit.message | upper_first }}\
 {% if commit.breaking %} (BREAKING){% endif %}\
-{% if commit.author != "github-actions[bot]" %} by @{{ commit.author }}{% endif %}\
+{% if commit.author != "github-actions[bot]" %} by @{{ commit.author }}{% endif %}
 {% endfor %}
 {% endfor %}
 """
