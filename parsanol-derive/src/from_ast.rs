@@ -11,7 +11,6 @@ use syn::{parse::Parse, parse::ParseStream, Data, DeriveInput, Expr, Fields, Ide
 #[derive(Debug, Default)]
 struct ParsanolAttrs {
     rule: Option<String>,
-    transparent: bool,
     tag: Option<String>,
     tag_expr: Option<Expr>,
     field: Option<String>,
@@ -27,7 +26,6 @@ enum DefaultKind {
 mod kw {
     syn::custom_keyword!(parsanol);
     syn::custom_keyword!(rule);
-    syn::custom_keyword!(transparent);
     syn::custom_keyword!(tag);
     syn::custom_keyword!(tag_expr);
     syn::custom_keyword!(field);
@@ -48,9 +46,6 @@ impl Parse for ParsanolAttrs {
                 if let Lit::Str(s) = lit {
                     attrs.rule = Some(s.value());
                 }
-            } else if lookahead.peek(kw::transparent) {
-                input.parse::<kw::transparent>()?;
-                attrs.transparent = true;
             } else if lookahead.peek(kw::tag) {
                 input.parse::<kw::tag>()?;
                 input.parse::<Token![=]>()?;
@@ -99,22 +94,12 @@ pub fn derive_from_ast_impl(input: &DeriveInput) -> syn::Result<TokenStream> {
     let generics = &input.generics;
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
-    // Parse container attributes
-    let container_attrs = parse_attrs(&input.attrs)?;
-    let transparent = container_attrs.transparent;
-
     let from_ast_impl = match &input.data {
         Data::Enum(data) => {
-            if transparent {
-                return Err(syn::Error::new_spanned(
-                    input,
-                    "transparent attribute is only valid for structs with a single field",
-                ));
-            }
             let variants: Vec<_> = data.variants.iter().collect();
             generate_enum_from_ast(name, &variants)?
         }
-        Data::Struct(data) => generate_struct_from_ast(name, &data.fields, transparent)?,
+        Data::Struct(data) => generate_struct_from_ast(name, &data.fields)?,
         Data::Union(data) => {
             return Err(syn::Error::new_spanned(
                 data.union_token,
@@ -145,9 +130,6 @@ fn parse_attrs(attrs: &[syn::Attribute]) -> syn::Result<ParsanolAttrs> {
             let parsed: ParsanolAttrs = attr.parse_args()?;
             if let Some(rule) = parsed.rule {
                 result.rule = Some(rule);
-            }
-            if parsed.transparent {
-                result.transparent = true;
             }
             if let Some(tag) = parsed.tag {
                 result.tag = Some(tag);
@@ -197,7 +179,7 @@ fn generate_enum_from_ast(name: &Ident, variants: &[&syn::Variant]) -> syn::Resu
                 let field_conversions: Vec<TokenStream> = fields
                     .named
                     .iter()
-                    .map(|f| generate_field_extraction_named(f))
+                    .map(generate_field_extraction_named)
                     .collect::<syn::Result<Vec<_>>>()?;
 
                 let field_names: Vec<&Ident> = fields
@@ -260,17 +242,13 @@ fn generate_enum_from_ast(name: &Ident, variants: &[&syn::Variant]) -> syn::Resu
 }
 
 /// Generate FromAst implementation for structs
-fn generate_struct_from_ast(
-    name: &Ident,
-    fields: &Fields,
-    transparent: bool,
-) -> syn::Result<TokenStream> {
+fn generate_struct_from_ast(name: &Ident, fields: &Fields) -> syn::Result<TokenStream> {
     match fields {
         Fields::Named(fields) => {
             let field_conversions: Vec<TokenStream> = fields
                 .named
                 .iter()
-                .map(|f| generate_field_extraction_named(f))
+                .map(generate_field_extraction_named)
                 .collect::<syn::Result<Vec<_>>>()?;
 
             let field_names: Vec<&Ident> = fields
