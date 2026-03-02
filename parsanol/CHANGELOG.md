@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Other
 
+- Release v0.1.6 by @[object]
+- Update example count to 39 and add missing feature flags by @[object]
+- Update magnus from 0.7 to 0.8.2 by @[object]
+- Release v0.1.5 by @[object]
+
+### Other
+
 - Update example count to 39 and add missing feature flags by @[object]
 - Update magnus from 0.7 to 0.8.2 by @[object]
 - Release v0.1.5 by @[object]
