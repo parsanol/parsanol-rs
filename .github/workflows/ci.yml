@@ -343,13 +343,13 @@ jobs:
           cache-on-failure: true
 
       - name: Build benchmarks
-        run: cargo build --bench comparison --no-default-features
+        run: cargo build -p parsanol --bench comparison --no-default-features
 
       - name: Run benchmarks (test mode)
-        run: cargo bench --bench comparison --no-default-features -- --test
+        run: cargo bench -p parsanol --bench comparison --no-default-features -- --test
 
       - name: Run benchmarks with baseline
-        run: cargo bench --bench comparison --no-default-features -- --save-baseline ci-${{ github.sha }}
+        run: cargo bench -p parsanol --bench comparison --no-default-features -- --save-baseline ci-${{ github.sha }}
 
       - name: Upload benchmark results
         uses: actions/upload-artifact@v4

@@ -10,6 +10,10 @@ documentation = "https://docs.rs/parsanol"
 homepage = "https://github.com/parsanol/parsanol-rs"
 rust-version = "1.85"
 
+[package.metadata.cargo-machete]
+# These optional dependencies are only used when specific features are enabled.
+ignored = ["nom", "winnow"]
+
 [lib]
 crate-type = ["rlib"]
 
@@ -200,3 +204,14 @@ path = "../examples/linter/basic.rs"
 [[example]]
 name = "custom-atoms"
 path = "../examples/custom-atoms/basic.rs"
+
+# Benchmarks
+[[bench]]
+name = "comparison"
+path = "../benches/comparison.rs"
+harness = false
+
+[[bench]]
+name = "libraries"
+path = "../benches/libraries.rs"
+harness = false

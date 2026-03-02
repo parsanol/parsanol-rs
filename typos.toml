@@ -1,23 +1,40 @@
 # Configuration for typos spell checker
 # See: https://github.com/crate-ci/typos
 
-[files]
-extend-exglob = []
-
+# Global configuration
 [default]
-extend-glob = ["Cargo.toml", "*.rs"]
+extend-glob = ["*.rs", "Cargo.toml"]
 
-[default.default]
-extend-glob = ["target/"]
+# Files to ignore
+[default.extend-exclude]
+glob = ["target/**", ".git/**"]
 
+# Custom words that typos should ignore
 [default.extend-words]
-lychee = "Cheatsheet", "cheatsheets", "Cheatsheets"
-# Add your custom words here
+# Project-specific terms
+parsanol = "parsanol"
+Parsanol = "Parsanol"
 
-[type]
-extend-glob = ["*.md"]
+# Rust/code terms
+eval = "eval"
+expr = "expr"
+ast = "ast"
+lexer = "lexer"
+lexers = "lexers"
+parsers = "parsers"
+parseable = "parseable"
+memoization = "memoization"
+packrat = "packrat"
+alloc = "alloc"
 
-[type.extend-words]
-# Add your custom words here
-parsanol = "Parsanol"  # Rust crate name
-parsanol-rs = "parsanol-rs"  # repository name
+# Documentation terms
+adoc = "adoc"
+asciidoc = "asciidoc"
+AsciiDoc = "AsciiDoc"
+
+# Common abbreviations in code
+serde = "serde"
+clippy = "clippy"
+rustfmt = "rustfmt"
+wasm = "wasm"
+ffi = "ffi"
