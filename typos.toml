@@ -1,0 +1,23 @@
+# Configuration for typos spell checker
+# See: https://github.com/crate-ci/typos
+
+[files]
+extend-exglob = []
+
+[default]
+extend-glob = ["Cargo.toml", "*.rs"]
+
+[default.default]
+extend-glob = ["target/"]
+
+[default.extend-words]
+lychee = "Cheatsheet", "cheatsheets", "Cheatsheets"
+# Add your custom words here
+
+[type]
+extend-glob = ["*.md"]
+
+[type.extend-words]
+# Add your custom words here
+parsanol = "Parsanol"  # Rust crate name
+parsanol-rs = "parsanol-rs"  # repository name

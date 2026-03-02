@@ -30,6 +30,16 @@ env:
 
 jobs:
   # ============================================================================
+  # Typos Check
+  # ============================================================================
+  typos:
+    name: Spell Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: crate-ci/typos@v1.43.5
+
+  # ============================================================================
   # Pre-flight Checks
   # ============================================================================
   preflight:
@@ -139,6 +149,32 @@ jobs:
 
       - name: Check for unused dependencies
         run: cargo machete
+
+  # ============================================================================
+  # Publish Check (Dry Run)
+  # ============================================================================
+  publish-check:
+    name: Publish Check
+    runs-on: ubuntu-latest
+    needs: preflight
+    if: needs.preflight.outputs.should_run == 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Publish check parsanol-derive
+        run: cargo publish --dry-run --manifest-path parsanol-derive/Cargo.toml
+
+      # Note: Can't check parsanol crate as it depends on parsanol-derive
+      # which isn't published yet. This is a known limitation.
+      # The derive crate is small and simple, so testing it is sufficient.
 
   # ============================================================================
   # Test Matrix (Multi-platform, Multi-arch)
@@ -386,7 +422,7 @@ jobs:
   ci-success:
     name: CI Success
     runs-on: ubuntu-latest
-    needs: [security, lint, machete, test, features, workspace, coverage, benchmarks, docs]
+    needs: [typos, security, lint, machete, publish-check, test, features, workspace, coverage, benchmarks, docs]
     if: always() && !contains(needs.*.result, 'failure')
     steps:
       - name: Report success
@@ -397,9 +433,11 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Check | Status |" >> $GITHUB_STEP_SUMMARY
           echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Spell Check | ✅ |" >> $GITHUB_STEP_SUMMARY
           echo "| Security Audit | ✅ |" >> $GITHUB_STEP_SUMMARY
           echo "| Format & Lint | ✅ |" >> $GITHUB_STEP_SUMMARY
           echo "| Unused Dependencies | ✅ |" >> $GITHUB_STEP_SUMMARY
+          echo "| Publish Check | ✅ |" >> $GITHUB_STEP_SUMMARY
           echo "| Tests | ✅ |" >> $GITHUB_STEP_SUMMARY
           echo "| Features | ✅ |" >> $GITHUB_STEP_SUMMARY
           echo "| Workspace | ✅ |" >> $GITHUB_STEP_SUMMARY
