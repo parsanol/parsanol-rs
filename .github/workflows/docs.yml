@@ -169,21 +169,21 @@ jobs:
 
       - name: Download RustDoc
         if: needs.rustdoc.result == 'success'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: rustdoc
           path: _site/rustdoc
 
       - name: Download Benchmarks
         if: needs.benchmarks.result == 'success'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: benchmarks
           path: _site/benchmarks
 
       - name: Download Coverage
         if: needs.coverage.result == 'success'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: coverage
           path: _site/coverage
