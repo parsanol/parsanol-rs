@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Add README to package and fix description typo by @[object]
 
+### Other
+
+- Release v0.1.5 ([#8](https://github.com/parsanol/parsanol-rs/pull/8)) by @[object]
+
+### Fixed
+
+- Add README to package and fix description typo by @[object]
+
 ### Fixed
 
 - Resolve CI failures by @[object]
