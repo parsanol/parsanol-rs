@@ -78,7 +78,7 @@ parsanol-rs/
 ├── parsanol-derive/       # Derive macros (always included)
 │   ├── src/
 │   └── Cargo.toml
-├── examples/              # 37 example parsers
+├── examples/              # 39 example parsers
 └── Cargo.toml             # Workspace root
 ```
 
@@ -941,7 +941,7 @@ See [SECURITY.md](SECURITY.md) for complete security documentation.
 
 # Examples
 
-See the `examples/` directory for 37 complete examples demonstrating
+See the `examples/` directory for 39 complete examples demonstrating
 real-world parsing scenarios:
 
 ## Expression Parsers
@@ -1097,7 +1097,7 @@ The test suite consists of multiple types of tests:
 
 **Integration tests:** Located in `tests/` directory, test end-to-end parsing scenarios.
 
-**Examples:** 37 runnable parsers in `examples/` directory demonstrating real-world usage.
+**Examples:** 39 runnable parsers in `examples/` directory demonstrating real-world usage.
 Examples are compiled and tested via `cargo build --examples`.
 
 **Documentation tests (doc tests):** Code examples in documentation comments. Note that many doc tests are marked with `ignore` because they show **incomplete code snippets** (e.g., method signatures or pseudocode) rather than complete runnable examples. This is intentional - the doc tests illustrate API patterns, while the `examples/` directory contains fully runnable code that is verified by CI.
