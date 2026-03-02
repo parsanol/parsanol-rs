@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Add README to package and fix description typo by @[object]
+
+### Fixed
+
 - Resolve CI failures by @[object]
 - Remove unused transparent attribute and fix example paths by @[object]
 
