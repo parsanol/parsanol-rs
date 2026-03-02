@@ -50,6 +50,8 @@
 //! - `wasm` - Enable WebAssembly bindings
 //! - `logging` - Enable debug logging using the `log` crate
 //! - `parallel` - Enable parallel parsing with rayon
+//! - `compare-nom` - Include nom parser for benchmarking comparisons
+//! - `compare-winnow` - Include winnow parser for benchmarking comparisons
 
 // Lint configuration for production quality
 #![warn(missing_docs)]
