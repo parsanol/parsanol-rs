@@ -8,7 +8,7 @@
 # Path to the workspace root (default: ".")
 # This detects all workspace members automatically
 # Enable GitHub releases
-git_release_enable = true
+git_release_enable = false
 
 # Update dependencies with `cargo update`
 dependencies_update = true
