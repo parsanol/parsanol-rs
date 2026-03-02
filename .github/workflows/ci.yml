@@ -399,6 +399,8 @@ jobs:
     if: needs.preflight.outputs.should_run == 'true' && github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
