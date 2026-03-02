@@ -11,6 +11,9 @@ extend-exclude = ["target/", ".git/"]
 parsanol = "parsanol"
 Parsanol = "Parsanol"
 
+# ISO-8601 duration format (PnYnMnDTnHnMnS)
+Pn = "Pn"
+
 # Rust/code terms
 eval = "eval"
 expr = "expr"
