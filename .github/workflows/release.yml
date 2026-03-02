@@ -44,7 +44,8 @@ jobs:
           echo "Testing branch CREATION (will create and delete a test branch)..."
           TEST_BRANCH="test-perm-$(date +%s)"
           gh api --method POST repos/${{ github.repository }}/git/refs \
-            -f input="{\"ref\":\"refs/heads/${TEST_BRANCH}\",\"sha\":\"${MAIN_SHA}\"}"
+            -f ref="refs/heads/${TEST_BRANCH}" \
+            -f sha="$MAIN_SHA"
           echo "Branch ${TEST_BRANCH} created successfully!"
 
           echo "Cleaning up test branch..."
