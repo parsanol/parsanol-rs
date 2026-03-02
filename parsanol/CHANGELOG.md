@@ -14,4 +14,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Other
 
+- Release v0.1.4 ([#6](https://github.com/parsanol/parsanol-rs/pull/6)) by @[object]
+- Restructure to match tokio workspace pattern by @[object]
+
+### Fixed
+
+- Resolve CI failures by @[object]
+- Remove unused transparent attribute and fix example paths by @[object]
+
+### Other
+
 - Restructure to match tokio workspace pattern by @[object]
