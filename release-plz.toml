@@ -4,7 +4,7 @@
 # See: https://release-plz.dev/docs/config
 
 # Workspace configuration for multi-crate publishing
-[[workspace]]
+[workspace]
 # Path to the workspace root (default: ".")
 # This detects all workspace members automatically
 
@@ -13,14 +13,11 @@
 name = "parsanol"
 # Changelog path (default: "CHANGELOG.md")
 changelog_path = "CHANGELOG.md"
-# Version bump configuration
-version_config = { require_conventional = true }
 
 # Derive macro crate
 [[package]]
 name = "parsanol-derive"
 changelog_path = "parsanol-derive/CHANGELOG.md"
-version_config = { require_conventional = true }
 
 # Global changelog configuration
 [changelog]
