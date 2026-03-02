@@ -8,16 +8,6 @@
 # Path to the workspace root (default: ".")
 # This detects all workspace members automatically
 
-# Main parsanol crate
-[[package]]
-name = "parsanol"
-changelog_path = "CHANGELOG.md"
-
-# Derive macro crate
-[[package]]
-name = "parsanol-derive"
-changelog_path = "parsanol-derive/CHANGELOG.md"
-
 # Global changelog configuration
 [changelog]
 # Include commit body in changelog
@@ -27,7 +17,7 @@ body = """
 {% for commit in commits %}
 - {{ commit.message | upper_first }}\
 {% if commit.breaking %} (BREAKING){% endif %}\
-{% if commit.author != "github-actions[bot]" %} by @{{ commit.author }}{% endif %}
+{% if commit.author != "github-actions[bot]" %} by @{{ commit.author }}{% endif %}\
 {% endfor %}
 {% endfor %}
 """
