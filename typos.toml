@@ -1,13 +1,9 @@
 # Configuration for typos spell checker
 # See: https://github.com/crate-ci/typos
 
-# Global configuration
-[default]
-extend-glob = ["*.rs", "Cargo.toml"]
-
-# Files to ignore
-[default.extend-exclude]
-glob = ["target/**", ".git/**"]
+# Files to check
+[files]
+extend-exclude = ["target/", ".git/"]
 
 # Custom words that typos should ignore
 [default.extend-words]
