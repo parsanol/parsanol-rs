@@ -30,6 +30,16 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Test token permissions
+        env:
+          GH_TOKEN: ${{ secrets.PARSANOL_CI_PAT_TOKEN }}
+        run: |
+          echo "Testing token permissions..."
+          gh auth status
+          gh repo view --json name,owner
+          echo "Testing branch creation permission..."
+          gh api repos/${{ github.repository }}/git/refs/heads/main --jq '.object.sha'
+
       - name: Run release-plz
         uses: MarcoIeni/release-plz-action@v0.5
         env:
