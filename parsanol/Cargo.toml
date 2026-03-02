@@ -44,7 +44,7 @@ memchr = { workspace = true }
 log = { version = "0.4", optional = true }
 nom = { version = "7", optional = true }
 winnow = { version = "0.6", optional = true }
-magnus = { version = "0.7", optional = true }
+magnus = { version = "0.8.2", optional = true }
 once_cell = { version = "1.21", optional = true }
 rayon = { version = "1.10", optional = true }
 wasm-bindgen = { version = "0.2", optional = true }
