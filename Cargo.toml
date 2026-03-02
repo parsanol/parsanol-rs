@@ -1,232 +1,28 @@
-[package]
-name = "parsanol"
+[workspace]
+resolver = "2"
+members = [
+    "parsanol",
+    "parsanol-derive",
+]
+
+[workspace.package]
 version = "0.1.3"
 edition = "2021"
 authors = ["Ribose Inc. <open.source@ribose.com>"]
 license = "MIT"
-description = "High-performance PEG parser library with packrat memoization and arena allocation"
 repository = "https://github.com/parsanol/parsanol-rs"
-readme = "README.md"
-keywords = ["parser", "peg", "parsing", "combinator", "packrat"]
-categories = ["parsing", "text-processing", "development-tools"]
-rust-version = "1.85"
-exclude = ["/.github", "/benches", "/examples", "/tests", "/target", "*.md"]
-documentation = "https://docs.rs/parsanol"
-homepage = "https://github.com/parsanol/parsanol-rs"
 
-[package.metadata.cargo-machete]
-ignored = ["winnow"]
-
-[lib]
-# Build as rlib for normal usage
-# Ruby extensions are built via parsanol-ruby which links this crate as a dependency
-# WASM builds are handled separately
-crate-type = ["rlib"]
-
-[features]
-default = []
-ruby = ["magnus", "rb-sys", "once_cell"]
-wasm = ["wasm-bindgen", "js-sys", "console_error_panic_hook"]
-logging = ["log"]
-parallel = ["rayon"]
-# Benchmark comparison features
-compare-nom = ["nom"]
-compare-winnow = ["winnow"]
-
-[dependencies]
-# Core dependencies (always included)
+[workspace.dependencies]
+# Shared dependencies
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 regex = "1.10"
 hashbrown = "0.14"
 ahash = "0.8"
 memchr = "2.7"
-
-# Logging (optional)
-log = { version = "0.4", optional = true }
-
-# Benchmark comparison libraries (optional)
-nom = { version = "7", optional = true }
-winnow = { version = "0.6", optional = true }
-
-# Derive macros (required)
-parsanol-derive = { path = "parsanol-derive", version = "0.1.0" }
-
-# Ruby FFI (optional)
-magnus = { version = "0.7", optional = true }
-once_cell = { version = "1.21", optional = true }
-
-# WASM bindings (optional)
-wasm-bindgen = { version = "0.2", optional = true }
-js-sys = { version = "0.3", optional = true }
-console_error_panic_hook = { version = "0.1", optional = true }
-
-# Parallel parsing (optional)
-rayon = { version = "1.10", optional = true }
-
-# WASM support - getrandom needs wasm_js for wasm32 targets
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-getrandom = { version = "0.3", features = ["wasm_js"] }
-
-[dev-dependencies]
-criterion = { version = "0.5", features = ["html_reports"] }
-proptest = "1.4"
-
-[build-dependencies]
-rb-sys = { version = "0.9", optional = true }
-
-[[bench]]
-name = "comparison"
-harness = false
-
-[[bench]]
-name = "libraries"
-harness = false
-
-# Examples in subdirectories need explicit declarations
-[[example]]
-name = "balanced-parens"
-path = "examples/balanced-parens/basic.rs"
-
-[[example]]
-name = "boolean-algebra"
-path = "examples/boolean-algebra/basic.rs"
-
-[[example]]
-name = "calculator-pattern"
-path = "examples/calculator/pattern.rs"
-
-[[example]]
-name = "calculator-transform"
-path = "examples/calculator/transform.rs"
-
-[[example]]
-name = "comments"
-path = "examples/comments/basic.rs"
-
-[[example]]
-name = "csv-pattern"
-path = "examples/csv/pattern.rs"
-
-[[example]]
-name = "csv-transform"
-path = "examples/csv/transform.rs"
-
-[[example]]
-name = "email"
-path = "examples/email/basic.rs"
-
-[[example]]
-name = "erb"
-path = "examples/erb/basic.rs"
-
-[[example]]
-name = "error-reporting"
-path = "examples/error-reporting/basic.rs"
-
-[[example]]
-name = "error-recovery"
-path = "examples/error-recovery/basic.rs"
-
-[[example]]
-name = "expression-evaluator"
-path = "examples/expression-evaluator/basic.rs"
-
-[[example]]
-name = "incremental"
-path = "examples/incremental/basic.rs"
-
-[[example]]
-name = "ini"
-path = "examples/ini/basic.rs"
-
-[[example]]
-name = "ip-address"
-path = "examples/ip-address/basic.rs"
-
-[[example]]
-name = "iso-8601"
-path = "examples/iso-8601/basic.rs"
-
-[[example]]
-name = "iso-6709"
-path = "examples/iso-6709/basic.rs"
-
-[[example]]
-name = "json-pattern"
-path = "examples/json/pattern.rs"
-
-[[example]]
-name = "json-transform"
-path = "examples/json/transform.rs"
-
-[[example]]
-name = "markdown"
-path = "examples/markdown/basic.rs"
-
-[[example]]
-name = "markup"
-path = "examples/markup/basic.rs"
-
-[[example]]
-name = "minilisp"
-path = "examples/minilisp/basic.rs"
-
-[[example]]
-name = "modularity"
-path = "examples/modularity/basic.rs"
-
-[[example]]
-name = "deepest-errors"
-path = "examples/deepest-errors/basic.rs"
-
-[[example]]
-name = "nested-errors"
-path = "examples/nested-errors/basic.rs"
-
-[[example]]
-name = "prec-calc"
-path = "examples/prec-calc/basic.rs"
-
-[[example]]
-name = "sentence"
-path = "examples/sentence/basic.rs"
-
-[[example]]
-name = "sexp"
-path = "examples/sexp/basic.rs"
-
-[[example]]
-name = "simple-xml"
-path = "examples/simple-xml/basic.rs"
-
-[[example]]
-name = "streaming"
-path = "examples/streaming/basic.rs"
-
-[[example]]
-name = "string-literal"
-path = "examples/string-literal/basic.rs"
-
-[[example]]
-name = "toml"
-path = "examples/toml/basic.rs"
-
-[[example]]
-name = "url"
-path = "examples/url/basic.rs"
-
-[[example]]
-name = "yaml"
-path = "examples/yaml/basic.rs"
-
-[[example]]
-name = "linter"
-path = "examples/linter/basic.rs"
-
-[[example]]
-name = "custom-atoms"
-path = "examples/custom-atoms/basic.rs"
+syn = { version = "2.0", features = ["full", "parsing", "extra-traits"] }
+quote = "1.0"
+proc-macro2 = "1.0"
 
 [profile.release]
 opt-level = 3
@@ -235,17 +31,3 @@ codegen-units = 1
 
 [profile.release.package."*"]
 opt-level = "s"
-
-[package.metadata.wasm-pack.profile.release]
-wasm-opt = ["-Oz", "--enable-mutable-globals"]
-
-[workspace]
-resolver = "2"
-members = ["parsanol-derive"]
-
-[workspace.package]
-version = "0.1.2"
-edition = "2021"
-authors = ["Ribose Inc. <open.source@ribose.com>"]
-license = "MIT"
-repository = "https://github.com/parsanol/parsanol-rs"

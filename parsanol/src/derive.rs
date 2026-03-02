@@ -58,5 +58,5 @@ impl fmt::Display for FromAstError {
 
 impl std::error::Error for FromAstError {}
 
-// Re-export derive macros
+// Re-export derive macros (always available)
 pub use parsanol_derive::FromAst;
