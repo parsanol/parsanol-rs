@@ -38,7 +38,18 @@ jobs:
           gh auth status
           gh repo view --json name,owner
           echo "Testing branch creation permission..."
-          gh api repos/${{ github.repository }}/git/refs/heads/main --jq '.object.sha'
+          MAIN_SHA=$(gh api repos/${{ github.repository }}/git/refs/heads/main --jq '.object.sha')
+          echo "Main branch SHA: $MAIN_SHA"
+
+          echo "Testing branch CREATION (will create and delete a test branch)..."
+          TEST_BRANCH="test-perm-$(date +%s)"
+          gh api --method POST repos/${{ github.repository }}/git/refs \
+            -f input="{\"ref\":\"refs/heads/${TEST_BRANCH}\",\"sha\":\"${MAIN_SHA}\"}"
+          echo "Branch ${TEST_BRANCH} created successfully!"
+
+          echo "Cleaning up test branch..."
+          gh api --method DELETE "repos/${{ github.repository }}/git/refs/heads/${TEST_BRANCH}"
+          echo "Test branch deleted successfully!"
 
       - name: Run release-plz
         uses: MarcoIeni/release-plz-action@v0.5
