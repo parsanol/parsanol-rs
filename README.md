@@ -20,13 +20,14 @@ Rust. It provides high-performance parsing capabilities with a focus on:
   reporting
 
 - **Flexibility**: Transform system for converting parse trees to typed
-  Rust structs
+  Rust structs via derive macros
 
 ## Features
 
 - [Quick Start](#quick-start) - Get started in minutes
 - [Parser DSL](#parser-dsl) - Fluent API for grammar definition
 - [Transform System](#transform-system) - Convert parse trees to typed structs
+- [Derive Macros](#derive-macros) - Automatic typed AST generation
 - [Streaming Builder](#streaming-builder) - Single-pass parsing with custom output
 - [Parallel Parsing](#parallel-parsing) - Multi-file parsing with rayon
 - [Infix Expression Parsing](#infix-expression-parsing) - Built-in operator precedence
@@ -49,6 +50,7 @@ Rust. It provides high-performance parsing capabilities with a focus on:
     │  • Infix expression parsing                                 │
     │  • Rich error reporting (tree structure)                    │
     │  • Transform DSL (pattern matching)                         │
+    │  • Derive macros for typed ASTs                             │
     │  • Optional Ruby FFI / WASM bindings                        │
     └─────────────────────────────────────────────────────────────┘
               ▲                                    ▲
@@ -64,6 +66,22 @@ Rust. It provides high-performance parsing capabilities with a focus on:
 > any specific domain (EXPRESS, Ruby, JSON, YAML, etc.). Domain-specific
 > parsers should be built ON TOP of this library.
 
+# Workspace Structure
+
+This repository uses a Cargo workspace with two crates:
+
+```
+parsanol-rs/
+├── parsanol/              # Main parser library
+│   ├── src/
+│   └── Cargo.toml
+├── parsanol-derive/       # Derive macros (always included)
+│   ├── src/
+│   └── Cargo.toml
+├── examples/              # 37 example parsers
+└── Cargo.toml             # Workspace root
+```
+
 # Installation
 
 Add this to your `Cargo.toml`:
@@ -72,6 +90,9 @@ Add this to your `Cargo.toml`:
 [dependencies]
 parsanol = "0.1"
 ```
+
+The `parsanol-derive` crate is automatically included as a dependency,
+providing the `#[derive(FromAst)]` macro for typed AST conversion.
 
 ## Optional Features
 
@@ -287,6 +308,122 @@ let value = ast_to_value(&ast, &arena, input);
 
 // Now apply transforms
 let result = transform.apply(&value)?;
+```
+
+# Derive Macros
+
+The `FromAst` derive macro automatically generates code to convert `Value`
+types into typed Rust structs and enums. This eliminates boilerplate code
+for AST transformation.
+
+## Basic Usage
+
+```rust
+use parsanol::derive::FromAst;
+use parsanol::portable::transform::Value;
+
+#[derive(FromAst, Debug)]
+pub enum Expr {
+    #[parsanol(tag = "number")]
+    Number(i64),
+
+    #[parsanol(tag = "binop")]
+    BinOp {
+        left: Box<Expr>,
+        op: String,
+        right: Box<Expr>,
+    },
+}
+
+// Convert Value to typed Expr
+let value: Value = /* ... parsed value ... */;
+let expr: Expr = value.try_into()?;
+```
+
+## Container Attributes
+
+| Attribute | Description |
+|-----------|-------------|
+| `#[parsanol(rule = "name")]` | Specify the grammar rule name |
+
+## Variant Attributes (for enums)
+
+| Attribute | Description |
+|-----------|-------------|
+| `#[parsanol(tag = "literal")]` | Match by literal tag string |
+| `#[parsanol(tag_expr = expr)]` | Match by expression (for dynamic tags) |
+
+## Field Attributes
+
+| Attribute | Description |
+|-----------|-------------|
+| `#[parsanol(field = "name")]` | Map to different hash field name |
+| `#[parsanol(default)]` | Use `Default::default()` if missing |
+| `#[parsanol(default = expr)]` | Use expression if missing |
+
+## Complete Example
+
+```rust
+use parsanol::derive::FromAst;
+use parsanol::portable::transform::Value;
+
+#[derive(FromAst, Debug)]
+#[parsanol(rule = "statement")]
+pub enum Statement {
+    #[parsanol(tag = "assignment")]
+    Assignment {
+        #[parsanol(field = "name")]
+        variable: String,
+        value: Box<Expr>,
+    },
+
+    #[parsanol(tag = "return")]
+    Return {
+        #[parsanol(default)]
+        value: Option<Box<Expr>>,
+    },
+
+    #[parsanol(tag = "if")]
+    If {
+        condition: Box<Expr>,
+        then_block: Vec<Statement>,
+        #[parsanol(default)]
+        else_block: Option<Vec<Statement>>,
+    },
+}
+
+// Usage
+fn parse_statement(value: Value) -> Result<Statement, parsanol::derive::FromAstError> {
+    value.try_into()
+}
+```
+
+## Single-Field Tuple Structs
+
+Single-field tuple structs automatically get transparent conversion:
+
+```rust
+#[derive(FromAst)]
+pub struct Identifier(pub String);
+
+// Value::String("foo") directly converts to Identifier("foo")
+```
+
+## Error Handling
+
+```rust
+use parsanol::derive::FromAstError;
+
+match value.try_into() {
+    Ok(expr) => println!("Parsed: {:?}", expr),
+    Err(FromAstError::MissingField(field)) => {
+        eprintln!("Missing field: {}", field);
+    }
+    Err(FromAstError::UnknownTag) => {
+        eprintln!("Unknown tag in enum");
+    }
+    Err(e) => eprintln!("Conversion error: {}", e),
+}
 ```
 
 # Streaming Builder
@@ -804,14 +941,15 @@ See [SECURITY.md](SECURITY.md) for complete security documentation.
 
 # Examples
 
-See the `examples/` directory for 28 complete examples with both Rust
-and Ruby implementations:
+See the `examples/` directory for 37 complete examples demonstrating
+real-world parsing scenarios:
 
 ## Expression Parsers
 
 | Example | Description |
 |----|----|
-| `calculator` | Parse and evaluate mathematical expressions with operator precedence |
+| `calculator-pattern` | Parse expressions with pattern-based transforms |
+| `calculator-transform` | Parse and evaluate expressions with native transforms |
 | `boolean-algebra` | Parse boolean expressions with AND, OR, NOT operators |
 | `expression-evaluator` | Evaluate expressions with variables and function calls |
 | `prec-calc` | Precedence climbing algorithm for infix expressions |
@@ -820,8 +958,10 @@ and Ruby implementations:
 
 | Example      | Description                                                |
 |--------------|------------------------------------------------------------|
-| `json`       | JSON parser with pattern matching and transform approaches |
-| `csv`        | CSV parser handling quoted fields and escaping             |
+| `json-pattern` | JSON parser with pattern matching |
+| `json-transform` | JSON parser with native transforms |
+| `csv-pattern` | CSV parser handling quoted fields (pattern mode) |
+| `csv-transform` | CSV parser handling quoted fields (transform mode) |
 | `ini`        | INI configuration file parser                              |
 | `simple-xml` | XML parser with tag matching                               |
 | `markup`     | Lightweight markup language parser                         |
@@ -837,7 +977,7 @@ and Ruby implementations:
 |--------------|-----------------------------------------------|
 | `url`        | URL parser with scheme, host, path components |
 | `email`      | Email address parser with validation          |
-| `ip-address` | IPv4 address parser with octet validation     |
+| `ip-address` | IPv4/IPv6 address parser with validation      |
 
 ## Code & Templates
 
@@ -861,21 +1001,26 @@ and Ruby implementations:
 | Example           | Description                              |
 |-------------------|------------------------------------------|
 | `error-reporting` | Rich error reporting with tree structure |
+| `error-recovery`  | Error recovery strategies                |
 | `deepest-errors`  | Deepest error point tracking             |
 | `nested-errors`   | Nested error tree visualization          |
 
-## Conceptual Examples
+## Advanced Features
 
-| Example      | Description                      |
-|--------------|----------------------------------|
-| `modularity` | Grammar composition from modules |
+| Example         | Description                            |
+|-----------------|----------------------------------------|
+| `streaming`     | Streaming parser for large inputs      |
+| `incremental`   | Incremental parsing for editor integration |
+| `linter`        | Code linter with custom validation     |
+| `custom-atoms`  | Custom atom registration               |
+| `modularity`    | Grammar composition from modules       |
 
 Run examples with:
 
 ```bash
-cargo run --example calculator/basic
-cargo run --example json/basic
-cargo run --example url/basic
+cargo run --example calculator-transform
+cargo run --example json-pattern
+cargo run --example url
 ```
 
 Full documentation and interactive examples available at [the
@@ -926,17 +1071,20 @@ requests at [GitHub](https://github.com/parsanol/parsanol-rs).
 git clone https://github.com/parsanol/parsanol-rs.git
 cd parsanol-rs
 
-# Build
+# Build (workspace)
 cargo build
 
-# Run tests (30 passing unit tests + 18 ignored doc tests)
-cargo test
+# Run tests (234 unit tests)
+cargo test --lib
+
+# Run all examples
+cargo build --examples
 
 # Run benchmarks
 cargo bench
 
 # Check code quality
-cargo clippy
+cargo clippy --lib -- -D warnings
 cargo fmt --check
 ```
 
@@ -944,11 +1092,13 @@ cargo fmt --check
 
 The test suite consists of multiple types of tests:
 
-**Unit tests:** Test internal functionality of each module (parser, arena, cache, etc.).
+**Unit tests:** 234 tests covering internal functionality of each module
+(parser, arena, cache, transform, derive, etc.).
 
 **Integration tests:** Located in `tests/` directory, test end-to-end parsing scenarios.
 
-**Examples:** Located in `examples/` directory, these are runnable parsers that demonstrate real-world usage. Examples are compiled and tested via `cargo test --examples`.
+**Examples:** 37 runnable parsers in `examples/` directory demonstrating real-world usage.
+Examples are compiled and tested via `cargo build --examples`.
 
 **Documentation tests (doc tests):** Code examples in documentation comments. Note that many doc tests are marked with `ignore` because they show **incomplete code snippets** (e.g., method signatures or pseudocode) rather than complete runnable examples. This is intentional - the doc tests illustrate API patterns, while the `examples/` directory contains fully runnable code that is verified by CI.
 
@@ -961,8 +1111,8 @@ cargo test
 # Include doc tests (most will be ignored as designed)
 cargo test --doc
 
-# Test examples
-cargo test --examples
+# Test examples compile
+cargo build --examples
 
 # Run ignored doc tests (will fail if not complete)
 cargo test -- --ignored
