@@ -395,11 +395,10 @@ fn test_backend_parity_choice_in_repetition() {
 
 #[test]
 fn test_backend_parity_complex_backtracking() {
-    // NOTE: This test demonstrates a known difference between backends.
-    // In standard PEG semantics, `("a" | "aa") "b"` on input "aab" should FAIL
-    // because once "a" matches, we don't backtrack to try "aa".
-    // The packrat backend may handle this differently due to memoization.
-    // The bytecode backend follows standard PEG semantics.
+    // Test that both backends correctly implement PEG ordered choice semantics.
+    // In standard PEG, `("a" | "aa") "b"` on input "aab" should FAIL
+    // because once "a" matches, we commit to it and don't backtrack to try "aa"
+    // when the subsequent "b" fails.
     let mut grammar = Grammar::new();
 
     let a = grammar.add_atom(Atom::Str {
@@ -431,26 +430,21 @@ fn test_backend_parity_complex_backtracking() {
     let packrat_result = packrat_parser.parse("aab");
     let bytecode_result = bytecode_parser.parse("aab");
 
-    // Both backends should produce the SAME result (either both fail or both succeed)
-    // Currently, packrat succeeds and bytecode fails - this is a known difference
-    // that will be addressed in a future update.
+    // Both backends should produce the SAME result (both fail in this case)
+    // Standard PEG semantics: once "a" matches in ("a" | "aa"), we commit and
+    // don't backtrack to try "aa" when "b" fails.
     match (&packrat_result, &bytecode_result) {
         (Ok(p), Ok(b)) => {
             assert_eq!(p.end_pos, b.end_pos, "mismatch for input: aab");
         }
         (Err(_), Err(_)) => {
-            // Both failed - acceptable
+            // Both failed - correct PEG behavior
         }
         _ => {
-            // Known difference: packrat succeeds, bytecode fails
-            // This is expected behavior for now - the backends have different
-            // backtracking semantics for alternatives in sequences
-            #[cfg(feature = "strict_parity")]
             panic!(
                 "Backend parity mismatch for input: 'aab' - packrat: {:?}, bytecode: {:?}",
                 packrat_result, bytecode_result
             );
-            let _ = (packrat_result, bytecode_result);
         }
     }
 }
@@ -482,4 +476,243 @@ fn test_backend_parity_empty_match() {
     let bytecode_result = bytecode_parser.parse("").unwrap();
     assert_eq!(packrat_result.end_pos, bytecode_result.end_pos);
     assert_eq!(packrat_result.end_pos, 0);
+}
+
+// ============================================================================
+// PEG Ordered Choice Semantics Tests
+// ============================================================================
+
+#[test]
+fn test_peg_ordered_choice_no_backtrack() {
+    // PEG ordered choice: once an alternative succeeds, we commit to it.
+    // Grammar: ("a" | "aa") "b" on input "aab" should FAIL.
+    // Because "a" matches at pos 0, we commit to it, then "b" fails at pos 1.
+    // We should NOT backtrack to try "aa".
+    let mut grammar = Grammar::new();
+
+    let a = grammar.add_atom(Atom::Str {
+        pattern: "a".to_string(),
+    });
+    let aa = grammar.add_atom(Atom::Str {
+        pattern: "aa".to_string(),
+    });
+    let b = grammar.add_atom(Atom::Str {
+        pattern: "b".to_string(),
+    });
+    let choice = grammar.add_atom(Atom::Alternative { atoms: vec![a, aa] });
+    let seq = grammar.add_atom(Atom::Sequence {
+        atoms: vec![choice, b],
+    });
+
+    grammar.root = seq;
+
+    // Both backends should fail
+    let mut packrat_parser = Parser::packrat(grammar.clone());
+    let mut bytecode_parser = Parser::bytecode(grammar);
+
+    assert!(
+        packrat_parser.parse("aab").is_err(),
+        "packrat should fail on 'aab'"
+    );
+    assert!(
+        bytecode_parser.parse("aab").is_err(),
+        "bytecode should fail on 'aab'"
+    );
+
+    // But should succeed on "ab" (first alternative + b)
+    assert!(
+        packrat_parser.parse("ab").is_ok(),
+        "packrat should succeed on 'ab'"
+    );
+    assert!(
+        bytecode_parser.parse("ab").is_ok(),
+        "bytecode should succeed on 'ab'"
+    );
+
+    // And succeed on "aab" with just the alternative (no b)
+    let mut grammar2 = Grammar::new();
+    let a2 = grammar2.add_atom(Atom::Str {
+        pattern: "a".to_string(),
+    });
+    let aa2 = grammar2.add_atom(Atom::Str {
+        pattern: "aa".to_string(),
+    });
+    let choice2 = grammar2.add_atom(Atom::Alternative {
+        atoms: vec![a2, aa2],
+    });
+    grammar2.root = choice2;
+
+    let mut packrat2 = Parser::packrat(grammar2.clone());
+    let mut bytecode2 = Parser::bytecode(grammar2);
+
+    let p_result = packrat2.parse("aa").unwrap();
+    let b_result = bytecode2.parse("aa").unwrap();
+    assert_eq!(
+        p_result.end_pos, 1,
+        "packrat should match 'a' (first alt) on 'aa'"
+    );
+    assert_eq!(
+        b_result.end_pos, 1,
+        "bytecode should match 'a' (first alt) on 'aa'"
+    );
+}
+
+#[test]
+fn test_peg_ordered_choice_three_alternatives() {
+    // Test with three alternatives: ("a" | "aa" | "aaa") "b"
+    // On input "aaab", should FAIL because "a" matches first, then "b" fails at "aab"
+    let mut grammar = Grammar::new();
+
+    let a = grammar.add_atom(Atom::Str {
+        pattern: "a".to_string(),
+    });
+    let aa = grammar.add_atom(Atom::Str {
+        pattern: "aa".to_string(),
+    });
+    let aaa = grammar.add_atom(Atom::Str {
+        pattern: "aaa".to_string(),
+    });
+    let b = grammar.add_atom(Atom::Str {
+        pattern: "b".to_string(),
+    });
+
+    let choice = grammar.add_atom(Atom::Alternative {
+        atoms: vec![a, aa, aaa],
+    });
+    let seq = grammar.add_atom(Atom::Sequence {
+        atoms: vec![choice, b],
+    });
+
+    grammar.root = seq;
+
+    let mut packrat_parser = Parser::packrat(grammar.clone());
+    let mut bytecode_parser = Parser::bytecode(grammar);
+
+    // Should fail - first alternative "a" matches, then "b" fails
+    assert!(packrat_parser.parse("aaab").is_err());
+    assert!(bytecode_parser.parse("aaab").is_err());
+
+    // Should succeed on "ab"
+    assert!(packrat_parser.parse("ab").is_ok());
+    assert!(bytecode_parser.parse("ab").is_ok());
+}
+
+#[test]
+fn test_peg_ordered_choice_nested() {
+    // Nested alternatives: (("a" | "aa") "b" | "c")
+    // On input "aab", should FAIL because inner ("a" | "aa") "b" fails,
+    // then outer alternative tries "c" which also fails.
+    let mut grammar = Grammar::new();
+
+    let a = grammar.add_atom(Atom::Str {
+        pattern: "a".to_string(),
+    });
+    let aa = grammar.add_atom(Atom::Str {
+        pattern: "aa".to_string(),
+    });
+    let b = grammar.add_atom(Atom::Str {
+        pattern: "b".to_string(),
+    });
+    let c = grammar.add_atom(Atom::Str {
+        pattern: "c".to_string(),
+    });
+
+    let inner_choice = grammar.add_atom(Atom::Alternative { atoms: vec![a, aa] });
+    let inner_seq = grammar.add_atom(Atom::Sequence {
+        atoms: vec![inner_choice, b],
+    });
+    let outer_choice = grammar.add_atom(Atom::Alternative {
+        atoms: vec![inner_seq, c],
+    });
+
+    grammar.root = outer_choice;
+
+    let mut packrat_parser = Parser::packrat(grammar.clone());
+    let mut bytecode_parser = Parser::bytecode(grammar);
+
+    // "aab" should fail
+    assert!(packrat_parser.parse("aab").is_err());
+    assert!(bytecode_parser.parse("aab").is_err());
+
+    // "ab" should succeed (inner choice "a" + "b")
+    assert!(packrat_parser.parse("ab").is_ok());
+    assert!(bytecode_parser.parse("ab").is_ok());
+
+    // "c" should succeed (outer second alternative)
+    assert!(packrat_parser.parse("c").is_ok());
+    assert!(bytecode_parser.parse("c").is_ok());
+}
+
+#[test]
+fn test_peg_ordered_choice_with_prefix() {
+    // Prefix before choice: "x" ("a" | "aa") "b" on input "xaab"
+    // Should FAIL: "x" matches, "a" matches, "b" fails at "aab"
+    let mut grammar = Grammar::new();
+
+    let x = grammar.add_atom(Atom::Str {
+        pattern: "x".to_string(),
+    });
+    let a = grammar.add_atom(Atom::Str {
+        pattern: "a".to_string(),
+    });
+    let aa = grammar.add_atom(Atom::Str {
+        pattern: "aa".to_string(),
+    });
+    let b = grammar.add_atom(Atom::Str {
+        pattern: "b".to_string(),
+    });
+
+    let choice = grammar.add_atom(Atom::Alternative { atoms: vec![a, aa] });
+    let seq = grammar.add_atom(Atom::Sequence {
+        atoms: vec![x, choice, b],
+    });
+
+    grammar.root = seq;
+
+    let mut packrat_parser = Parser::packrat(grammar.clone());
+    let mut bytecode_parser = Parser::bytecode(grammar);
+
+    assert!(packrat_parser.parse("xaab").is_err());
+    assert!(bytecode_parser.parse("xaab").is_err());
+
+    assert!(packrat_parser.parse("xab").is_ok());
+    assert!(bytecode_parser.parse("xab").is_ok());
+}
+
+#[test]
+fn test_peg_first_alternative_wins() {
+    // Test that first matching alternative wins, even if later one is "better"
+    // ("ab" | "a") "c" on input "abc"
+    // "ab" matches at pos 0-1, then "c" matches at pos 2 - SUCCESS
+    // But with ("a" | "ab") "c" on input "abc":
+    // "a" matches at pos 0, then "c" fails at pos 1 (input is "bc") - FAIL
+    let mut grammar = Grammar::new();
+
+    let a = grammar.add_atom(Atom::Str {
+        pattern: "a".to_string(),
+    });
+    let ab = grammar.add_atom(Atom::Str {
+        pattern: "ab".to_string(),
+    });
+    let c = grammar.add_atom(Atom::Str {
+        pattern: "c".to_string(),
+    });
+
+    let choice = grammar.add_atom(Atom::Alternative { atoms: vec![a, ab] });
+    let seq = grammar.add_atom(Atom::Sequence {
+        atoms: vec![choice, c],
+    });
+
+    grammar.root = seq;
+
+    let mut packrat_parser = Parser::packrat(grammar.clone());
+    let mut bytecode_parser = Parser::bytecode(grammar);
+
+    // "abc" should fail because "a" matches first, then "c" fails at "bc"
+    assert!(packrat_parser.parse("abc").is_err());
+    assert!(bytecode_parser.parse("abc").is_err());
+
+    // "ac" should succeed
+    assert!(packrat_parser.parse("ac").is_ok());
+    assert!(bytecode_parser.parse("ac").is_ok());
 }
