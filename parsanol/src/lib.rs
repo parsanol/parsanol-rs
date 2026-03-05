@@ -68,12 +68,8 @@ pub mod prelude;
 // Derive macro support
 pub mod derive;
 
-// Conditional compilation for Ruby FFI
-#[cfg(feature = "ruby")]
-mod generic_lexer;
-
-#[cfg(feature = "ruby")]
-pub mod ruby_ffi;
+// FFI module - unified foreign function interface
+pub mod ffi;
 
 // Portable core - available for both Ruby and future WASM
 pub mod portable;
@@ -105,6 +101,10 @@ pub use portable::{
     PortableParser,
 };
 
-// Conditional compilation for WASM bindings
-#[cfg(feature = "wasm")]
-mod wasm;
+// Backward compatibility: Re-export Ruby FFI at crate root
+#[cfg(feature = "ruby")]
+pub use ffi::ruby as ruby_ffi;
+
+// Backward compatibility: Re-export generic_lexer for Ruby FFI
+#[cfg(feature = "ruby")]
+pub use ffi::ruby::lexer::{create_lexer, drop_lexer, tokenize_with_lexer};

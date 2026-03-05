@@ -93,7 +93,7 @@ impl WasmParser {
 
         // Use the unified flatten implementation
         let mut result = Vec::new();
-        crate::portable::ffi::flatten_ast_to_u64(&ast, &self.arena, input, &mut result);
+        crate::ffi::shared::flatten_ast_to_u64(&ast, &self.arena, input, &mut result);
 
         Ok(result)
     }
