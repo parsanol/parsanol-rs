@@ -5,6 +5,55 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-03-05
+
+### Breaking Changes
+
+This release includes breaking changes to the FFI module organization. See [MIGRATION.md](MIGRATION.md) for detailed migration instructions.
+
+- **FFI Module Reorganization**: All FFI code consolidated under unified `ffi/` module
+  - `parsanol::portable::ffi` → `parsanol::ffi` (utilities re-exported from portable)
+  - `parsanol::portable::c_ffi` → `parsanol::ffi::c`
+  - `parsanol::ruby_ffi` → `parsanol::ffi::ruby` (backward-compatible re-export at root)
+
+- **Removed Components**:
+  - `once_cell` feature flag (use `std::sync::OnceLock` or add `once_cell` crate directly)
+  - `parsanol::ruby_ffi::drop_lexer` (standalone lexer removed - use parser directly)
+  - `parsanol::portable::c_ffi` module (moved to `parsanol::ffi::c`)
+  - `parsanol::portable::ffi` module (moved to `parsanol::ffi`)
+
+### Added
+
+- **Pre-commit Hooks**: CI checks now available locally
+  - `.pre-commit-config.yaml` for pre-commit framework
+  - `.githooks/pre-commit` shell script alternative
+  - Checks: format, clippy, docs, machete, typos, semver
+  - Skip mechanism: `SKIP_PRECOMMIT=1` or `.skip-precommit` file
+
+- **Backend Abstraction**: Trait-based parsing backend selection
+  - `ParsingBackend` trait for custom backends
+  - `PackratBackend` - Traditional packrat memoization
+  - `BytecodeBackend` - VM-based parsing for linear patterns
+  - `Backend::default_for_grammar()` - Auto-selection
+
+- **Bytecode VM Backend**: Optional VM-based parser
+  - Compiles grammar to bytecode instructions
+  - Better performance for grammars without nested repetition
+  - PEG-ordered choice semantics with proper commit handling
+
+### Fixed
+
+- **Bytecode VM**: Fixed PEG ordered choice semantics
+  - Changed `Jump` to `Commit` after successful alternatives
+  - Properly pops choice points to prevent incorrect backtracking
+  - Added comprehensive tests for PEG choice behavior
+
+- **Documentation**: Fixed unclosed HTML tags in optimizer.rs doc comments
+
+### Changed
+
+- Version bumped from 0.1.6 to 0.2.0 due to breaking API changes
+
 ## [Unreleased]
 
 ### Added
