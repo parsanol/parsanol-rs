@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add comprehensive all-examples benchmark and backend guide by @[object]
+- Add comprehensive backend comparison benchmark by @[object]
+- Implement bytecode parser backend in addition to packrat by @[object]
+
+### Other
+
+- Add pre-commit hooks and bump version to 0.2.0 by @[object]
+- More fixes by @[object]
+- Fix gha by @[object]
+- Update rust to 1.86 by @[object]
+- Remove old lexer ruby ffi by @[object]
+- Linting by @[object]
+- Release v0.1.6 by @[object]
+
 ### Other
 
 - Release v0.1.6 by @[object]
