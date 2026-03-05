@@ -106,14 +106,17 @@ impl ErrorTracker {
             // New furthest position - clear old contexts
             self.furthest_position = position;
             self.contexts.clear();
-            self.contexts.push(ErrorContext::new(position, expected, instruction_ip));
+            self.contexts
+                .push(ErrorContext::new(position, expected, instruction_ip));
         } else if position == self.furthest_position && !self.contexts.is_empty() {
             // Same furthest position - add context if not duplicate
-            let is_duplicate = self.contexts.iter().any(|ctx| {
-                ctx.position == position && ctx.expected == expected
-            });
+            let is_duplicate = self
+                .contexts
+                .iter()
+                .any(|ctx| ctx.position == position && ctx.expected == expected);
             if !is_duplicate {
-                self.contexts.push(ErrorContext::new(position, expected, instruction_ip));
+                self.contexts
+                    .push(ErrorContext::new(position, expected, instruction_ip));
             }
         }
     }
@@ -155,10 +158,7 @@ impl<'a> ErrorReporter<'a> {
     /// Build a RichError from the error tracker
     pub fn build_error(&self, tracker: &ErrorTracker) -> RichError {
         if !tracker.has_failures() {
-            return RichError::at(
-                "Parse failed",
-                SourceSpan::at(0, 1, 1),
-            );
+            return RichError::at("Parse failed", SourceSpan::at(0, 1, 1));
         }
 
         let pos = tracker.furthest_position();
@@ -183,15 +183,12 @@ impl<'a> ErrorReporter<'a> {
         // Add context about what was found
         if let Some(found) = self.get_char_at(pos) {
             error = error.with_child(
-                RichError::unexpected(
-                    &format!("'{}'", found.escape_default()),
-                    span,
-                ).with_severity(ErrorSeverity::Note)
+                RichError::unexpected(&format!("'{}'", found.escape_default()), span)
+                    .with_severity(ErrorSeverity::Note),
             );
         } else {
             error = error.with_child(
-                RichError::unexpected("end of input", span)
-                    .with_severity(ErrorSeverity::Note)
+                RichError::unexpected("end of input", span).with_severity(ErrorSeverity::Note),
             );
         }
 
@@ -279,8 +276,14 @@ mod tests {
     #[test]
     fn test_expected_display() {
         assert_eq!(Expected::Char('a').to_string(), "'a'");
-        assert_eq!(Expected::CharSet("[abc]".to_string()).to_string(), "one of [abc]");
-        assert_eq!(Expected::String("hello".to_string()).to_string(), "\"hello\"");
+        assert_eq!(
+            Expected::CharSet("[abc]".to_string()).to_string(),
+            "one of [abc]"
+        );
+        assert_eq!(
+            Expected::String("hello".to_string()).to_string(),
+            "\"hello\""
+        );
         assert_eq!(Expected::EndOfInput.to_string(), "end of input");
         assert_eq!(Expected::Any(1).to_string(), "any 1 character");
         assert_eq!(Expected::Any(3).to_string(), "any 3 characters");

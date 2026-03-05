@@ -12,7 +12,9 @@ fn test_backend_parity_simple_capture() {
     // Test simple named capture: letter:"a"
     let mut grammar = Grammar::new();
 
-    let a = grammar.add_atom(Atom::Str { pattern: "a".to_string() });
+    let a = grammar.add_atom(Atom::Str {
+        pattern: "a".to_string(),
+    });
     let letter = grammar.add_atom(Atom::Named {
         name: "letter".to_string(),
         atom: a,
@@ -40,19 +42,26 @@ fn test_backend_parity_sequence_with_captures() {
     // Test sequence with multiple captures: (first:"a" second:"b")
     let mut grammar = Grammar::new();
 
-    let a = grammar.add_atom(Atom::Str { pattern: "a".to_string() }); // 0
-    let b = grammar.add_atom(Atom::Str { pattern: "b".to_string() }); // 1
+    let a = grammar.add_atom(Atom::Str {
+        pattern: "a".to_string(),
+    }); // 0
+    let b = grammar.add_atom(Atom::Str {
+        pattern: "b".to_string(),
+    }); // 1
 
-    let first = grammar.add_atom(Atom::Named { // 2
+    let first = grammar.add_atom(Atom::Named {
+        // 2
         name: "first".to_string(),
         atom: a,
     });
-    let second = grammar.add_atom(Atom::Named { // 3
+    let second = grammar.add_atom(Atom::Named {
+        // 3
         name: "second".to_string(),
         atom: b,
     });
 
-    let seq = grammar.add_atom(Atom::Sequence { // 4
+    let seq = grammar.add_atom(Atom::Sequence {
+        // 4
         atoms: vec![first, second],
     });
 
@@ -78,15 +87,21 @@ fn test_backend_parity_nested_capture() {
     // Test nested capture: outer:(inner:"ab")
     let mut grammar = Grammar::new();
 
-    let a = grammar.add_atom(Atom::Str { pattern: "a".to_string() }); // 0
-    let b = grammar.add_atom(Atom::Str { pattern: "b".to_string() }); // 1
+    let a = grammar.add_atom(Atom::Str {
+        pattern: "a".to_string(),
+    }); // 0
+    let b = grammar.add_atom(Atom::Str {
+        pattern: "b".to_string(),
+    }); // 1
     let ab = grammar.add_atom(Atom::Sequence { atoms: vec![a, b] }); // 2
 
-    let inner = grammar.add_atom(Atom::Named { // 3
+    let inner = grammar.add_atom(Atom::Named {
+        // 3
         name: "inner".to_string(),
         atom: ab,
     });
-    let outer = grammar.add_atom(Atom::Named { // 4
+    let outer = grammar.add_atom(Atom::Named {
+        // 4
         name: "outer".to_string(),
         atom: inner,
     });
@@ -113,13 +128,17 @@ fn test_backend_parity_capture_with_repetition() {
     // Test capture with repetition: letters:("a")+
     let mut grammar = Grammar::new();
 
-    let a = grammar.add_atom(Atom::Str { pattern: "a".to_string() }); // 0
-    let a_plus = grammar.add_atom(Atom::Repetition { // 1
+    let a = grammar.add_atom(Atom::Str {
+        pattern: "a".to_string(),
+    }); // 0
+    let a_plus = grammar.add_atom(Atom::Repetition {
+        // 1
         atom: a,
         min: 1,
         max: None,
     });
-    let letters = grammar.add_atom(Atom::Named { // 2
+    let letters = grammar.add_atom(Atom::Named {
+        // 2
         name: "letters".to_string(),
         atom: a_plus,
     });
@@ -146,19 +165,26 @@ fn test_backend_parity_alternative_with_captures() {
     // Test alternative with captures: (a:"x" | b:"y")
     let mut grammar = Grammar::new();
 
-    let x = grammar.add_atom(Atom::Str { pattern: "x".to_string() }); // 0
-    let y = grammar.add_atom(Atom::Str { pattern: "y".to_string() }); // 1
+    let x = grammar.add_atom(Atom::Str {
+        pattern: "x".to_string(),
+    }); // 0
+    let y = grammar.add_atom(Atom::Str {
+        pattern: "y".to_string(),
+    }); // 1
 
-    let a_cap = grammar.add_atom(Atom::Named { // 2
+    let a_cap = grammar.add_atom(Atom::Named {
+        // 2
         name: "a".to_string(),
         atom: x,
     });
-    let b_cap = grammar.add_atom(Atom::Named { // 3
+    let b_cap = grammar.add_atom(Atom::Named {
+        // 3
         name: "b".to_string(),
         atom: y,
     });
 
-    let alt = grammar.add_atom(Atom::Alternative { // 4
+    let alt = grammar.add_atom(Atom::Alternative {
+        // 4
         atoms: vec![a_cap, b_cap],
     });
 
@@ -191,13 +217,20 @@ fn test_backend_parity_ignore() {
     // Test ignore (match but discard): "a" ~"b" "c"
     let mut grammar = Grammar::new();
 
-    let a = grammar.add_atom(Atom::Str { pattern: "a".to_string() }); // 0
-    let b = grammar.add_atom(Atom::Str { pattern: "b".to_string() }); // 1
-    let c = grammar.add_atom(Atom::Str { pattern: "c".to_string() }); // 2
+    let a = grammar.add_atom(Atom::Str {
+        pattern: "a".to_string(),
+    }); // 0
+    let b = grammar.add_atom(Atom::Str {
+        pattern: "b".to_string(),
+    }); // 1
+    let c = grammar.add_atom(Atom::Str {
+        pattern: "c".to_string(),
+    }); // 2
 
     let ignore_b = grammar.add_atom(Atom::Ignore { atom: b }); // 3
 
-    let seq = grammar.add_atom(Atom::Sequence { // 4
+    let seq = grammar.add_atom(Atom::Sequence {
+        // 4
         atoms: vec![a, ignore_b, c],
     });
 
@@ -219,12 +252,17 @@ fn test_backend_parity_cut() {
     // Once "a" matches, we commit and can't backtrack
     let mut grammar = Grammar::new();
 
-    let a = grammar.add_atom(Atom::Str { pattern: "a".to_string() }); // 0
-    let b = grammar.add_atom(Atom::Str { pattern: "b".to_string() }); // 1
+    let a = grammar.add_atom(Atom::Str {
+        pattern: "a".to_string(),
+    }); // 0
+    let b = grammar.add_atom(Atom::Str {
+        pattern: "b".to_string(),
+    }); // 1
 
     let cut = grammar.add_atom(Atom::Cut); // 2
 
-    let seq = grammar.add_atom(Atom::Sequence { // 3
+    let seq = grammar.add_atom(Atom::Sequence {
+        // 3
         atoms: vec![a, cut, b],
     });
 
@@ -247,21 +285,26 @@ fn test_backend_parity_exponential_safe() {
     // and will consume all 'a's, leaving nothing for the second repetition
     let mut grammar = Grammar::new();
 
-    let a = grammar.add_atom(Atom::Str { pattern: "a".to_string() }); // 0
+    let a = grammar.add_atom(Atom::Str {
+        pattern: "a".to_string(),
+    }); // 0
 
-    let first_rep = grammar.add_atom(Atom::Repetition { // 1
+    let first_rep = grammar.add_atom(Atom::Repetition {
+        // 1
         atom: a,
         min: 0,
         max: None,
     });
 
-    let second_rep = grammar.add_atom(Atom::Repetition { // 2
+    let second_rep = grammar.add_atom(Atom::Repetition {
+        // 2
         atom: a,
         min: 0,
         max: None,
     });
 
-    let seq = grammar.add_atom(Atom::Sequence { // 3
+    let seq = grammar.add_atom(Atom::Sequence {
+        // 3
         atoms: vec![first_rep, second_rep],
     });
 
@@ -283,15 +326,19 @@ fn test_backend_parity_nested_repetition() {
     // This tests that nested repetitions work correctly
     let mut grammar = Grammar::new();
 
-    let a = grammar.add_atom(Atom::Str { pattern: "a".to_string() }); // 0
+    let a = grammar.add_atom(Atom::Str {
+        pattern: "a".to_string(),
+    }); // 0
 
-    let inner = grammar.add_atom(Atom::Repetition { // 1
+    let inner = grammar.add_atom(Atom::Repetition {
+        // 1
         atom: a,
         min: 1,
         max: None,
     });
 
-    let outer = grammar.add_atom(Atom::Repetition { // 2
+    let outer = grammar.add_atom(Atom::Repetition {
+        // 2
         atom: inner,
         min: 1,
         max: None,
@@ -315,14 +362,20 @@ fn test_backend_parity_choice_in_repetition() {
     // This tests that alternatives work correctly within repetitions
     let mut grammar = Grammar::new();
 
-    let a = grammar.add_atom(Atom::Str { pattern: "a".to_string() }); // 0
-    let b = grammar.add_atom(Atom::Str { pattern: "b".to_string() }); // 1
+    let a = grammar.add_atom(Atom::Str {
+        pattern: "a".to_string(),
+    }); // 0
+    let b = grammar.add_atom(Atom::Str {
+        pattern: "b".to_string(),
+    }); // 1
 
-    let choice = grammar.add_atom(Atom::Alternative { // 2
+    let choice = grammar.add_atom(Atom::Alternative {
+        // 2
         atoms: vec![a, b],
     });
 
-    let rep = grammar.add_atom(Atom::Repetition { // 3
+    let rep = grammar.add_atom(Atom::Repetition {
+        // 3
         atom: choice,
         min: 0,
         max: None,
@@ -349,15 +402,23 @@ fn test_backend_parity_complex_backtracking() {
     // The bytecode backend follows standard PEG semantics.
     let mut grammar = Grammar::new();
 
-    let a = grammar.add_atom(Atom::Str { pattern: "a".to_string() }); // 0
-    let aa = grammar.add_atom(Atom::Str { pattern: "aa".to_string() }); // 1
-    let b = grammar.add_atom(Atom::Str { pattern: "b".to_string() }); // 2
+    let a = grammar.add_atom(Atom::Str {
+        pattern: "a".to_string(),
+    }); // 0
+    let aa = grammar.add_atom(Atom::Str {
+        pattern: "aa".to_string(),
+    }); // 1
+    let b = grammar.add_atom(Atom::Str {
+        pattern: "b".to_string(),
+    }); // 2
 
-    let choice = grammar.add_atom(Atom::Alternative { // 3
+    let choice = grammar.add_atom(Atom::Alternative {
+        // 3
         atoms: vec![a, aa],
     });
 
-    let seq = grammar.add_atom(Atom::Sequence { // 4
+    let seq = grammar.add_atom(Atom::Sequence {
+        // 4
         atoms: vec![choice, b],
     });
 
@@ -389,6 +450,7 @@ fn test_backend_parity_complex_backtracking() {
                 "Backend parity mismatch for input: 'aab' - packrat: {:?}, bytecode: {:?}",
                 packrat_result, bytecode_result
             );
+            let _ = (packrat_result, bytecode_result);
         }
     }
 }
@@ -399,9 +461,12 @@ fn test_backend_parity_empty_match() {
     // Pattern: "a"* should match empty string
     let mut grammar = Grammar::new();
 
-    let a = grammar.add_atom(Atom::Str { pattern: "a".to_string() }); // 0
+    let a = grammar.add_atom(Atom::Str {
+        pattern: "a".to_string(),
+    }); // 0
 
-    let rep = grammar.add_atom(Atom::Repetition { // 1
+    let rep = grammar.add_atom(Atom::Repetition {
+        // 1
         atom: a,
         min: 0,
         max: None,

@@ -35,7 +35,10 @@ fn test_jump_to_return_simplification() {
     pass.run(&mut program);
 
     // Jump should be replaced with Return
-    assert!(matches!(program.get_instruction(0), Some(Instruction::Return)));
+    assert!(matches!(
+        program.get_instruction(0),
+        Some(Instruction::Return)
+    ));
 }
 
 #[test]
@@ -50,7 +53,10 @@ fn test_jump_to_fail_simplification() {
     pass.run(&mut program);
 
     // Jump should be replaced with Fail
-    assert!(matches!(program.get_instruction(0), Some(Instruction::Fail)));
+    assert!(matches!(
+        program.get_instruction(0),
+        Some(Instruction::Fail)
+    ));
 }
 
 #[test]
@@ -146,7 +152,10 @@ fn test_full_capture_optimization_char() {
 
     // Should be converted to: Char, FullCapture, End
     assert_eq!(program.instruction_count(), 3);
-    assert!(matches!(program.get_instruction(0), Some(Instruction::Char { .. })));
+    assert!(matches!(
+        program.get_instruction(0),
+        Some(Instruction::Char { .. })
+    ));
     assert!(matches!(
         program.get_instruction(1),
         Some(Instruction::FullCapture { .. })
@@ -233,7 +242,11 @@ fn test_test_set_optimization() {
 
     // Should be converted to: TestSet, End
     assert_eq!(program.instruction_count(), 2);
-    if let Some(Instruction::TestSet { set_idx: idx, offset }) = program.get_instruction(0) {
+    if let Some(Instruction::TestSet {
+        set_idx: idx,
+        offset,
+    }) = program.get_instruction(0)
+    {
         assert_eq!(*idx, set_idx);
         assert_eq!(*offset, 3);
     } else {

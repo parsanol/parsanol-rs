@@ -314,7 +314,7 @@ mod tests {
         assert!(governor.enter_recursive().is_err()); // depth = 4, exceeds limit
 
         governor.exit_recursive(); // depth = 3
-        // After exit, depth = 3, entering again makes depth = 4 which still exceeds limit
+                                   // After exit, depth = 3, entering again makes depth = 4 which still exceeds limit
         assert!(governor.enter_recursive().is_err()); // depth = 4, exceeds limit
     }
 

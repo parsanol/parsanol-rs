@@ -120,11 +120,12 @@ impl Parser {
     /// Parse using bytecode backend
     fn parse_bytecode(&mut self, input: &str) -> Result<ParseResult, ParseError> {
         // Compile grammar to program
-        let program = Compiler::new(self.grammar.clone())
-            .compile()
-            .map_err(|e| ParseError::Internal {
-                message: format!("Compilation error: {}", e),
-            })?;
+        let program =
+            Compiler::new(self.grammar.clone())
+                .compile()
+                .map_err(|e| ParseError::Internal {
+                    message: format!("Compilation error: {}", e),
+                })?;
 
         // Execute program
         let mut arena = AstArena::for_input(input.len());
