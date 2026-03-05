@@ -13,14 +13,14 @@ rust-version = "1.86"
 
 [package.metadata.cargo-machete]
 # These optional dependencies are only used when specific features are enabled.
-ignored = ["nom", "winnow"]
+ignored = ["winnow"]
 
 [lib]
 crate-type = ["rlib"]
 
 [features]
 default = []
-ruby = ["magnus", "rb-sys", "once_cell"]
+ruby = ["magnus", "rb-sys"]
 wasm = ["wasm-bindgen", "js-sys", "console_error_panic_hook"]
 logging = ["log"]
 parallel = ["rayon"]
@@ -45,7 +45,6 @@ log = { version = "0.4", optional = true }
 nom = { version = "8", optional = true }
 winnow = { version = "0.7", optional = true }
 magnus = { version = "0.8.2", optional = true }
-once_cell = { version = "1.21", optional = true }
 rayon = { version = "1.10", optional = true }
 wasm-bindgen = { version = "0.2", optional = true }
 js-sys = { version = "0.3", optional = true }
