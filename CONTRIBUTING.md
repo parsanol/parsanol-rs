@@ -59,6 +59,56 @@ cargo test --features wasm
 cargo test -p parsanol-ruby-derive
 ```
 
+### Pre-commit Hooks
+
+This project provides pre-commit hooks that mirror CI checks. Using them helps catch issues early.
+
+**Option 1: Pre-commit Framework (Recommended)**
+
+```bash
+# Install pre-commit
+pip install pre-commit
+
+# Install the hooks
+pre-commit install
+
+# (Optional) Run on all files to check current state
+pre-commit run --all-files
+```
+
+**Option 2: Shell Hook**
+
+```bash
+# Copy and enable the hook
+cp .githooks/pre-commit .git/hooks/pre-commit
+chmod +x .git/hooks/pre-commit
+
+# Install required tools
+cargo install cargo-machete typos-cli cargo-semver-checks
+```
+
+**Checks performed:**
+- `cargo fmt --all -- --check` - Format check
+- `cargo clippy --all-targets -- -D warnings` - Lint check
+- `cargo doc --no-deps --all-features` - Documentation build
+- `cargo machete` - Unused dependencies
+- `typos` - Spell check
+- `cargo semver-checks --baseline-rev origin/main` - API compatibility
+
+**Skipping Pre-commit Checks:**
+
+To skip checks temporarily for a commit:
+
+```bash
+# Option 1: Environment variable
+SKIP_PRECOMMIT=1 git commit -m "..."
+
+# Option 2: Create a skip file (remains active until deleted)
+touch .skip-precommit
+git commit -m "..."
+rm .skip-precommit  # Re-enable checks
+```
+
 ## Making Changes
 
 ### Code Style

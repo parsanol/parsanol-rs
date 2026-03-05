@@ -11,6 +11,9 @@ extend-exclude = ["target/", ".git/"]
 parsanol = "parsanol"
 Parsanol = "Parsanol"
 
+# Software engineering terms
+CLAS = "CLAS"  # Part of "GOD CLASS" pattern name
+
 # ISO-8601 duration format (PnYnMnDTnHnMnS)
 Pn = "Pn"
 
