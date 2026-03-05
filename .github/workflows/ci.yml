@@ -196,9 +196,9 @@ jobs:
           - macos-15-intel         # macOS Intel
         rust: [stable]
         include:
-          # MSRV check - Rust 1.85+ required for 2024 edition dependencies
+          # MSRV check - Rust 1.86+ required for criterion 0.8
           - os: ubuntu-22.04
-            rust: "1.85"
+            rust: "1.86"
             name: Test MSRV
           # Beta for early warning
           - os: ubuntu-22.04

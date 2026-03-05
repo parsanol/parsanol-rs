@@ -9,7 +9,7 @@ readme = "../README.md"
 description = "High-performance PEG parser library with packrat memoization and arena allocation"
 documentation = "https://docs.rs/parsanol"
 homepage = "https://github.com/parsanol/parsanol-rs"
-rust-version = "1.85"
+rust-version = "1.86"
 
 [package.metadata.cargo-machete]
 # These optional dependencies are only used when specific features are enabled.
