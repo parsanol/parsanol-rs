@@ -217,3 +217,8 @@ harness = false
 name = "libraries"
 path = "../benches/libraries.rs"
 harness = false
+
+[[bench]]
+name = "backend-comparison"
+path = "../benches/backend-comparison.rs"
+harness = false
