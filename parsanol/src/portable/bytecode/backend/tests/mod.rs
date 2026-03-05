@@ -84,7 +84,10 @@ pub fn lookahead_grammar() -> Grammar {
     let b = grammar.add_atom(Atom::Str {
         pattern: "b".to_string(),
     });
-    let lookahead = grammar.add_atom(Atom::Lookahead { atom: b, positive: true });
+    let lookahead = grammar.add_atom(Atom::Lookahead {
+        atom: b,
+        positive: true,
+    });
     let b2 = grammar.add_atom(Atom::Str {
         pattern: "b".to_string(),
     });
@@ -104,7 +107,10 @@ pub fn negative_lookahead_grammar() -> Grammar {
     let b = grammar.add_atom(Atom::Str {
         pattern: "b".to_string(),
     });
-    let neg_lookahead = grammar.add_atom(Atom::Lookahead { atom: a, positive: false });
+    let neg_lookahead = grammar.add_atom(Atom::Lookahead {
+        atom: a,
+        positive: false,
+    });
     grammar.add_atom(Atom::Sequence {
         atoms: vec![neg_lookahead, b],
     });

@@ -13,7 +13,10 @@ use super::Backend;
 /// in the bytecode VM, while Packrat guarantees O(n).
 pub fn has_nested_repetition(grammar: &Grammar) -> bool {
     for atom in &grammar.atoms {
-        if let Atom::Repetition { atom: inner_idx, .. } = atom {
+        if let Atom::Repetition {
+            atom: inner_idx, ..
+        } = atom
+        {
             if let Some(inner) = grammar.get_atom(*inner_idx) {
                 if matches!(inner, Atom::Repetition { .. }) {
                     return true;

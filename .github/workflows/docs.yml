@@ -65,7 +65,7 @@ jobs:
           echo '<!DOCTYPE html><html><head><meta http-equiv="refresh" content="0;url=parsanol/index.html"></head><body></body></html>' > target/doc/index.html
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: rustdoc
           path: target/doc
@@ -119,7 +119,7 @@ jobs:
           fi
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: benchmarks
           path: _benchmarks
@@ -147,7 +147,7 @@ jobs:
         run: cargo llvm-cov --all-features --workspace --html
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage
           path: target/llvm-cov/html
@@ -169,21 +169,21 @@ jobs:
 
       - name: Download RustDoc
         if: needs.rustdoc.result == 'success'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: rustdoc
           path: _site/rustdoc
 
       - name: Download Benchmarks
         if: needs.benchmarks.result == 'success'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: benchmarks
           path: _site/benchmarks
 
       - name: Download Coverage
         if: needs.coverage.result == 'success'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: coverage
           path: _site/coverage
@@ -192,10 +192,10 @@ jobs:
         run: cp .github/scripts/docs-index.html _site/index.html
 
       - name: Setup Pages
-        uses: actions/configure-pages@v4
+        uses: actions/configure-pages@v5
 
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v4
 
       - name: Deploy to GitHub Pages
         id: deployment

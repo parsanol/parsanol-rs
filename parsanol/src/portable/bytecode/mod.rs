@@ -25,22 +25,22 @@
 //! For grammars with heavy backtracking or nested repetitions,
 //! the packrat backend may be more appropriate.
 
-pub mod instruction;
-pub mod program;
-pub mod compiler;
-pub mod vm;
 pub mod backend;
 pub mod capture;
+pub mod compiler;
 pub mod error;
+pub mod instruction;
 pub mod optimizer;
 pub mod pattern_analysis;
+pub mod program;
+pub mod vm;
 
-pub use instruction::{CaptureKind, Instruction, Opcode};
-pub use program::{CharSet, Program};
-pub use compiler::{compile as compile_bytecode, CompileError, Compiler};
-pub use vm::{parse_with_vm, BytecodeVM, VMConfig, VMResult};
 pub use backend::{Backend, GrammarAnalysis, Parser};
 pub use capture::{CaptureFrame, CaptureProcessor};
+pub use compiler::{compile as compile_bytecode, CompileError, Compiler};
 pub use error::{ErrorContext, ErrorReporter, ErrorTracker, Expected};
+pub use instruction::{CaptureKind, Instruction, Opcode};
 pub use optimizer::{OptimizationPass, PeepholeOptimizer};
 pub use pattern_analysis::{FixedLenAnalysis, NullableAnalysis, PatternLength, PatternNullability};
+pub use program::{CharSet, Program};
+pub use vm::{parse_with_vm, BytecodeVM, VMConfig, VMResult};

@@ -241,9 +241,13 @@ impl OptimizationPass for SpanOptimization {
             // Pattern: Choice → CharSet → PartialCommit → Commit
             // PartialCommit should jump back to CharSet (offset = -2)
             if let (
-                Some(Instruction::Choice { offset: choice_offset }),
+                Some(Instruction::Choice {
+                    offset: choice_offset,
+                }),
                 Some(Instruction::CharSet { set_idx }),
-                Some(Instruction::PartialCommit { offset: partial_offset }),
+                Some(Instruction::PartialCommit {
+                    offset: partial_offset,
+                }),
                 Some(Instruction::Commit { offset: _ }),
             ) = (instr0, instr1, instr2, instr3)
             {
@@ -305,13 +309,15 @@ impl OptimizationPass for TestCharOptimization {
 
                 match (instr0, instr1, instr2, instr3) {
                     (
-                        Some(Instruction::Choice { offset: choice_offset }),
+                        Some(Instruction::Choice {
+                            offset: choice_offset,
+                        }),
                         Some(Instruction::Char { byte }),
-                        Some(Instruction::Commit { offset: commit_offset }),
+                        Some(Instruction::Commit {
+                            offset: commit_offset,
+                        }),
                         Some(Instruction::Jump { .. }),
-                    ) if *commit_offset == 0 => {
-                        Some((*byte, *choice_offset))
-                    }
+                    ) if *commit_offset == 0 => Some((*byte, *choice_offset)),
                     _ => None,
                 }
             };
@@ -371,13 +377,15 @@ impl OptimizationPass for TestSetOptimization {
 
                 match (instr0, instr1, instr2, instr3) {
                     (
-                        Some(Instruction::Choice { offset: choice_offset }),
+                        Some(Instruction::Choice {
+                            offset: choice_offset,
+                        }),
                         Some(Instruction::CharSet { set_idx }),
-                        Some(Instruction::Commit { offset: commit_offset }),
+                        Some(Instruction::Commit {
+                            offset: commit_offset,
+                        }),
                         Some(Instruction::Jump { .. }),
-                    ) if *commit_offset == 0 => {
-                        Some((*set_idx, *choice_offset))
-                    }
+                    ) if *commit_offset == 0 => Some((*set_idx, *choice_offset)),
                     _ => None,
                 }
             };
@@ -434,10 +442,9 @@ impl OptimizationPass for TailCallOptimization {
                 let instr1 = program.get_instruction(i + 1);
 
                 match (instr0, instr1) {
-                    (
-                        Some(Instruction::Call { offset }),
-                        Some(Instruction::Return),
-                    ) => Some(*offset),
+                    (Some(Instruction::Call { offset }), Some(Instruction::Return)) => {
+                        Some(*offset)
+                    }
                     _ => None,
                 }
             };
@@ -489,17 +496,19 @@ impl OptimizationPass for FullCaptureOptimization {
                     (
                         Some(Instruction::OpenCapture { kind, key_idx }),
                         Some(Instruction::Char { .. }),
-                        Some(Instruction::CloseCapture { kind: close_kind, key_idx: close_key }),
-                    ) if kind == close_kind && key_idx == close_key => {
-                        Some((*kind, *key_idx))
-                    }
+                        Some(Instruction::CloseCapture {
+                            kind: close_kind,
+                            key_idx: close_key,
+                        }),
+                    ) if kind == close_kind && key_idx == close_key => Some((*kind, *key_idx)),
                     (
                         Some(Instruction::OpenCapture { kind, key_idx }),
                         Some(Instruction::String { .. }),
-                        Some(Instruction::CloseCapture { kind: close_kind, key_idx: close_key }),
-                    ) if kind == close_kind && key_idx == close_key => {
-                        Some((*kind, *key_idx))
-                    }
+                        Some(Instruction::CloseCapture {
+                            kind: close_kind,
+                            key_idx: close_key,
+                        }),
+                    ) if kind == close_kind && key_idx == close_key => Some((*kind, *key_idx)),
                     _ => None,
                 }
             };
@@ -558,9 +567,13 @@ impl OptimizationPass for LookaheadOptimization {
                 match (instr0, instr1, instr2) {
                     // Pattern: Choice → Char → BackCommit → ...
                     (
-                        Some(Instruction::Choice { offset: choice_offset }),
+                        Some(Instruction::Choice {
+                            offset: choice_offset,
+                        }),
                         Some(Instruction::Char { byte }),
-                        Some(Instruction::BackCommit { offset: backcommit_offset }),
+                        Some(Instruction::BackCommit {
+                            offset: backcommit_offset,
+                        }),
                     ) => {
                         // Check if this looks like a positive lookahead:
                         // - Choice should jump past BackCommit (to a Fail instruction)
@@ -587,9 +600,13 @@ impl OptimizationPass for LookaheadOptimization {
                     }
                     // Pattern: Choice → CharSet → BackCommit → ...
                     (
-                        Some(Instruction::Choice { offset: choice_offset }),
+                        Some(Instruction::Choice {
+                            offset: choice_offset,
+                        }),
                         Some(Instruction::CharSet { set_idx }),
-                        Some(Instruction::BackCommit { offset: backcommit_offset }),
+                        Some(Instruction::BackCommit {
+                            offset: backcommit_offset,
+                        }),
                     ) => {
                         let fail_target = (i as i32 + 1 + choice_offset) as usize;
                         let continue_target = (i as i32 + 2 + backcommit_offset) as usize;

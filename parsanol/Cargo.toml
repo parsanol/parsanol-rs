@@ -42,8 +42,8 @@ memchr = { workspace = true }
 
 # Optional dependencies
 log = { version = "0.4", optional = true }
-nom = { version = "7", optional = true }
-winnow = { version = "0.6", optional = true }
+nom = { version = "8", optional = true }
+winnow = { version = "0.7", optional = true }
 magnus = { version = "0.8.2", optional = true }
 once_cell = { version = "1.21", optional = true }
 rayon = { version = "1.10", optional = true }
@@ -52,10 +52,10 @@ js-sys = { version = "0.3", optional = true }
 console_error_panic_hook = { version = "0.1", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-getrandom = { version = "0.3", features = ["wasm_js"] }
+getrandom = { version = "0.4", features = ["wasm_js"] }
 
 [dev-dependencies]
-criterion = { version = "0.5", features = ["html_reports"] }
+criterion = { version = "0.8", features = ["html_reports"] }
 proptest = "1.4"
 
 [build-dependencies]

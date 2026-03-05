@@ -202,8 +202,8 @@ pub use plugin::{
 // ============================================================================
 
 pub use bytecode::{
+    compiler::{compile as compile_bytecode, CompileError, Compiler},
     instruction::{CaptureKind, Instruction, Opcode},
     program::{CharSet, Program},
-    compiler::{compile as compile_bytecode, CompileError, Compiler},
     vm::{parse_with_vm, BytecodeVM, VMConfig, VMResult},
 };

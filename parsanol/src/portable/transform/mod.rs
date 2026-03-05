@@ -51,7 +51,9 @@ mod value;
 
 // Re-export all public types
 pub use direct::{direct_helpers, DirectTransform};
-pub use helpers::{ast_node_span, ast_to_value, ast_to_value_with_span, extract_field, extract_int, extract_string};
+pub use helpers::{
+    ast_node_span, ast_to_value, ast_to_value_with_span, extract_field, extract_int, extract_string,
+};
 pub use pattern::{Bindings, HashPatternBuilder, Pattern};
 pub use transform::{Transform, TransformError, TypedTransform};
 pub use value::Value;

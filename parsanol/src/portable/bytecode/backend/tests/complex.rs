@@ -32,15 +32,23 @@ fn test_backend_parity_json_string() {
 
     let test_cases = vec![
         (r#""hello""#, 7),
-        (r#""""#, 2),           // empty string
+        (r#""""#, 2), // empty string
         (r#""abc123""#, 8),
     ];
 
     for (input, expected_end) in test_cases {
         let packrat_result = packrat_parser.parse(input).unwrap();
         let bytecode_result = bytecode_parser.parse(input).unwrap();
-        assert_eq!(packrat_result.end_pos, bytecode_result.end_pos, "mismatch for input: {}", input);
-        assert_eq!(packrat_result.end_pos, expected_end, "wrong end pos for input: {}", input);
+        assert_eq!(
+            packrat_result.end_pos, bytecode_result.end_pos,
+            "mismatch for input: {}",
+            input
+        );
+        assert_eq!(
+            packrat_result.end_pos, expected_end,
+            "wrong end pos for input: {}",
+            input
+        );
     }
 }
 
@@ -63,17 +71,21 @@ fn test_backend_parity_json_number() {
     let mut packrat_parser = Parser::packrat(grammar.clone());
     let mut bytecode_parser = Parser::bytecode(grammar);
 
-    let test_cases = vec![
-        ("123", 3),
-        ("0", 1),
-        ("99999", 5),
-    ];
+    let test_cases = vec![("123", 3), ("0", 1), ("99999", 5)];
 
     for (input, expected_end) in test_cases {
         let packrat_result = packrat_parser.parse(input).unwrap();
         let bytecode_result = bytecode_parser.parse(input).unwrap();
-        assert_eq!(packrat_result.end_pos, bytecode_result.end_pos, "mismatch for input: {}", input);
-        assert_eq!(packrat_result.end_pos, expected_end, "wrong end pos for input: {}", input);
+        assert_eq!(
+            packrat_result.end_pos, bytecode_result.end_pos,
+            "mismatch for input: {}",
+            input
+        );
+        assert_eq!(
+            packrat_result.end_pos, expected_end,
+            "wrong end pos for input: {}",
+            input
+        );
     }
 }
 
@@ -101,7 +113,11 @@ fn test_backend_parity_arithmetic() {
         match (&packrat_result, &bytecode_result) {
             (Ok(p), Ok(b)) => {
                 assert_eq!(p.end_pos, b.end_pos, "mismatch for input: {:?}", input);
-                assert_eq!(p.end_pos, expected_end, "wrong end pos for input: {:?}", input);
+                assert_eq!(
+                    p.end_pos, expected_end,
+                    "wrong end pos for input: {:?}",
+                    input
+                );
             }
             (Err(_), Err(_)) => {
                 // Both failed - acceptable if input was invalid
@@ -110,8 +126,10 @@ fn test_backend_parity_arithmetic() {
                 }
             }
             _ => {
-                panic!("Backend parity mismatch for input: {:?} - packrat: {:?}, bytecode: {:?}",
-                       input, packrat_result, bytecode_result);
+                panic!(
+                    "Backend parity mismatch for input: {:?} - packrat: {:?}, bytecode: {:?}",
+                    input, packrat_result, bytecode_result
+                );
             }
         }
     }
@@ -122,14 +140,24 @@ fn test_backend_parity_nested_alternatives() {
     // Test nested alternatives: (a | b) (c | d)
     let mut grammar = Grammar::new();
 
-    let a = grammar.add_atom(Atom::Str { pattern: "a".to_string() });  // 0
-    let b = grammar.add_atom(Atom::Str { pattern: "b".to_string() });  // 1
-    let c = grammar.add_atom(Atom::Str { pattern: "c".to_string() });  // 2
-    let d = grammar.add_atom(Atom::Str { pattern: "d".to_string() });  // 3
+    let a = grammar.add_atom(Atom::Str {
+        pattern: "a".to_string(),
+    }); // 0
+    let b = grammar.add_atom(Atom::Str {
+        pattern: "b".to_string(),
+    }); // 1
+    let c = grammar.add_atom(Atom::Str {
+        pattern: "c".to_string(),
+    }); // 2
+    let d = grammar.add_atom(Atom::Str {
+        pattern: "d".to_string(),
+    }); // 3
 
-    let first = grammar.add_atom(Atom::Alternative { atoms: vec![a, b] });   // 4
-    let second = grammar.add_atom(Atom::Alternative { atoms: vec![c, d] });  // 5
-    let seq = grammar.add_atom(Atom::Sequence { atoms: vec![first, second] }); // 6
+    let first = grammar.add_atom(Atom::Alternative { atoms: vec![a, b] }); // 4
+    let second = grammar.add_atom(Atom::Alternative { atoms: vec![c, d] }); // 5
+    let seq = grammar.add_atom(Atom::Sequence {
+        atoms: vec![first, second],
+    }); // 6
     grammar.root = seq;
 
     let mut packrat_parser = Parser::packrat(grammar.clone());
@@ -141,8 +169,16 @@ fn test_backend_parity_nested_alternatives() {
             let input = format!("{}{}", first_char, second_char);
             let packrat_result = packrat_parser.parse(&input).unwrap();
             let bytecode_result = bytecode_parser.parse(&input).unwrap();
-            assert_eq!(packrat_result.end_pos, bytecode_result.end_pos, "mismatch for input: {}", input);
-            assert_eq!(packrat_result.end_pos, 2, "wrong end pos for input: {}", input);
+            assert_eq!(
+                packrat_result.end_pos, bytecode_result.end_pos,
+                "mismatch for input: {}",
+                input
+            );
+            assert_eq!(
+                packrat_result.end_pos, 2,
+                "wrong end pos for input: {}",
+                input
+            );
         }
     }
 }
@@ -152,7 +188,9 @@ fn test_backend_parity_deeply_nested_repetition() {
     // Test: ((a)+)+
     let mut grammar = Grammar::new();
 
-    let a = grammar.add_atom(Atom::Str { pattern: "a".to_string() });
+    let a = grammar.add_atom(Atom::Str {
+        pattern: "a".to_string(),
+    });
     let a_plus = grammar.add_atom(Atom::Repetition {
         atom: a,
         min: 1,
@@ -169,17 +207,21 @@ fn test_backend_parity_deeply_nested_repetition() {
     let mut packrat_parser = Parser::packrat(grammar.clone());
     let mut bytecode_parser = Parser::bytecode(grammar);
 
-    let test_cases = vec![
-        ("a", 1),
-        ("aa", 2),
-        ("aaa", 3),
-    ];
+    let test_cases = vec![("a", 1), ("aa", 2), ("aaa", 3)];
 
     for (input, expected_end) in test_cases {
         let packrat_result = packrat_parser.parse(input).unwrap();
         let bytecode_result = bytecode_parser.parse(input).unwrap();
-        assert_eq!(packrat_result.end_pos, bytecode_result.end_pos, "mismatch for input: {}", input);
-        assert_eq!(packrat_result.end_pos, expected_end, "wrong end pos for input: {}", input);
+        assert_eq!(
+            packrat_result.end_pos, bytecode_result.end_pos,
+            "mismatch for input: {}",
+            input
+        );
+        assert_eq!(
+            packrat_result.end_pos, expected_end,
+            "wrong end pos for input: {}",
+            input
+        );
     }
 }
 
@@ -189,15 +231,19 @@ fn test_backend_parity_many_optional() {
     // Pattern: (a? a? a? a? a?) which can have many ways to match
     let mut grammar = Grammar::new();
 
-    let a = grammar.add_atom(Atom::Str { pattern: "a".to_string() }); // 0
-    let a_opt = grammar.add_atom(Atom::Repetition {  // 1
+    let a = grammar.add_atom(Atom::Str {
+        pattern: "a".to_string(),
+    }); // 0
+    let a_opt = grammar.add_atom(Atom::Repetition {
+        // 1
         atom: a,
         min: 0,
         max: Some(1),
     });
 
     // Sequence of 5 optional 'a's
-    grammar.add_atom(Atom::Sequence {  // 2
+    grammar.add_atom(Atom::Sequence {
+        // 2
         atoms: vec![a_opt, a_opt, a_opt, a_opt, a_opt],
     });
     grammar.root = 2;
@@ -225,7 +271,9 @@ fn test_backend_parity_complex_json_like() {
     let mut grammar = Grammar::new();
 
     // Primitives
-    let quote = grammar.add_atom(Atom::Str { pattern: "\"".to_string() });
+    let quote = grammar.add_atom(Atom::Str {
+        pattern: "\"".to_string(),
+    });
     let string_content = grammar.add_atom(Atom::Re {
         pattern: "[^\"]".to_string(),
     });
@@ -238,7 +286,9 @@ fn test_backend_parity_complex_json_like() {
         atoms: vec![quote, string_inner, quote],
     });
 
-    let digit = grammar.add_atom(Atom::Re { pattern: "[0-9]".to_string() });
+    let digit = grammar.add_atom(Atom::Re {
+        pattern: "[0-9]".to_string(),
+    });
     let number_value = grammar.add_atom(Atom::Repetition {
         atom: digit,
         min: 1,
@@ -251,9 +301,15 @@ fn test_backend_parity_complex_json_like() {
     });
 
     // Array elements
-    let lbracket = grammar.add_atom(Atom::Str { pattern: "[".to_string() });
-    let rbracket = grammar.add_atom(Atom::Str { pattern: "]".to_string() });
-    let comma = grammar.add_atom(Atom::Str { pattern: ",".to_string() });
+    let lbracket = grammar.add_atom(Atom::Str {
+        pattern: "[".to_string(),
+    });
+    let rbracket = grammar.add_atom(Atom::Str {
+        pattern: "]".to_string(),
+    });
+    let comma = grammar.add_atom(Atom::Str {
+        pattern: ",".to_string(),
+    });
     let comma_value = grammar.add_atom(Atom::Sequence {
         atoms: vec![comma, value],
     });
@@ -287,16 +343,24 @@ fn test_backend_parity_complex_json_like() {
         match (&packrat_result, &bytecode_result) {
             (Ok(p), Ok(b)) => {
                 assert_eq!(p.end_pos, b.end_pos, "mismatch for input: {:?}", input);
-                assert_eq!(p.end_pos, expected_end, "wrong end pos for input: {:?}", input);
+                assert_eq!(
+                    p.end_pos, expected_end,
+                    "wrong end pos for input: {:?}",
+                    input
+                );
             }
             (Err(pe), Err(be)) => {
                 // Both failed - this is a parity success, but indicate the issue
-                panic!("Both backends failed for input: {:?}\npackrat: {:?}\nbytecode: {:?}",
-                       input, pe, be);
+                panic!(
+                    "Both backends failed for input: {:?}\npackrat: {:?}\nbytecode: {:?}",
+                    input, pe, be
+                );
             }
             _ => {
-                panic!("Backend parity mismatch for input: {:?} - packrat: {:?}, bytecode: {:?}",
-                       input, packrat_result, bytecode_result);
+                panic!(
+                    "Backend parity mismatch for input: {:?} - packrat: {:?}, bytecode: {:?}",
+                    input, packrat_result, bytecode_result
+                );
             }
         }
     }
