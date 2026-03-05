@@ -2,7 +2,6 @@
 
 use magnus::{function, Error, Module, Ruby};
 
-use super::lexer::{create_lexer, drop_lexer, tokenize_with_lexer};
 use super::parser::{is_available, parse_batch, parse_to_ruby_objects, parse_with_builder};
 
 /// Initialize the Ruby native extension module
@@ -16,10 +15,6 @@ pub fn init(ruby: &Ruby) -> Result<(), Error> {
     native_module
         .define_module_function("parse_to_ruby_objects", function!(parse_to_ruby_objects, 2))?;
     native_module.define_module_function("parse_with_builder", function!(parse_with_builder, 3))?;
-    native_module.define_module_function("create_lexer", function!(create_lexer, 1))?;
-    native_module
-        .define_module_function("tokenize_with_lexer", function!(tokenize_with_lexer, 2))?;
-    native_module.define_module_function("drop_lexer", function!(drop_lexer, 1))?;
 
     Ok(())
 }
