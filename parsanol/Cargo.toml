@@ -222,3 +222,8 @@ harness = false
 name = "backend-comparison"
 path = "../benches/backend-comparison.rs"
 harness = false
+
+[[bench]]
+name = "all-examples"
+path = "../benches/all-examples.rs"
+harness = false
