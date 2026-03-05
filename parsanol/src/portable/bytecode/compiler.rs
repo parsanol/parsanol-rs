@@ -246,10 +246,10 @@ impl Compiler {
         // For alternatives (ordered choice in PEG):
         // Choice L2        ; if alt1 fails, backtrack to L2
         // <alt1>
-        // Jump End         ; alt1 succeeded, skip remaining alts
+        // Commit End        ; alt1 succeeded, commit and skip remaining alts
         // L2: Choice L3    ; if alt2 fails, backtrack to L3
         // <alt2>
-        // Jump End
+        // Commit End
         // ...
         // Ln: <altN>       ; last alternative, no choice needed
         // End:
@@ -276,12 +276,12 @@ impl Compiler {
             // Compile the alternative
             self.compile_atom(atom_idx)?;
 
-            // If not the last alternative, add Jump to end
+            // If not the last alternative, add Commit to end (pops choice point)
             if i < atoms.len() - 1 {
-                let jump_idx = self.program.instruction_count();
+                let commit_idx = self.program.instruction_count();
                 self.program
-                    .add_instruction(Instruction::jump(PLACEHOLDER_OFFSET));
-                jump_indices.push(jump_idx);
+                    .add_instruction(Instruction::commit(PLACEHOLDER_OFFSET));
+                jump_indices.push(commit_idx);
             }
         }
 
@@ -296,11 +296,11 @@ impl Compiler {
                 .set_instruction(choice_idx, Instruction::choice(offset));
         }
 
-        // Patch Jump instructions: each Jump should skip to the end
-        for &jump_idx in &jump_indices {
-            let offset = (end_idx as i32) - (jump_idx as i32 + 1);
+        // Patch Commit instructions: each Commit should skip to the end
+        for &commit_idx in &jump_indices {
+            let offset = (end_idx as i32) - (commit_idx as i32 + 1);
             self.program
-                .set_instruction(jump_idx, Instruction::jump(offset));
+                .set_instruction(commit_idx, Instruction::commit(offset));
         }
 
         Ok(entry)

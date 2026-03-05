@@ -27,6 +27,8 @@ parallel = ["rayon"]
 # Benchmark comparison features
 compare-nom = ["nom"]
 compare-winnow = ["winnow"]
+# Strict backend parity checking (causes tests to fail on mismatches)
+strict_parity = []
 
 [dependencies]
 # Derive macros (required)
