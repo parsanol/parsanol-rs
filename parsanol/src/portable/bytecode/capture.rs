@@ -145,7 +145,11 @@ impl<'a> CaptureProcessor<'a> {
     }
 
     /// Try to insert a capture into a parent capture (or its children)
-    fn try_insert_into_parent(&self, capture: &mut CaptureFrame, parent: &mut CaptureFrame) -> bool {
+    fn try_insert_into_parent(
+        &self,
+        capture: &mut CaptureFrame,
+        parent: &mut CaptureFrame,
+    ) -> bool {
         let cap_start = capture.start_pos;
         let cap_end = capture.end_pos.unwrap();
         let parent_start = parent.start_pos;
@@ -156,7 +160,10 @@ impl<'a> CaptureProcessor<'a> {
             // Check if this capture is the same as parent (same range and same key)
             // In that case, don't nest - this handles the case where the same
             // named capture appears multiple times
-            if cap_start == parent_start && cap_end == parent_end && capture.key_idx == parent.key_idx {
+            if cap_start == parent_start
+                && cap_end == parent_end
+                && capture.key_idx == parent.key_idx
+            {
                 return false;
             }
 

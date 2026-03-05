@@ -40,7 +40,7 @@ impl Default for VMConfig {
         Self {
             max_input_size: 100_000_000, // 100MB
             max_recursion_depth: 10_000,
-            timeout_ms: 30_000, // 30 seconds
+            timeout_ms: 30_000,      // 30 seconds
             max_memory: 500_000_000, // 500MB
             debug: false,
         }
@@ -218,7 +218,6 @@ impl<'a> BytecodeVM<'a> {
             // ========================================================================
             // Matching Instructions
             // ========================================================================
-
             Instruction::Any { n } => {
                 let n = *n as usize;
                 if self.position + n <= self.input.len() {
@@ -254,11 +253,12 @@ impl<'a> BytecodeVM<'a> {
             }
 
             Instruction::CharSet { set_idx } => {
-                let set = self.program.get_char_set(*set_idx).ok_or_else(|| {
-                    ParseError::Internal {
-                        message: format!("Invalid charset index: {}", set_idx),
-                    }
-                })?;
+                let set =
+                    self.program
+                        .get_char_set(*set_idx)
+                        .ok_or_else(|| ParseError::Internal {
+                            message: format!("Invalid charset index: {}", set_idx),
+                        })?;
 
                 if self.position < self.input.len() && set.contains(self.input[self.position]) {
                     let char_len = utf8_char_len(self.input[self.position]);
@@ -271,11 +271,12 @@ impl<'a> BytecodeVM<'a> {
             }
 
             Instruction::String { str_idx, len } => {
-                let s = self.program.get_string(*str_idx).ok_or_else(|| {
-                    ParseError::Internal {
+                let s = self
+                    .program
+                    .get_string(*str_idx)
+                    .ok_or_else(|| ParseError::Internal {
                         message: format!("Invalid string index: {}", str_idx),
-                    }
-                })?;
+                    })?;
 
                 let s_bytes = s.as_bytes();
                 let end = self.position + s_bytes.len();
@@ -293,18 +294,18 @@ impl<'a> BytecodeVM<'a> {
             }
 
             Instruction::Regex { regex_idx } => {
-                let pattern = self.program.get_regex(*regex_idx).ok_or_else(|| {
-                    ParseError::Internal {
-                        message: format!("Invalid regex index: {}", regex_idx),
-                    }
-                })?;
+                let pattern =
+                    self.program
+                        .get_regex(*regex_idx)
+                        .ok_or_else(|| ParseError::Internal {
+                            message: format!("Invalid regex index: {}", regex_idx),
+                        })?;
 
                 // Use the regex cache
-                let re = regex_cache::get_or_compile(pattern).ok_or_else(|| {
-                    ParseError::Internal {
+                let re =
+                    regex_cache::get_or_compile(pattern).ok_or_else(|| ParseError::Internal {
                         message: format!("Failed to compile regex: {}", pattern),
-                    }
-                })?;
+                    })?;
 
                 // Match at current position
                 if let Some(m) = re.find_at(self.input_str, self.position) {
@@ -321,7 +322,6 @@ impl<'a> BytecodeVM<'a> {
             // ========================================================================
             // Test Instructions
             // ========================================================================
-
             Instruction::TestChar { byte, offset } => {
                 if self.position < self.input.len() && self.input[self.position] == *byte {
                     self.position += 1;
@@ -333,11 +333,12 @@ impl<'a> BytecodeVM<'a> {
             }
 
             Instruction::TestSet { set_idx, offset } => {
-                let set = self.program.get_char_set(*set_idx).ok_or_else(|| {
-                    ParseError::Internal {
-                        message: format!("Invalid charset index: {}", set_idx),
-                    }
-                })?;
+                let set =
+                    self.program
+                        .get_char_set(*set_idx)
+                        .ok_or_else(|| ParseError::Internal {
+                            message: format!("Invalid charset index: {}", set_idx),
+                        })?;
 
                 if self.position < self.input.len() && set.contains(self.input[self.position]) {
                     let char_len = utf8_char_len(self.input[self.position]);
@@ -372,7 +373,6 @@ impl<'a> BytecodeVM<'a> {
             // ========================================================================
             // Control Flow
             // ========================================================================
-
             Instruction::Jump { offset } => Ok(ExecutionResult::Jump(*offset)),
 
             Instruction::Call { offset } => {
@@ -409,7 +409,6 @@ impl<'a> BytecodeVM<'a> {
             // ========================================================================
             // Backtracking
             // ========================================================================
-
             Instruction::Choice { offset } => {
                 self.backtrack_stack.push(BacktrackFrame {
                     return_ip: (self.ip as i32 + 1 + offset) as usize,
@@ -459,7 +458,6 @@ impl<'a> BytecodeVM<'a> {
             // ========================================================================
             // Captures
             // ========================================================================
-
             Instruction::OpenCapture { kind, key_idx } => {
                 if self.capture_stack.len() >= MAX_CAPTURE_DEPTH {
                     return Err(ParseError::RecursionLimitExceeded {
@@ -468,11 +466,8 @@ impl<'a> BytecodeVM<'a> {
                     });
                 }
 
-                self.capture_stack.push(CaptureFrame::open(
-                    self.position,
-                    *kind,
-                    *key_idx,
-                ));
+                self.capture_stack
+                    .push(CaptureFrame::open(self.position, *kind, *key_idx));
                 Ok(ExecutionResult::Continue)
             }
 
@@ -480,10 +475,7 @@ impl<'a> BytecodeVM<'a> {
                 // Close the most recent matching open capture
                 // Search backwards for a matching open capture
                 for frame in self.capture_stack.iter_mut().rev() {
-                    if !frame.is_closed()
-                        && frame.kind == *kind
-                        && frame.key_idx == *key_idx
-                    {
+                    if !frame.is_closed() && frame.kind == *kind && frame.key_idx == *key_idx {
                         frame.close(self.position);
                         break;
                     }
@@ -503,7 +495,6 @@ impl<'a> BytecodeVM<'a> {
             // ========================================================================
             // Predicates
             // ========================================================================
-
             Instruction::PredChoice { offset } => {
                 self.backtrack_stack.push(BacktrackFrame {
                     return_ip: (self.ip as i32 + 1 + offset) as usize,
@@ -517,7 +508,6 @@ impl<'a> BytecodeVM<'a> {
             // ========================================================================
             // Advanced
             // ========================================================================
-
             Instruction::Behind { n } => {
                 // Move position backward by n characters
                 let n = *n as usize;
@@ -566,11 +556,12 @@ impl<'a> BytecodeVM<'a> {
             }
 
             Instruction::Span { set_idx } => {
-                let set = self.program.get_char_set(*set_idx).ok_or_else(|| {
-                    ParseError::Internal {
-                        message: format!("Invalid charset index: {}", set_idx),
-                    }
-                })?;
+                let set =
+                    self.program
+                        .get_char_set(*set_idx)
+                        .ok_or_else(|| ParseError::Internal {
+                            message: format!("Invalid charset index: {}", set_idx),
+                        })?;
 
                 // Match zero or more characters from the set
                 while self.position < self.input.len() && set.contains(self.input[self.position]) {
@@ -583,7 +574,8 @@ impl<'a> BytecodeVM<'a> {
 
             Instruction::Custom { id } => {
                 // Call the custom atom at runtime
-                let result = crate::portable::custom::parse_custom_atom(*id, self.input_str, self.position);
+                let result =
+                    crate::portable::custom::parse_custom_atom(*id, self.input_str, self.position);
 
                 match result {
                     Some(custom_result) => {
@@ -659,7 +651,8 @@ impl<'a> BytecodeVM<'a> {
             // Get the current instruction for context
             if let Some(instr) = self.program.get_instruction(self.ip) {
                 let expected = instruction_to_expected(instr, self.program);
-                self.error_tracker.record_failure(self.position, expected, self.ip);
+                self.error_tracker
+                    .record_failure(self.position, expected, self.ip);
             }
         }
         if self.position > self.furthest_failure {
@@ -712,8 +705,8 @@ pub fn parse_with_vm(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::portable::bytecode::program::CharSet;
     use crate::portable::bytecode::instruction::Instruction;
+    use crate::portable::bytecode::program::CharSet;
 
     fn make_test_program() -> Program {
         Program::new()
@@ -886,7 +879,9 @@ mod tests {
 
     #[test]
     fn test_vm_custom_instruction() {
-        use crate::portable::custom::{register_custom_atom, unregister_custom_atom, CustomAtom, CustomResult};
+        use crate::portable::custom::{
+            register_custom_atom, unregister_custom_atom, CustomAtom, CustomResult,
+        };
 
         // Register a test custom atom that matches "foo"
         struct FooMatcher;

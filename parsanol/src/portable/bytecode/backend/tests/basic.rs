@@ -268,7 +268,9 @@ fn test_backend_parity_three_alternatives() {
     let c = grammar.add_atom(Atom::Str {
         pattern: "c".to_string(),
     });
-    grammar.add_atom(Atom::Alternative { atoms: vec![a, b, c] });
+    grammar.add_atom(Atom::Alternative {
+        atoms: vec![a, b, c],
+    });
     grammar.root = 3;
 
     let mut packrat_parser = Parser::packrat(grammar.clone());
@@ -316,16 +318,24 @@ fn test_backend_parity_complex_sequence() {
 
     // Test various inputs
     let test_cases = vec![
-        ("abb", 3),  // a, bb, no c
+        ("abb", 3),   // a, bb, no c
         ("abbbc", 5), // a, bbb, c
-        ("abc", 3),  // a, b, c
-        ("ab", 2),   // a, b, no c
+        ("abc", 3),   // a, b, c
+        ("ab", 2),    // a, b, no c
     ];
 
     for (input, expected_end) in test_cases {
         let packrat_result = packrat_parser.parse(input).unwrap();
         let bytecode_result = bytecode_parser.parse(input).unwrap();
-        assert_eq!(packrat_result.end_pos, bytecode_result.end_pos, "mismatch for input: {}", input);
-        assert_eq!(packrat_result.end_pos, expected_end, "wrong end pos for input: {}", input);
+        assert_eq!(
+            packrat_result.end_pos, bytecode_result.end_pos,
+            "mismatch for input: {}",
+            input
+        );
+        assert_eq!(
+            packrat_result.end_pos, expected_end,
+            "wrong end pos for input: {}",
+            input
+        );
     }
 }

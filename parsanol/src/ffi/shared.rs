@@ -172,14 +172,18 @@ pub fn flatten_ast(node: &AstNode, arena: &AstArena, input: &str) -> Vec<u64> {
 ///
 /// Parses input with the given grammar and returns a flattened array.
 /// This is the primary entry point for batch FFI operations.
-pub fn parse_to_flat(grammar_json: &str, input: &str) -> Result<Vec<u64>, crate::portable::ast::ParseError> {
+pub fn parse_to_flat(
+    grammar_json: &str,
+    input: &str,
+) -> Result<Vec<u64>, crate::portable::ast::ParseError> {
     use crate::portable::grammar::Grammar;
     use crate::portable::parser::PortableParser;
 
-    let grammar: Grammar =
-        serde_json::from_str(grammar_json).map_err(|e| crate::portable::ast::ParseError::InvalidGrammar {
+    let grammar: Grammar = serde_json::from_str(grammar_json).map_err(|e| {
+        crate::portable::ast::ParseError::InvalidGrammar {
             reason: e.to_string(),
-        })?;
+        }
+    })?;
 
     let mut arena = AstArena::new();
     let mut parser = PortableParser::new(&grammar, input, &mut arena);

@@ -110,7 +110,6 @@ impl ParsingBackend for PackratBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::portable::parser_dsl::GrammarBuilder;
 
     #[test]
     fn test_packrat_backend_name() {

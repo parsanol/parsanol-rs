@@ -26,15 +26,15 @@
 //! let result = bytecode.parse(&grammar, input)?;
 //! ```
 
-mod traits;
-mod packrat;
-mod bytecode;
 mod analysis;
+mod bytecode;
+mod packrat;
+mod traits;
 
-pub use traits::{ParsingBackend, BackendCharacteristics, DynBackend, BackendResult};
-pub use packrat::PackratBackend;
+pub use analysis::{has_nested_repetition, GrammarAnalysis};
 pub use bytecode::BytecodeBackend;
-pub use analysis::{GrammarAnalysis, has_nested_repetition};
+pub use packrat::PackratBackend;
+pub use traits::{BackendCharacteristics, BackendResult, DynBackend, ParsingBackend};
 
 use crate::portable::grammar::Grammar;
 

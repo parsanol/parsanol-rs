@@ -53,7 +53,6 @@ pub enum Opcode {
     // ============================================================================
     // Matching Instructions
     // ============================================================================
-
     /// Match any n characters
     ///
     /// Fails if there are fewer than n characters remaining.
@@ -87,7 +86,6 @@ pub enum Opcode {
     // ============================================================================
     // Test Instructions (test + conditional jump)
     // ============================================================================
-
     /// Test character and jump on failure
     ///
     /// If the current character matches, consume it and continue.
@@ -109,7 +107,6 @@ pub enum Opcode {
     // ============================================================================
     // Control Flow
     // ============================================================================
-
     /// Unconditional jump
     ///
     /// Jump to the instruction at the given offset.
@@ -133,7 +130,6 @@ pub enum Opcode {
     // ============================================================================
     // Backtracking
     // ============================================================================
-
     /// Push a backtrack point
     ///
     /// Creates a choice point with an alternative address.
@@ -170,7 +166,6 @@ pub enum Opcode {
     // ============================================================================
     // Captures
     // ============================================================================
-
     /// Start a capture
     ///
     /// Marks the beginning of a capture region.
@@ -189,7 +184,6 @@ pub enum Opcode {
     // ============================================================================
     // Predicates
     // ============================================================================
-
     /// Choice for lookahead predicates
     ///
     /// Special choice that tracks predicate state.
@@ -198,7 +192,6 @@ pub enum Opcode {
     // ============================================================================
     // Advanced
     // ============================================================================
-
     /// Move position backward
     ///
     /// Used for lookbehind. Moves the position back n characters.
@@ -266,7 +259,6 @@ pub enum Instruction {
     // ============================================================================
     // Matching Instructions
     // ============================================================================
-
     /// Match any n characters
     Any {
         /// Number of characters to match
@@ -302,7 +294,6 @@ pub enum Instruction {
     // ============================================================================
     // Test Instructions
     // ============================================================================
-
     /// Test character and jump on failure
     TestChar {
         /// The byte to test
@@ -330,7 +321,6 @@ pub enum Instruction {
     // ============================================================================
     // Control Flow
     // ============================================================================
-
     /// Unconditional jump
     Jump {
         /// Jump offset (relative to next instruction)
@@ -352,7 +342,6 @@ pub enum Instruction {
     // ============================================================================
     // Backtracking
     // ============================================================================
-
     /// Push a backtrack point
     Choice {
         /// Jump offset to alternative
@@ -386,7 +375,6 @@ pub enum Instruction {
     // ============================================================================
     // Captures
     // ============================================================================
-
     /// Start a capture
     OpenCapture {
         /// Kind of capture
@@ -414,7 +402,6 @@ pub enum Instruction {
     // ============================================================================
     // Predicates
     // ============================================================================
-
     /// Choice for lookahead predicates
     PredChoice {
         /// Jump offset to alternative
@@ -424,7 +411,6 @@ pub enum Instruction {
     // ============================================================================
     // Advanced
     // ============================================================================
-
     /// Move position backward
     Behind {
         /// Number of characters to move back
@@ -547,7 +533,10 @@ impl Instruction {
             | Instruction::PartialCommit { offset }
             | Instruction::BackCommit { offset }
             | Instruction::PredChoice { offset }
-            | Instruction::ThrowRec { recovery_offset: offset, .. } => Some(*offset),
+            | Instruction::ThrowRec {
+                recovery_offset: offset,
+                ..
+            } => Some(*offset),
             _ => None,
         }
     }

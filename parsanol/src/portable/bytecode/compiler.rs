@@ -70,12 +70,14 @@ impl Compiler {
     /// Compile a single atom and return the entry instruction index
     fn compile_atom(&mut self, atom_idx: usize) -> Result<usize, CompileError> {
         // Get the atom first to check if it's an Entity (rule reference)
-        let atom = self.grammar.get_atom(atom_idx).cloned().ok_or(
-            CompileError::InvalidAtomIndex {
-                index: atom_idx,
-                max: self.grammar.atoms.len(),
-            }
-        )?;
+        let atom =
+            self.grammar
+                .get_atom(atom_idx)
+                .cloned()
+                .ok_or(CompileError::InvalidAtomIndex {
+                    index: atom_idx,
+                    max: self.grammar.atoms.len(),
+                })?;
 
         // Only cache addresses for Entity atoms (rule references)
         // Inline atoms (Str, Re, etc.) should be compiled fresh each time
@@ -118,7 +120,8 @@ impl Compiler {
 
         if pattern.len() == 1 {
             // Single character: use Char instruction
-            self.program.add_instruction(Instruction::char(pattern.as_bytes()[0]));
+            self.program
+                .add_instruction(Instruction::char(pattern.as_bytes()[0]));
         } else {
             // Multiple characters: use String instruction
             let str_idx = self.program.add_string(pattern);
@@ -256,7 +259,8 @@ impl Compiler {
         let choice_indices: Vec<usize> = (0..atoms.len() - 1)
             .map(|_| {
                 let idx = self.program.instruction_count();
-                self.program.add_instruction(Instruction::choice(PLACEHOLDER_OFFSET));
+                self.program
+                    .add_instruction(Instruction::choice(PLACEHOLDER_OFFSET));
                 idx
             })
             .collect();
@@ -275,7 +279,8 @@ impl Compiler {
             // If not the last alternative, add Jump to end
             if i < atoms.len() - 1 {
                 let jump_idx = self.program.instruction_count();
-                self.program.add_instruction(Instruction::jump(PLACEHOLDER_OFFSET));
+                self.program
+                    .add_instruction(Instruction::jump(PLACEHOLDER_OFFSET));
                 jump_indices.push(jump_idx);
             }
         }
@@ -287,13 +292,15 @@ impl Compiler {
             // Choice i should jump to alternative (i+1)
             let next_alt_start = alt_starts[i + 1];
             let offset = (next_alt_start as i32) - (choice_idx as i32 + 1);
-            self.program.set_instruction(choice_idx, Instruction::choice(offset));
+            self.program
+                .set_instruction(choice_idx, Instruction::choice(offset));
         }
 
         // Patch Jump instructions: each Jump should skip to the end
         for &jump_idx in &jump_indices {
             let offset = (end_idx as i32) - (jump_idx as i32 + 1);
-            self.program.set_instruction(jump_idx, Instruction::jump(offset));
+            self.program
+                .set_instruction(jump_idx, Instruction::jump(offset));
         }
 
         Ok(entry)
@@ -316,7 +323,8 @@ impl Compiler {
         if min == 0 && max == Some(1) {
             // Optional: Choice, <atom>, Commit
             let choice_idx = self.program.instruction_count();
-            self.program.add_instruction(Instruction::choice(PLACEHOLDER_OFFSET));
+            self.program
+                .add_instruction(Instruction::choice(PLACEHOLDER_OFFSET));
             self.compile_atom(atom_idx)?;
             let _commit_idx = self.program.instruction_count();
             self.program.add_instruction(Instruction::commit(0));
@@ -324,7 +332,8 @@ impl Compiler {
 
             // Patch choice to skip to after commit on failure
             let choice_offset = (after_commit as i32) - (choice_idx as i32 + 1);
-            self.program.set_instruction(choice_idx, Instruction::choice(choice_offset));
+            self.program
+                .set_instruction(choice_idx, Instruction::choice(choice_offset));
 
             return Ok(entry);
         }
@@ -351,32 +360,37 @@ impl Compiler {
                     //   PartialCommit loop_start
                     //   after_loop:
                     let loop_start = self.program.instruction_count();
-                    self.program.add_instruction(Instruction::choice(PLACEHOLDER_OFFSET));
+                    self.program
+                        .add_instruction(Instruction::choice(PLACEHOLDER_OFFSET));
                     self.compile_atom(atom_idx)?;
                     let partial_commit_idx = self.program.instruction_count();
 
                     // Calculate offset to loop back
                     let loop_offset = (loop_start as i32) - (partial_commit_idx as i32 + 1);
-                    self.program.add_instruction(Instruction::partial_commit(loop_offset));
+                    self.program
+                        .add_instruction(Instruction::partial_commit(loop_offset));
 
                     let after_loop = self.program.instruction_count();
 
                     // Patch choice to skip to after loop on failure
                     let choice_offset = (after_loop as i32) - (loop_start as i32 + 1);
-                    self.program.set_instruction(loop_start, Instruction::choice(choice_offset));
+                    self.program
+                        .set_instruction(loop_start, Instruction::choice(choice_offset));
                 }
             }
             Some(max_val) => {
                 // Limited: try to match up to (max - min) more times
                 for _ in 0..(max_val - min) {
                     let choice_idx = self.program.instruction_count();
-                    self.program.add_instruction(Instruction::choice(PLACEHOLDER_OFFSET));
+                    self.program
+                        .add_instruction(Instruction::choice(PLACEHOLDER_OFFSET));
                     self.compile_atom(atom_idx)?;
                     let after_atom = self.program.instruction_count();
 
                     // Patch choice to skip to after atom on failure
                     let choice_offset = (after_atom as i32) - (choice_idx as i32 + 1);
-                    self.program.set_instruction(choice_idx, Instruction::choice(choice_offset));
+                    self.program
+                        .set_instruction(choice_idx, Instruction::choice(choice_offset));
                 }
             }
         }
@@ -436,7 +450,8 @@ impl Compiler {
             self.program.add_instruction(Instruction::call(offset));
         } else {
             // Forward reference: use placeholder, patch later
-            self.program.add_instruction(Instruction::call(PLACEHOLDER_OFFSET));
+            self.program
+                .add_instruction(Instruction::call(PLACEHOLDER_OFFSET));
             self.pending_patches.push((entry, atom_idx));
         }
 
@@ -464,7 +479,8 @@ impl Compiler {
             // 4. If <atom> fails: Choice backtracks to Fail
 
             let choice_idx = self.program.instruction_count();
-            self.program.add_instruction(Instruction::choice(PLACEHOLDER_OFFSET));
+            self.program
+                .add_instruction(Instruction::choice(PLACEHOLDER_OFFSET));
 
             self.compile_atom(atom_idx)?;
 
@@ -498,7 +514,8 @@ impl Compiler {
             // 4. If <atom> fails: Choice backtracks to success (position restored)
 
             let choice_idx = self.program.instruction_count();
-            self.program.add_instruction(Instruction::choice(PLACEHOLDER_OFFSET));
+            self.program
+                .add_instruction(Instruction::choice(PLACEHOLDER_OFFSET));
 
             self.compile_atom(atom_idx)?;
             self.program.add_instruction(Instruction::fail_twice());
@@ -562,7 +579,7 @@ impl Compiler {
                 CompileError::UnresolvedReference {
                     atom: atom_idx,
                     from: instr_idx,
-                }
+                },
             )?;
 
             let offset = (target_addr as i32) - (instr_idx as i32 + 1);
@@ -629,7 +646,11 @@ impl std::fmt::Display for CompileError {
                 write!(f, "Invalid atom index {} (max: {})", index, max)
             }
             CompileError::UnresolvedReference { atom, from } => {
-                write!(f, "Unresolved reference to atom {} from instruction {}", atom, from)
+                write!(
+                    f,
+                    "Unresolved reference to atom {} from instruction {}",
+                    atom, from
+                )
             }
             CompileError::UnsupportedFeature { feature } => {
                 write!(f, "Unsupported feature: {}", feature)

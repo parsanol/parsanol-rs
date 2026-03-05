@@ -52,7 +52,10 @@ pub fn ast_to_value(node: &AstNode, arena: &AstArena, input: &str) -> Value {
 /// Get the source span for an AST node, if available
 ///
 /// Returns None for leaf nodes without position info (Nil, Bool, Int, Float)
-pub fn ast_node_span(node: &AstNode, input: &str) -> Option<super::super::source_location::SourceSpan> {
+pub fn ast_node_span(
+    node: &AstNode,
+    input: &str,
+) -> Option<super::super::source_location::SourceSpan> {
     match node {
         AstNode::InputRef { offset, length } => {
             let start = *offset as usize;
@@ -95,8 +98,8 @@ pub fn ast_to_value_with_span(
     input: &str,
 ) -> super::super::source_map::SourceMapped<Value> {
     let value = ast_to_value(node, arena, input);
-    let span =
-        ast_node_span(node, input).unwrap_or_else(|| super::super::source_location::SourceSpan::start());
+    let span = ast_node_span(node, input)
+        .unwrap_or_else(|| super::super::source_location::SourceSpan::start());
     super::super::source_map::SourceMapped::new(value, span)
 }
 

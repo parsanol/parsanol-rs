@@ -315,10 +315,7 @@ mod tests {
     fn test_nullable_analysis_custom() {
         let analysis = NullableAnalysis::new();
         let atom = Atom::Custom { id: 1000 };
-        assert_eq!(
-            analysis.analyze(&atom),
-            PatternNullability::NotNullable
-        );
+        assert_eq!(analysis.analyze(&atom), PatternNullability::NotNullable);
     }
 
     #[test]

@@ -60,7 +60,6 @@ pub struct PortableParser<'a> {
     // ========================================================================
     // Grammar and Input (immutable)
     // ========================================================================
-
     /// The compiled grammar
     grammar: &'a Grammar,
 
@@ -73,7 +72,6 @@ pub struct PortableParser<'a> {
     // ========================================================================
     // Output (mutable)
     // ========================================================================
-
     /// AST arena for allocating nodes
     arena: &'a mut AstArena,
 
@@ -86,7 +84,6 @@ pub struct PortableParser<'a> {
     // ========================================================================
     // Resource Management (delegated)
     // ========================================================================
-
     /// Resource governor - manages all limits via composition
     governor: ResourceGovernor,
 }
@@ -268,7 +265,8 @@ impl<'a> PortableParser<'a> {
     /// Parse with custom config
     pub fn parse_with_config(&mut self, config: ParserConfig) -> Result<AstNode, ParseError> {
         self.governor.set_max_input_size(config.max_input_size);
-        self.governor.set_max_recursion_depth(config.max_recursion_depth);
+        self.governor
+            .set_max_recursion_depth(config.max_recursion_depth);
         self.governor.set_timeout_ms(config.timeout_ms);
         self.governor.set_max_memory(config.max_memory);
         self.parse()
@@ -741,15 +739,27 @@ impl<'a> PortableParser<'a> {
 
         match atom {
             Some(Atom::Str { pattern }) => format!("Expected {:?}, found {}", pattern, char_at),
-            Some(Atom::Re { pattern }) => format!("Expected pattern {:?}, found {}", pattern, char_at),
+            Some(Atom::Re { pattern }) => {
+                format!("Expected pattern {:?}, found {}", pattern, char_at)
+            }
             Some(Atom::Sequence { atoms }) => {
-                format!("Failed to match sequence of {} items at {}", atoms.len(), char_at)
+                format!(
+                    "Failed to match sequence of {} items at {}",
+                    atoms.len(),
+                    char_at
+                )
             }
             Some(Atom::Alternative { atoms }) => {
-                format!("Expected one of {} alternatives, found {}", atoms.len(), char_at)
+                format!(
+                    "Expected one of {} alternatives, found {}",
+                    atoms.len(),
+                    char_at
+                )
             }
             Some(Atom::Repetition { min, max, .. }) => {
-                let max_str = max.map(|m| m.to_string()).unwrap_or_else(|| "∞".to_string());
+                let max_str = max
+                    .map(|m| m.to_string())
+                    .unwrap_or_else(|| "∞".to_string());
                 format!("Expected {}..{} repetitions at {}", min, max_str, char_at)
             }
             Some(Atom::Named { name, .. }) => format!("Failed to match {:?} at {}", name, char_at),
