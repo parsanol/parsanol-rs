@@ -48,12 +48,13 @@
 
 pub mod arena;
 pub mod ast;
+pub mod backend;
+pub mod bytecode;
 pub mod cache;
 pub mod char_class;
 pub mod custom;
 pub mod debug;
 pub mod error;
-pub mod ffi;
 pub mod grammar;
 pub mod grammar_analysis;
 pub mod incremental;
@@ -72,9 +73,6 @@ pub mod visitor;
 
 // Parallel parsing (always available, uses rayon when feature is enabled)
 pub mod parallel;
-
-// C ABI for external language bindings
-pub mod c_ffi;
 
 // ============================================================================
 // Core Types
@@ -98,6 +96,14 @@ pub use error::{ErrorSeverity, RichError};
 pub use cache::{CacheEntry, DenseCache};
 
 // ============================================================================
+// Backend Abstraction
+// ============================================================================
+
+pub use backend::{
+    Backend, BackendCharacteristics, BytecodeBackend, DynBackend, PackratBackend, ParsingBackend,
+};
+
+// ============================================================================
 // Character Classes
 // ============================================================================
 
@@ -110,12 +116,13 @@ pub use char_class::{utf8_char_len, CharClassTables, CharacterPattern, CHAR_CLAS
 pub use regex_cache::{get_or_compile as get_regex, stats as regex_stats, CacheStats};
 
 // ============================================================================
-// FFI Utilities
+// FFI Utilities (re-exported from crate::ffi)
 // ============================================================================
 
-pub use ffi::{
+pub use crate::ffi::{
     flatten_ast, flatten_ast_to_u64, parse_to_flat, TAG_ARRAY_END, TAG_ARRAY_START, TAG_BOOL,
-    TAG_FLOAT, TAG_HASH_END, TAG_HASH_KEY, TAG_HASH_START, TAG_INT, TAG_NIL, TAG_STRING,
+    TAG_FLOAT, TAG_HASH_END, TAG_HASH_KEY, TAG_HASH_START, TAG_INLINE_STRING, TAG_INT, TAG_NIL,
+    TAG_STRING,
 };
 
 // ============================================================================
@@ -188,4 +195,15 @@ pub use parallel::{parse_batch_parallel, parse_batch_parallel_owned, ParallelCon
 pub use plugin::{
     clear_plugins, get_plugin_info, has_plugin, list_plugins, plugin_count, register_plugin,
     unregister_plugin, AtomRegistry, ParsanolPlugin, PluginInfo, PluginRegistry, TransformRegistry,
+};
+
+// ============================================================================
+// Bytecode VM Backend
+// ============================================================================
+
+pub use bytecode::{
+    instruction::{CaptureKind, Instruction, Opcode},
+    program::{CharSet, Program},
+    compiler::{compile as compile_bytecode, CompileError, Compiler},
+    vm::{parse_with_vm, BytecodeVM, VMConfig, VMResult},
 };

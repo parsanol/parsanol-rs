@@ -1,4 +1,4 @@
-//! FFI utilities for cross-language bindings
+//! Shared FFI utilities for cross-language bindings
 //!
 //! This module provides a unified implementation for flattening AST nodes
 //! to flat arrays that can be passed across FFI boundaries (Ruby, WASM, etc.).
@@ -17,9 +17,10 @@
 //! | 0x05 | ...children... 0x06 | array |
 //! | 0x07 | ...key-values... 0x08 | hash |
 //! | 0x09 | len, data... | hash_key |
+//! | 0x0A | len, data... | inline_string |
 
-use super::arena::AstArena;
-use super::ast::AstNode;
+use crate::portable::arena::AstArena;
+use crate::portable::ast::AstNode;
 
 // Tag constants for flat array format
 /// Tag for nil values
@@ -61,7 +62,7 @@ pub const TAG_INLINE_STRING: u64 = 0x0A;
 /// # Example
 ///
 /// ```rust,ignore
-/// use parsanol::portable::ffi::flatten_ast_to_u64;
+/// use parsanol::ffi::flatten_ast_to_u64;
 ///
 /// let mut output = Vec::new();
 /// flatten_ast_to_u64(&ast, &arena, &input, &mut output);
@@ -171,12 +172,12 @@ pub fn flatten_ast(node: &AstNode, arena: &AstArena, input: &str) -> Vec<u64> {
 ///
 /// Parses input with the given grammar and returns a flattened array.
 /// This is the primary entry point for batch FFI operations.
-pub fn parse_to_flat(grammar_json: &str, input: &str) -> Result<Vec<u64>, super::ast::ParseError> {
-    use super::grammar::Grammar;
-    use super::parser::PortableParser;
+pub fn parse_to_flat(grammar_json: &str, input: &str) -> Result<Vec<u64>, crate::portable::ast::ParseError> {
+    use crate::portable::grammar::Grammar;
+    use crate::portable::parser::PortableParser;
 
     let grammar: Grammar =
-        serde_json::from_str(grammar_json).map_err(|e| super::ast::ParseError::InvalidGrammar {
+        serde_json::from_str(grammar_json).map_err(|e| crate::portable::ast::ParseError::InvalidGrammar {
             reason: e.to_string(),
         })?;
 
