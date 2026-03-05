@@ -48,3 +48,6 @@ TODO*.md
 PROPOSALS/
 API_STABILITY.md
 PRODUCTION-READINESS.md
+
+# Pre-commit skip file
+.skip-precommit

@@ -535,7 +535,7 @@ impl OptimizationPass for FullCaptureOptimization {
 
 /// Optimize positive lookahead patterns
 ///
-/// Pattern: Choice(fail) → <simple pattern> → BackCommit(continue) → Fail
+/// Pattern: Choice(fail) -&gt; `simple pattern` -&gt; BackCommit(continue) -&gt; Fail
 ///
 /// This optimization:
 /// 1. Replaces `Choice` with `PredChoice` for better VM handling of predicates
@@ -557,7 +557,7 @@ impl OptimizationPass for LookaheadOptimization {
         let mut i = 0;
 
         // Scan for positive lookahead pattern:
-        // Choice(fail_offset) → <pattern> → BackCommit(continue_offset) → Fail
+        // Choice(fail_offset) -> `pattern` -> BackCommit(continue_offset) -> Fail
         while i + 2 < program.instruction_count() {
             let pattern_info = {
                 let instr0 = program.get_instruction(i);
