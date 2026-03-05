@@ -5,7 +5,6 @@
 //! - Core PEG parsing with packrat memoization
 //! - Arena allocation for zero-copy AST construction
 //! - Parser DSL for idiomatic grammar definition
-//! - Generic lexer framework
 //! - Rich error reporting with tree-structured errors
 //! - Transformation system for converting parse trees to typed structs
 //! - Infix expression parsing with precedence handling
@@ -104,7 +103,3 @@ pub use portable::{
 // Backward compatibility: Re-export Ruby FFI at crate root
 #[cfg(feature = "ruby")]
 pub use ffi::ruby as ruby_ffi;
-
-// Backward compatibility: Re-export generic_lexer for Ruby FFI
-#[cfg(feature = "ruby")]
-pub use ffi::ruby::lexer::{create_lexer, drop_lexer, tokenize_with_lexer};
