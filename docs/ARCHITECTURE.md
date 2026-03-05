@@ -22,8 +22,8 @@ written in Rust. It provides:
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                              │
 │   ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐ │
-│   │  Grammar    │    │  Portable   │    │ Streaming   │    │ Incremental │ │
-│   │  (JSON/DSL) │    │   Parser    │    │   Parser    │    │   Parser    │ │
+│   │  Grammar    │    │  Backend    │    │ Streaming   │    │ Incremental │ │
+│   │  (JSON/DSL) │    │ (Trait/Enum)│    │   Parser    │    │   Parser    │ │
 │   └──────┬──────┘    └──────┬──────┘    └──────┬──────┘    └──────┬──────┘ │
 │          │                  │                  │                  │        │
 │          └──────────────────┴──────────────────┴──────────────────┘        │
@@ -45,8 +45,61 @@ written in Rust. It provides:
 │   │  (Tables)   │    │ (Compiled)  │    │  (Walker)   │    │  (Builder)  │ │
 │   └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘ │
 │                                                                              │
+│   ┌──────────────────────────────────────────────────────────────────────┐  │
+│   │                      ResourceGovernor                                │  │
+│   │  (Recursion depth, timeout, memory limits, input size validation)   │  │
+│   └──────────────────────────────────────────────────────────────────────┘  │
+│                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
+
+## Backend Architecture
+
+Parsanol supports multiple parsing backends through the `ParsingBackend` trait:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           ParsingBackend Trait                               │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│   fn parse(&mut self, grammar: &Grammar, input: &str) -> BackendResult      │
+│   fn name(&self) -> &'static str                                             │
+│   fn characteristics(&self) -> BackendCharacteristics                        │
+│   fn supports_streaming(&self) -> bool                                       │
+│   fn supports_incremental(&self) -> bool                                     │
+│   fn is_safe_for_all_grammars(&self) -> bool                                 │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                    ┌─────────────────┼─────────────────┐
+                    │                 │                 │
+                    ▼                 ▼                 ▼
+         ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
+         │ Packrat     │    │ Bytecode    │    │ Custom      │
+         │ Backend     │    │ Backend     │    │ Backend     │
+         ├─────────────┤    ├─────────────┤    ├─────────────┤
+         │ O(n) time   │    │ O(n)-O(2^n) │    │ User-defined│
+         │ O(n×r) mem  │    │ O(d) memory │    │             │
+         │ Memoization │    │ Streaming   │    │             │
+         │ Incremental │    │ Lower mem   │    │             │
+         └─────────────┘    └─────────────┘    └─────────────┘
+```
+
+### Backend Characteristics
+
+| Characteristic | Packrat | Bytecode |
+|----------------|---------|----------|
+| Time Complexity | O(n) | O(n) to O(2^n) |
+| Memory Complexity | O(n × r) | O(d) |
+| Uses Memoization | Yes | No |
+| Supports Streaming | No | Yes |
+| Supports Incremental | Yes | No |
+| Safe for All Grammars | Yes | No (nested reps) |
+
+Where:
+- n = input length
+- r = number of rules
+- d = nesting depth
 
 ## Core Components
 
@@ -80,17 +133,22 @@ pub enum Atom {
 - JSON-serializable for cross-language compatibility
 - `AtomVisitor` trait for grammar analysis
 
-### 2. Parser (`parser.rs`)
+### 2. Parser (`parser/`)
 
-The `PortableParser` is the main parsing engine:
+The `PortableParser` is the main parsing engine, now using composition for clean separation of concerns:
 
 ```rust
 pub struct PortableParser<'a> {
+    // Core parsing data
     grammar: &'a Grammar,
     input: &'a str,
+    input_bytes: &'a [u8],
     arena: &'a mut AstArena,
     cache: DenseCache,
-    // ... configuration and state
+    cached_nodes: Vec<AstNode>,
+
+    // Resource management delegated to governor
+    governor: ResourceGovernor,
 }
 ```
 
@@ -105,11 +163,44 @@ pub struct ParseContext<'a> {
     pub arena: &'a mut AstArena,
     pub cache: DenseCache,
     pub cached_nodes: Vec<AstNode>,
-    // ... resource tracking
 }
 ```
 
-### 3. Cache (`cache.rs`)
+### 3. ResourceGovernor (`parser/governor.rs`)
+
+The `ResourceGovernor` handles all resource limits during parsing, following the Single Responsibility Principle:
+
+```rust
+pub struct ResourceGovernor {
+    max_input_size: usize,
+    max_recursion_depth: usize,
+    current_depth: usize,
+    timeout_ms: u64,
+    start_time: Option<Instant>,
+    op_count: usize,
+    max_memory: usize,
+}
+```
+
+**Key Methods:**
+- `check_input_size()` - Validate input size limit
+- `enter_recursive()` / `exit_recursive()` - Track recursion depth
+- `check_timeout()` - Periodic timeout checking
+- `check_memory()` - Memory limit enforcement
+- `check_resources()` - Combined resource check
+
+**Builder Pattern:**
+```rust
+let governor = ResourceGovernor::new()
+    .with_max_input_size(10_000_000)
+    .with_max_recursion_depth(1000)
+    .with_timeout_ms(5000)
+    .with_max_memory(100_000_000);
+```
+
+This separation allows the parser to focus on parsing logic while delegating all resource management to the governor.
+
+### 4. Cache (`cache.rs`)
 
 Dense packrat cache with open addressing:
 
@@ -132,7 +223,7 @@ pub struct CacheEntry {
 - Linear probing for collision resolution
 - Load factor 0.75 for optimal performance
 
-### 4. Arena (`arena.rs`)
+### 5. Arena (`arena.rs`)
 
 Arena allocator for AST nodes:
 
@@ -152,7 +243,7 @@ pub struct AstArena {
 - O(1) reset for reuse
 - Configurable string clearing
 
-### 5. AST (`ast.rs`)
+### 6. AST (`ast.rs`)
 
 AST node types:
 
@@ -174,7 +265,7 @@ pub enum AstNode {
 - Position tracking via `SourcePosition`
 - Rich error type `ParseError` with source location
 
-### 6. Transform (`transform.rs`)
+### 7. Transform (`transform/`)
 
 Pattern-based AST transformation:
 
@@ -194,7 +285,7 @@ pub enum Value {
 }
 ```
 
-### 7. Visitor (`visitor.rs`)
+### 8. Visitor (`visitor.rs`)
 
 Tree walking visitor pattern:
 
@@ -272,7 +363,46 @@ pub trait Visitor {
 
 ## Extension Points
 
-### 1. Custom Atoms
+### 1. Custom Backends
+
+Implement the `ParsingBackend` trait for custom parsing strategies:
+
+```rust
+use parsanol::portable::backend::{ParsingBackend, BackendCharacteristics, BackendResult};
+use parsanol::portable::grammar::Grammar;
+
+struct MyCustomBackend {
+    // Custom configuration
+}
+
+impl ParsingBackend for MyCustomBackend {
+    fn parse(&mut self, grammar: &Grammar, input: &str) -> BackendResult {
+        // Custom parsing implementation
+        todo!()
+    }
+
+    fn name(&self) -> &'static str {
+        "my-custom"
+    }
+
+    fn characteristics(&self) -> BackendCharacteristics {
+        BackendCharacteristics {
+            time_complexity: "O(n)",
+            memory_complexity: "O(1)",
+            uses_memoization: false,
+            supports_streaming: true,
+            supports_incremental: false,
+            safe_for_all_grammars: true,
+        }
+    }
+}
+
+// Use with dynamic dispatch
+use parsanol::portable::backend::DynBackend;
+let backend: DynBackend = Box::new(MyCustomBackend::new());
+```
+
+### 2. Custom Atoms
 
 Create custom atom types by implementing pattern matching:
 
@@ -292,7 +422,7 @@ fn parse_atom(&mut self, atom: &Atom, pos: usize) -> Result<...> {
 }
 ```
 
-### 2. Custom Visitors
+### 3. Custom Visitors
 
 Implement the `Visitor` trait:
 
@@ -310,7 +440,7 @@ impl Visitor for MyVisitor {
 walk(&arena, &root_node, &mut MyVisitor);
 ```
 
-### 3. Custom Transforms
+### 4. Custom Transforms
 
 Add transformation rules:
 
@@ -322,7 +452,7 @@ transform.add_rule("number", |node, arena| {
 });
 ```
 
-### 4. Grammar Analysis
+### 5. Grammar Analysis
 
 Implement `AtomVisitor` for grammar analysis:
 

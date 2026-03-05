@@ -25,6 +25,8 @@ Rust. It provides high-performance parsing capabilities with a focus on:
 ## Features
 
 - [Quick Start](#quick-start) - Get started in minutes
+- [Backend Abstraction](#backend-abstraction) - Extensible backend trait system
+- [Bytecode Backend](#bytecode-backend) - Optional VM backend for linear patterns
 - [Parser DSL](#parser-dsl) - Fluent API for grammar definition
 - [Transform System](#transform-system) - Convert parse trees to typed structs
 - [Derive Macros](#derive-macros) - Automatic typed AST generation
@@ -36,6 +38,453 @@ Rust. It provides high-performance parsing capabilities with a focus on:
 - [Grammar Composition](#grammar-composition) - Import and compose grammars
 - [Ruby FFI](#ruby-ffi) - Optional Ruby bindings
 - [WASM Support](#wasm-support) - Optional WebAssembly bindings
+
+# Bytecode Backend
+
+Parsanol-rs supports two parsing backends:
+
+1. **Packrat (default)**: Memoization-based parser with O(n) time complexity for all grammars
+2. **Bytecode VM**: Stack-based virtual machine with optimization passes
+
+## Backend Comparison
+
+Both backends produce **identical parsing results** for all valid inputs. The difference lies in performance characteristics:
+
+| Aspect | Packrat | Bytecode VM |
+|--------|---------|-------------|
+| **Time Complexity** | Guaranteed O(n) | O(n) to O(2^n) depending on grammar |
+| **Memory Usage** | Higher (memoization table) | Lower (stack-based) |
+| **Compilation** | None required | Pre-compilation needed |
+| **Nested Repetitions** | Handles efficiently | Can be exponential |
+| **Simple Patterns** | Good | Excellent |
+| **Predictability** | Consistent performance | Varies by grammar |
+
+### Performance Characteristics
+
+**Packrat Backend:**
+- Memoization stores parse results at each position
+- Guarantees O(n) time complexity regardless of grammar structure
+- Memory overhead scales with input size and grammar complexity
+- Ideal when predictable performance is required
+
+**Bytecode VM Backend:**
+- Stack-based execution with backtracking
+- O(n) for linear patterns (most common case)
+- Can exhibit O(2^n) behavior for pathological patterns like `(a*)*`
+- Lower memory footprint, good for memory-constrained environments
+- Pre-compilation enables optimization passes
+
+### Decision Matrix
+
+| Grammar Type | Recommended Backend | Reason |
+|--------------|---------------------|--------|
+| JSON, XML, config files | Either | Linear patterns, both perform well |
+| Programming languages | Packrat | Complex grammar with nested structures |
+| Log parsing | Bytecode | Simple patterns, streaming potential |
+| Nested repetitions `(a*)*` | Packrat | Avoids exponential backtracking |
+| Memory-constrained | Bytecode | Lower memory footprint |
+| Need predictable O(n) | Packrat | Guaranteed linear time |
+
+### Automatic Selection
+
+Use `Backend::Auto` (the default) to let parsanol analyze your grammar:
+
+```rust
+// Automatic selection (default)
+let mut parser = Parser::auto(grammar);
+
+// Or explicitly:
+let mut parser = Parser::new(grammar, Backend::Auto);
+
+// Check the analysis
+let analysis = parser.analysis();
+println!("Has nested repetitions: {}", analysis.has_nested_repetition);
+println!("Recommended: {:?}", analysis.recommended_backend());
+```
+
+### Why Nested Repetitions Are the Criterion
+
+The backend selection is based on a **single hard rule**:
+
+- **Has nested repetitions** (e.g., `(a*)*`) → **Packrat**
+- **Otherwise** → **Bytecode**
+
+This is the only criterion because nested repetitions are the **only pattern that causes exponential time complexity** in the bytecode backend. Here's why:
+
+**The Algorithmic Problem:**
+
+When a repetition contains another repetition, the parser must try all possible ways to divide the input. For pattern `(a*)*` on input "aaa":
+
+```
+Division 1: (aaa)           - outer * matches 1 group
+Division 2: (aa)(a)         - outer * matches 2 groups
+Division 3: (a)(aa)         - outer * matches 2 groups (different split)
+Division 4: (a)(a)(a)       - outer * matches 3 groups
+... and so on
+```
+
+The number of ways to partition n characters is O(2^n). The bytecode VM tries each possibility via backtracking, leading to exponential time.
+
+**Why Packrat Solves It:**
+
+Packrat memoizes results by (position, rule). Once `(a*)` is evaluated at position i, the result is cached. Subsequent evaluations at the same position are O(1) cache hits. This guarantees O(n) total time.
+
+**Why Other Patterns Don't Matter:**
+
+| Pattern | Time Impact | Backend Difference |
+|---------|-------------|-------------------|
+| Overlapping choices (`"a" \| "aa"`) | Linear backtracking | Both handle identically |
+| Deep nesting | Stack depth increases | Both handle fine |
+| Many alternatives | More choice points | Linear in alternative count |
+| Left recursion | Infinite loop | **Both fail** - not a backend issue |
+
+### How the Analysis Works
+
+The grammar analysis is deliberately simple:
+
+```rust
+pub struct GrammarAnalysis {
+    /// Total atoms in the grammar
+    pub atom_count: usize,
+    /// Whether any Repetition contains another Repetition
+    pub has_nested_repetition: bool,
+}
+```
+
+The algorithm iterates through all atoms and checks: "Is this a Repetition whose inner atom is also a Repetition?"
+
+```rust
+for atom in &grammar.atoms {
+    if let Atom::Repetition { atom: inner_idx, .. } = atom {
+        if let Some(inner) = grammar.get_atom(*inner_idx) {
+            if matches!(inner, Atom::Repetition { .. }) {
+                has_nested_repetition = true;
+                break;
+            }
+        }
+    }
+}
+```
+
+This is O(atoms) time and detects the only pattern that matters for backend selection.
+
+### When to Override Auto-Selection
+
+The auto-selection only considers **time complexity**. You may want to manually select based on:
+
+| Scenario | Manual Selection | Rationale |
+|----------|------------------|-----------|
+| **Memory-constrained** (embedded, WASM) | `Backend::Bytecode` | Lower memory: O(depth) vs O(n×rules) |
+| **Very large files** (>100MB) | `Backend::Bytecode` | Packrat table grows with input size |
+| **Predictable latency required** | `Backend::Packrat` | Guaranteed O(n), no pathological cases |
+| **Streaming parsing** | `Backend::Bytecode` | Packrat requires full input in memory |
+| **Incremental re-parsing** | `Backend::Packrat` | Memo table can be reused for unchanged portions |
+| **Grammar has nested repetitions but input is bounded** | Either | If input is always small, exponential doesn't matter |
+| **Testing/debugging** | `Backend::Packrat` | Consistent behavior across all inputs |
+
+```rust
+// Memory-constrained environment
+let mut parser = Parser::bytecode(grammar);
+
+// Safety-critical with guaranteed O(n)
+let mut parser = Parser::packrat(grammar);
+
+// Explicit choice regardless of analysis
+let mut parser = Parser::new(grammar, Backend::Packrat);
+```
+
+### Problematic Grammar Patterns
+
+The following patterns can cause exponential O(2^n) behavior in the Bytecode backend.
+They are **safe with Packrat** due to memoization. If your grammar contains these,
+use Packrat explicitly or rely on `Backend::Auto`.
+
+**Critical Pattern: Nested Repetitions**
+```
+(a*)*     // CRITICAL: Outer * tries O(2^n) ways to divide input
+(a+)+     // Same issue
+((a|b)*)* // Even worse with choice
+
+// Safe alternatives:
+a*        // Single repetition - O(n)
+(a b)*    // Fixed sequence inside - O(n)
+```
+
+**Moderate Pattern: Overlapping Choice Prefixes**
+```
+// Problematic: All start with 'a'
+("a" | "aa" | "aaa")+
+
+// Better: Distinct first characters
+("a" | "b" | "c")+
+```
+
+**Safe Pattern: Deep Recursion (Both handle well)**
+```
+expr = term (("+" | "-") term)*
+// Recursive but structured - both backends handle efficiently
+```
+
+### Analyzing Your Grammar
+
+Use the GrammarAnalysis API to check for nested repetitions:
+
+```rust
+use parsanol::portable::{
+    parser_dsl::{str, re, GrammarBuilder},
+    bytecode::{Backend, GrammarAnalysis, Parser},
+};
+
+fn main() {
+    let grammar = GrammarBuilder::new()
+        .rule("expr", re(r"[0-9]+"))
+        .build();
+
+    // Analyze the grammar
+    let analysis = GrammarAnalysis::analyze(&grammar);
+
+    // The only field that matters for backend selection
+    if analysis.has_nested_repetition {
+        println!("⚠️  Nested repetitions detected - use Packrat!");
+    } else {
+        println!("✅ No nested repetitions - Bytecode is efficient");
+    }
+
+    // Get recommendation (hard rule: nested repetition → Packrat, else → Bytecode)
+    println!("Recommended: {:?}", analysis.recommended_backend());
+}
+```
+
+**GrammarAnalysis Fields:**
+
+| Field | Type | Purpose |
+|-------|------|---------|
+| `atom_count` | `usize` | Number of atoms in grammar (informational) |
+| `has_nested_repetition` | `bool` | **The criterion** - if true, use Packrat |
+
+**The `recommended_backend()` Method:**
+
+Returns `Backend::Packrat` if `has_nested_repetition` is true, otherwise `Backend::Bytecode`. This is what `Backend::Auto` uses internally.
+
+## Using the Bytecode Backend
+
+```rust
+use parsanol::portable::{
+    parser_dsl::{str, re, GrammarBuilder},
+    bytecode::{Backend, Parser},
+};
+
+let grammar = GrammarBuilder::new()
+    .rule("number", re(r"[0-9]+"))
+    .build();
+
+// Create parser with bytecode backend
+let mut parser = Parser::new(grammar, Backend::Bytecode);
+let result = parser.parse("42");
+
+// Or use auto-selection (analyzes grammar complexity)
+let mut parser = Parser::auto(grammar);
+let result = parser.parse("42");
+```
+
+### Known Differences
+
+Both backends produce **identical results** for the vast majority of patterns. However, there are edge cases where behavior differs:
+
+**Alternatives in Sequences**: For patterns like `("a" | "aa") "b"` on input `"aab"`:
+- **Packrat**: May succeed due to memoization re-evaluation
+- **Bytecode**: Fails (standard PEG semantics - once "a" succeeds, "aa" is not tried)
+
+This difference only affects patterns with:
+- Alternatives containing overlapping prefixes ("a" vs "aa")
+- The alternative is followed by content that fails
+- The later alternative would allow the following content to succeed
+
+For most practical grammars, this difference never manifests. Use `Backend::Auto` to let parsanol choose the appropriate backend.
+
+## Backend Abstraction
+
+Parsanol provides a trait-based backend abstraction for extensibility. You can implement custom backends or use the built-in ones interchangeably.
+
+### Using the ParsingBackend Trait
+
+```rust
+use parsanol::portable::backend::{ParsingBackend, PackratBackend, BytecodeBackend, Backend};
+
+// Use Packrat backend for predictable O(n) performance
+let mut packrat = PackratBackend::new();
+let result = packrat.parse(&grammar, input)?;
+
+// Use Bytecode backend for lower memory usage
+let mut bytecode = BytecodeBackend::new();
+let result = bytecode.parse(&grammar, input)?;
+
+// Configure backends
+let packrat = PackratBackend::new()
+    .with_max_recursion_depth(500)
+    .with_timeout_ms(5000);
+
+let bytecode = BytecodeBackend::new()
+    .with_auto_fallback(true);  // Falls back to Packrat for complex grammars
+```
+
+### Runtime Backend Selection
+
+```rust
+use parsanol::portable::backend::Backend;
+
+// Select backend at runtime
+let backend_type = Backend::default_for_grammar(&grammar);
+
+match backend_type {
+    Backend::Packrat => {
+        let mut parser = PackratBackend::new();
+        parser.parse(&grammar, input)?
+    }
+    Backend::Bytecode => {
+        let mut parser = BytecodeBackend::new();
+        parser.parse(&grammar, input)?
+    }
+};
+```
+
+### Backend Characteristics
+
+Each backend documents its performance characteristics:
+
+```rust
+use parsanol::portable::backend::{ParsingBackend, PackratBackend};
+
+let backend = PackratBackend::new();
+let chars = backend.characteristics();
+
+println!("Time: {}", chars.time_complexity);        // "O(n)"
+println!("Memory: {}", chars.memory_complexity);    // "O(n × r)"
+println!("Memoization: {}", chars.uses_memoization); // true
+println!("Streaming: {}", chars.supports_streaming); // false
+println!("Incremental: {}", chars.supports_incremental); // true
+println!("Safe: {}", chars.safe_for_all_grammars);  // true
+```
+
+### Implementing Custom Backends
+
+```rust
+use parsanol::portable::backend::{ParsingBackend, BackendCharacteristics, BackendResult};
+use parsanol::portable::grammar::Grammar;
+
+struct MyCustomBackend;
+
+impl ParsingBackend for MyCustomBackend {
+    fn parse(&mut self, grammar: &Grammar, input: &str) -> BackendResult {
+        // Custom parsing logic here
+        todo!()
+    }
+
+    fn name(&self) -> &'static str {
+        "my-custom"
+    }
+
+    fn characteristics(&self) -> BackendCharacteristics {
+        BackendCharacteristics {
+            time_complexity: "O(n log n)",
+            memory_complexity: "O(n)",
+            uses_memoization: false,
+            supports_streaming: true,
+            supports_incremental: false,
+            safe_for_all_grammars: true,
+        }
+    }
+}
+```
+
+### Dynamic Backend Dispatch
+
+For runtime polymorphism:
+
+```rust
+use parsanol::portable::backend::{DynBackend, PackratBackend, BytecodeBackend};
+
+fn get_backend(use_packrat: bool) -> DynBackend {
+    if use_packrat {
+        Box::new(PackratBackend::new())
+    } else {
+        Box::new(BytecodeBackend::new())
+    }
+}
+
+let mut backend: DynBackend = get_backend(true);
+let result = backend.parse(&grammar, input)?;
+```
+
+## Quick Start Examples
+
+Using the bytecode backend explicitly:
+
+```rust
+use parsanol::portable::{
+    parser_dsl::{str, re, GrammarBuilder},
+    bytecode::{Backend, Parser},
+};
+
+let grammar = GrammarBuilder::new()
+    .rule("number", re(r"[0-9]+"))
+    .build();
+
+// Create parser with bytecode backend
+let mut parser = Parser::new(grammar, Backend::Bytecode);
+let result = parser.parse("42");
+```
+
+Using packrat backend explicitly:
+
+```rust
+let mut parser = Parser::new(grammar, Backend::Packrat);
+let result = parser.parse("42");
+```
+
+## Optimization Passes
+
+The bytecode backend applies 11 optimization passes automatically:
+
+1. `DeadCodeElimination` - Remove unreachable code
+2. `JumpChainSimplification` - Simplify jump chains
+3. `JumpToReturnSimplification` - Direct returns
+4. `JumpToFailSimplification` - Direct failures
+5. `CombineAdjacentChars` - Char merging
+6. `SpanOptimization` - CharSet* to Span
+7. `FullCaptureOptimization` - Capture pairs to FullCapture
+8. `TestCharOptimization` - Choice patterns to TestChar
+9. `TestSetOptimization` - Choice patterns to TestSet
+10. `TailCallOptimization` - Tail calls to jumps
+11. `LookaheadOptimization` - Choice to PredChoice for predicates
+
+## Bytecode VM Architecture
+
+```
+Grammar (Atoms) ──► Compiler ──► Program (bytecode)
+                                    │
+                                    ▼
+Input ──────────────────────────► VM ──► AstNode
+```
+
+The bytecode VM uses:
+- **Backtracking stack**: For choice point management
+- **Capture stack**: For building AST nodes
+- **Instruction pointer**: Sequential execution
+- **Optimization passes**: Peephole optimization on compiled bytecode
+
+## Instruction Set
+
+The VM supports 28 instructions covering all PEG operations:
+
+| Category | Instructions |
+|----------|-------------|
+| Matching | `Char`, `CharSet`, `String`, `Regex`, `Any`, `Custom` |
+| Control Flow | `Jump`, `Call`, `Return`, `End` |
+| Backtracking | `Choice`, `Commit`, `PartialCommit`, `BackCommit`, `Fail`, `FailTwice` |
+| Captures | `OpenCapture`, `CloseCapture`, `FullCapture` |
+| Tests | `TestChar`, `TestSet`, `TestAny` |
+| Special | `Behind`, `Span`, `NoOp`, `PredChoice` |
 
 # Architecture
 
@@ -1054,6 +1503,18 @@ Experimental APIs (may change):
 - Infix expression parsing
 
 - Debug/trace tools
+
+# Documentation
+
+## Architecture
+
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the overall system architecture.
+
+## Development
+
+- [docs/refactoring-plan.md](docs/refactoring-plan.md) - Current refactoring roadmap
+- [docs/continuation-prompt.md](docs/continuation-prompt.md) - Prompt for continuing work
+- [docs/MIGRATION.md](docs/MIGRATION.md) - Migration guide from Parslet
 
 # License
 
