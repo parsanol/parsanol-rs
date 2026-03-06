@@ -266,7 +266,8 @@ impl<'a> GrammarAnalyzer<'a> {
                     None
                 }
             }
-            Atom::Str { .. } | Atom::Re { .. } | Atom::Cut | Atom::Custom { .. } => None,
+            Atom::Str { .. } | Atom::Re { .. } | Atom::Cut | Atom::Custom { .. }
+            | Atom::Capture { .. } | Atom::Scope { .. } | Atom::Dynamic { .. } => None,
         }
     }
 
@@ -312,6 +313,8 @@ impl<'a> GrammarAnalyzer<'a> {
             | Atom::Lookahead { atom, .. } => self.is_nullable(*atom),
             Atom::Cut => false,
             Atom::Custom { .. } => false, // Custom atoms are not nullable by default
+            Atom::Capture { atom, .. } | Atom::Scope { atom } => self.is_nullable(*atom),
+            Atom::Dynamic { .. } => false, // Dynamic atoms are not nullable by default
         }
     }
 
@@ -343,7 +346,8 @@ impl<'a> GrammarAnalyzer<'a> {
         };
 
         match atom {
-            Atom::Str { .. } | Atom::Re { .. } | Atom::Cut | Atom::Custom { .. } => {}
+            Atom::Str { .. } | Atom::Re { .. } | Atom::Cut | Atom::Custom { .. }
+            | Atom::Dynamic { .. } => {}
             Atom::Sequence { atoms } | Atom::Alternative { atoms } => {
                 for &child in atoms {
                     self.collect_reachable(child, reachable);
@@ -353,7 +357,9 @@ impl<'a> GrammarAnalyzer<'a> {
             | Atom::Named { atom, .. }
             | Atom::Entity { atom }
             | Atom::Ignore { atom }
-            | Atom::Lookahead { atom, .. } => {
+            | Atom::Lookahead { atom, .. }
+            | Atom::Capture { atom, .. }
+            | Atom::Scope { atom } => {
                 self.collect_reachable(*atom, reachable);
             }
         }

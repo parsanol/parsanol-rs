@@ -1,0 +1,55 @@
+{
+  "id": "captures",
+  "title": "Capture Atoms",
+  "description": "Extract named values from parsed input using capture atoms. Like named groups in regex, but integrated into the parsing grammar.",
+  "category": "conceptual",
+  "tags": ["capture", "extraction", "named", "zero-copy"],
+  "difficulty": "intermediate",
+  "concepts": [
+    "named captures",
+    "zero-copy extraction",
+    "capture inspection API",
+    "cross-backend support"
+  ],
+
+  "motivation": {
+    "why": "Captures allow extracting specific fields from parsed input without building a full AST. This is more efficient for simple extraction tasks.",
+    "useCases": [
+      "Extracting email addresses from text",
+      "Parsing log files for specific fields (IP, status, timestamp)",
+      "Parsing CSV exports for data migration",
+      "Field extraction without full AST construction"
+    ]
+  },
+
+  "inputFormat": {
+    "description": "Any structured text with fields to extract.",
+    "syntax": "user@example.com, 192.168.1.1 - - [timestamp] \"GET /path\" 200",
+    "examples": [
+      {
+        "input": "user@example.com",
+        "description": "Email address to parse",
+        "valid": true
+      },
+      {
+        "input": "192.168.1.1 - - [10/Oct/2000:13:55:36] \"GET /apache_pb.gif HTTP/1.0\" 200 2326",
+        "description": "Apache log line",
+        "valid": true
+      }
+    ]
+  },
+
+  "outputFormat": {
+    "description": "Named captures accessible via the capture inspection API.",
+    "structure": {
+      "capture_names": { "description": "List of all capture names" },
+      "get_capture": { "description": "Get text of a named capture" },
+      "captures": { "description": "All captures as HashMap" }
+    }
+  },
+
+  "related": ["scopes", "streaming-captures", "dynamic", "email"],
+  "implementations": {
+    "rust": { "basic": "basic.rs" }
+  }
+}

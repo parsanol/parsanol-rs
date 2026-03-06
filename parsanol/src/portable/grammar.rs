@@ -82,6 +82,74 @@ pub enum Atom {
         atom: usize,
     },
 
+    /// Capture matched text with a name
+    ///
+    /// Stores the matched text in the capture state with the given name.
+    /// The capture can be referenced later by dynamic atoms or retrieved
+    /// after parsing.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // Capture "foo" as :keyword
+    /// Atom::Capture {
+    ///     name: "keyword".to_string(),
+    ///     atom: str_atom_index,
+    /// }
+    /// ```
+    Capture {
+        /// The name for this capture
+        name: String,
+        /// Index into atoms array
+        atom: usize,
+    },
+
+    /// Create an isolated capture scope
+    ///
+    /// Captures made within this scope are discarded when the scope ends.
+    /// Useful for lookahead-like patterns where inner captures shouldn't
+    /// pollute the outer state.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // Inner captures are isolated
+    /// Atom::Scope {
+    ///     atom: inner_atom_index,
+    /// }
+    /// ```
+    Scope {
+        /// Index into atoms array
+        atom: usize,
+    },
+
+    /// Dynamic atom resolution via callback
+    ///
+    /// At parse time, invokes the registered callback to determine which
+    /// atom to parse. The callback receives the current parsing context
+    /// (input, position, captures) and returns an atom to parse.
+    ///
+    /// # Use Cases
+    ///
+    /// - Context-sensitive keywords
+    /// - Parser switching based on captures
+    /// - Conditional parsing logic
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // Register a callback that returns different atoms based on captures
+    /// let callback_id = register_dynamic_callback(Box::new(MyResolver));
+    ///
+    /// Atom::Dynamic {
+    ///     callback_id,
+    /// }
+    /// ```
+    Dynamic {
+        /// Unique identifier for the registered callback
+        callback_id: u64,
+    },
+
     /// Custom atom extension point
     ///
     /// References a custom parsing implementation registered via
@@ -192,6 +260,9 @@ impl Grammar {
                 Atom::Lookahead { .. } => "lookahead",
                 Atom::Cut => "cut",
                 Atom::Ignore { .. } => "ignore",
+                Atom::Capture { .. } => "capture",
+                Atom::Scope { .. } => "scope",
+                Atom::Dynamic { .. } => "dynamic",
                 Atom::Custom { .. } => "custom",
             };
             *atom_types.entry(ty).or_insert(0) += 1;
@@ -208,6 +279,18 @@ impl Grammar {
                 .atoms
                 .iter()
                 .any(|a| matches!(a, Atom::Lookahead { .. })),
+            has_captures: self
+                .atoms
+                .iter()
+                .any(|a| matches!(a, Atom::Capture { .. })),
+            has_scopes: self
+                .atoms
+                .iter()
+                .any(|a| matches!(a, Atom::Scope { .. })),
+            has_dynamic: self
+                .atoms
+                .iter()
+                .any(|a| matches!(a, Atom::Dynamic { .. })),
         }
     }
 
@@ -429,6 +512,15 @@ pub struct GrammarAnalysis {
 
     /// Whether grammar contains lookaheads
     pub has_lookaheads: bool,
+
+    /// Whether grammar contains captures
+    pub has_captures: bool,
+
+    /// Whether grammar contains scopes
+    pub has_scopes: bool,
+
+    /// Whether grammar contains dynamic atoms
+    pub has_dynamic: bool,
 }
 
 // ============================================================================
@@ -513,6 +605,21 @@ pub trait AtomVisitor {
     /// Visit an ignore atom (called after visiting child)
     fn visit_ignore_post(&mut self, _atom: usize) {}
 
+    /// Visit a capture atom (called before visiting child)
+    fn visit_capture_pre(&mut self, _name: &str, _atom: usize) {}
+
+    /// Visit a capture atom (called after visiting child)
+    fn visit_capture_post(&mut self, _name: &str, _atom: usize) {}
+
+    /// Visit a scope atom (called before visiting child)
+    fn visit_scope_pre(&mut self, _atom: usize) {}
+
+    /// Visit a scope atom (called after visiting child)
+    fn visit_scope_post(&mut self, _atom: usize) {}
+
+    /// Visit a dynamic atom
+    fn visit_dynamic(&mut self, _callback_id: u64) {}
+
     /// Visit a custom atom
     fn visit_custom(&mut self, _id: u64) {}
 }
@@ -578,6 +685,19 @@ impl Grammar {
                     self.visit_atom(*atom, visitor);
                     visitor.visit_ignore_post(*atom);
                 }
+                Atom::Capture { name, atom } => {
+                    visitor.visit_capture_pre(name, *atom);
+                    self.visit_atom(*atom, visitor);
+                    visitor.visit_capture_post(name, *atom);
+                }
+                Atom::Scope { atom } => {
+                    visitor.visit_scope_pre(*atom);
+                    self.visit_atom(*atom, visitor);
+                    visitor.visit_scope_post(*atom);
+                }
+                Atom::Dynamic { callback_id } => {
+                    visitor.visit_dynamic(*callback_id);
+                }
                 Atom::Custom { id } => {
                     visitor.visit_custom(*id);
                 }
@@ -609,6 +729,14 @@ pub struct AtomTypeCounter {
     pub cut_count: usize,
     /// Count of ignore atoms
     pub ignore_count: usize,
+    /// Count of capture atoms
+    pub capture_count: usize,
+    /// Count of scope atoms
+    pub scope_count: usize,
+    /// Count of dynamic atoms
+    pub dynamic_count: usize,
+    /// Count of custom atoms
+    pub custom_count: usize,
 }
 
 impl AtomVisitor for AtomTypeCounter {
@@ -650,6 +778,22 @@ impl AtomVisitor for AtomTypeCounter {
 
     fn visit_ignore_pre(&mut self, _atom: usize) {
         self.ignore_count += 1;
+    }
+
+    fn visit_capture_pre(&mut self, _name: &str, _atom: usize) {
+        self.capture_count += 1;
+    }
+
+    fn visit_scope_pre(&mut self, _atom: usize) {
+        self.scope_count += 1;
+    }
+
+    fn visit_dynamic(&mut self, _callback_id: u64) {
+        self.dynamic_count += 1;
+    }
+
+    fn visit_custom(&mut self, _id: u64) {
+        self.custom_count += 1;
     }
 }
 

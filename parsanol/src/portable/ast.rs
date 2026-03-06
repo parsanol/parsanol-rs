@@ -4,6 +4,7 @@
 //! without any Ruby or external dependencies. This enables the parser
 //! to be compiled to WASM for Opal.
 
+use std::collections::HashMap;
 use std::fmt;
 
 // Re-export SourcePosition from source_location for backward compatibility
@@ -108,12 +109,55 @@ impl PartialEq for AstNode {
 }
 
 /// Result of a parse operation
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct ParseResult {
     /// The parsed AST node
     pub value: AstNode,
     /// Position after the matched content
     pub end_pos: usize,
+    /// Capture state for named captures
+    pub capture_state: Option<super::capture_state::CaptureState>,
+}
+
+impl ParseResult {
+    /// Create a new ParseResult without captures
+    #[inline]
+    pub fn new(value: AstNode, end_pos: usize) -> Self {
+        Self {
+            value,
+            end_pos,
+            capture_state: None,
+        }
+    }
+
+    /// Get the names of all captures
+    pub fn capture_names(&self) -> Vec<String> {
+        match &self.capture_state {
+            Some(cs) => cs.names().map(|s| s.to_string()).collect(),
+            None => Vec::new(),
+        }
+    }
+
+    /// Get a capture's text value from the input string
+    pub fn get_capture<'a>(&self, name: &str, input: &'a str) -> Option<&'a str> {
+        self.capture_state
+            .as_ref()
+            .and_then(|cs| cs.get(name))
+            .map(|v| v.get_text(input))
+    }
+
+    /// Get all captures as a HashMap from the input string
+    pub fn captures<'a>(&'a self, input: &'a str) -> HashMap<&'a str, &'a str> {
+        let mut result = HashMap::new();
+        if let Some(cs) = &self.capture_state {
+            for name in cs.names() {
+                if let Some(value) = cs.get(&name) {
+                    result.insert(name.as_str(), value.get_text(input));
+                }
+            }
+        }
+        result
+    }
 }
 
 /// Error type for parse operations
@@ -430,6 +474,7 @@ mod tests {
         let result = ParseResult {
             value: AstNode::Int(42),
             end_pos: 10,
+            capture_state: None,
         };
         assert_eq!(result.value, AstNode::Int(42));
         assert_eq!(result.end_pos, 10);

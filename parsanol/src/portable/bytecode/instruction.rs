@@ -221,6 +221,27 @@ pub enum Opcode {
     ///
     /// Calls a registered custom atom at runtime.
     Custom = 27,
+
+    // ============================================================================
+    // Scope Management
+    // ============================================================================
+    /// Push a new capture scope
+    ///
+    /// Creates an isolated capture scope.
+    PushScope = 28,
+
+    /// Pop a capture scope
+    ///
+    /// Discards all captures made since matching PushScope.
+    PopScope = 29,
+
+    // ============================================================================
+    // Dynamic Atoms
+    // ============================================================================
+    /// Invoke a dynamic callback
+    ///
+    /// Calls a registered dynamic callback to determine which atom to parse.
+    InvokeDynamic = 30,
 }
 
 /// Capture kind for capture instructions
@@ -448,6 +469,35 @@ pub enum Instruction {
         /// The custom atom ID (registered via `register_custom_atom()`)
         id: u64,
     },
+
+    // ============================================================================
+    // Scope Management
+    // ============================================================================
+    /// Push a new capture scope
+    ///
+    /// Creates an isolated capture scope. Captures made after this instruction
+    /// will be discarded when PopScope is executed.
+    PushScope,
+
+    /// Pop a capture scope
+    ///
+    /// Discards all captures made since the matching PushScope.
+    PopScope,
+
+    // ============================================================================
+    // Dynamic Atoms
+    // ============================================================================
+    /// Invoke a dynamic callback
+    ///
+    /// Calls the registered dynamic callback to determine which atom to parse.
+    /// The callback receives the current parsing context (input, position, captures).
+    ///
+    /// If the callback returns Some(atom), parsing continues with that atom.
+    /// If the callback returns None, the parse fails (backtracks).
+    InvokeDynamic {
+        /// The dynamic callback ID (registered via `register_dynamic_callback()`)
+        callback_id: u64,
+    },
 }
 
 impl Instruction {
@@ -483,6 +533,9 @@ impl Instruction {
             Instruction::ThrowRec { .. } => Opcode::ThrowRec,
             Instruction::Span { .. } => Opcode::Span,
             Instruction::Custom { .. } => Opcode::Custom,
+            Instruction::PushScope => Opcode::PushScope,
+            Instruction::PopScope => Opcode::PopScope,
+            Instruction::InvokeDynamic { .. } => Opcode::InvokeDynamic,
         }
     }
 
@@ -736,6 +789,11 @@ impl fmt::Display for Instruction {
             } => write!(f, "ThrowRec [{}] -> +{}", label_idx, recovery_offset),
             Instruction::Span { set_idx } => write!(f, "Span [{}]", set_idx),
             Instruction::Custom { id } => write!(f, "Custom #{}", id),
+            Instruction::PushScope => write!(f, "PushScope"),
+            Instruction::PopScope => write!(f, "PopScope"),
+            Instruction::InvokeDynamic { callback_id } => {
+                write!(f, "InvokeDynamic #{}", callback_id)
+            }
         }
     }
 }
