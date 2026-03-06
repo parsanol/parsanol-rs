@@ -36,6 +36,7 @@ struct Example {
     category: &'static str,
     grammar: Grammar,
     inputs: Vec<&'static str>,
+    #[allow(dead_code)]
     has_nested_repetition: bool,
 }
 
@@ -514,16 +515,16 @@ fn build_nested_grammar(depth: usize) -> Grammar {
         return GrammarBuilder::new().rule("start", re(r"[a-z]+")).build();
     }
 
-    let mut builder = GrammarBuilder::new();
-    builder = builder.rule("start", ref_("nested"));
+    let mut _builder = GrammarBuilder::new();
+    _builder = _builder.rule("start", ref_("nested"));
 
     for d in 0..depth {
-        let rule_name = if d == 0 {
+        let _rule_name = if d == 0 {
             "start"
         } else {
             &format!("level_{}", d)
         };
-        let inner_name = if d == depth - 1 {
+        let _inner_name = if d == depth - 1 {
             "atom"
         } else {
             &format!("level_{}", d + 1)
@@ -561,7 +562,7 @@ fn build_nested_input(depth: usize) -> String {
     for _ in 0..depth {
         s.push('(');
     }
-    s.push_str("x");
+    s.push('x');
     for _ in 0..depth {
         s.push(')');
     }
