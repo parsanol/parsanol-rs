@@ -1,6 +1,6 @@
 [package]
 name = "parsanol-derive"
-version = "0.1.0"
+version.workspace = true
 edition = "2021"
 description = "Derive macros for parsanol - typed AST generation from parser output"
 license = "MIT"
