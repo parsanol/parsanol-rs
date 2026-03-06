@@ -3,7 +3,6 @@
 //! These tests verify cross-backend parity for the new capture infrastructure.
 
 use super::*;
-use crate::portable::ast::AstNode;
 use crate::portable::bytecode::backend::Parser;
 use crate::portable::capture_state::CaptureValue;
 use crate::portable::dynamic::{register_dynamic_callback, ConstCallback};

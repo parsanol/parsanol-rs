@@ -188,10 +188,12 @@ mod grammars {
 
 mod data {
     // JSON data
+    #[allow(dead_code)]
     pub fn json_tiny() -> &'static str {
         "null"
     }
 
+    #[allow(dead_code)]
     pub fn json_small() -> &'static str {
         r#"{"name":"test","value":42}"#
     }
@@ -201,10 +203,12 @@ mod data {
     }
 
     // Calculator data
+    #[allow(dead_code)]
     pub fn calc_simple() -> &'static str {
         "42"
     }
 
+    #[allow(dead_code)]
     pub fn calc_medium() -> &'static str {
         "1+2*3"
     }
