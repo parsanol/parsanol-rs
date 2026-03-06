@@ -32,7 +32,7 @@ strict_parity = []
 
 [dependencies]
 # Derive macros (required)
-parsanol-derive = { path = "../parsanol-derive", version = "0.1.0" }
+parsanol-derive = { path = "../parsanol-derive" }
 
 # Core dependencies
 serde = { workspace = true }
