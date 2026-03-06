@@ -135,6 +135,79 @@ impl GrammarBuilder {
         self.atoms.get(idx)
     }
 
+    // ========================================================================
+    // Capture, Scope, and Dynamic Helpers
+    // ========================================================================
+
+    /// Create a capture atom
+    ///
+    /// Captures the matched text with a name for later reference.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use parsanol::portable::parser_dsl::*;
+    ///
+    /// let grammar = GrammarBuilder::new()
+    ///     .rule("greeting", capture("name", str("hello")))
+    ///     .build();
+    /// ```
+    pub fn capture<N: Into<String>, P: Parslet>(&mut self, name: N, parslet: P) -> usize {
+        let atom = parslet.build(self);
+        self.add_atom(Atom::Capture {
+            name: name.into(),
+            atom,
+        })
+    }
+
+    /// Create a scope atom
+    ///
+    /// Creates an isolated capture scope. Captures made within this scope
+    /// are discarded when the scope ends.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use parsanol::portable::parser_dsl::*;
+    ///
+    /// let grammar = GrammarBuilder::new()
+    ///     .rule("isolated", scope(str("a").then(str("b"))))
+    ///     .build();
+    /// ```
+    pub fn scope<P: Parslet>(&mut self, parslet: P) -> usize {
+        let atom = parslet.build(self);
+        self.add_atom(Atom::Scope { atom })
+    }
+
+    /// Create a dynamic atom with a callback
+    ///
+    /// The callback is invoked at parse time to determine which atom to parse.
+    /// The callback receives the current parsing context (input, position, captures)
+    /// and returns an atom to parse, or None to fail.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use parsanol::portable::parser_dsl::*;
+    /// use parsanol::portable::dynamic::{DynamicContext, ConstCallback};
+    /// use parsanol::portable::grammar::Atom;
+    ///
+    /// // Create a callback that returns a constant atom
+    /// let callback = ConstCallback::new(
+    ///     Atom::Str { pattern: "dynamic".to_string() },
+    ///     "const_dynamic"
+    /// );
+    ///
+    /// let callback_id = parsanol::portable::dynamic::register_dynamic_callback(Box::new(callback));
+    ///
+    /// let grammar = GrammarBuilder::new()
+    ///     .rule("dynamic_rule", dynamic_with_id(callback_id))
+    ///     .build();
+    /// ```
+    pub fn dynamic(&mut self, callback_id: u64) -> usize {
+        self.add_atom(Atom::Dynamic { callback_id })
+    }
+
     /// Import all atoms from another grammar
     ///
     /// This allows composing grammars by importing rules from another grammar.
@@ -269,6 +342,16 @@ fn remap_atom(atom: &Atom, offset: usize) -> Atom {
         Atom::Cut => Atom::Cut,
         Atom::Ignore { atom } => Atom::Ignore {
             atom: atom + offset,
+        },
+        Atom::Capture { name, atom } => Atom::Capture {
+            name: name.clone(),
+            atom: atom + offset,
+        },
+        Atom::Scope { atom } => Atom::Scope {
+            atom: atom + offset,
+        },
+        Atom::Dynamic { callback_id } => Atom::Dynamic {
+            callback_id: *callback_id,
         },
         Atom::Custom { id } => Atom::Custom { id: *id },
     }
@@ -568,7 +651,7 @@ impl Parslet for Cut {
 }
 
 /// A type-erased parslet (for heterogeneous sequences/choices)
-pub struct Dynamic(Box<dyn DynParslet>);
+pub struct ErasedParslet(Box<dyn DynParslet>);
 
 /// Trait for type-erased parslets
 pub trait DynParslet: Send + Sync {
@@ -582,15 +665,15 @@ impl<P: Parslet + 'static> DynParslet for P {
     }
 }
 
-impl Parslet for Dynamic {
+impl Parslet for ErasedParslet {
     fn build(self, builder: &mut GrammarBuilder) -> usize {
         self.0.build_boxed(builder)
     }
 }
 
-/// Convert any parslet to a dynamic one
-pub fn dynamic<P: Parslet + 'static>(p: P) -> Dynamic {
-    Dynamic(Box::new(p))
+/// Convert any parslet to a type-erased one
+pub fn dynamic<P: Parslet + 'static>(p: P) -> ErasedParslet {
+    ErasedParslet(Box::new(p))
 }
 
 /// A sequence of multiple parslets
@@ -610,6 +693,69 @@ impl<P: Parslet> Parslet for Choice<P> {
     fn build(self, builder: &mut GrammarBuilder) -> usize {
         let indices: Vec<usize> = self.0.into_iter().map(|p| p.build(builder)).collect();
         builder.add_atom(Atom::Alternative { atoms: indices })
+    }
+}
+
+/// Capture parslet - stores matched text with a name
+pub struct Capture<'a, P: Parslet> {
+    name: &'a str,
+    inner: P,
+}
+
+impl<'a, P: Parslet> Capture<'a, P> {
+    /// Create a new capture parslet
+    pub fn new(name: &'a str, inner: P) -> Self {
+        Self { name, inner }
+    }
+}
+
+impl<'a, P: Parslet> Parslet for Capture<'a, P> {
+    fn build(self, builder: &mut GrammarBuilder) -> usize {
+        let inner_idx = self.inner.build(builder);
+        builder.add_atom(Atom::Capture {
+            name: self.name.to_string(),
+            atom: inner_idx,
+        })
+    }
+}
+
+/// Scope parslet - creates an isolated capture scope
+pub struct Scope<P: Parslet> {
+    inner: P,
+}
+
+impl<P: Parslet> Scope<P> {
+    /// Create a new scope parslet
+    pub fn new(inner: P) -> Self {
+        Self { inner }
+    }
+}
+
+impl<P: Parslet> Parslet for Scope<P> {
+    fn build(self, builder: &mut GrammarBuilder) -> usize {
+        let inner_idx = self.inner.build(builder);
+        builder.add_atom(Atom::Scope { atom: inner_idx })
+    }
+}
+
+/// DynamicAtom parslet - invokes a callback at parse time to get the atom to parse
+/// This is different from `Dynamic` (type-erased parslet).
+pub struct DynamicAtom {
+    callback_id: u64,
+}
+
+impl DynamicAtom {
+    /// Create a new dynamic atom parslet
+    pub fn new(callback_id: u64) -> Self {
+        Self { callback_id }
+    }
+}
+
+impl Parslet for DynamicAtom {
+    fn build(self, builder: &mut GrammarBuilder) -> usize {
+        builder.add_atom(Atom::Dynamic {
+            callback_id: self.callback_id,
+        })
     }
 }
 
@@ -843,6 +989,63 @@ where
     I: IntoIterator<Item = P>,
 {
     Choice(items.into_iter().collect())
+}
+
+// ============================================================================
+// Capture, Scope, and Dynamic Helpers
+// ============================================================================
+
+/// Create a capture parslet
+///
+/// # Example
+///
+/// ```rust
+/// use parsanol::portable::parser_dsl::*;
+///
+/// let grammar = GrammarBuilder::new()
+///     .rule("greeting", capture("name", str("hello")))
+///     .build();
+/// ```
+pub fn capture<'a, P: Parslet>(name: &'a str, inner: P) -> Capture<'a, P> {
+    Capture::new(name, inner)
+}
+
+/// Create a scope parslet
+///
+/// # Example
+///
+/// ```rust
+/// use parsanol::portable::parser_dsl::*;
+///
+/// let grammar = GrammarBuilder::new()
+///     .rule("isolated", scope(str("a").then(str("b"))))
+///     .build();
+/// ```
+pub fn scope<P: Parslet>(inner: P) -> Scope<P> {
+    Scope::new(inner)
+}
+
+/// Create a dynamic parslet with a pre-registered callback ID
+///
+/// # Example
+///
+/// ```rust
+/// use parsanol::portable::parser_dsl::*;
+/// use parsanol::portable::dynamic::{ConstCallback, register_dynamic_callback};
+/// use parsanol::portable::grammar::Atom;
+///
+/// let callback = ConstCallback::new(
+///     Atom::Str { pattern: "dynamic".to_string() },
+///     "const_dynamic"
+/// );
+/// let callback_id = register_dynamic_callback(Box::new(callback));
+///
+/// let grammar = GrammarBuilder::new()
+///     .rule("dynamic_rule", dynamic_with_id(callback_id))
+///     .build();
+/// ```
+pub fn dynamic_with_id(callback_id: u64) -> DynamicAtom {
+    DynamicAtom::new(callback_id)
 }
 
 // ============================================================================

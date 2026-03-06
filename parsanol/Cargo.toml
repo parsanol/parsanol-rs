@@ -207,6 +207,23 @@ path = "../examples/linter/basic.rs"
 name = "custom-atoms"
 path = "../examples/custom-atoms/basic.rs"
 
+# New 0.3.0 feature examples
+[[example]]
+name = "captures"
+path = "../examples/captures/basic.rs"
+
+[[example]]
+name = "scopes"
+path = "../examples/scopes/basic.rs"
+
+[[example]]
+name = "dynamic"
+path = "../examples/dynamic/basic.rs"
+
+[[example]]
+name = "streaming-captures"
+path = "../examples/streaming-captures/basic.rs"
+
 # Benchmarks
 [[bench]]
 name = "comparison"

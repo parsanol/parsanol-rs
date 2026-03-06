@@ -1,0 +1,62 @@
+{
+  "id": "streaming-captures",
+  "title": "Streaming Parser with Captures",
+  "description": "Extract named values from large files without loading them into memory. Combines streaming parser efficiency with capture extraction.",
+  "category": "conceptual",
+  "tags": ["streaming", "captures", "memory", "large-files", "extraction"],
+  "difficulty": "advanced",
+  "concepts": [
+    "streaming with captures",
+    "bounded memory",
+    "chunk-based extraction",
+    "capture persistence",
+    "incremental processing"
+  ],
+
+  "motivation": {
+    "why": "Combine the memory efficiency of streaming with the convenience of named captures. Process GB-scale files while extracting specific fields.",
+    "useCases": [
+      "Log file analysis (extract IPs, status codes from 10GB+ logs)",
+      "CSV export processing (extract emails from 500MB+ files)",
+      "Real-time feed parsing (stock tickers, event streams)",
+      "Database dump processing (extract specific fields)"
+    ]
+  },
+
+  "inputFormat": {
+    "description": "Large files processed in fixed-size chunks.",
+    "syntax": "Any format with captures: CSV, logs, JSON lines, etc.",
+    "examples": [
+      {
+        "input": "192.168.1.1 - - [10/Oct/2000:13:55:36] \"GET /path\" 200 2326\n...",
+        "description": "Apache access log (millions of lines)",
+        "valid": true
+      },
+      {
+        "input": "email,name,age\nuser1@example.com,Alice,30\n...",
+        "description": "CSV export (millions of rows)",
+        "valid": true
+      }
+    ]
+  },
+
+  "outputFormat": {
+    "description": "Captures available after streaming parse completes.",
+    "structure": {
+      "capture_state": { "description": "CaptureState with all extracted captures" },
+      "bytes_processed": { "description": "Total bytes processed" },
+      "chunks_processed": { "description": "Number of chunks used" }
+    }
+  },
+
+  "backendCompatibility": {
+    "packrat": { "support": "n/a", "notes": "Not applicable - use streaming instead" },
+    "bytecode": { "support": "n/a", "notes": "Not applicable - use streaming instead" },
+    "streaming": { "support": "full", "notes": "Primary backend for this feature" }
+  },
+
+  "related": ["captures", "scopes", "streaming", "csv"],
+  "implementations": {
+    "rust": { "basic": "basic.rs" }
+  }
+}

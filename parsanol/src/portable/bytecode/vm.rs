@@ -9,6 +9,7 @@ use super::instruction::{CaptureKind, Instruction};
 use super::program::Program;
 use crate::portable::arena::AstArena;
 use crate::portable::ast::{AstNode, ParseError, ParseResult};
+use crate::portable::capture_state::CaptureState;
 use crate::portable::char_class::utf8_char_len;
 use crate::portable::regex_cache;
 use std::time::Instant;
@@ -108,6 +109,9 @@ pub struct BytecodeVM<'a> {
 
     /// Error tracker for detailed error messages
     error_tracker: ErrorTracker,
+
+    /// Capture state for generational scopes
+    capture_state: CaptureState,
 }
 
 impl<'a> BytecodeVM<'a> {
@@ -132,6 +136,7 @@ impl<'a> BytecodeVM<'a> {
             start_time: Instant::now(),
             furthest_failure: 0,
             error_tracker: ErrorTracker::new(),
+            capture_state: CaptureState::new(),
         }
     }
 
@@ -601,6 +606,78 @@ impl<'a> BytecodeVM<'a> {
                     }
                 }
             }
+
+            // ========================================================================
+            // Capture Scope Instructions
+            // ========================================================================
+
+            Instruction::PushScope => {
+                // Push a new capture scope
+                self.capture_state.push_scope();
+                Ok(ExecutionResult::Continue)
+            }
+
+            Instruction::PopScope => {
+                // Pop the capture scope (discards inner captures)
+                self.capture_state.pop_scope();
+                Ok(ExecutionResult::Continue)
+            }
+
+            // ========================================================================
+            // Dynamic Atom Instructions
+            // ========================================================================
+
+            Instruction::InvokeDynamic { callback_id } => {
+                // Dynamic atoms use Packrat fallback
+                use crate::portable::dynamic::{invoke_dynamic_callback, DynamicContext};
+                use crate::portable::grammar::Grammar;
+                use crate::portable::parser::PortableParser;
+                use crate::portable::arena::AstArena;
+
+                // Create context for callback
+                let ctx = DynamicContext::new(
+                    self.input_str,
+                    self.position,
+                    self.capture_state.clone(),
+                );
+
+                // Invoke callback to get the atom
+                let atom = match invoke_dynamic_callback(*callback_id, &ctx) {
+                    Some(a) => a,
+                    None => {
+                        self.track_failure();
+                        return Ok(ExecutionResult::Fail);
+                    }
+                };
+
+                // Create temporary grammar and add the atom
+                let mut temp_grammar = Grammar::new();
+                let temp_atom_id = temp_grammar.add_atom(atom);
+                temp_grammar.root = temp_atom_id;
+
+                // Create temporary arena
+                let mut temp_arena = AstArena::for_input(self.input_str.len());
+
+                // Use Packrat parser for dynamic atom
+                let mut temp_parser = PortableParser::new(&temp_grammar, self.input_str, &mut temp_arena);
+                match temp_parser.parse_from_pos(self.position) {
+                    Ok(result) => {
+                        // Merge captures from temp parser
+                        let temp_captures = temp_parser.capture_state();
+                        for name in temp_captures.names() {
+                            if let Some(value) = temp_captures.get(&name) {
+                                self.capture_state.store(&name, value);
+                            }
+                        }
+                        self.position = result.end_pos;
+                        Ok(ExecutionResult::Continue)
+                    }
+                    Err(_) => {
+                        self.track_failure();
+                        Ok(ExecutionResult::Fail)
+                    }
+                }
+            }
         }
     }
 
@@ -699,6 +776,7 @@ pub fn parse_with_vm(
     Ok(ParseResult {
         value: result.value,
         end_pos: result.end_pos,
+        capture_state: None,
     })
 }
 

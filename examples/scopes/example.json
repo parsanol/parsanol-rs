@@ -1,0 +1,50 @@
+{
+  "id": "scopes",
+  "title": "Scope Atoms",
+  "description": "Create isolated capture contexts with scope atoms. Captures made inside a scope are discarded when the scope exits, preventing capture pollution.",
+  "category": "conceptual",
+  "tags": ["scope", "isolation", "nested", "capture"],
+  "difficulty": "intermediate",
+  "concepts": [
+    "capture isolation",
+    "scope nesting",
+    "recursive parsing",
+    "automatic capture cleanup"
+  ],
+
+  "motivation": {
+    "why": "Scopes prevent inner captures from polluting outer contexts. Essential for parsing nested structures where each level has its own context.",
+    "useCases": [
+      "Parsing nested configuration with per-section captures",
+      "Recursive descent parsing without capture accumulation",
+      "Processing repeated structures with isolated state",
+      "Preventing capture name collisions"
+    ]
+  },
+
+  "inputFormat": {
+    "description": "Nested structures where inner contexts should be isolated.",
+    "syntax": "[section1]\nkey=value\n[section2]\nkey=value",
+    "examples": [
+      {
+        "input": "[database]\nhost=localhost\nport=5432\n[server]\nport=8080",
+        "description": "INI-style config with sections",
+        "valid": true
+      }
+    ]
+  },
+
+  "outputFormat": {
+    "description": "Only captures from outer scope are preserved.",
+    "structure": {
+      "section": { "description": "Section name persists to outer scope" },
+      "key": { "description": "Keys are isolated within each section scope" },
+      "value": { "description": "Values are isolated within each section scope" }
+    }
+  },
+
+  "related": ["captures", "streaming-captures", "ini"],
+  "implementations": {
+    "rust": { "basic": "basic.rs" }
+  }
+}

@@ -51,9 +51,11 @@ pub mod ast;
 pub mod backend;
 pub mod bytecode;
 pub mod cache;
+pub mod capture_state;
 pub mod char_class;
 pub mod custom;
 pub mod debug;
+pub mod dynamic;
 pub mod error;
 pub mod grammar;
 pub mod grammar_analysis;
@@ -108,6 +110,26 @@ pub use backend::{
 // ============================================================================
 
 pub use char_class::{utf8_char_len, CharClassTables, CharacterPattern, CHAR_CLASSES};
+
+// ============================================================================
+// Capture State
+// ============================================================================
+
+pub use capture_state::{
+    set_current_captures, current_captures, current_capture, CaptureGuard, CaptureSnapshot,
+    CaptureState, CaptureValue, MAX_SCOPE_DEPTH,
+};
+
+// ============================================================================
+// Dynamic Callbacks
+// ============================================================================
+
+pub use dynamic::{
+    register_dynamic_callback, register_dynamic_callback_with_id, unregister_dynamic_callback,
+    invoke_dynamic_callback, get_dynamic_callback_description, has_dynamic_callback,
+    dynamic_callback_count, clear_dynamic_callbacks,
+    DynamicCallback, DynamicContext, ConstCallback, CaptureSwitchCallback,
+};
 
 // ============================================================================
 // Regex Cache

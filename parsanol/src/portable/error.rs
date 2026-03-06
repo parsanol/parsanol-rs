@@ -23,6 +23,7 @@
 //! let rich_error: RichError = parse_error.into_rich("input text");
 //! ```
 
+use std::collections::HashMap;
 use std::fmt;
 
 // Re-export SourceSpan from source_location for use in errors
@@ -231,6 +232,57 @@ impl RichError {
 
         // Print tree
         output.push_str(&self.ascii_tree());
+
+        output
+    }
+
+    /// Format with source code context and captures
+    ///
+    /// This method extends `format_with_source` to include captured values
+    /// in the error message for better debugging.
+    ///
+    /// # Arguments
+    ///
+    /// * `source` - The source input that was being parsed
+    /// * `captures` - A HashMap of capture names to their text values
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use parsanol::portable::{ParseError, RichError};
+    /// use std::collections::HashMap;
+    ///
+    /// let error = ParseError::at_position(5);
+    /// let rich = error.into_rich("hello world");
+    /// let mut captures = HashMap::new();
+    /// captures.insert("greeting", "hello");
+    /// println!("{}", rich.format_with_source_and_captures("hello world", &captures));
+    /// ```
+    pub fn format_with_source_and_captures(
+        &self,
+        source: &str,
+        captures: &HashMap<&str, &str>,
+    ) -> String {
+        let mut output = self.format_with_source(source);
+
+        // Add captures section if there are any
+        if !captures.is_empty() {
+            output.push_str("\nCaptures at time of error:\n");
+            let mut names: Vec<_> = captures.keys().collect();
+            names.sort(); // Deterministic output
+            for name in names {
+                if let Some(value) = captures.get(name) {
+                    let value_str: &str = *value;
+                    // Truncate long values
+                    let display_value = if value_str.len() > 40 {
+                        format!("{}... ({} chars)", &value_str[..40], value_str.len())
+                    } else {
+                        value_str.to_string()
+                    };
+                    output.push_str(&format!("  {} = {:?}\n", name, display_value));
+                }
+            }
+        }
 
         output
     }
@@ -471,5 +523,35 @@ mod tests {
         let formatted = error.format_with_source(source);
         assert!(formatted.contains("line 2, column 5"));
         assert!(formatted.contains("Unexpected token"));
+    }
+
+    #[test]
+    fn test_format_with_source_and_captures() {
+        let source = "hello world\nthis is a test\nmore text";
+        let error = ErrorBuilder::new("Unexpected token").at(15, 2, 5).build();
+
+        let mut captures = HashMap::new();
+        captures.insert("greeting", "hello");
+        captures.insert("name", "world");
+
+        let formatted = error.format_with_source_and_captures(source, &captures);
+        assert!(formatted.contains("line 2, column 5"));
+        assert!(formatted.contains("Unexpected token"));
+        assert!(formatted.contains("Captures at time of error"));
+        assert!(formatted.contains("greeting"));
+        assert!(formatted.contains("name"));
+    }
+
+    #[test]
+    fn test_format_with_source_and_empty_captures() {
+        let source = "hello world";
+        let error = ErrorBuilder::new("Unexpected token").at(5, 1, 6).build();
+
+        let captures: HashMap<&str, &str> = HashMap::new();
+
+        let formatted = error.format_with_source_and_captures(source, &captures);
+        assert!(formatted.contains("Unexpected token"));
+        // Should not contain captures section when empty
+        assert!(!formatted.contains("Captures at time of error"));
     }
 }
