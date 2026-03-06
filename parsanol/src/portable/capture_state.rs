@@ -176,7 +176,8 @@ impl CaptureState {
         if let Some(&old_value) = self.captures.get(name) {
             // Shadowing an existing capture
             self.captures.insert(name.to_string(), value);
-            self.capture_order.push(CaptureEntry::Shadow(name.to_string(), old_value));
+            self.capture_order
+                .push(CaptureEntry::Shadow(name.to_string(), old_value));
             false
         } else {
             // New capture
@@ -320,11 +321,9 @@ impl CaptureState {
 
     /// Iterate over all capture names (in order of first occurrence)
     pub fn names(&self) -> impl Iterator<Item = &String> {
-        self.capture_order.iter().filter_map(|entry| {
-            match entry {
-                CaptureEntry::New(name) => Some(name),
-                CaptureEntry::Shadow(name, _) => Some(name),
-            }
+        self.capture_order.iter().map(|entry| match entry {
+            CaptureEntry::New(name) => name,
+            CaptureEntry::Shadow(name, _) => name,
         })
     }
 
@@ -356,7 +355,8 @@ impl CaptureState {
             if let Some(&old_value) = self.captures.get(name) {
                 // Shadowing existing capture
                 self.captures.insert(name.clone(), value);
-                self.capture_order.push(CaptureEntry::Shadow(name.clone(), old_value));
+                self.capture_order
+                    .push(CaptureEntry::Shadow(name.clone(), old_value));
             } else {
                 // New capture
                 self.captures.insert(name.clone(), value);
@@ -395,11 +395,7 @@ pub fn current_captures() -> Option<CaptureState> {
 
 /// Get a specific capture from the current state
 pub fn current_capture(name: &str) -> Option<CaptureValue> {
-    CURRENT_CAPTURES.with(|c| {
-        c.borrow()
-            .as_ref()
-            .and_then(|state| state.get(name))
-    })
+    CURRENT_CAPTURES.with(|c| c.borrow().as_ref().and_then(|state| state.get(name)))
 }
 
 /// Guard that restores previous capture state when dropped
@@ -425,7 +421,7 @@ mod tests {
 
     #[test]
     fn test_capture_value() {
-        let value = CaptureValue::new(7, 5);  // "World" in "Hello, World!"
+        let value = CaptureValue::new(7, 5); // "World" in "Hello, World!"
         assert_eq!(value.offset, 7);
         assert_eq!(value.length, 5);
         assert_eq!(value.end(), 12);

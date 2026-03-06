@@ -116,7 +116,7 @@ pub use char_class::{utf8_char_len, CharClassTables, CharacterPattern, CHAR_CLAS
 // ============================================================================
 
 pub use capture_state::{
-    set_current_captures, current_captures, current_capture, CaptureGuard, CaptureSnapshot,
+    current_capture, current_captures, set_current_captures, CaptureGuard, CaptureSnapshot,
     CaptureState, CaptureValue, MAX_SCOPE_DEPTH,
 };
 
@@ -125,10 +125,10 @@ pub use capture_state::{
 // ============================================================================
 
 pub use dynamic::{
-    register_dynamic_callback, register_dynamic_callback_with_id, unregister_dynamic_callback,
-    invoke_dynamic_callback, get_dynamic_callback_description, has_dynamic_callback,
-    dynamic_callback_count, clear_dynamic_callbacks,
-    DynamicCallback, DynamicContext, ConstCallback, CaptureSwitchCallback,
+    clear_dynamic_callbacks, dynamic_callback_count, get_dynamic_callback_description,
+    has_dynamic_callback, invoke_dynamic_callback, register_dynamic_callback,
+    register_dynamic_callback_with_id, unregister_dynamic_callback, CaptureSwitchCallback,
+    ConstCallback, DynamicCallback, DynamicContext,
 };
 
 // ============================================================================

@@ -170,13 +170,9 @@ fn test_backend_parity_nested_scopes() {
         atom: a,
     });
 
-    let inner_scope = grammar.add_atom(Atom::Scope {
-        atom: capture_deep,
-    });
+    let inner_scope = grammar.add_atom(Atom::Scope { atom: capture_deep });
 
-    let outer_scope = grammar.add_atom(Atom::Scope {
-        atom: inner_scope,
-    });
+    let outer_scope = grammar.add_atom(Atom::Scope { atom: inner_scope });
 
     grammar.root = outer_scope;
 
@@ -206,9 +202,7 @@ fn test_backend_parity_scope_in_lookahead() {
         atom: a,
     });
 
-    let scope = grammar.add_atom(Atom::Scope {
-        atom: capture_peek,
-    });
+    let scope = grammar.add_atom(Atom::Scope { atom: capture_peek });
 
     let lookahead = grammar.add_atom(Atom::Lookahead {
         atom: scope,

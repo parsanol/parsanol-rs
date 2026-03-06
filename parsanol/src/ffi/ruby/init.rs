@@ -71,20 +71,13 @@ pub fn init(ruby: &Ruby) -> Result<(), Error> {
     // Parser functions
     native_module.define_module_function("is_available", function!(is_available, 0))?;
     native_module.define_module_function("parse_batch", function!(parse_batch, 2))?;
-    native_module.define_module_function(
-        "parse_to_ruby_objects",
-        function!(parse_to_ruby_objects, 2),
-    )?;
-    native_module.define_module_function(
-        "parse_with_builder",
-        function!(parse_with_builder, 3),
-    )?;
+    native_module
+        .define_module_function("parse_to_ruby_objects", function!(parse_to_ruby_objects, 2))?;
+    native_module.define_module_function("parse_with_builder", function!(parse_with_builder, 3))?;
 
     // Dynamic callback functions
-    native_module.define_module_function(
-        "register_callback",
-        function!(ruby_register_callback, 2),
-    )?;
+    native_module
+        .define_module_function("register_callback", function!(ruby_register_callback, 2))?;
     native_module.define_module_function(
         "unregister_callback",
         function!(ruby_unregister_callback, 1),
@@ -93,18 +86,9 @@ pub fn init(ruby: &Ruby) -> Result<(), Error> {
         "get_callback_description",
         function!(ruby_get_callback_description, 1),
     )?;
-    native_module.define_module_function(
-        "callback_count",
-        function!(ruby_callback_count, 0),
-    )?;
-    native_module.define_module_function(
-        "clear_callbacks",
-        function!(ruby_clear_callbacks, 0),
-    )?;
-    native_module.define_module_function(
-        "has_callback",
-        function!(ruby_has_callback, 1),
-    )?;
+    native_module.define_module_function("callback_count", function!(ruby_callback_count, 0))?;
+    native_module.define_module_function("clear_callbacks", function!(ruby_clear_callbacks, 0))?;
+    native_module.define_module_function("has_callback", function!(ruby_has_callback, 1))?;
 
     Ok(())
 }

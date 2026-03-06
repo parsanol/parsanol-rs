@@ -15,8 +15,8 @@ use std::time::Duration;
 
 use parsanol::portable::{
     backend::{BytecodeBackend, PackratBackend, ParsingBackend},
-    parser_dsl::{choice, dynamic, re, ref_, seq, str, GrammarBuilder},
     infix::{Assoc, InfixBuilder},
+    parser_dsl::{choice, dynamic, re, ref_, seq, str, GrammarBuilder},
     AstArena, Grammar, PortableParser,
 };
 
@@ -112,7 +112,10 @@ mod grammars {
     pub fn sexp() -> Grammar {
         // Note: This has nested repetition, so should use Packrat
         GrammarBuilder::new()
-            .rule("sexp", choice(vec![dynamic(ref_("atom")), dynamic(ref_("list"))]))
+            .rule(
+                "sexp",
+                choice(vec![dynamic(ref_("atom")), dynamic(ref_("list"))]),
+            )
             .rule("atom", re(r"[a-zA-Z0-9+-/*=<>!?:_]+"))
             .rule(
                 "list",
@@ -211,7 +214,14 @@ mod data {
     }
 
     pub fn calc_expressions() -> Vec<&'static str> {
-        vec!["42", "1+2", "1+2*3", "(1+2)*3", "1+2*3/4-5", "((1+2)*(3+4))"]
+        vec![
+            "42",
+            "1+2",
+            "1+2*3",
+            "(1+2)*3",
+            "1+2*3/4-5",
+            "((1+2)*(3+4))",
+        ]
     }
 
     // URL data
@@ -290,28 +300,20 @@ fn bench_json(c: &mut Criterion) {
         group.throughput(Throughput::Bytes(input.len() as u64));
 
         // Packrat backend
-        group.bench_with_input(
-            BenchmarkId::new("packrat", input),
-            input,
-            |b, input| {
-                b.iter(|| {
-                    let mut backend = PackratBackend::new();
-                    let _ = black_box(backend.parse(&grammar, input));
-                })
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("packrat", input), input, |b, input| {
+            b.iter(|| {
+                let mut backend = PackratBackend::new();
+                let _ = black_box(backend.parse(&grammar, input));
+            })
+        });
 
         // Bytecode backend
-        group.bench_with_input(
-            BenchmarkId::new("bytecode", input),
-            input,
-            |b, input| {
-                b.iter(|| {
-                    let mut backend = BytecodeBackend::new();
-                    let _ = black_box(backend.parse(&grammar, input));
-                })
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("bytecode", input), input, |b, input| {
+            b.iter(|| {
+                let mut backend = BytecodeBackend::new();
+                let _ = black_box(backend.parse(&grammar, input));
+            })
+        });
     }
 
     group.finish();
@@ -324,27 +326,19 @@ fn bench_calculator(c: &mut Criterion) {
     for input in data::calc_expressions() {
         group.throughput(Throughput::Bytes(input.len() as u64));
 
-        group.bench_with_input(
-            BenchmarkId::new("packrat", input),
-            input,
-            |b, input| {
-                b.iter(|| {
-                    let mut backend = PackratBackend::new();
-                    let _ = black_box(backend.parse(&grammar, input));
-                })
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("packrat", input), input, |b, input| {
+            b.iter(|| {
+                let mut backend = PackratBackend::new();
+                let _ = black_box(backend.parse(&grammar, input));
+            })
+        });
 
-        group.bench_with_input(
-            BenchmarkId::new("bytecode", input),
-            input,
-            |b, input| {
-                b.iter(|| {
-                    let mut backend = BytecodeBackend::new();
-                    let _ = black_box(backend.parse(&grammar, input));
-                })
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("bytecode", input), input, |b, input| {
+            b.iter(|| {
+                let mut backend = BytecodeBackend::new();
+                let _ = black_box(backend.parse(&grammar, input));
+            })
+        });
     }
 
     group.finish();
@@ -359,27 +353,19 @@ fn bench_url(c: &mut Criterion) {
     for input in inputs {
         group.throughput(Throughput::Bytes(input.len() as u64));
 
-        group.bench_with_input(
-            BenchmarkId::new("packrat", input),
-            input,
-            |b, input| {
-                b.iter(|| {
-                    let mut backend = PackratBackend::new();
-                    let _ = black_box(backend.parse(&grammar, input));
-                })
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("packrat", input), input, |b, input| {
+            b.iter(|| {
+                let mut backend = PackratBackend::new();
+                let _ = black_box(backend.parse(&grammar, input));
+            })
+        });
 
-        group.bench_with_input(
-            BenchmarkId::new("bytecode", input),
-            input,
-            |b, input| {
-                b.iter(|| {
-                    let mut backend = BytecodeBackend::new();
-                    let _ = black_box(backend.parse(&grammar, input));
-                })
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("bytecode", input), input, |b, input| {
+            b.iter(|| {
+                let mut backend = BytecodeBackend::new();
+                let _ = black_box(backend.parse(&grammar, input));
+            })
+        });
     }
 
     group.finish();
@@ -394,27 +380,19 @@ fn bench_email(c: &mut Criterion) {
     for input in inputs {
         group.throughput(Throughput::Bytes(input.len() as u64));
 
-        group.bench_with_input(
-            BenchmarkId::new("packrat", input),
-            input,
-            |b, input| {
-                b.iter(|| {
-                    let mut backend = PackratBackend::new();
-                    let _ = black_box(backend.parse(&grammar, input));
-                })
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("packrat", input), input, |b, input| {
+            b.iter(|| {
+                let mut backend = PackratBackend::new();
+                let _ = black_box(backend.parse(&grammar, input));
+            })
+        });
 
-        group.bench_with_input(
-            BenchmarkId::new("bytecode", input),
-            input,
-            |b, input| {
-                b.iter(|| {
-                    let mut backend = BytecodeBackend::new();
-                    let _ = black_box(backend.parse(&grammar, input));
-                })
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("bytecode", input), input, |b, input| {
+            b.iter(|| {
+                let mut backend = BytecodeBackend::new();
+                let _ = black_box(backend.parse(&grammar, input));
+            })
+        });
     }
 
     group.finish();
@@ -429,27 +407,19 @@ fn bench_string_literal(c: &mut Criterion) {
     for input in inputs {
         group.throughput(Throughput::Bytes(input.len() as u64));
 
-        group.bench_with_input(
-            BenchmarkId::new("packrat", input),
-            input,
-            |b, input| {
-                b.iter(|| {
-                    let mut backend = PackratBackend::new();
-                    let _ = black_box(backend.parse(&grammar, input));
-                })
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("packrat", input), input, |b, input| {
+            b.iter(|| {
+                let mut backend = PackratBackend::new();
+                let _ = black_box(backend.parse(&grammar, input));
+            })
+        });
 
-        group.bench_with_input(
-            BenchmarkId::new("bytecode", input),
-            input,
-            |b, input| {
-                b.iter(|| {
-                    let mut backend = BytecodeBackend::new();
-                    let _ = black_box(backend.parse(&grammar, input));
-                })
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("bytecode", input), input, |b, input| {
+            b.iter(|| {
+                let mut backend = BytecodeBackend::new();
+                let _ = black_box(backend.parse(&grammar, input));
+            })
+        });
     }
 
     group.finish();
@@ -465,27 +435,19 @@ fn bench_sexp(c: &mut Criterion) {
     for input in inputs {
         group.throughput(Throughput::Bytes(input.len() as u64));
 
-        group.bench_with_input(
-            BenchmarkId::new("packrat", input),
-            input,
-            |b, input| {
-                b.iter(|| {
-                    let mut backend = PackratBackend::new();
-                    let _ = black_box(backend.parse(&grammar, input));
-                })
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("packrat", input), input, |b, input| {
+            b.iter(|| {
+                let mut backend = PackratBackend::new();
+                let _ = black_box(backend.parse(&grammar, input));
+            })
+        });
 
-        group.bench_with_input(
-            BenchmarkId::new("bytecode", input),
-            input,
-            |b, input| {
-                b.iter(|| {
-                    let mut backend = BytecodeBackend::new();
-                    let _ = black_box(backend.parse(&grammar, input));
-                })
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("bytecode", input), input, |b, input| {
+            b.iter(|| {
+                let mut backend = BytecodeBackend::new();
+                let _ = black_box(backend.parse(&grammar, input));
+            })
+        });
     }
 
     group.finish();
@@ -496,32 +458,28 @@ fn bench_balanced_parens(c: &mut Criterion) {
     let mut group = c.benchmark_group("balanced_parens");
 
     // This grammar has nested recursion - critical test for Packrat vs Bytecode
-    let inputs = vec![data::parens_simple(), data::parens_nested(), data::parens_complex()];
+    let inputs = vec![
+        data::parens_simple(),
+        data::parens_nested(),
+        data::parens_complex(),
+    ];
 
     for input in inputs {
         group.throughput(Throughput::Bytes(input.len() as u64));
 
-        group.bench_with_input(
-            BenchmarkId::new("packrat", input),
-            input,
-            |b, input| {
-                b.iter(|| {
-                    let mut backend = PackratBackend::new();
-                    let _ = black_box(backend.parse(&grammar, input));
-                })
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("packrat", input), input, |b, input| {
+            b.iter(|| {
+                let mut backend = PackratBackend::new();
+                let _ = black_box(backend.parse(&grammar, input));
+            })
+        });
 
-        group.bench_with_input(
-            BenchmarkId::new("bytecode", input),
-            input,
-            |b, input| {
-                b.iter(|| {
-                    let mut backend = BytecodeBackend::new();
-                    let _ = black_box(backend.parse(&grammar, input));
-                })
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("bytecode", input), input, |b, input| {
+            b.iter(|| {
+                let mut backend = BytecodeBackend::new();
+                let _ = black_box(backend.parse(&grammar, input));
+            })
+        });
     }
 
     group.finish();
@@ -534,27 +492,19 @@ fn bench_iso_date(c: &mut Criterion) {
     let input = data::date_simple();
     group.throughput(Throughput::Bytes(input.len() as u64));
 
-    group.bench_with_input(
-        BenchmarkId::new("packrat", input),
-        input,
-        |b, input| {
-            b.iter(|| {
-                let mut backend = PackratBackend::new();
-                let _ = black_box(backend.parse(&grammar, input));
-            })
-        },
-    );
+    group.bench_with_input(BenchmarkId::new("packrat", input), input, |b, input| {
+        b.iter(|| {
+            let mut backend = PackratBackend::new();
+            let _ = black_box(backend.parse(&grammar, input));
+        })
+    });
 
-    group.bench_with_input(
-        BenchmarkId::new("bytecode", input),
-        input,
-        |b, input| {
-            b.iter(|| {
-                let mut backend = BytecodeBackend::new();
-                let _ = black_box(backend.parse(&grammar, input));
-            })
-        },
-    );
+    group.bench_with_input(BenchmarkId::new("bytecode", input), input, |b, input| {
+        b.iter(|| {
+            let mut backend = BytecodeBackend::new();
+            let _ = black_box(backend.parse(&grammar, input));
+        })
+    });
 
     group.finish();
 }
@@ -566,27 +516,19 @@ fn bench_ip_address(c: &mut Criterion) {
     let input = data::ip_simple();
     group.throughput(Throughput::Bytes(input.len() as u64));
 
-    group.bench_with_input(
-        BenchmarkId::new("packrat", input),
-        input,
-        |b, input| {
-            b.iter(|| {
-                let mut backend = PackratBackend::new();
-                let _ = black_box(backend.parse(&grammar, input));
-            })
-        },
-    );
+    group.bench_with_input(BenchmarkId::new("packrat", input), input, |b, input| {
+        b.iter(|| {
+            let mut backend = PackratBackend::new();
+            let _ = black_box(backend.parse(&grammar, input));
+        })
+    });
 
-    group.bench_with_input(
-        BenchmarkId::new("bytecode", input),
-        input,
-        |b, input| {
-            b.iter(|| {
-                let mut backend = BytecodeBackend::new();
-                let _ = black_box(backend.parse(&grammar, input));
-            })
-        },
-    );
+    group.bench_with_input(BenchmarkId::new("bytecode", input), input, |b, input| {
+        b.iter(|| {
+            let mut backend = BytecodeBackend::new();
+            let _ = black_box(backend.parse(&grammar, input));
+        })
+    });
 
     group.finish();
 }
