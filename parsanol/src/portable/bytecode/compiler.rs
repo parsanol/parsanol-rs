@@ -105,6 +105,9 @@ impl Compiler {
             Atom::Lookahead { atom, positive } => self.compile_lookahead(atom, positive),
             Atom::Cut => self.compile_cut(),
             Atom::Ignore { atom } => self.compile_ignore(atom),
+            Atom::Capture { name, atom } => self.compile_capture(&name, atom),
+            Atom::Scope { atom } => self.compile_scope(atom),
+            Atom::Dynamic { callback_id } => self.compile_dynamic(callback_id),
             Atom::Custom { id } => self.compile_custom(id),
         }
     }
@@ -557,6 +560,66 @@ impl Compiler {
         // For now, we don't track results at the VM level
         // The capture system handles result building
         // Ignore just means don't create a capture
+
+        Ok(entry)
+    }
+
+    /// Compile a capture atom
+    ///
+    /// Captures the matched text with a name for later reference.
+    fn compile_capture(
+        &mut self,
+        name: &str,
+        atom_idx: usize,
+    ) -> Result<usize, CompileError> {
+        let entry = self.program.instruction_count();
+
+        // Get or add the key index
+        let key_idx = self.program.add_key(name);
+
+        // Open capture, compile child, close capture
+        self.program
+            .add_instruction(Instruction::OpenCapture {
+                kind: CaptureKind::Named,
+                key_idx,
+            });
+
+        self.compile_atom(atom_idx)?;
+
+        self.program
+            .add_instruction(Instruction::CloseCapture {
+                kind: CaptureKind::Named,
+                key_idx,
+            });
+
+        Ok(entry)
+    }
+
+    /// Compile a scope atom
+    ///
+    /// Creates an isolated capture scope. Captures inside are discarded on scope exit.
+    fn compile_scope(&mut self, atom_idx: usize) -> Result<usize, CompileError> {
+        let entry = self.program.instruction_count();
+
+        // Push scope, compile child, pop scope
+        self.program.add_instruction(Instruction::PushScope);
+
+        self.compile_atom(atom_idx)?;
+
+        self.program.add_instruction(Instruction::PopScope);
+
+        Ok(entry)
+    }
+
+    /// Compile a dynamic atom
+    ///
+    /// Invokes a callback at runtime to determine which atom to parse.
+    fn compile_dynamic(&mut self, callback_id: u64) -> Result<usize, CompileError> {
+        let entry = self.program.instruction_count();
+
+        // Emit InvokeDynamic instruction
+        self.program
+            .add_instruction(Instruction::InvokeDynamic { callback_id });
 
         Ok(entry)
     }

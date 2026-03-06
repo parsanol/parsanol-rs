@@ -1,0 +1,60 @@
+{
+  "id": "dynamic",
+  "title": "Dynamic Atoms",
+  "description": "Runtime-determined parsing via callbacks. Enable context-sensitive parsing where the grammar itself depends on input or previously captured values.",
+  "category": "conceptual",
+  "tags": ["dynamic", "callback", "context-sensitive", "runtime"],
+  "difficulty": "advanced",
+  "concepts": [
+    "runtime callback invocation",
+    "context access",
+    "capture-aware decisions",
+    "Packrat fallback"
+  ],
+
+  "motivation": {
+    "why": "Dynamic atoms allow parsing behavior to change based on context. This enables scenarios impossible with static grammars.",
+    "useCases": [
+      "Configuration-driven parsing with different grammars per config",
+      "Context-sensitive keywords that change meaning based on position",
+      "Incremental parsing with hints from previous parses",
+      "Plugin systems where users inject custom parsers",
+      "Language detection and switching"
+    ]
+  },
+
+  "inputFormat": {
+    "description": "Any input where parsing behavior depends on context.",
+    "syntax": "ruby def method... / python lambda x: ...",
+    "examples": [
+      {
+        "input": "ruby def method_name",
+        "description": "Ruby code with 'def' keyword",
+        "valid": true
+      },
+      {
+        "input": "python lambda x: x",
+        "description": "Python code with 'lambda' keyword",
+        "valid": true
+      }
+    ]
+  },
+
+  "outputFormat": {
+    "description": "Atoms determined at runtime by callback.",
+    "structure": {
+      "callback_result": { "description": "Atom returned by callback determines parsing" }
+    }
+  },
+
+  "backendCompatibility": {
+    "packrat": { "support": "native", "notes": "Direct callback invocation" },
+    "bytecode": { "support": "fallback", "notes": "Uses Packrat internally" },
+    "streaming": { "support": "fallback", "notes": "Uses Packrat internally" }
+  },
+
+  "related": ["captures", "scopes"],
+  "implementations": {
+    "rust": { "basic": "basic.rs" }
+  }
+}

@@ -5,8 +5,10 @@
 //! - `parity`: Tests verifying both backends produce same results
 //! - `complex`: Complex grammar tests (JSON-like, arithmetic)
 //! - `captures`: Named capture parity tests
+//! - `capture_scope_dynamic`: Tests for Capture, Scope, and Dynamic atoms
 
 mod basic;
+mod capture_scope_dynamic;
 mod captures;
 mod complex;
 mod parity;
