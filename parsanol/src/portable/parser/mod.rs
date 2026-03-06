@@ -350,6 +350,11 @@ impl<'a> PortableParser<'a> {
     // Core Parsing - Try Atom
     // ========================================================================
 
+    /// Try to parse an atom at a given position.
+    ///
+    /// This is the core parsing method that attempts to match an atom
+    /// at the specified position in the input. It uses packrat memoization
+    /// to cache results and avoid redundant parsing.
     #[inline]
     pub fn try_atom(&mut self, atom_id: usize, pos: usize) -> Result<ParseResult, ParseError> {
         self.check_resources()?;
@@ -751,11 +756,7 @@ impl<'a> PortableParser<'a> {
     ///
     /// Invokes a registered callback to determine which atom to parse.
     #[inline]
-    fn parse_dynamic(
-        &mut self,
-        callback_id: u64,
-        pos: usize,
-    ) -> Result<ParseResult, ParseError> {
+    fn parse_dynamic(&mut self, callback_id: u64, pos: usize) -> Result<ParseResult, ParseError> {
         use super::dynamic::{invoke_dynamic_callback, DynamicContext};
 
         // Create context for callback
@@ -763,7 +764,7 @@ impl<'a> PortableParser<'a> {
 
         // Invoke callback to get the atom
         let atom = invoke_dynamic_callback(callback_id, &ctx)
-            .ok_or_else(|| ParseError::Failed { position: pos })?;
+            .ok_or(ParseError::Failed { position: pos })?;
 
         // Create a temporary grammar and add the atom
         let mut temp_grammar = self.grammar.clone();
@@ -778,8 +779,8 @@ impl<'a> PortableParser<'a> {
 
         // Merge captures from temp parser
         for name in temp_parser.capture_state.names() {
-            if let Some(value) = temp_parser.capture_state.get(&name) {
-                self.capture_state.store(&name, value);
+            if let Some(value) = temp_parser.capture_state.get(name) {
+                self.capture_state.store(name, value);
             }
         }
 

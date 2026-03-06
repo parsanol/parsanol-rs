@@ -43,19 +43,13 @@ impl DynamicCallback for RubyDynamicCallback {
 
         // Get Parsanol::Native::Dynamic module from Ruby
         let object_class: RClass = ruby.class_object();
-        let parsanol_mod: RClass = object_class
-            .const_get::<_, RClass>("Parsanol")
-            .ok()?;
-        let native_mod: RClass = parsanol_mod
-            .const_get::<_, RClass>("Native")
-            .ok()?;
-        let dynamic_mod: Value = native_mod
-            .const_get::<_, Value>("Dynamic")
-            .ok()?;
+        let parsanol_mod: RClass = object_class.const_get::<_, RClass>("Parsanol").ok()?;
+        let native_mod: RClass = parsanol_mod.const_get::<_, RClass>("Native").ok()?;
+        let dynamic_mod: Value = native_mod.const_get::<_, Value>("Dynamic").ok()?;
 
         // Call Dynamic.invoke_from_rust(callback_id, context)
-        let result: Result<Value, Error> = dynamic_mod
-            .funcall("invoke_from_rust", (self.callback_id, ruby_ctx));
+        let result: Result<Value, Error> =
+            dynamic_mod.funcall("invoke_from_rust", (self.callback_id, ruby_ctx));
 
         match result {
             Ok(value) => {
@@ -129,10 +123,7 @@ fn ruby_value_to_atom(value: Value) -> Option<Atom> {
 }
 
 /// Register a Ruby callback with the global dynamic callback registry
-pub fn register_ruby_callback_with_global_registry(
-    callback_id: u64,
-    description: String,
-) -> u64 {
+pub fn register_ruby_callback_with_global_registry(callback_id: u64, description: String) -> u64 {
     let callback = RubyDynamicCallback::new(callback_id, description);
     crate::portable::dynamic::register_dynamic_callback_with_id(callback_id, Box::new(callback));
     callback_id

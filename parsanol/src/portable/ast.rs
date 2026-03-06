@@ -151,7 +151,7 @@ impl ParseResult {
         let mut result = HashMap::new();
         if let Some(cs) = &self.capture_state {
             for name in cs.names() {
-                if let Some(value) = cs.get(&name) {
+                if let Some(value) = cs.get(name) {
                     result.insert(name.as_str(), value.get_text(input));
                 }
             }

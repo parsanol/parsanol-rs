@@ -284,7 +284,10 @@ pub fn invoke_dynamic_callback(id: u64, ctx: &DynamicContext) -> Option<Atom> {
 pub fn get_dynamic_callback_description(id: u64) -> Option<String> {
     let registry = get_registry();
     let guard = registry.lock().unwrap();
-    guard.callbacks.get(&id).map(|cb| cb.description().to_string())
+    guard
+        .callbacks
+        .get(&id)
+        .map(|cb| cb.description().to_string())
 }
 
 /// Check if a callback is registered
@@ -359,11 +362,7 @@ impl CaptureSwitchCallback {
     /// * `capture_name` - Name of the capture to check
     /// * `cases` - List of (value, atom) pairs
     /// * `default` - Default atom if no case matches (None = fail)
-    pub fn new(
-        capture_name: &str,
-        cases: Vec<(String, Atom)>,
-        default: Option<Atom>,
-    ) -> Self {
+    pub fn new(capture_name: &str, cases: Vec<(String, Atom)>, default: Option<Atom>) -> Self {
         Self {
             capture_name: capture_name.to_string(),
             cases,
@@ -422,12 +421,16 @@ mod tests {
         impl DynamicCallback for TestCallback {
             fn resolve(&self, ctx: &DynamicContext) -> Option<Atom> {
                 if ctx.remaining().starts_with("foo") {
-                    Some(Atom::Str { pattern: "foo".to_string() })
+                    Some(Atom::Str {
+                        pattern: "foo".to_string(),
+                    })
                 } else {
                     None
                 }
             }
-            fn description(&self) -> &str { "test callback" }
+            fn description(&self) -> &str {
+                "test callback"
+            }
         }
 
         let id = register_dynamic_callback(Box::new(TestCallback));
@@ -449,8 +452,10 @@ mod tests {
     #[test]
     fn test_const_callback() {
         let callback = ConstCallback::new(
-            Atom::Str { pattern: "test".to_string() },
-            "const test"
+            Atom::Str {
+                pattern: "test".to_string(),
+            },
+            "const test",
         );
 
         let ctx = DynamicContext::new("anything", 0, CaptureState::new());
@@ -468,10 +473,22 @@ mod tests {
         let callback = CaptureSwitchCallback::new(
             "type",
             vec![
-                ("int".to_string(), Atom::Str { pattern: "integer".to_string() }),
-                ("str".to_string(), Atom::Str { pattern: "string".to_string() }),
+                (
+                    "int".to_string(),
+                    Atom::Str {
+                        pattern: "integer".to_string(),
+                    },
+                ),
+                (
+                    "str".to_string(),
+                    Atom::Str {
+                        pattern: "string".to_string(),
+                    },
+                ),
             ],
-            Some(Atom::Str { pattern: "unknown".to_string() }),
+            Some(Atom::Str {
+                pattern: "unknown".to_string(),
+            }),
         );
 
         // Test matching "int"

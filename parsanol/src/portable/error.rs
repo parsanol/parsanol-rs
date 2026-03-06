@@ -272,7 +272,7 @@ impl RichError {
             names.sort(); // Deterministic output
             for name in names {
                 if let Some(value) = captures.get(name) {
-                    let value_str: &str = *value;
+                    let value_str: &str = value;
                     // Truncate long values
                     let display_value = if value_str.len() > 40 {
                         format!("{}... ({} chars)", &value_str[..40], value_str.len())
