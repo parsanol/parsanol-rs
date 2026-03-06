@@ -10,7 +10,7 @@
 
 use parsanol::portable::{
     parser_dsl::{capture, dynamic, re, seq, str, GrammarBuilder},
-    AstArena, Grammar, PortableParser, Atom,
+    AstArena, Atom, Grammar, PortableParser,
 };
 use std::collections::HashMap;
 
@@ -34,7 +34,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Extract the captured value
     if let Some(text) = result.get_capture("greeting", input) {
-        println!("  Captured 'greeting': {:?}", text);  // "hello"
+        println!("  Captured 'greeting': {:?}", text); // "hello"
     }
 
     // =========================================================================
@@ -43,13 +43,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n--- Example 2: Email Parsing with Nested Captures ---\n");
 
     let grammar = GrammarBuilder::new()
-        .rule("email", capture("email",
-            seq(vec![
-                dynamic(capture("local", dynamic(re(r"[a-zA-Z0-9._%+-]+")))),
-                dynamic(str("@")),
-                dynamic(capture("domain", dynamic(re(r"[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")))),
-            ])
-        ))
+        .rule(
+            "email",
+            capture(
+                "email",
+                seq(vec![
+                    dynamic(capture("local", dynamic(re(r"[a-zA-Z0-9._%+-]+")))),
+                    dynamic(str("@")),
+                    dynamic(capture(
+                        "domain",
+                        dynamic(re(r"[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")),
+                    )),
+                ]),
+            ),
+        )
         .build();
 
     let input = "user@example.com";
@@ -83,15 +90,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut grammar = Grammar::new();
 
-    let name = grammar.add_atom(Atom::Re { pattern: r"[a-zA-Z]+".into() });
+    let name = grammar.add_atom(Atom::Re {
+        pattern: r"[a-zA-Z]+".into(),
+    });
     let name_capture = grammar.add_atom(Atom::Capture {
         name: "name".into(),
         atom: name,
     });
 
-    let comma = grammar.add_atom(Atom::Str { pattern: ", ".into() });
+    let comma = grammar.add_atom(Atom::Str {
+        pattern: ", ".into(),
+    });
 
-    let age = grammar.add_atom(Atom::Re { pattern: r"\d+".into() });
+    let age = grammar.add_atom(Atom::Re {
+        pattern: r"\d+".into(),
+    });
     let age_capture = grammar.add_atom(Atom::Capture {
         name: "age".into(),
         atom: age,

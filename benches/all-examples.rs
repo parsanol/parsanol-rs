@@ -12,8 +12,8 @@ use std::hint::black_box;
 
 use parsanol::portable::{
     backend::{BytecodeBackend, PackratBackend, ParsingBackend},
-    parser_dsl::{choice, dynamic, re, ref_, seq, str, GrammarBuilder},
     infix::{Assoc, InfixBuilder},
+    parser_dsl::{choice, dynamic, re, ref_, seq, str, GrammarBuilder},
     Grammar,
 };
 
@@ -432,12 +432,19 @@ fn bench_category_summary(c: &mut Criterion) {
     let mut group = c.benchmark_group("category_summary");
 
     // Group by category and compute representative times
-    let categories = ["simple", "expression", "nested", "data", "programming", "text", "special"];
+    let categories = [
+        "simple",
+        "expression",
+        "nested",
+        "data",
+        "programming",
+        "text",
+        "special",
+    ];
 
     for category in categories {
-        let category_examples: Vec<_> = examples.iter()
-            .filter(|e| e.category == category)
-            .collect();
+        let category_examples: Vec<_> =
+            examples.iter().filter(|e| e.category == category).collect();
 
         if category_examples.is_empty() {
             continue;
@@ -504,17 +511,23 @@ fn bench_nested_repetition(c: &mut Criterion) {
 
 fn build_nested_grammar(depth: usize) -> Grammar {
     if depth == 0 {
-        return GrammarBuilder::new()
-            .rule("start", re(r"[a-z]+"))
-            .build();
+        return GrammarBuilder::new().rule("start", re(r"[a-z]+")).build();
     }
 
     let mut builder = GrammarBuilder::new();
     builder = builder.rule("start", ref_("nested"));
 
     for d in 0..depth {
-        let rule_name = if d == 0 { "start" } else { &format!("level_{}", d) };
-        let inner_name = if d == depth - 1 { "atom" } else { &format!("level_{}", d + 1) };
+        let rule_name = if d == 0 {
+            "start"
+        } else {
+            &format!("level_{}", d)
+        };
+        let inner_name = if d == depth - 1 {
+            "atom"
+        } else {
+            &format!("level_{}", d + 1)
+        };
 
         if d == 0 {
             continue; // Skip, already added
@@ -523,16 +536,22 @@ fn build_nested_grammar(depth: usize) -> Grammar {
 
     // Simple nested structure
     GrammarBuilder::new()
-        .rule("start", seq(vec![
-            dynamic(str("(")),
-            dynamic(ref_("inner")),
-            dynamic(str(")")),
-        ]))
-        .rule("inner", seq(vec![
-            dynamic(str("(")),
-            dynamic(ref_("atom")),
-            dynamic(str(")")),
-        ]))
+        .rule(
+            "start",
+            seq(vec![
+                dynamic(str("(")),
+                dynamic(ref_("inner")),
+                dynamic(str(")")),
+            ]),
+        )
+        .rule(
+            "inner",
+            seq(vec![
+                dynamic(str("(")),
+                dynamic(ref_("atom")),
+                dynamic(str(")")),
+            ]),
+        )
         .rule("atom", re(r"[a-z]+"))
         .build()
 }

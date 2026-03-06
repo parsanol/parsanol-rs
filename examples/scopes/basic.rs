@@ -9,7 +9,7 @@
 
 use parsanol::portable::{
     parser_dsl::{capture, dynamic, re, scope, seq, str, GrammarBuilder},
-    AstArena, Grammar, PortableParser, Atom,
+    AstArena, Atom, Grammar, PortableParser,
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -23,11 +23,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Without scope: captures accumulate, last value wins
     let grammar = GrammarBuilder::new()
-        .rule("items", seq(vec![
-            dynamic(capture("temp", dynamic(str("a")))),
-            dynamic(str("b")),
-            dynamic(capture("temp", dynamic(str("c")))),
-        ]))
+        .rule(
+            "items",
+            seq(vec![
+                dynamic(capture("temp", dynamic(str("a")))),
+                dynamic(str("b")),
+                dynamic(capture("temp", dynamic(str("c")))),
+            ]),
+        )
         .build();
 
     let input = "abc";
@@ -41,17 +44,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // With scope: inner captures are discarded
     let grammar = GrammarBuilder::new()
-        .rule("outer", seq(vec![
-            dynamic(capture("outer_name", dynamic(str("prefix")))),
-            dynamic(str(" ")),
-            dynamic(scope(seq(vec![
-                dynamic(capture("inner_name", dynamic(re(r"[a-z]+")))),
+        .rule(
+            "outer",
+            seq(vec![
+                dynamic(capture("outer_name", dynamic(str("prefix")))),
                 dynamic(str(" ")),
-                dynamic(capture("inner_value", dynamic(re(r"\d+")))),
-            ]))),
-            dynamic(str(" ")),
-            dynamic(capture("outer_value", dynamic(str("suffix")))),
-        ]))
+                dynamic(scope(seq(vec![
+                    dynamic(capture("inner_name", dynamic(re(r"[a-z]+")))),
+                    dynamic(str(" ")),
+                    dynamic(capture("inner_value", dynamic(re(r"\d+")))),
+                ]))),
+                dynamic(str(" ")),
+                dynamic(capture("outer_value", dynamic(str("suffix")))),
+            ]),
+        )
         .build();
 
     let input = "prefix hello 123 suffix";
@@ -61,8 +67,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("\n  With scope:");
     println!("    Capture names: {:?}", result.capture_names());
-    println!("    'outer_name':  {:?}", result.get_capture("outer_name", input));
-    println!("    'outer_value': {:?}", result.get_capture("outer_value", input));
+    println!(
+        "    'outer_name':  {:?}",
+        result.get_capture("outer_name", input)
+    );
+    println!(
+        "    'outer_value': {:?}",
+        result.get_capture("outer_value", input)
+    );
     // Note: inner_name and inner_value are NOT in the result
     println!("    (inner_name and inner_value are discarded)");
 
@@ -72,17 +84,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n--- Example 2: Nested Scopes ---\n");
 
     let grammar = GrammarBuilder::new()
-        .rule("outer", seq(vec![
-            dynamic(capture("level", dynamic(str("L1")))),
-            dynamic(str(" ")),
-            dynamic(scope(seq(vec![
-                dynamic(capture("level", dynamic(str("L2")))),
+        .rule(
+            "outer",
+            seq(vec![
+                dynamic(capture("level", dynamic(str("L1")))),
                 dynamic(str(" ")),
                 dynamic(scope(seq(vec![
-                    dynamic(capture("level", dynamic(str("L3")))),
+                    dynamic(capture("level", dynamic(str("L2")))),
+                    dynamic(str(" ")),
+                    dynamic(scope(seq(vec![dynamic(capture(
+                        "level",
+                        dynamic(str("L3")),
+                    ))]))),
                 ]))),
-            ]))),
-        ]))
+            ]),
+        )
         .build();
 
     let input = "L1 L2 L3";
@@ -92,7 +108,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("  Nested scopes - only L1 persists:");
     println!("    Capture names: {:?}", result.capture_names());
-    println!("    'level' value:  {:?}", result.get_capture("level", input));
+    println!(
+        "    'level' value:  {:?}",
+        result.get_capture("level", input)
+    );
 
     // =========================================================================
     // Example 3: Recursive Structure with Scopes (Raw Grammar API)
@@ -103,7 +122,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut grammar = Grammar::new();
 
     // Inner content (can be text or nested parens)
-    let inner_text = grammar.add_atom(Atom::Re { pattern: r"[^()]+".into() });
+    let inner_text = grammar.add_atom(Atom::Re {
+        pattern: r"[^()]+".into(),
+    });
 
     // Capture text at current level (scoped)
     let text_capture = grammar.add_atom(Atom::Capture {
@@ -115,8 +136,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let content = grammar.add_atom(Atom::Scope { atom: text_capture });
 
     // Full structure - create atoms first to avoid borrow issues
-    let open_paren = grammar.add_atom(Atom::Str { pattern: "(".into() });
-    let close_paren = grammar.add_atom(Atom::Str { pattern: ")".into() });
+    let open_paren = grammar.add_atom(Atom::Str {
+        pattern: "(".into(),
+    });
+    let close_paren = grammar.add_atom(Atom::Str {
+        pattern: ")".into(),
+    });
 
     let paren_content = grammar.add_atom(Atom::Sequence {
         atoms: vec![open_paren, content, close_paren],
@@ -141,14 +166,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Processing repeated structures - each gets its own scope
     let grammar = GrammarBuilder::new()
-        .rule("item", scope(seq(vec![
-            dynamic(capture("id", dynamic(re(r"\d+")))),
-            dynamic(str(":")),
-            dynamic(capture("name", dynamic(re(r"[a-zA-Z]+")))),
-        ])))
-        .rule("items", seq(vec![
-            dynamic(str("item")),
-        ]))
+        .rule(
+            "item",
+            scope(seq(vec![
+                dynamic(capture("id", dynamic(re(r"\d+")))),
+                dynamic(str(":")),
+                dynamic(capture("name", dynamic(re(r"[a-zA-Z]+")))),
+            ])),
+        )
+        .rule("items", seq(vec![dynamic(str("item"))]))
         .build();
 
     let input = "item";
@@ -168,10 +194,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n--- Example 5: Accessing Capture State ---\n");
 
     let grammar = GrammarBuilder::new()
-        .rule("outer", seq(vec![
-            dynamic(capture("name", dynamic(str("outer")))),
-            dynamic(scope(dynamic(capture("inner", dynamic(str("inner")))))),
-        ]))
+        .rule(
+            "outer",
+            seq(vec![
+                dynamic(capture("name", dynamic(str("outer")))),
+                dynamic(scope(dynamic(capture("inner", dynamic(str("inner")))))),
+            ]),
+        )
         .build();
 
     let input = "outerinner";

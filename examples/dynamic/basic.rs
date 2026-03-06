@@ -8,11 +8,11 @@
 
 #![allow(clippy::print_literal)]
 
+use parsanol::portable::dynamic::{register_dynamic_callback, DynamicCallback, DynamicContext};
 use parsanol::portable::{
     parser_dsl::{capture, dynamic, dynamic_with_id, re, seq, str, GrammarBuilder},
-    AstArena, PortableParser, Atom,
+    AstArena, Atom, PortableParser,
 };
-use parsanol::portable::dynamic::{DynamicCallback, DynamicContext, register_dynamic_callback};
 
 // =========================================================================
 // Example 1: Constant Callback
@@ -25,7 +25,11 @@ struct ConstCallback {
 
 impl DynamicCallback for ConstCallback {
     fn resolve(&self, ctx: &DynamicContext) -> Option<Atom> {
-        println!("    [ConstCallback '{}'] invoked at position {}", self.desc, ctx.pos());
+        println!(
+            "    [ConstCallback '{}'] invoked at position {}",
+            self.desc,
+            ctx.pos()
+        );
         Some(self.atom.clone())
     }
 
@@ -38,7 +42,9 @@ fn example_const_callback() -> Result<(), Box<dyn std::error::Error>> {
     println!("--- Example 1: Constant Callback ---\n");
 
     let callback = ConstCallback {
-        atom: Atom::Str { pattern: "hello".into() },
+        atom: Atom::Str {
+            pattern: "hello".into(),
+        },
         desc: "greeting",
     };
     let callback_id = register_dynamic_callback(Box::new(callback));
@@ -72,13 +78,19 @@ impl DynamicCallback for LanguageKeywordCallback {
         // Look at preceding context to determine language
         if pos >= 5 && &input[pos - 5..pos] == "ruby " {
             println!("    -> Detected Ruby context, returning 'def'");
-            Some(Atom::Str { pattern: "def".into() })
+            Some(Atom::Str {
+                pattern: "def".into(),
+            })
         } else if pos >= 7 && &input[pos - 7..pos] == "python " {
             println!("    -> Detected Python context, returning 'lambda'");
-            Some(Atom::Str { pattern: "lambda".into() })
+            Some(Atom::Str {
+                pattern: "lambda".into(),
+            })
         } else {
             println!("    -> No context detected, returning 'function'");
-            Some(Atom::Str { pattern: "function".into() })
+            Some(Atom::Str {
+                pattern: "function".into(),
+            })
         }
     }
 
@@ -132,13 +144,19 @@ impl DynamicCallback for PositionCallback {
         // Different behavior at different positions
         if pos == 0 {
             // First position: expect a keyword (return regex that matches any of them)
-            Some(Atom::Re { pattern: r"(let|const|var)".into() })
+            Some(Atom::Re {
+                pattern: r"(let|const|var)".into(),
+            })
         } else if pos < input.len() / 2 {
             // First half: expect identifier
-            Some(Atom::Re { pattern: r"[a-zA-Z_][a-zA-Z0-9_]*".into() })
+            Some(Atom::Re {
+                pattern: r"[a-zA-Z_][a-zA-Z0-9_]*".into(),
+            })
         } else {
             // Second half: expect value
-            Some(Atom::Re { pattern: r"\d+".into() })
+            Some(Atom::Re {
+                pattern: r"\d+".into(),
+            })
         }
     }
 
@@ -153,13 +171,16 @@ fn example_position_based() -> Result<(), Box<dyn std::error::Error>> {
     let callback_id = register_dynamic_callback(Box::new(PositionCallback));
 
     let grammar = GrammarBuilder::new()
-        .rule("stmt", seq(vec![
-            dynamic(dynamic_with_id(callback_id)),
-            dynamic(str(" ")),
-            dynamic(dynamic_with_id(callback_id)),
-            dynamic(str("=")),
-            dynamic(dynamic_with_id(callback_id)),
-        ]))
+        .rule(
+            "stmt",
+            seq(vec![
+                dynamic(dynamic_with_id(callback_id)),
+                dynamic(str(" ")),
+                dynamic(dynamic_with_id(callback_id)),
+                dynamic(str("=")),
+                dynamic(dynamic_with_id(callback_id)),
+            ]),
+        )
         .build();
 
     let input = "let x=42";
@@ -188,10 +209,14 @@ impl DynamicCallback for ConfigCallback {
 
         if self.strict_mode {
             // Strict mode: only lowercase identifiers
-            Some(Atom::Re { pattern: r"[a-z][a-z0-9_]*".into() })
+            Some(Atom::Re {
+                pattern: r"[a-z][a-z0-9_]*".into(),
+            })
         } else {
             // Lenient mode: any identifier
-            Some(Atom::Re { pattern: r"[a-zA-Z_][a-zA-Z0-9_]*".into() })
+            Some(Atom::Re {
+                pattern: r"[a-zA-Z_][a-zA-Z0-9_]*".into(),
+            })
         }
     }
 
@@ -238,14 +263,22 @@ impl DynamicCallback for CaptureAwareCallback {
         if let Some(type_name) = ctx.get_capture_text("type") {
             println!("    -> Found type capture: {:?}", type_name);
             match type_name {
-                "int" => Some(Atom::Re { pattern: r"\d+".into() }),
-                "str" => Some(Atom::Re { pattern: r"[a-zA-Z]+".into() }),
-                "bool" => Some(Atom::Re { pattern: r"(true|false)".into() }),
+                "int" => Some(Atom::Re {
+                    pattern: r"\d+".into(),
+                }),
+                "str" => Some(Atom::Re {
+                    pattern: r"[a-zA-Z]+".into(),
+                }),
+                "bool" => Some(Atom::Re {
+                    pattern: r"(true|false)".into(),
+                }),
                 _ => None,
             }
         } else {
             println!("    -> No type capture, matching identifier");
-            Some(Atom::Re { pattern: r"[a-z]+".into() })
+            Some(Atom::Re {
+                pattern: r"[a-z]+".into(),
+            })
         }
     }
 
@@ -262,13 +295,16 @@ fn example_capture_aware() -> Result<(), Box<dyn std::error::Error>> {
     // Grammar: type:name = value
     // The value parser depends on the type
     let grammar = GrammarBuilder::new()
-        .rule("declaration", seq(vec![
-            dynamic(capture("type", dynamic(re(r"[a-z]+")))),
-            dynamic(str(":")),
-            dynamic(capture("name", dynamic(re(r"[a-z]+")))),
-            dynamic(str("=")),
-            dynamic(capture("value", dynamic(dynamic_with_id(callback_id)))),
-        ]))
+        .rule(
+            "declaration",
+            seq(vec![
+                dynamic(capture("type", dynamic(re(r"[a-z]+")))),
+                dynamic(str(":")),
+                dynamic(capture("name", dynamic(re(r"[a-z]+")))),
+                dynamic(str("=")),
+                dynamic(capture("value", dynamic(dynamic_with_id(callback_id)))),
+            ]),
+        )
         .build();
 
     let test_cases = [

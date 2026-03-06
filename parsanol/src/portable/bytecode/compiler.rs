@@ -567,30 +567,24 @@ impl Compiler {
     /// Compile a capture atom
     ///
     /// Captures the matched text with a name for later reference.
-    fn compile_capture(
-        &mut self,
-        name: &str,
-        atom_idx: usize,
-    ) -> Result<usize, CompileError> {
+    fn compile_capture(&mut self, name: &str, atom_idx: usize) -> Result<usize, CompileError> {
         let entry = self.program.instruction_count();
 
         // Get or add the key index
         let key_idx = self.program.add_key(name);
 
         // Open capture, compile child, close capture
-        self.program
-            .add_instruction(Instruction::OpenCapture {
-                kind: CaptureKind::Named,
-                key_idx,
-            });
+        self.program.add_instruction(Instruction::OpenCapture {
+            kind: CaptureKind::Named,
+            key_idx,
+        });
 
         self.compile_atom(atom_idx)?;
 
-        self.program
-            .add_instruction(Instruction::CloseCapture {
-                kind: CaptureKind::Named,
-                key_idx,
-            });
+        self.program.add_instruction(Instruction::CloseCapture {
+            kind: CaptureKind::Named,
+            key_idx,
+        });
 
         Ok(entry)
     }
