@@ -28,6 +28,10 @@ Rust. It provides high-performance parsing capabilities with a focus on:
 - [Backend Abstraction](#backend-abstraction) - Extensible backend trait system
 - [Bytecode Backend](#bytecode-backend) - Optional VM backend for linear patterns
 - [Parser DSL](#parser-dsl) - Fluent API for grammar definition
+- [Capture Atoms](#capture-atoms) - Extract named values during parsing
+- [Scope Atoms](#scope-atoms) - Isolated capture contexts
+- [Dynamic Atoms](#dynamic-atoms) - Runtime-determined parsing via callbacks
+- [Streaming with Captures](#streaming-with-captures) - Memory-efficient parsing with capture support
 - [Transform System](#transform-system) - Convert parse trees to typed structs
 - [Derive Macros](#derive-macros) - Automatic typed AST generation
 - [Streaming Builder](#streaming-builder) - Single-pass parsing with custom output
@@ -621,14 +625,17 @@ fn build_calculator_grammar() -> Grammar {
 ## Atom Types
 
 | Atom | Description | Example |
-|----|----|----|
+|------|-------------|---------|
 | `str("literal")` | Match exact string | `str("hello")` |
 | `re("pattern")` | Match regex pattern | `re(r"[0-9]+")` |
 | `any()` | Match any single character | `any()` |
 | `ref_("rule")` | Reference to named rule | `ref_("expr")` |
-| `seq([…])` | Sequence of atoms | `seq(vec![a,` `b,` `c])` |
-| `choice([…])` | Alternative atoms | `choice(vec![a,` `b])` |
+| `seq([...])` | Sequence of atoms | `seq(vec![a, b, c])` |
+| `choice([...])` | Alternative atoms | `choice(vec![a, b])` |
 | `cut()` | Commit to this branch (prevent backtracking) | `cut()` |
+| `capture("name", atom)` | Extract named value during parsing | `capture("id", re(r"[a-z]+"))` |
+| `scope(atom)` | Create isolated capture context | `scope(seq([...]))` |
+| `dynamic(callback)` | Runtime-determined parsing via callback | `dynamic(callback_id)` |
 
 ## Combinators
 
@@ -674,6 +681,197 @@ let grammar = grammar! {
     "greeting" => ref_("hello").then(ref_("world")),
 };
 ```
+
+# Capture Atoms
+
+Capture atoms extract named values during parsing, similar to regex named groups. They work with all backends (Packrat, Bytecode, Streaming).
+
+## Basic Usage
+
+```rust
+use parsanol::portable::{
+    parser_dsl::{capture, dynamic, re, seq, GrammarBuilder},
+    PortableParser, AstArena,
+};
+
+let grammar = GrammarBuilder::new()
+    .rule("greeting", seq(vec![
+        capture("word", dynamic(re(r"[a-zA-Z]+"))),
+    ]))
+    .build();
+
+let mut arena = AstArena::for_input(64);
+let mut parser = PortableParser::packrat(grammar);
+let result = parser.parse_from_pos(0, "hello world", &mut arena)?;
+
+// Access captures
+if let Some(text) = result.get_capture("word", "hello world") {
+    println!("Captured: {}", text); // Prints: "hello"
+}
+```
+
+## Capture API
+
+```rust
+// Get a single capture by name
+let value = result.get_capture("name", input);
+
+// Get all capture names
+for name in result.capture_names() {
+    println!("Capture: {}", name);
+}
+
+// Check if capture exists
+if result.has_capture("name") {
+    // ...
+}
+```
+
+## Backend Compatibility
+
+| Backend | Capture Support | Notes |
+|---------|-----------------|-------|
+| Packrat | Full | Native support |
+| Bytecode | Full | Uses capture instructions |
+| Streaming | Full | Captures persist across chunks |
+
+# Scope Atoms
+
+Scope atoms create isolated capture contexts. Captures made inside a scope are discarded when the scope exits, preventing pollution of the parent context.
+
+## Use Cases
+
+- Nested parsing where inner captures shouldn't affect outer state
+- Repetitive patterns where each iteration starts fresh
+- Context isolation in recursive grammars
+
+## Basic Usage
+
+```rust
+use parsanol::portable::parser_dsl::{scope, seq, capture, dynamic, re, GrammarBuilder};
+
+let grammar = GrammarBuilder::new()
+    .rule("outer", seq(vec![
+        capture("outer_name", dynamic(re(r"[a-z]+"))),
+        scope(seq(vec![
+            capture("inner_name", dynamic(re(r"[0-9]+"))),
+        ])),
+        // "inner_name" is NOT available here
+    ]))
+    .build();
+```
+
+# Dynamic Atoms
+
+Dynamic atoms enable runtime-determined parsing via registered callbacks. This allows context-sensitive parsing where the grammar itself depends on input or previously captured values.
+
+## Registering a Callback
+
+```rust
+use parsanol::portable::{
+    Grammar, Atom, Parser,
+    dynamic::{DynamicCallback, DynamicContext, register_dynamic_callback},
+    parser_dsl::*,
+};
+
+struct KeywordCallback;
+
+impl DynamicCallback for KeywordCallback {
+    fn call(&self, ctx: &DynamicContext) -> Option<Atom> {
+        // Access current position
+        let pos = ctx.pos();
+        // Access input
+        let input = ctx.input();
+        // Access captures made so far
+        if let Some(lang) = ctx.get_capture("language") {
+            match lang {
+                "ruby" => Some(Atom::Str { pattern: "def".into() }),
+                "python" => Some(Atom::Str { pattern: "lambda".into() }),
+                _ => None,
+            }
+        } else {
+            None
+        }
+    }
+
+    fn description(&self) -> &str {
+        "keyword_callback"
+    }
+}
+
+let callback_id = register_dynamic_callback(Box::new(KeywordCallback));
+```
+
+## Using Dynamic Atoms in Grammars
+
+```rust
+let grammar = GrammarBuilder::new()
+    .rule("keyword", dynamic_with_id(callback_id))
+    .build();
+```
+
+## Backend Compatibility
+
+| Backend | Dynamic Support | Notes |
+|---------|-----------------|-------|
+| Packrat | Full | Native support (recommended) |
+| Bytecode | Fallback | Uses Packrat internally |
+| Streaming | Fallback | Uses Packrat internally |
+
+**Note:** For heavy dynamic atom usage, prefer the Packrat backend for best performance.
+
+# Streaming with Captures
+
+The streaming parser supports captures while maintaining bounded memory usage. Captures persist across streaming parse operations.
+
+## Basic Usage
+
+```rust
+use parsanol::portable::{
+    parser_dsl::{capture, dynamic, re, GrammarBuilder},
+    streaming::{StreamingParser, ChunkConfig},
+    arena::AstArena,
+};
+use std::io::Cursor;
+
+let grammar = GrammarBuilder::new()
+    .rule("word", capture("word", dynamic(re(r"[a-zA-Z]+"))))
+    .build();
+
+let config = ChunkConfig {
+    chunk_size: 65536,  // 64 KB chunks
+    window_size: 2,      // Keep 2 chunks in memory
+};
+
+let mut parser = StreamingParser::new(&grammar, config);
+let mut arena = AstArena::for_input(65536);
+let mut cursor = Cursor::new(input.as_bytes());
+
+let result = parser.parse_from_reader(&mut cursor, &mut arena)?;
+
+if let Some(captures) = &result.capture_state {
+    for name in captures.names() {
+        if let Some(value) = captures.get(&name) {
+            println!("{} = {:?}", name, value.get_text(input));
+        }
+    }
+}
+```
+
+## Chunk Configuration
+
+| Preset | Chunk Size | Window | Use Case |
+|--------|------------|--------|----------|
+| `small()` | 16 KB | 2 | Real-time feeds |
+| `medium()` | 64 KB | 3 | Default |
+| `large()` | 256 KB | 4 | Log files |
+| `huge()` | 1 MB | 5 | Large files |
+
+## Performance Notes
+
+- Memory: O(chunk_size × window_size + capture_state)
+- Captures accumulate during parse, available at end
+- For very large captures, use `reset()` to process incrementally
 
 # Transform System
 
