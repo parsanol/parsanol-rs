@@ -610,7 +610,6 @@ impl<'a> BytecodeVM<'a> {
             // ========================================================================
             // Capture Scope Instructions
             // ========================================================================
-
             Instruction::PushScope => {
                 // Push a new capture scope
                 self.capture_state.push_scope();
@@ -626,20 +625,16 @@ impl<'a> BytecodeVM<'a> {
             // ========================================================================
             // Dynamic Atom Instructions
             // ========================================================================
-
             Instruction::InvokeDynamic { callback_id } => {
                 // Dynamic atoms use Packrat fallback
+                use crate::portable::arena::AstArena;
                 use crate::portable::dynamic::{invoke_dynamic_callback, DynamicContext};
                 use crate::portable::grammar::Grammar;
                 use crate::portable::parser::PortableParser;
-                use crate::portable::arena::AstArena;
 
                 // Create context for callback
-                let ctx = DynamicContext::new(
-                    self.input_str,
-                    self.position,
-                    self.capture_state.clone(),
-                );
+                let ctx =
+                    DynamicContext::new(self.input_str, self.position, self.capture_state.clone());
 
                 // Invoke callback to get the atom
                 let atom = match invoke_dynamic_callback(*callback_id, &ctx) {
@@ -659,14 +654,15 @@ impl<'a> BytecodeVM<'a> {
                 let mut temp_arena = AstArena::for_input(self.input_str.len());
 
                 // Use Packrat parser for dynamic atom
-                let mut temp_parser = PortableParser::new(&temp_grammar, self.input_str, &mut temp_arena);
+                let mut temp_parser =
+                    PortableParser::new(&temp_grammar, self.input_str, &mut temp_arena);
                 match temp_parser.parse_from_pos(self.position) {
                     Ok(result) => {
                         // Merge captures from temp parser
                         let temp_captures = temp_parser.capture_state();
                         for name in temp_captures.names() {
-                            if let Some(value) = temp_captures.get(&name) {
-                                self.capture_state.store(&name, value);
+                            if let Some(value) = temp_captures.get(name) {
+                                self.capture_state.store(name, value);
                             }
                         }
                         self.position = result.end_pos;

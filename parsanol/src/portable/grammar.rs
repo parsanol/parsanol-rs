@@ -279,18 +279,9 @@ impl Grammar {
                 .atoms
                 .iter()
                 .any(|a| matches!(a, Atom::Lookahead { .. })),
-            has_captures: self
-                .atoms
-                .iter()
-                .any(|a| matches!(a, Atom::Capture { .. })),
-            has_scopes: self
-                .atoms
-                .iter()
-                .any(|a| matches!(a, Atom::Scope { .. })),
-            has_dynamic: self
-                .atoms
-                .iter()
-                .any(|a| matches!(a, Atom::Dynamic { .. })),
+            has_captures: self.atoms.iter().any(|a| matches!(a, Atom::Capture { .. })),
+            has_scopes: self.atoms.iter().any(|a| matches!(a, Atom::Scope { .. })),
+            has_dynamic: self.atoms.iter().any(|a| matches!(a, Atom::Dynamic { .. })),
         }
     }
 

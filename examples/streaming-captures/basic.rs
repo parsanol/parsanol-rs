@@ -8,9 +8,9 @@
 #![allow(clippy::print_literal)]
 
 use parsanol::portable::{
-    parser_dsl::{capture, dynamic, re, GrammarBuilder},
-    streaming::{StreamingParser, ChunkConfig},
     arena::AstArena,
+    parser_dsl::{capture, dynamic, re, GrammarBuilder},
+    streaming::{ChunkConfig, StreamingParser},
 };
 use std::io::Cursor;
 
