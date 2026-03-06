@@ -48,7 +48,7 @@ fn example_basic_streaming() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(captures) = &result.capture_state {
         println!("  Captures found:");
         for name in captures.names() {
-            if let Some(value) = captures.get(&name) {
+            if let Some(value) = captures.get(name) {
                 println!("    {} = {:?}", name, value.get_text(input));
             }
         }
