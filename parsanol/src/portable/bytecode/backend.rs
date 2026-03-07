@@ -135,6 +135,7 @@ impl Parser {
         Ok(ParseResult {
             value: result.value,
             end_pos: result.end_pos,
+            capture_state: None,
         })
     }
 

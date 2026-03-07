@@ -329,6 +329,9 @@ pub struct StreamingResult {
 
     /// Cache statistics
     pub cache_stats: (u64, u64, f64),
+
+    /// Captured values (if any captures were made)
+    pub capture_state: Option<super::capture_state::CaptureState>,
 }
 
 impl<'a> StreamingParser<'a> {
@@ -418,6 +421,9 @@ impl<'a> StreamingParser<'a> {
         let mut parser = super::parser::PortableParser::new(self.grammar, &input, arena);
         let ast = parser.parse().map_err(|e| StreamingError::ParseError(e))?;
 
+        // Extract captures from parser
+        let capture_state = Some(parser.capture_state().clone());
+
         let cache_stats = self.cache.stats();
 
         Ok(StreamingResult {
@@ -426,6 +432,7 @@ impl<'a> StreamingParser<'a> {
             chunks_processed,
             peak_memory,
             cache_stats,
+            capture_state,
         })
     }
 
@@ -476,6 +483,9 @@ impl<'a> StreamingParser<'a> {
         let mut parser = super::parser::PortableParser::new(self.grammar, &input, arena);
         let ast = parser.parse().map_err(|e| StreamingError::ParseError(e))?;
 
+        // Extract captures from parser
+        let capture_state = Some(parser.capture_state().clone());
+
         let cache_stats = self.cache.stats();
 
         Ok(StreamingResult {
@@ -484,6 +494,7 @@ impl<'a> StreamingParser<'a> {
             chunks_processed,
             peak_memory,
             cache_stats,
+            capture_state,
         })
     }
 
@@ -602,6 +613,7 @@ impl<'a> StreamingParser<'a> {
             chunks_processed,
             peak_memory,
             cache_stats,
+            capture_state: None,
         })
     }
 
@@ -878,5 +890,68 @@ mod tests {
         // Add more chunks, not last
         window.push(Chunk::new(vec![7, 8, 9], 6, false));
         assert!(!window.has_last_chunk()); // New chunk overwrites last
+    }
+
+    #[test]
+    fn test_streaming_result_capture_state() {
+        use super::super::grammar::{Atom, Grammar};
+
+        // Create a grammar with captures
+        let mut grammar = Grammar::new();
+        let str_atom = grammar.add_atom(Atom::Str {
+            pattern: "hello".to_string(),
+        });
+        let capture = grammar.add_atom(Atom::Capture {
+            name: "greeting".to_string(),
+            atom: str_atom,
+        });
+        grammar.root = capture;
+
+        // Parse from chunks
+        let config = ChunkConfig {
+            chunk_size: 16,
+            window_size: 2,
+        };
+        let mut parser = StreamingParser::new(&grammar, config);
+        let mut arena = AstArena::for_input(5);
+
+        let chunks = vec![b"hello".to_vec()];
+        let result = parser.parse_from_chunks(chunks, &mut arena);
+
+        assert!(result.is_ok());
+        let streaming_result = result.unwrap();
+        // Captures should be available in the result
+        assert!(streaming_result.capture_state.is_some());
+    }
+
+    #[test]
+    fn test_streaming_parse_from_reader_with_captures() {
+        use super::super::grammar::{Atom, Grammar};
+        use std::io::Cursor;
+
+        // Create a grammar with captures
+        let mut grammar = Grammar::new();
+        let str_atom = grammar.add_atom(Atom::Str {
+            pattern: "test".to_string(),
+        });
+        let capture = grammar.add_atom(Atom::Capture {
+            name: "value".to_string(),
+            atom: str_atom,
+        });
+        grammar.root = capture;
+
+        // Parse from reader
+        let config = ChunkConfig::small();
+        let mut parser = StreamingParser::new(&grammar, config);
+        let mut arena = AstArena::for_input(4);
+
+        let input = b"test";
+        let mut reader = Cursor::new(input);
+        let result = parser.parse_from_reader(&mut reader, &mut arena);
+
+        assert!(result.is_ok());
+        let streaming_result = result.unwrap();
+        // Captures should be in the result
+        assert!(streaming_result.capture_state.is_some());
     }
 }

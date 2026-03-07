@@ -28,6 +28,7 @@ pub use governor::ResourceGovernor;
 use crate::portable::arena::AstArena;
 use crate::portable::ast::{AstNode, ParseError, ParseResult};
 use crate::portable::cache::{CacheEntry, DenseCache};
+use crate::portable::capture_state::CaptureState;
 use crate::portable::char_class::{utf8_char_len, CharacterPattern};
 use crate::portable::grammar::{Atom, Grammar};
 use crate::portable::regex_cache;
@@ -86,6 +87,12 @@ pub struct PortableParser<'a> {
     // ========================================================================
     /// Resource governor - manages all limits via composition
     governor: ResourceGovernor,
+
+    // ========================================================================
+    // Capture State
+    // ========================================================================
+    /// Capture state for named captures
+    capture_state: CaptureState,
 }
 
 impl<'a> PortableParser<'a> {
@@ -122,6 +129,7 @@ impl<'a> PortableParser<'a> {
             cache,
             cached_nodes,
             governor,
+            capture_state: CaptureState::new(),
         }
     }
 
@@ -149,6 +157,7 @@ impl<'a> PortableParser<'a> {
             cache,
             cached_nodes: Vec::with_capacity(estimated_entries),
             governor,
+            capture_state: CaptureState::new(),
         }
     }
 
@@ -186,6 +195,28 @@ impl<'a> PortableParser<'a> {
     #[inline]
     pub fn memory_usage(&self) -> usize {
         self.arena.memory_usage() + self.cache.memory_usage()
+    }
+
+    /// Get a reference to the capture state
+    #[inline]
+    pub fn capture_state(&self) -> &CaptureState {
+        &self.capture_state
+    }
+
+    /// Get a mutable reference to the capture state
+    #[inline]
+    pub fn capture_state_mut(&mut self) -> &mut CaptureState {
+        &mut self.capture_state
+    }
+
+    /// Parse from a specific position (for dynamic atom support)
+    pub fn parse_from_pos(&mut self, pos: usize) -> Result<ParseResult, ParseError> {
+        let result = self.try_atom(self.grammar.root, pos)?;
+        Ok(ParseResult {
+            value: result.value,
+            end_pos: result.end_pos,
+            capture_state: Some(self.capture_state.clone()),
+        })
     }
 
     // ========================================================================
@@ -320,7 +351,7 @@ impl<'a> PortableParser<'a> {
     // ========================================================================
 
     #[inline]
-    fn try_atom(&mut self, atom_id: usize, pos: usize) -> Result<ParseResult, ParseError> {
+    pub fn try_atom(&mut self, atom_id: usize, pos: usize) -> Result<ParseResult, ParseError> {
         self.check_resources()?;
 
         // Check cache
@@ -335,6 +366,7 @@ impl<'a> PortableParser<'a> {
                 Ok(ParseResult {
                     value: cached,
                     end_pos: end_pos as usize,
+                    capture_state: None,
                 })
             } else {
                 Err(ParseError::Failed { position: pos })
@@ -357,6 +389,7 @@ impl<'a> PortableParser<'a> {
         Ok(ParseResult {
             value: self.cached_nodes[ast_ref as usize],
             end_pos: result.end_pos,
+            capture_state: None,
         })
     }
 
@@ -386,15 +419,20 @@ impl<'a> PortableParser<'a> {
                 Atom::Cut => Ok(ParseResult {
                     value: AstNode::Nil,
                     end_pos: pos,
+                    capture_state: None,
                 }),
                 Atom::Ignore { atom } => {
                     let result = self.try_atom(*atom, pos)?;
                     Ok(ParseResult {
                         value: AstNode::Nil,
                         end_pos: result.end_pos,
+                        capture_state: None,
                     })
                 }
                 Atom::Custom { id } => self.parse_custom(*id, pos),
+                Atom::Capture { name, atom } => self.parse_capture(name, *atom, pos),
+                Atom::Scope { atom } => self.parse_scope(*atom, pos),
+                Atom::Dynamic { callback_id } => self.parse_dynamic(*callback_id, pos),
             },
             None => Err(ParseError::Internal {
                 message: "Invalid atom ID".to_string(),
@@ -421,6 +459,7 @@ impl<'a> PortableParser<'a> {
             Ok(ParseResult {
                 value: self.arena.input_ref(pos, pattern_len),
                 end_pos: end,
+                capture_state: None,
             })
         } else {
             Err(ParseError::Failed { position: pos })
@@ -448,6 +487,7 @@ impl<'a> PortableParser<'a> {
                 return Ok(ParseResult {
                     value: self.arena.input_ref(pos, char_len),
                     end_pos: pos + char_len,
+                    capture_state: None,
                 });
             } else {
                 return Err(ParseError::Failed { position: pos });
@@ -471,6 +511,7 @@ impl<'a> PortableParser<'a> {
                 return Ok(ParseResult {
                     value: self.arena.input_ref(pos, match_len),
                     end_pos: pos + match_len,
+                    capture_state: None,
                 });
             }
         }
@@ -496,6 +537,7 @@ impl<'a> PortableParser<'a> {
                 length: len,
             },
             end_pos: current_pos,
+            capture_state: None,
         })
     }
 
@@ -562,6 +604,7 @@ impl<'a> PortableParser<'a> {
                 length: len,
             },
             end_pos: current_pos,
+            capture_state: None,
         })
     }
 
@@ -596,6 +639,7 @@ impl<'a> PortableParser<'a> {
         Ok(ParseResult {
             value: self.arena.input_ref(pos, actual_count),
             end_pos: actual_end,
+            capture_state: None,
         })
     }
 
@@ -614,6 +658,7 @@ impl<'a> PortableParser<'a> {
                 length: len,
             },
             end_pos: result.end_pos,
+            capture_state: None,
         })
     }
 
@@ -629,6 +674,7 @@ impl<'a> PortableParser<'a> {
             Ok(ParseResult {
                 value: AstNode::Nil,
                 end_pos: pos,
+                capture_state: None,
             })
         } else {
             Err(ParseError::Failed { position: pos })
@@ -647,10 +693,101 @@ impl<'a> PortableParser<'a> {
                 Ok(ParseResult {
                     value,
                     end_pos: result.end_pos,
+                    capture_state: None,
                 })
             }
             None => Err(ParseError::Failed { position: pos }),
         }
+    }
+
+    /// Parse a capture atom
+    ///
+    /// Captures the result of parsing the inner atom under the given name.
+    #[inline]
+    fn parse_capture(
+        &mut self,
+        name: &str,
+        atom_id: usize,
+        pos: usize,
+    ) -> Result<ParseResult, ParseError> {
+        let result = self.try_atom(atom_id, pos)?;
+
+        // Store the capture
+        let capture_value = super::capture_state::CaptureValue::new(pos, result.end_pos - pos);
+        self.capture_state.store(name, capture_value);
+
+        // Return result with capture state
+        Ok(ParseResult {
+            value: result.value,
+            end_pos: result.end_pos,
+            capture_state: Some(self.capture_state.clone()),
+        })
+    }
+
+    /// Parse a scope atom
+    ///
+    /// Creates an isolated scope for captures. Any captures made inside
+    /// will be discarded when the scope exits (unless explicitly promoted).
+    #[inline]
+    fn parse_scope(&mut self, atom_id: usize, pos: usize) -> Result<ParseResult, ParseError> {
+        // Push a new scope
+        self.capture_state.push_scope();
+
+        // Parse the inner atom
+        let result = self.try_atom(atom_id, pos);
+
+        // Pop the scope (discards inner captures)
+        self.capture_state.pop_scope();
+
+        // Return result with remaining capture state
+        result.map(|r| ParseResult {
+            value: r.value,
+            end_pos: r.end_pos,
+            capture_state: Some(self.capture_state.clone()),
+        })
+    }
+
+    /// Parse a dynamic atom
+    ///
+    /// Invokes a registered callback to determine which atom to parse.
+    #[inline]
+    fn parse_dynamic(
+        &mut self,
+        callback_id: u64,
+        pos: usize,
+    ) -> Result<ParseResult, ParseError> {
+        use super::dynamic::{invoke_dynamic_callback, DynamicContext};
+
+        // Create context for callback
+        let ctx = DynamicContext::new(self.input, pos, self.capture_state.clone());
+
+        // Invoke callback to get the atom
+        let atom = invoke_dynamic_callback(callback_id, &ctx)
+            .ok_or_else(|| ParseError::Failed { position: pos })?;
+
+        // Create a temporary grammar and add the atom
+        let mut temp_grammar = self.grammar.clone();
+        let temp_atom_id = temp_grammar.add_atom(atom);
+
+        // Parse using the returned atom
+        // Note: We create a temporary parser to avoid borrowing issues
+        let mut temp_arena = AstArena::for_input(self.input.len());
+        let mut temp_parser = PortableParser::new(&temp_grammar, self.input, &mut temp_arena);
+
+        let result = temp_parser.try_atom(temp_atom_id, pos)?;
+
+        // Merge captures from temp parser
+        for name in temp_parser.capture_state.names() {
+            if let Some(value) = temp_parser.capture_state.get(&name) {
+                self.capture_state.store(&name, value);
+            }
+        }
+
+        Ok(ParseResult {
+            value: result.value,
+            end_pos: result.end_pos,
+            capture_state: Some(self.capture_state.clone()),
+        })
     }
 
     // ========================================================================
@@ -834,6 +971,7 @@ impl<'a> PortableParser<'a> {
                 Ok(ParseResult {
                     value: cached,
                     end_pos: end_pos as usize,
+                    capture_state: None,
                 })
             } else {
                 Err(ParseError::Failed { position: pos })
