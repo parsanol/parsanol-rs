@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add capture, scope, and dynamic atoms with streaming support by @[object]
+
+### Fixed
+
+- Add version to parsanol-derive dependency for publishing by @[object]
+- Resolve clippy warnings in benches and examples by @[object]
+- Resolve CI failures and clippy warnings by @[object]
+
+### Other
+
+- Fix workspace Cargo.toml duplicate key error by @[object]
+- Update README with capture/scope/dynamic features by @[object]
+- Release v0.2.0 by @[object]
+
+### Added
+
 - Add comprehensive all-examples benchmark and backend guide by @[object]
 - Add comprehensive backend comparison benchmark by @[object]
 - Implement bytecode parser backend in addition to packrat by @[object]
