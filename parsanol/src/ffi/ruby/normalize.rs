@@ -25,8 +25,7 @@
 //!
 //! Those transformations should be done by the consumer (e.g., Expressir).
 
-use magnus::r_hash::ForEach;
-use magnus::{value::ReprValue, Class, Error, IntoValue, Module, RArray, RHash, Ruby, Value};
+use magnus::{value::ReprValue, Class, Error, IntoValue, Module, RArray, Ruby, Value};
 
 use crate::portable::{AstArena, AstNode};
 
@@ -195,7 +194,7 @@ pub fn normalize_ast(
             // Return as regular array
             let ary = ruby.ary_new_capa(transformed.len() as _);
             for item in &transformed {
-                ary.push(item)?;
+                ary.push(*item)?;
             }
             Ok(ary.as_value())
         }
