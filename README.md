@@ -1355,19 +1355,10 @@ parsanol-ruby.
 
 The Ruby FFI provides:
 
-- Fast parsing via Rust (18-44x faster than pure Ruby)
-
-- Three transformation options:
-
-  - **Ruby Transform**: Parse in Rust, transform in Ruby
-    (Parslet-compatible)
-
-  - **Serialized**: Parse + transform in Rust, JSON output
-
-  - **Native**: Direct Ruby object construction via FFI
-
-- **Streaming Builder**: Single-pass parsing with Ruby callbacks (most
-  efficient)
+- **26x faster** parsing than pure Ruby (Parslet)
+- **Single `parse()` API** - no confusing options
+- **Lazy line/column** - zero overhead unless needed
+- **Streaming Builder** - single-pass parsing with callbacks
 
 ## Building for Ruby
 
@@ -1381,18 +1372,31 @@ cargo build --features ruby
 ## Ruby API
 
 ```ruby
-require 'parsanol'
+require 'parsanol/native'
 
-class MyParser < Parsanol::Parser
-  rule(:number) { match('[0-9]').repeat(1).as(:int) }
-  rule(:operator) { str('+') | str('-') }
-  rule(:expr) { number.as(:left) >> operator.as(:op) >> number.as(:right) }
-  root(:expr)
-end
+# Serialize grammar once
+grammar = str('hello').as(:greeting) >> str(' ').maybe >> match('[a-z]').repeat(1).as(:name)
+grammar_json = Parsanol::Native.serialize_grammar(grammar)
 
-parser = MyParser.new
-tree = parser.parse("42+8")
+# Parse - simple and clean
+result = Parsanol::Native.parse(grammar_json, "hello world")
+# => {greeting: "hello"@0, name: "world"@6}
+
+# Line/column available when needed (computed lazily)
+result[:greeting].line_and_column  # => [1, 1]
+result[:name].line_and_column      # => [1, 7]
 ```
+
+## Lazy Line/Column
+
+Slice objects support lazy line/column computation:
+
+- `slice.offset` - character position (always available, zero cost)
+- `slice.content` - string value (always available, zero cost)
+- `slice.line_and_column` - [line, column] tuple (computed lazily, cached)
+
+This provides **zero overhead** for users who don't need position info,
+while keeping line/column **always available** when needed.
 
 ## Streaming Builder (Ruby)
 

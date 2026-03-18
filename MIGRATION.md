@@ -76,15 +76,19 @@ The Ruby FFI is still available at `parsanol::ruby_ffi` for backward compatibili
 
 **Before (0.1.6):**
 ```rust
-use parsanol::ruby_ffi::{parse_to_ruby_objects, parse_batch};
+use parsanol::ruby_ffi::parse_to_ruby_objects;
 ```
 
-**After (0.2.0):**
+**After (0.4.0):**
 ```rust
-// Both paths work
-use parsanol::ruby_ffi::{parse_to_ruby_objects, parse_batch};  // Backward compatible
-use parsanol::ffi::ruby::{parse_to_ruby_objects, parse_batch}; // Canonical
+use parsanol::ffi::ruby::parse;
 ```
+
+The new `parse()` function returns a normalized AST with:
+- Symbol keys instead of string keys
+- Joined character sequences (not character arrays)
+- No empty spaces arrays
+- Slice objects with lazy line/column computation
 
 ### 4. Removed: Lexer Module
 
