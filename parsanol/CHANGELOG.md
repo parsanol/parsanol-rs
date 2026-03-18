@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Single parse() API with lazy line/column computation (BREAKING) by @[object]
+
+### Fixed
+
+- Update parsanol-derive version to 0.4.0 by @[object]
+
+### Added
+
 - Add comprehensive all-examples benchmark and backend guide by @[object]
 - Add comprehensive backend comparison benchmark by @[object]
 - Implement bytecode parser backend in addition to packrat by @[object]
