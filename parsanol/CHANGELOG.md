@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Use magnus and rb-sys compatible with ruby 4.0 by @[object]
+
+### Fixed
+
+- Magnus version alignment and normalize.rs push fix by @[object]
+- Resolve Ruby FFI warnings and error by @[object]
+
+### Other
+
+- Release v0.4.0 by @[object]
+
+### Added
+
 - Single parse() API with lazy line/column computation (BREAKING) by @[object]
 
 ### Fixed
