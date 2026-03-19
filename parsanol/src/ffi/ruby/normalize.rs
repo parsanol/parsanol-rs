@@ -30,7 +30,7 @@ use magnus::{value::ReprValue, Class, Error, IntoValue, Module, RArray, Ruby, Va
 use crate::portable::{AstArena, AstNode};
 
 /// Get the Parsanol::Slice class
-fn get_slice_class(ruby: &Ruby) -> Result<magnus::RClass, Error> {
+pub fn get_slice_class(ruby: &Ruby) -> Result<magnus::RClass, Error> {
     let parsanol_module: magnus::RModule =
         ruby.class_object().const_get("Parsanol").map_err(|e| {
             Error::new(
@@ -51,7 +51,7 @@ fn get_slice_class(ruby: &Ruby) -> Result<magnus::RClass, Error> {
 ///
 /// The Slice stores the input string reference so it can compute
 /// line/column lazily on demand.
-fn create_slice(ruby: &Ruby, offset: u32, content: &str, input: &str) -> Result<Value, Error> {
+pub fn create_slice(ruby: &Ruby, offset: u32, content: &str, input: &str) -> Result<Value, Error> {
     let slice_class = get_slice_class(ruby)?;
     let offset_val = ruby.integer_from_i64(offset as i64);
     let content_val = ruby.str_new(content);
