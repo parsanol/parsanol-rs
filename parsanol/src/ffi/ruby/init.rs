@@ -73,7 +73,8 @@ pub fn init(ruby: &Ruby) -> Result<(), Error> {
     // =========================================================================
 
     // Main parsing method - returns clean AST with lazy line/column support
-    native_module.define_module_function("parse", function!(parse, 2))?;
+    // Named _parse_raw to avoid conflict with Ruby wrapper's parse method
+    native_module.define_module_function("_parse_raw", function!(parse, 2))?;
 
     // =========================================================================
     // LOW-LEVEL API - For advanced users / debugging

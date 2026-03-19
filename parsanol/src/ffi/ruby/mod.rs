@@ -28,6 +28,7 @@ mod dynamic;
 mod init;
 mod normalize;
 mod parser;
+mod transform;
 mod traits;
 
 // Public API - what users actually need
@@ -42,4 +43,5 @@ pub use dynamic::{
 };
 pub use normalize::normalize_ast;
 pub use parser::{parse_batch, parse_with_builder};
+pub use transform::transform_ast;
 pub use traits::RubyObject;

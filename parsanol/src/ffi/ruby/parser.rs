@@ -22,7 +22,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::Mutex;
 
 use super::builder::RubyBuilder;
-use super::normalize::normalize_ast;
+use super::transform::transform_ast;
 
 // Thread-safe global grammar cache
 static GRAMMAR_CACHE: std::sync::OnceLock<Mutex<hashbrown::HashMap<u64, Grammar>>> =
@@ -47,13 +47,13 @@ pub fn is_available() -> bool {
 // PUBLIC API - What most users need
 // ============================================================================
 
-/// Parse input and return a clean, normalized AST with lazy line/column support
+/// Parse input and return transformed AST with lazy line/column support
 ///
 /// This is the MAIN parsing method that all users should use.
-/// It returns a clean AST with:
+/// It returns a clean AST matching Ruby parser output:
 /// - Symbol keys instead of string keys
-/// - Joined character sequences (not character arrays)
-/// - No empty spaces arrays
+/// - Merged sequences (unnamed strings discarded when named captures present)
+/// - Proper repetition handling (arrays of named captures, joined strings)
 /// - Slice objects with lazy line/column computation
 ///
 /// # Performance
@@ -68,7 +68,7 @@ pub fn is_available() -> bool {
 ///
 /// # Returns
 ///
-/// Ruby Hash/Array with normalized AST structure. String values are
+/// Ruby Hash/Array with transformed AST structure. String values are
 /// Parsanol::Slice objects that support lazy line/column computation.
 ///
 /// # Example
@@ -109,8 +109,8 @@ pub fn parse(grammar_json: String, input: String) -> Result<Value, Error> {
         .parse()
         .map_err(|e| Error::new(ruby.exception_runtime_error(), e.to_string()))?;
 
-    // Normalize AST to clean format with lazy line/column support
-    normalize_ast(&ast, &arena, &input, &ruby)
+    // Transform AST to Ruby format with full sequence/repetition handling
+    transform_ast(&ast, &arena, &input, &ruby)
 }
 
 // ============================================================================
