@@ -18,6 +18,7 @@
 //! | 0x07 | ...key-values... 0x08 | hash |
 //! | 0x09 | len, data... | hash_key |
 //! | 0x0A | len, data... | inline_string |
+//! | 0x0B | len, data... | symbol |
 
 use crate::portable::arena::AstArena;
 use crate::portable::ast::AstNode;
@@ -45,6 +46,32 @@ pub const TAG_HASH_END: u64 = 0x08;
 pub const TAG_HASH_KEY: u64 = 0x09;
 /// Tag for inline strings (next: len, then u64 chunks of string bytes)
 pub const TAG_INLINE_STRING: u64 = 0x0A;
+/// Tag for symbols (next: len, then u64 chunks of symbol bytes without leading ':')
+pub const TAG_SYMBOL: u64 = 0x0B;
+
+/// Write a symbol to the output buffer
+///
+/// Symbols are encoded as: TAG_SYMBOL, len, then u64 chunks of bytes
+#[inline]
+pub fn write_symbol(symbol_name: &str, output: &mut Vec<u64>) {
+    let bytes = symbol_name.as_bytes();
+    let len = bytes.len() as u64;
+    output.push(TAG_SYMBOL);
+    output.push(len);
+
+    // Write symbol bytes as u64 chunks
+    let chunks = bytes.len().div_ceil(8);
+    for chunk_idx in 0..chunks {
+        let mut chunk: u64 = 0;
+        for byte_idx in 0..8 {
+            let idx = chunk_idx * 8 + byte_idx;
+            if idx < bytes.len() {
+                chunk |= (bytes[idx] as u64) << (byte_idx * 8);
+            }
+        }
+        output.push(chunk);
+    }
+}
 
 /// Flatten an AST node to a u64 array for FFI
 ///
@@ -96,20 +123,28 @@ pub fn flatten_ast_to_u64(node: &AstNode, arena: &AstArena, _input: &str, output
             let (s, _, _) = arena.get_string_parts(*pool_index as usize);
             let bytes = s.as_bytes();
             let len = bytes.len() as u64;
-            output.push(TAG_INLINE_STRING);
-            output.push(len);
 
-            // Write string bytes as u64 chunks (same format as hash keys)
-            let chunks = bytes.len().div_ceil(8);
-            for chunk_idx in 0..chunks {
-                let mut chunk: u64 = 0;
-                for byte_idx in 0..8 {
-                    let idx = chunk_idx * 8 + byte_idx;
-                    if idx < bytes.len() {
-                        chunk |= (bytes[idx] as u64) << (byte_idx * 8);
+            // Check if this is a tag (starts with ':') - write as symbol
+            if bytes.starts_with(b":") {
+                // Write as symbol (without the leading ':')
+                write_symbol(&s[1..], output);
+            } else {
+                // Regular inline string
+                output.push(TAG_INLINE_STRING);
+                output.push(len);
+
+                // Write string bytes as u64 chunks (same format as hash keys)
+                let chunks = bytes.len().div_ceil(8);
+                for chunk_idx in 0..chunks {
+                    let mut chunk: u64 = 0;
+                    for byte_idx in 0..8 {
+                        let idx = chunk_idx * 8 + byte_idx;
+                        if idx < bytes.len() {
+                            chunk |= (bytes[idx] as u64) << (byte_idx * 8);
+                        }
                     }
+                    output.push(chunk);
                 }
-                output.push(chunk);
             }
         }
         AstNode::InputRef { offset, length } => {
