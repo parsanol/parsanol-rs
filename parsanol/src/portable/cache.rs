@@ -152,12 +152,35 @@ impl DenseCache {
     }
 
     /// Create a cache sized for a given input length
+    ///
+    /// # Cache Sizing Strategy
+    ///
+    /// The cache needs to hold entries for all (position, atom_id) pairs that
+    /// might be tried during parsing. With packrat memoization, the worst case
+    /// is `input_len * atom_count` entries.
+    ///
+    /// For small grammars (< 100 atoms), we use a simple heuristic.
+    /// For large grammars (like EXPRESS with 2273 atoms), we need a larger cache
+    /// to avoid collisions that destroy performance.
     #[inline]
     pub fn for_input(input_len: usize, atom_count: usize) -> Self {
-        // Estimate: ~1 cache entry per 10 characters * atoms_at_position
-        // Typically atoms_at_position is ~2-5, so use factor of 3
-        let estimated = (input_len / 10) * atom_count.min(5);
-        Self::new(estimated.clamp(1000, 500_000))
+        // For large grammars, we need significantly more cache capacity
+        // because each position may try many atoms due to alternatives
+        let estimated = if atom_count > 100 {
+            // Large grammar: estimate based on actual atom count
+            // Not all atoms are tried at every position, so use a fraction
+            // but ensure minimum capacity based on atom count
+            let base = (input_len as f64 * 0.5) as usize; // ~50% of positions
+            let per_pos = (atom_count as f64 * 0.1).ceil() as usize; // ~10% of atoms per pos
+            (base * per_pos).max(atom_count * 2) // ensure room for at least 2x atoms
+        } else {
+            // Small grammar: simple heuristic
+            (input_len / 10) * atom_count.max(3)
+        };
+
+        // Clamp to reasonable bounds, but with higher minimum for large grammars
+        let min_capacity = if atom_count > 100 { 10000 } else { 1000 };
+        Self::new(estimated.clamp(min_capacity, 2_000_000))
     }
 
     /// Get a cached entry

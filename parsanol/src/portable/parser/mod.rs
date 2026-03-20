@@ -355,6 +355,12 @@ impl<'a> PortableParser<'a> {
     /// This is the core parsing method that attempts to match an atom
     /// at the specified position in the input. It uses packrat memoization
     /// to cache results and avoid redundant parsing.
+    ///
+    /// # Packrat Memoization
+    ///
+    /// Both successful AND failed parses are cached. Caching failures is
+    /// crucial for PEG parsing performance, especially with grammars that
+    /// have many alternatives (like EXPRESS with 2273 atoms).
     #[inline]
     pub fn try_atom(&mut self, atom_id: usize, pos: usize) -> Result<ParseResult, ParseError> {
         self.check_resources()?;
@@ -374,28 +380,45 @@ impl<'a> PortableParser<'a> {
                     capture_state: None,
                 })
             } else {
+                // Cached failure - this is important for PEG performance!
+                // Without caching failures, we'd re-parse failed alternatives every time
                 Err(ParseError::Failed { position: pos })
             };
         }
 
         // Parse uncached
-        let result = self.parse_atom_uncached(atom_id, pos)?;
+        match self.parse_atom_uncached(atom_id, pos) {
+            Ok(result) => {
+                // Cache successful result
+                let ast_ref = self.store_cached_node(result.value);
+                self.cache.insert(CacheEntry::new(
+                    pos as u32,
+                    atom_id as u16,
+                    true,
+                    result.end_pos as u32,
+                    ast_ref,
+                ));
 
-        // Cache result
-        let ast_ref = self.store_cached_node(result.value);
-        self.cache.insert(CacheEntry::new(
-            pos as u32,
-            atom_id as u16,
-            true,
-            result.end_pos as u32,
-            ast_ref,
-        ));
-
-        Ok(ParseResult {
-            value: self.cached_nodes[ast_ref as usize],
-            end_pos: result.end_pos,
-            capture_state: None,
-        })
+                Ok(ParseResult {
+                    value: self.cached_nodes[ast_ref as usize],
+                    end_pos: result.end_pos,
+                    capture_state: None,
+                })
+            }
+            Err(e) => {
+                // CRITICAL: Cache failures too!
+                // Without this, failed alternatives are re-parsed exponentially
+                // This is the key to packrat parser performance
+                self.cache.insert(CacheEntry::new(
+                    pos as u32,
+                    atom_id as u16,
+                    false, // failure
+                    pos as u32,
+                    0,     // no ast_ref for failures
+                ));
+                Err(e)
+            }
+        }
     }
 
     #[inline]

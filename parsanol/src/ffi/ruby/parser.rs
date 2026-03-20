@@ -117,6 +117,50 @@ pub fn parse(grammar_json: String, input: String) -> Result<Value, Error> {
 // LOW-LEVEL API - For advanced users / debugging
 // ============================================================================
 
+/// Parse with cache statistics - returns [ast, cache_hits, cache_misses, hit_rate]
+///
+/// This is a low-level function for performance debugging.
+/// Most users should use `parse()` instead.
+pub fn parse_with_stats(
+    grammar_json: String,
+    input: String,
+) -> Result<(Value, u64, u64, f64), Error> {
+    let ruby = Ruby::get().unwrap();
+
+    // Get or compile grammar (thread-safe)
+    let hash = hash_string(&grammar_json);
+    let grammar = {
+        let cache = get_grammar_cache();
+        let guard = cache.lock().unwrap();
+        if let Some(cached) = guard.get(&hash) {
+            cached.clone()
+        } else {
+            drop(guard);
+            let grammar: Grammar = serde_json::from_str(&grammar_json)
+                .map_err(|e| Error::new(ruby.exception_arg_error(), e.to_string()))?;
+            let mut guard = cache.lock().unwrap();
+            guard.insert(hash, grammar.clone());
+            grammar
+        }
+    };
+
+    let mut arena = AstArena::for_input(input.len());
+    let mut parser = PortableParser::new(&grammar, &input, &mut arena);
+
+    let ast = parser
+        .parse()
+        .map_err(|e| Error::new(ruby.exception_runtime_error(), e.to_string()))?;
+
+    // Get cache statistics before parser is consumed
+    let (cache, _) = parser.into_cache();
+    let (hits, misses, hit_rate) = cache.stats();
+
+    // Transform AST to Ruby format
+    let result = transform_ast(&ast, &arena, &input, &ruby)?;
+
+    Ok((result, hits, misses, hit_rate))
+}
+
 /// Parse using batch FFI - returns flat array instead of Ruby objects
 ///
 /// This is a low-level function primarily used for debugging and benchmarks.
