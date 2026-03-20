@@ -239,7 +239,10 @@ fn get_hash_keys(
     let inner_value: Result<Value, _> = hash.funcall("[]", (outer_key,));
     if let Ok(inner) = inner_value {
         // Named atoms are not hashes - return None so caller handles them
-        let name_var: Result<Value, _> = inner.funcall("instance_variable_get", (ruby.to_symbol("@name").as_value(),));
+        let name_var: Result<Value, _> = inner.funcall(
+            "instance_variable_get",
+            (ruby.to_symbol("@name").as_value(),),
+        );
         if let Ok(name_var) = name_var {
             if !name_var.is_nil() {
                 return None;
@@ -284,7 +287,10 @@ fn get_value_hash_keys(
     let inner_value: Result<Value, _> = hash.funcall("[]", (outer_key,));
     if let Ok(inner) = inner_value {
         // Named atoms are not hash-like - return None so this falls through to merge
-        let name_var: Result<Value, _> = inner.funcall("instance_variable_get", (ruby.to_symbol("@name").as_value(),));
+        let name_var: Result<Value, _> = inner.funcall(
+            "instance_variable_get",
+            (ruby.to_symbol("@name").as_value(),),
+        );
         if let Ok(name_var) = name_var {
             if !name_var.is_nil() {
                 return None;
@@ -449,7 +455,10 @@ fn fold_hash_array(ary: &RArray, ruby: &Ruby, _input: &str) -> Result<Value, Err
         }
     }
 
-    let unique_len = all_keys.iter().collect::<std::collections::HashSet<_>>().len();
+    let unique_len = all_keys
+        .iter()
+        .collect::<std::collections::HashSet<_>>()
+        .len();
     let has_duplicates = unique_len < all_keys.len();
 
     // Check if all hashes have the same single key
@@ -473,7 +482,9 @@ fn fold_hash_array(ary: &RArray, ruby: &Ruby, _input: &str) -> Result<Value, Err
                                                 break;
                                             }
                                             if let Ok(key) = keys_ary.entry::<Value>(0) {
-                                                if let Ok(key_str) = key.funcall::<_, _, String>("to_s", ()) {
+                                                if let Ok(key_str) =
+                                                    key.funcall::<_, _, String>("to_s", ())
+                                                {
                                                     if key_str != first_key_str {
                                                         all_same_single_key = false;
                                                         break;
@@ -497,7 +508,8 @@ fn fold_hash_array(ary: &RArray, ruby: &Ruby, _input: &str) -> Result<Value, Err
     if all_same_single_key {
         if let Some(ref first_key_str) = first_key_str_opt {
             let first_key_sym = ruby.to_symbol(first_key_str).as_value();
-            let first_inner_keys = get_inner_keys(&ary.entry::<Value>(0).unwrap(), first_key_sym, ruby);
+            let first_inner_keys =
+                get_inner_keys(&ary.entry::<Value>(0).unwrap(), first_key_sym, ruby);
 
             if let Some(inner_keys_set) = first_inner_keys {
                 // Inner value is a hash - check if all have same inner keys
@@ -529,7 +541,8 @@ fn fold_hash_array(ary: &RArray, ruby: &Ruby, _input: &str) -> Result<Value, Err
             } else {
                 // Inner value is NOT a hash
                 // Check if all inner values have the same hash-like structure
-                let first_hash_keys = get_hash_keys(&ary.entry::<Value>(0).unwrap(), first_key_sym, ruby);
+                let first_hash_keys =
+                    get_hash_keys(&ary.entry::<Value>(0).unwrap(), first_key_sym, ruby);
                 if let Some(first_keys_set) = first_hash_keys {
                     let mut all_same_structure = true;
                     for i in 1..non_nil_len {
@@ -553,12 +566,15 @@ fn fold_hash_array(ary: &RArray, ruby: &Ruby, _input: &str) -> Result<Value, Err
                     // else: DUPLICATE KEY pattern - fall through
                 } else {
                     // Inner values are not hashes
-                    let first_val_keys = get_value_hash_keys(&ary.entry::<Value>(0).unwrap(), first_key_sym, ruby);
+                    let first_val_keys =
+                        get_value_hash_keys(&ary.entry::<Value>(0).unwrap(), first_key_sym, ruby);
                     if let Some(first_val_set) = first_val_keys {
                         let mut all_same_structure = true;
                         for i in 1..non_nil_len {
                             if let Ok(item) = ary.entry::<Value>(i as isize) {
-                                if let Some(item_keys) = get_value_hash_keys(&item, first_key_sym, ruby) {
+                                if let Some(item_keys) =
+                                    get_value_hash_keys(&item, first_key_sym, ruby)
+                                {
                                     if item_keys != first_val_set {
                                         all_same_structure = false;
                                         break;
@@ -644,14 +660,18 @@ fn transform_ast_internal(
             let items = arena.get_array(*pool_index as usize, *length as usize);
 
             // Check for tags
-            if let Some(AstNode::StringRef { pool_index: tag_idx }) = items.first() {
+            if let Some(AstNode::StringRef {
+                pool_index: tag_idx,
+            }) = items.first()
+            {
                 let (tag, _, _) = arena.get_string_parts(*tag_idx as usize);
                 if tag == ":sequence" || tag == ":repetition" || tag == ":maybe" {
                     let ary = ruby.ary_new_capa(items.len() as _);
                     let tag_sym = ruby.to_symbol(&tag[1..]);
                     ary.push(tag_sym)?;
                     for item in items.iter().skip(1) {
-                        let ruby_item = transform_ast_internal(&item, arena, input, ruby, depth + 1)?;
+                        let ruby_item =
+                            transform_ast_internal(&item, arena, input, ruby, depth + 1)?;
                         ary.push(ruby_item)?;
                     }
                     return Ok(ary.as_value());

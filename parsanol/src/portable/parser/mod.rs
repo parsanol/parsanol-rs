@@ -414,7 +414,7 @@ impl<'a> PortableParser<'a> {
                     atom_id as u16,
                     false, // failure
                     pos as u32,
-                    0,     // no ast_ref for failures
+                    0, // no ast_ref for failures
                 ));
                 Err(e)
             }

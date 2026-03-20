@@ -357,10 +357,7 @@ impl AstArena {
     #[inline]
     pub fn alloc_array(&mut self, items: Vec<AstNode>) -> AstNode {
         let (pool_index, length) = self.store_array(&items);
-        AstNode::Array {
-            pool_index,
-            length,
-        }
+        AstNode::Array { pool_index, length }
     }
 
     /// Allocate a hash and return the complete AstNode
@@ -369,15 +366,9 @@ impl AstArena {
     #[inline]
     pub fn alloc_hash(&mut self, pairs: Vec<(String, AstNode)>) -> AstNode {
         // Convert Vec<(String, AstNode)> to &[(&str, AstNode)]
-        let refs: Vec<(&str, AstNode)> = pairs
-            .iter()
-            .map(|(k, v)| (k.as_str(), v.clone()))
-            .collect();
+        let refs: Vec<(&str, AstNode)> = pairs.iter().map(|(k, v)| (k.as_str(), *v)).collect();
         let (pool_index, length) = self.store_hash(&refs);
-        AstNode::Hash {
-            pool_index,
-            length,
-        }
+        AstNode::Hash { pool_index, length }
     }
 }
 
