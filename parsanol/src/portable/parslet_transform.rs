@@ -578,6 +578,7 @@ mod tests {
         // This produces: Repetition(Named("letter", Match("[a-z]")), 1, None)
         // Which parses "abc" into: [{letter: "a"}, {letter: "b"}, {letter: "c"}]
         // After transformation, this should stay as an array of hashes (repetition pattern)
+        // The array is tagged with :repetition for proper transformation
         let grammar = GrammarBuilder::new()
             .rule("letters", re("[a-z]").label("letter").repeat(1, None))
             .build();
@@ -585,13 +586,22 @@ mod tests {
         let (result, arena) = parse_and_transform("abc", &grammar);
 
         // For repetition pattern with named captures BEFORE repeat,
-        // the result should be an ARRAY of hashes, not a single hash
+        // the result should be an ARRAY with :repetition tag + hashes
         if let AstNode::Array { pool_index, length } = result {
             let items = arena.get_array(pool_index as usize, length as usize);
-            assert_eq!(items.len(), 3);
+            // Array has :repetition tag + 3 items = 4 total
+            assert_eq!(items.len(), 4);
 
-            // Each item should be a hash with key "letter"
-            for item in items.iter() {
+            // First item should be the :repetition tag
+            if let AstNode::StringRef { pool_index: tag_idx } = items[0] {
+                let (tag_str, _, _) = arena.get_string_parts(tag_idx as usize);
+                assert_eq!(tag_str, ":repetition");
+            } else {
+                panic!("Expected :repetition tag, got {:?}", items[0]);
+            }
+
+            // Remaining items should be hashes with key "letter"
+            for item in items.iter().skip(1) {
                 if let AstNode::Hash {
                     pool_index: h_p,
                     length: h_l,

@@ -558,7 +558,8 @@ impl<'a> PortableParser<'a> {
             current_pos = result.end_pos;
         }
 
-        let (pool_idx, len) = self.arena.store_array(&items);
+        // Tag the array with :sequence for proper transformation
+        let (pool_idx, len) = self.arena.store_tagged_array(":sequence", &items);
         Ok(ParseResult {
             value: AstNode::Array {
                 pool_index: pool_idx,
@@ -625,7 +626,8 @@ impl<'a> PortableParser<'a> {
             return Err(ParseError::Failed { position: pos });
         }
 
-        let (pool_idx, len) = self.arena.store_array(&items);
+        // Tag the array with :repetition for proper transformation
+        let (pool_idx, len) = self.arena.store_tagged_array(":repetition", &items);
         Ok(ParseResult {
             value: AstNode::Array {
                 pool_index: pool_idx,

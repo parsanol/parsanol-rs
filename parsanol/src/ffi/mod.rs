@@ -71,5 +71,5 @@ pub mod wasm;
 pub use shared::{
     flatten_ast, flatten_ast_to_u64, parse_to_flat, TAG_ARRAY_END, TAG_ARRAY_START, TAG_BOOL,
     TAG_FLOAT, TAG_HASH_END, TAG_HASH_KEY, TAG_HASH_START, TAG_INLINE_STRING, TAG_INT, TAG_NIL,
-    TAG_STRING,
+    TAG_STRING, TAG_SYMBOL, write_symbol,
 };

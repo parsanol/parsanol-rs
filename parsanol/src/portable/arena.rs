@@ -271,6 +271,22 @@ impl AstArena {
         (start, items.len() as u32)
     }
 
+    /// Store a tagged array in the pool (for :sequence/:repetition tags)
+    ///
+    /// The tag is prepended as a StringRef to the items.
+    /// Returns the starting index and length.
+    #[inline]
+    pub fn store_tagged_array(&mut self, tag: &str, items: &[AstNode]) -> (u32, u32) {
+        let start = self.array_pool.len() as u32;
+        // Prepend the tag as a StringRef
+        let tag_node = self.intern_string(tag);
+        self.array_pool.push(ArrayPoolEntry { value: tag_node });
+        for item in items {
+            self.array_pool.push(ArrayPoolEntry { value: *item });
+        }
+        (start, items.len() as u32 + 1)
+    }
+
     /// Get array items from pool
     #[inline]
     pub fn get_array(&self, start: usize, len: usize) -> Vec<AstNode> {
