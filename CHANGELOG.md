@@ -97,6 +97,20 @@ This release includes breaking changes to the FFI module organization. See [MIGR
 
 ## [Unreleased]
 
+### Fixed
+
+- **Ruby FFI Transform**: Fixed wrapper vs repetition pattern detection
+  - Removed Expressir-specific "named sequence pattern" hack (`is_named_sequence_pattern`)
+  - Generic detection now compares inner hash keys:
+    - Same inner keys → Repetition pattern (keep as array)
+    - Different inner keys → Wrapper pattern (merge inner hashes)
+  - Ensures correct entity extraction for all grammars
+
+- **Portable Parser**: Enhanced arena and cache for batch processing
+  - Added `AstArena` for efficient AST node storage
+  - Updated `GrammarCache` for better memory management
+  - Improved `parslet_transform` for correct sequence flattening
+
 ### Added
 
 #### Architecture Improvements (Phase 1-4)
