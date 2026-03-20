@@ -353,48 +353,95 @@ fn flatten_sequence(items: &[AstNode], arena: &mut AstArena, input: &str) -> Ast
                 });
 
                 if all_values_are_hashes {
-                    // Wrapper pattern: merge inner hashes
-                    let mut merged_inner: Vec<(String, AstNode)> = Vec::new();
-                    for item in items {
+                    // Check if inner hashes have the same keys or different keys
+                    // REPETITION pattern (same keys like entity_decl): keep as array
+                    // WRAPPER pattern (different keys like schemaId vs schemaBody): merge
+
+                    // Get the first item's inner keys to compare against
+                    let first_inner_keys: Vec<String> = if let AstNode::Hash { pool_index, length } = &items[0] {
+                        let pairs = arena.get_hash_items(*pool_index as usize, *length as usize);
+                        if pairs.len() == 1 {
+                            if let AstNode::Hash { pool_index: inner_p, length: inner_l } = &pairs[0].1 {
+                                arena.get_hash_items(*inner_p as usize, *inner_l as usize)
+                                    .iter()
+                                    .map(|(k, _)| k.clone())
+                                    .collect()
+                            } else {
+                                vec![]
+                            }
+                        } else {
+                            vec![]
+                        }
+                    } else {
+                        vec![]
+                    };
+
+                    let all_same_keys = items.iter().all(|item| {
                         if let AstNode::Hash { pool_index, length } = item {
-                            let pairs =
-                                arena.get_hash_items(*pool_index as usize, *length as usize);
+                            let pairs = arena.get_hash_items(*pool_index as usize, *length as usize);
                             if pairs.len() == 1 {
-                                if let AstNode::Hash {
-                                    pool_index: inner_p,
-                                    length: inner_l,
-                                } = pairs[0].1
-                                {
-                                    let inner_pairs =
-                                        arena.get_hash_items(inner_p as usize, inner_l as usize);
-                                    for (k, v) in inner_pairs {
-                                        if let Some(pos) =
-                                            merged_inner.iter().position(|(key, _)| *key == k)
-                                        {
-                                            merged_inner[pos] = (k.clone(), v);
-                                        } else {
-                                            merged_inner.push((k.clone(), v));
+                                if let AstNode::Hash { pool_index: inner_p, length: inner_l } = &pairs[0].1 {
+                                    let keys: Vec<String> = arena.get_hash_items(*inner_p as usize, *inner_l as usize)
+                                        .iter()
+                                        .map(|(k, _)| k.clone())
+                                        .collect();
+                                    keys == first_inner_keys
+                                } else {
+                                    false
+                                }
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        }
+                    });
+
+                    if all_same_keys {
+                        // REPETITION pattern: keep as array of hashes
+                        let (pool_idx, len) = arena.store_array(items);
+                        return AstNode::Array {
+                            pool_index: pool_idx,
+                            length: len,
+                        };
+                    } else {
+                        // WRAPPER pattern: merge inner hashes with different keys
+                        let mut merged_inner: Vec<(String, AstNode)> = Vec::new();
+                        for item in items {
+                            if let AstNode::Hash { pool_index, length } = item {
+                                let pairs =
+                                    arena.get_hash_items(*pool_index as usize, *length as usize);
+                                if pairs.len() == 1 {
+                                    if let AstNode::Hash {
+                                        pool_index: inner_p,
+                                        length: inner_l,
+                                    } = pairs[0].1
+                                    {
+                                        let inner_pairs =
+                                            arena.get_hash_items(inner_p as usize, inner_l as usize);
+                                        for (k, v) in inner_pairs {
+                                            merged_inner.push((k.clone(), v.clone()));
                                         }
                                     }
                                 }
                             }
                         }
+                        // Convert to borrowed slices for store_hash
+                        let inner_refs: Vec<(&str, AstNode)> =
+                            merged_inner.iter().map(|(k, v)| (k.as_str(), *v)).collect();
+                        let (inner_pool, inner_len) = arena.store_hash(&inner_refs);
+                        let (pool_idx, len) = arena.store_hash(&[(
+                            first_key.as_str(),
+                            AstNode::Hash {
+                                pool_index: inner_pool,
+                                length: inner_len,
+                            },
+                        )]);
+                        return AstNode::Hash {
+                            pool_index: pool_idx,
+                            length: len,
+                        };
                     }
-                    // Convert to borrowed slices for store_hash
-                    let inner_refs: Vec<(&str, AstNode)> =
-                        merged_inner.iter().map(|(k, v)| (k.as_str(), *v)).collect();
-                    let (inner_pool, inner_len) = arena.store_hash(&inner_refs);
-                    let (pool_idx, len) = arena.store_hash(&[(
-                        first_key.as_str(),
-                        AstNode::Hash {
-                            pool_index: inner_pool,
-                            length: inner_len,
-                        },
-                    )]);
-                    return AstNode::Hash {
-                        pool_index: pool_idx,
-                        length: len,
-                    };
                 } else {
                     // Repetition pattern: keep as array
                     let (pool_idx, len) = arena.store_array(items);

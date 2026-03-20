@@ -54,6 +54,47 @@ This release includes breaking changes to the FFI module organization. See [MIGR
 
 - Version bumped from 0.1.6 to 0.2.0 due to breaking API changes
 
+## [0.4.0] - 2026-03-19
+
+### Breaking Changes
+
+- **Ruby FFI API Simplification**: Unified to single `parse()` function
+  - `parse_parslet(g, i)` → `parse(g, i)`
+  - `parse_parslet_with_positions(g, i, cache)` → `parse(g, i)`
+  - `parse_with_transform(g, i, cache)` → `parse(g, i)`
+  - `parse_to_objects(g, i, map)` → `parse(g, i)`
+  - `parse_raw(atom, i)` → `parse_with_grammar(atom, i)`
+
+### Added
+
+- **Lazy Line/Column in Ruby FFI**: Zero-overhead position info
+  - `Slice#offset` - Always available, zero cost
+  - `Slice#content` - Always available, zero cost
+  - `Slice#line_and_column` - Computed lazily, cached after first call
+  - Slice stores input string reference for lazy computation
+
+- **WASM Build Configuration**: Added `.cargo/config.toml` for WASM target
+  - Configures `getrandom_backend="wasm_js"` rustflag
+  - Enables building for `wasm32-unknown-unknown` target
+
+### Changed
+
+- **Ruby FFI Dependencies**: Simplified dependency structure
+  - `rb-sys` no longer a direct dependency (transitive through `magnus`)
+  - Workspace patches `rb-sys` to latest main for magnus compatibility
+  - Feature flag `ruby` now only enables `magnus`
+- **Ruby 4.0 Support**: Uses unreleased magnus 0.9.0 (git rev 4e46772)
+  - Workspace patches rb-sys to latest main (rev b42b5fba)
+  - Required for Ruby 4.0 ABI compatibility
+
+- **parsanol-derive**: Version bumped to 0.4.1
+
+### Fixed
+
+- **WASM Build**: Fixed `getrandom` crate configuration for WASM targets
+  - Added `getrandom_03` dependency with `wasm_js` feature
+  - Both `getrandom` 0.3.x and 0.4.x now support WASM builds
+
 ## [Unreleased]
 
 ### Added

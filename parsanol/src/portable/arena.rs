@@ -350,6 +350,35 @@ impl AstArena {
             + self.array_pool.capacity() * mem::size_of::<ArrayPoolEntry>()
             + self.hash_pool.capacity() * mem::size_of::<HashPoolEntry>()
     }
+
+    /// Allocate an array and return the complete AstNode
+    ///
+    /// Convenience method that stores the array and creates the AstNode.
+    #[inline]
+    pub fn alloc_array(&mut self, items: Vec<AstNode>) -> AstNode {
+        let (pool_index, length) = self.store_array(&items);
+        AstNode::Array {
+            pool_index,
+            length,
+        }
+    }
+
+    /// Allocate a hash and return the complete AstNode
+    ///
+    /// Convenience method that stores the hash and creates the AstNode.
+    #[inline]
+    pub fn alloc_hash(&mut self, pairs: Vec<(String, AstNode)>) -> AstNode {
+        // Convert Vec<(String, AstNode)> to &[(&str, AstNode)]
+        let refs: Vec<(&str, AstNode)> = pairs
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.clone()))
+            .collect();
+        let (pool_index, length) = self.store_hash(&refs);
+        AstNode::Hash {
+            pool_index,
+            length,
+        }
+    }
 }
 
 #[cfg(test)]

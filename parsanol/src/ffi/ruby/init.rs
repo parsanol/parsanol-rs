@@ -5,7 +5,7 @@ use magnus::{function, Error, Module, Ruby};
 use super::dynamic::{
     register_ruby_callback_with_global_registry, unregister_ruby_callback_from_global_registry,
 };
-use super::parser::{is_available, parse, parse_batch, parse_with_builder};
+use super::parser::{is_available, parse, parse_batch, parse_with_builder, parse_with_stats};
 use crate::portable::dynamic::{
     clear_dynamic_callbacks, dynamic_callback_count, get_dynamic_callback_description,
     has_dynamic_callback,
@@ -76,6 +76,10 @@ pub fn init(ruby: &Ruby) -> Result<(), Error> {
     // Named _parse_raw to avoid conflict with Ruby wrapper's parse method
     native_module.define_module_function("_parse_raw", function!(parse, 2))?;
 
+    // Batch parsing method - returns flat u64 array for minimal FFI overhead
+    // Named _parse_batch_raw to avoid conflict with Ruby wrapper's parse_batch method
+    native_module.define_module_function("_parse_batch_raw", function!(parse_batch, 2))?;
+
     // =========================================================================
     // LOW-LEVEL API - For advanced users / debugging
     // =========================================================================
@@ -83,11 +87,11 @@ pub fn init(ruby: &Ruby) -> Result<(), Error> {
     // Availability check
     native_module.define_module_function("is_available", function!(is_available, 0))?;
 
-    // Batch parsing (returns flat u64 array - for debugging/benchmarks)
-    native_module.define_module_function("parse_batch", function!(parse_batch, 2))?;
-
     // Streaming builder callback
     native_module.define_module_function("parse_with_builder", function!(parse_with_builder, 3))?;
+
+    // Parsing with cache statistics (for debugging/benchmarks)
+    native_module.define_module_function("parse_with_stats", function!(parse_with_stats, 2))?;
 
     // =========================================================================
     // DYNAMIC CALLBACKS - For advanced use cases

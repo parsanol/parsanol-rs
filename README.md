@@ -549,7 +549,7 @@ providing the `#[derive(FromAst)]` macro for typed AST conversion.
 
 ## Optional Features
 
-- `ruby` - Enable Ruby FFI bindings (requires `magnus`, `rb-sys`)
+- `ruby` - Enable Ruby FFI bindings (requires `magnus`)
 
 - `wasm` - Enable WebAssembly bindings (requires `wasm-bindgen`,
   `js-sys`)
@@ -1362,6 +1362,9 @@ The Ruby FFI provides:
 
 ## Building for Ruby
 
+> **Ruby 4.0 Support**: This version uses unreleased magnus 0.9.0 and rb-sys HEAD
+> for Ruby 4.0 compatibility. The workspace `Cargo.toml` patches rb-sys automatically.
+
 ```bash
 # Build with Ruby support
 cargo build --features ruby
@@ -1896,12 +1899,16 @@ The WASM FFI uses `wasm-bindgen` for JavaScript bindings.
 
 **Prerequisites:**
 - `wasm-pack` installed (`cargo install wasm-pack`)
+- `.cargo/config.toml` configures WASM-specific rustflags (auto-applied)
 
 **Testing:**
 ```bash
 # Compile-time check
 cargo check --features wasm
 cargo clippy --features wasm --lib -- -D warnings
+
+# Build for WASM target
+cargo build --features wasm --target wasm32-unknown-unknown
 
 # Full WASM build and test
 wasm-pack build --features wasm

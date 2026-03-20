@@ -97,6 +97,54 @@ fn join_slices_from_array(ary: &RArray, ruby: &Ruby, input: &str) -> Result<Valu
     }
 }
 
+/// Deep merge two hashes, recursively merging nested hashes
+/// For keys that exist in both hashes with hash values, merge the nested hashes
+/// For all other cases, right-hand value wins
+fn deep_merge_hashes(l: Value, r: Value, ruby: &Ruby, input: &str) -> Result<Value, Error> {
+    let hash_class = ruby.class_hash();
+
+    // Start with a copy of left hash
+    let result = l.funcall::<_, _, Value>("dup", ())?;
+
+    // Iterate over right hash keys
+    if let Ok(r_keys) = r.funcall::<_, _, Value>("keys", ()) {
+        if let Some(r_keys_ary) = RArray::from_value(r_keys) {
+            for i in 0..r_keys_ary.len() {
+                if let Ok(r_key) = r_keys_ary.entry::<Value>(i as isize) {
+                    // Get values from both hashes
+                    let l_val: Result<Value, _> = l.funcall("[]", (r_key.clone(),));
+                    let r_val: Result<Value, _> = r.funcall("[]", (r_key.clone(),));
+
+                    match (l_val, r_val) {
+                        (Ok(l_v), Ok(r_v)) => {
+                            let l_is_hash = l_v.is_kind_of(hash_class);
+                            let r_is_hash = r_v.is_kind_of(hash_class);
+
+                            if l_is_hash && r_is_hash {
+                                // Both are hashes - recursively merge
+                                let merged = deep_merge_hashes(l_v, r_v, ruby, input)?;
+                                let _: Value = result.funcall("[]=", (r_key, merged))?;
+                            } else {
+                                // Not both hashes - right wins
+                                let _: Value = result.funcall("[]=", (r_key, r_v))?;
+                            }
+                        }
+                        (Err(_), Ok(r_v)) => {
+                            // l_val is Err, but r_val is Ok - set from right
+                            let _: Value = result.funcall("[]=", (r_key, r_v))?;
+                        }
+                        (_, Err(_)) => {
+                            // r_val is Err - skip this key
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(result.as_value())
+}
+
 /// Merge two values using Ruby's merge_fold logic
 fn merge_fold(l: Value, r: Value, ruby: &Ruby, input: &str) -> Result<Value, Error> {
     // Safety checks: if either value is nil, return the other
@@ -118,9 +166,10 @@ fn merge_fold(l: Value, r: Value, ruby: &Ruby, input: &str) -> Result<Value, Err
     let l_is_array = l.is_kind_of(array_class);
     let r_is_array = r.is_kind_of(array_class);
 
-    // Two hashes: merge them
+    // Two hashes: merge them with deep merge for shared keys with nested hashes
     if l_is_hash && r_is_hash {
-        return l.funcall("merge", (r,));
+        // Use deep_merge! for nested hash merging
+        return deep_merge_hashes(l, r, ruby, input);
     }
 
     // Two strings/slices: concatenate
@@ -174,6 +223,113 @@ fn merge_fold(l: Value, r: Value, ruby: &Ruby, input: &str) -> Result<Value, Err
     Ok(ary.as_value())
 }
 
+/// Get the keys from the value at a given hash key
+/// Returns Some(set of keys) if the value is a Hash, None otherwise
+fn get_hash_keys(
+    hash: &Value,
+    outer_key: Value,
+    ruby: &Ruby,
+) -> Option<std::collections::HashSet<String>> {
+    let hash_class = ruby.class_hash();
+
+    if !hash.is_kind_of(hash_class) {
+        return None;
+    }
+
+    let inner_value: Result<Value, _> = hash.funcall("[]", (outer_key,));
+    if let Ok(inner) = inner_value {
+        // Named atoms are not hashes - return None so caller handles them
+        let name_var: Result<Value, _> = inner.funcall("instance_variable_get", (ruby.to_symbol("@name").as_value(),));
+        if let Ok(name_var) = name_var {
+            if !name_var.is_nil() {
+                return None;
+            }
+        }
+
+        if !inner.is_kind_of(hash_class) {
+            return None;
+        }
+
+        if let Ok(keys) = inner.funcall::<_, _, Value>("keys", ()) {
+            if let Some(keys_ary) = RArray::from_value(keys) {
+                let len = keys_ary.len();
+                let mut inner_keys: std::collections::HashSet<String> =
+                    std::collections::HashSet::new();
+                for i in 0..len {
+                    if let Ok(k) = keys_ary.entry::<Value>(i as isize) {
+                        if let Ok(key_str) = k.funcall::<_, _, String>("to_s", ()) {
+                            inner_keys.insert(key_str);
+                        }
+                    }
+                }
+                return Some(inner_keys);
+            }
+        }
+    }
+
+    None
+}
+
+/// Get the keys from the value at a given hash key (regardless of value type)
+/// Returns Some(set of keys) if the value responds to :keys with a non-nil result, None otherwise
+fn get_value_hash_keys(
+    hash: &Value,
+    outer_key: Value,
+    ruby: &Ruby,
+) -> Option<std::collections::HashSet<String>> {
+    if !hash.is_kind_of(ruby.class_hash()) {
+        return None;
+    }
+
+    let inner_value: Result<Value, _> = hash.funcall("[]", (outer_key,));
+    if let Ok(inner) = inner_value {
+        // Named atoms are not hash-like - return None so this falls through to merge
+        let name_var: Result<Value, _> = inner.funcall("instance_variable_get", (ruby.to_symbol("@name").as_value(),));
+        if let Ok(name_var) = name_var {
+            if !name_var.is_nil() {
+                return None;
+            }
+        }
+
+        // Check if the inner value is a Hash
+        if !inner.is_kind_of(ruby.class_hash()) {
+            return None;
+        }
+
+        // Inner is a Hash - get its keys
+        if let Ok(keys) = inner.funcall::<_, _, Value>("keys", ()) {
+            if keys.is_nil() {
+                return None;
+            }
+            if let Some(keys_ary) = RArray::from_value(keys) {
+                let len = keys_ary.len();
+                let mut inner_keys: std::collections::HashSet<String> =
+                    std::collections::HashSet::new();
+                for i in 0..len {
+                    if let Ok(k) = keys_ary.entry::<Value>(i as isize) {
+                        if let Ok(key_str) = k.funcall::<_, _, String>("to_s", ()) {
+                            inner_keys.insert(key_str);
+                        }
+                    }
+                }
+                return Some(inner_keys);
+            }
+        }
+    }
+
+    None
+}
+
+/// Get the keys from the inner value of a hash
+/// Returns Some(set of inner keys) if the inner value is a hash, None otherwise
+fn get_inner_keys(
+    hash: &Value,
+    outer_key: Value,
+    ruby: &Ruby,
+) -> Option<std::collections::HashSet<String>> {
+    get_hash_keys(hash, outer_key, ruby)
+}
+
 /// Fold an array of values using merge_fold (like Ruby's flatten_sequence)
 fn fold_sequence_from_array(ary: &RArray, ruby: &Ruby, input: &str) -> Result<Value, Error> {
     let len = ary.len();
@@ -213,65 +369,77 @@ fn fold_sequence_from_array(ary: &RArray, ruby: &Ruby, input: &str) -> Result<Va
         }
     }
 
+    // Process based on whether all items are hashes
     if all_hashes {
-        // Collect all keys to check for duplicates
-        let mut all_keys: Vec<String> = Vec::new();
+        return fold_hash_array(&non_nil, ruby, input);
+    } else {
+        // Not all items are hashes - separate hash from non-hash items
+        let hash_items = ruby.ary_new_capa(non_nil_len as _);
+        let non_hash_items = ruby.ary_new_capa(non_nil_len as _);
         for i in 0..non_nil_len {
             if let Ok(item) = non_nil.entry::<Value>(i as isize) {
-                if let Ok(keys) = item.funcall::<_, _, Value>("keys", ()) {
-                    if let Some(keys_ary) = RArray::from_value(keys) {
-                        for j in 0..keys_ary.len() {
-                            if let Ok(key) = keys_ary.entry::<Value>(j as isize) {
-                                if !key.is_nil() {
-                                    if let Ok(key_str) = key.funcall::<_, _, String>("to_s", ()) {
-                                        all_keys.push(key_str);
-                                    }
-                                }
-                            }
-                        }
-                    }
+                if item.is_kind_of(hash_class) {
+                    hash_items.push(item)?;
+                } else {
+                    non_hash_items.push(item)?;
                 }
             }
         }
 
-        // Check for duplicate keys
-        let unique_len = all_keys.iter().collect::<std::collections::HashSet<_>>().len();
-        if unique_len < all_keys.len() {
-            // Duplicate keys - return as array (repetition pattern)
-            return Ok(non_nil.as_value());
+        let hash_len = hash_items.len();
+        let non_hash_len = non_hash_items.len();
+
+        // Process hash items with wrapper/repetition logic
+        let hash_result = if hash_len > 0 {
+            fold_hash_array(&hash_items, ruby, input)?
+        } else {
+            ruby.qnil().as_value()
+        };
+
+        if non_hash_len == 0 {
+            // No non-hash items, return hash result directly
+            return Ok(hash_result);
         }
 
-        // Check if all hashes have the same single key (wrapper pattern)
-        if let Ok(first) = non_nil.entry::<Value>(0) {
-            if let Ok(first_keys) = first.funcall::<_, _, Value>("keys", ()) {
-                if let Some(first_keys_ary) = RArray::from_value(first_keys) {
-                    if first_keys_ary.len() == 1 {
-                        if let Ok(first_key) = first_keys_ary.entry::<Value>(0) {
-                            if let Ok(first_key_str) = first_key.funcall::<_, _, String>("to_s", ()) {
-                                // Check if all items have the same single key
-                                let mut all_same = true;
-                                for i in 1..non_nil_len {
-                                    if let Ok(item) = non_nil.entry::<Value>(i as isize) {
-                                        if let Ok(keys) = item.funcall::<_, _, Value>("keys", ()) {
-                                            if let Some(keys_ary) = RArray::from_value(keys) {
-                                                if keys_ary.len() != 1 {
-                                                    all_same = false;
-                                                    break;
-                                                }
-                                                if let Ok(key) = keys_ary.entry::<Value>(0) {
-                                                    if let Ok(key_str) = key.funcall::<_, _, String>("to_s", ()) {
-                                                        if key_str != first_key_str {
-                                                            all_same = false;
-                                                            break;
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                if all_same {
-                                    return Ok(non_nil.as_value());
+        // Combine hash result with non-hash items using merge_fold
+        let result_box = ruby.ary_new_capa(1);
+        result_box.push(hash_result)?;
+
+        for i in 0..non_hash_len {
+            if let Ok(item) = non_hash_items.entry::<Value>(i as isize) {
+                let current = result_box.entry::<Value>(0)?;
+                let merged = merge_fold(current, item, ruby, input)?;
+                let _: Value = result_box.pop()?;
+                result_box.push(merged)?;
+            }
+        }
+
+        return result_box.entry::<Value>(0);
+    }
+}
+
+/// Fold an array of hash values using merge_fold
+/// Handles wrapper vs repetition pattern detection
+fn fold_hash_array(ary: &RArray, ruby: &Ruby, _input: &str) -> Result<Value, Error> {
+    let non_nil_len = ary.len();
+    if non_nil_len == 0 {
+        return Ok(ruby.qnil().as_value());
+    }
+    if non_nil_len == 1 {
+        return ary.entry::<Value>(0);
+    }
+
+    // Collect all keys to check for duplicates
+    let mut all_keys: Vec<String> = Vec::new();
+    for i in 0..non_nil_len {
+        if let Ok(item) = ary.entry::<Value>(i as isize) {
+            if let Ok(keys) = item.funcall::<_, _, Value>("keys", ()) {
+                if let Some(keys_ary) = RArray::from_value(keys) {
+                    for j in 0..keys_ary.len() {
+                        if let Ok(key) = keys_ary.entry::<Value>(j as isize) {
+                            if !key.is_nil() {
+                                if let Ok(key_str) = key.funcall::<_, _, String>("to_s", ()) {
+                                    all_keys.push(key_str);
                                 }
                             }
                         }
@@ -281,17 +449,152 @@ fn fold_sequence_from_array(ary: &RArray, ruby: &Ruby, input: &str) -> Result<Va
         }
     }
 
-    // Fold left using merge_fold with explicit rooting of intermediate results
-    // We keep the intermediate result in a 1-element RArray to ensure it's always
-    // visible to Ruby's GC, even during recursive merge operations
+    let unique_len = all_keys.iter().collect::<std::collections::HashSet<_>>().len();
+    let has_duplicates = unique_len < all_keys.len();
+
+    // Check if all hashes have the same single key
+    let mut all_same_single_key = true;
+    let mut first_key_str_opt: Option<String> = None;
+
+    if let Ok(first) = ary.entry::<Value>(0) {
+        if let Ok(first_keys) = first.funcall::<_, _, Value>("keys", ()) {
+            if let Some(first_keys_ary) = RArray::from_value(first_keys) {
+                if first_keys_ary.len() == 1 {
+                    if let Ok(first_key) = first_keys_ary.entry::<Value>(0) {
+                        if let Ok(first_key_str) = first_key.funcall::<_, _, String>("to_s", ()) {
+                            first_key_str_opt = Some(first_key_str.clone());
+                            // Check if all items have the same single key
+                            for i in 1..non_nil_len {
+                                if let Ok(item) = ary.entry::<Value>(i as isize) {
+                                    if let Ok(keys) = item.funcall::<_, _, Value>("keys", ()) {
+                                        if let Some(keys_ary) = RArray::from_value(keys) {
+                                            if keys_ary.len() != 1 {
+                                                all_same_single_key = false;
+                                                break;
+                                            }
+                                            if let Ok(key) = keys_ary.entry::<Value>(0) {
+                                                if let Ok(key_str) = key.funcall::<_, _, String>("to_s", ()) {
+                                                    if key_str != first_key_str {
+                                                        all_same_single_key = false;
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    all_same_single_key = false;
+                }
+            }
+        }
+    }
+
+    // If all items have same single outer key, check inner keys to determine wrapper vs repetition
+    if all_same_single_key {
+        if let Some(ref first_key_str) = first_key_str_opt {
+            let first_key_sym = ruby.to_symbol(first_key_str).as_value();
+            let first_inner_keys = get_inner_keys(&ary.entry::<Value>(0).unwrap(), first_key_sym, ruby);
+
+            if let Some(inner_keys_set) = first_inner_keys {
+                // Inner value is a hash - check if all have same inner keys
+                let mut all_same_inner = true;
+                for i in 1..non_nil_len {
+                    if let Ok(item) = ary.entry::<Value>(i as isize) {
+                        if let Some(item_inner_keys) = get_inner_keys(&item, first_key_sym, ruby) {
+                            if item_inner_keys != inner_keys_set {
+                                all_same_inner = false;
+                                break;
+                            }
+                        } else {
+                            // Inner value is not a hash
+                            all_same_inner = false;
+                            break;
+                        }
+                    }
+                }
+
+                if all_same_inner {
+                    // REPETITION pattern: same inner keys
+                    // Keep as array of hashes
+                    return Ok(ary.as_value());
+                }
+
+                // WRAPPER pattern: different inner keys
+                // Merge inner hashes - this is the correct generic behavior
+                // Fall through to merge_fold below
+            } else {
+                // Inner value is NOT a hash
+                // Check if all inner values have the same hash-like structure
+                let first_hash_keys = get_hash_keys(&ary.entry::<Value>(0).unwrap(), first_key_sym, ruby);
+                if let Some(first_keys_set) = first_hash_keys {
+                    let mut all_same_structure = true;
+                    for i in 1..non_nil_len {
+                        if let Ok(item) = ary.entry::<Value>(i as isize) {
+                            if let Some(item_keys) = get_hash_keys(&item, first_key_sym, ruby) {
+                                if item_keys != first_keys_set {
+                                    all_same_structure = false;
+                                    break;
+                                }
+                            } else {
+                                all_same_structure = false;
+                                break;
+                            }
+                        }
+                    }
+
+                    if all_same_structure {
+                        // REPETITION pattern: same hash structure
+                        return Ok(ary.as_value());
+                    }
+                    // else: DUPLICATE KEY pattern - fall through
+                } else {
+                    // Inner values are not hashes
+                    let first_val_keys = get_value_hash_keys(&ary.entry::<Value>(0).unwrap(), first_key_sym, ruby);
+                    if let Some(first_val_set) = first_val_keys {
+                        let mut all_same_structure = true;
+                        for i in 1..non_nil_len {
+                            if let Ok(item) = ary.entry::<Value>(i as isize) {
+                                if let Some(item_keys) = get_value_hash_keys(&item, first_key_sym, ruby) {
+                                    if item_keys != first_val_set {
+                                        all_same_structure = false;
+                                        break;
+                                    }
+                                } else {
+                                    all_same_structure = false;
+                                    break;
+                                }
+                            }
+                        }
+
+                        if all_same_structure {
+                            // REPETITION pattern: same non-hash structure
+                            return Ok(ary.as_value());
+                        }
+                        // else: DUPLICATE KEY pattern - fall through
+                    } else {
+                        // REPETITION pattern: non-hash values (Slices, strings)
+                        return Ok(ary.as_value());
+                    }
+                }
+            }
+        }
+    } else if has_duplicates {
+        // Different outer keys with duplicates
+        return Ok(ary.as_value());
+    }
+
+    // Fall through to merge_fold (left-fold with deep merge)
     let result_box = ruby.ary_new_capa(1);
-    result_box.push(non_nil.entry::<Value>(0)?)?;
+    result_box.push(ary.entry::<Value>(0)?)?;
 
     for i in 1..non_nil_len {
         let current = result_box.entry::<Value>(0)?;
-        let next_item = non_nil.entry::<Value>(i as isize)?;
-        let merged = merge_fold(current, next_item, ruby, input)?;
-        // Replace the element to keep merged value rooted
+        let next_item = ary.entry::<Value>(i as isize)?;
+        let merged = merge_fold(current, next_item, ruby, "")?;
         let _: Value = result_box.pop()?;
         result_box.push(merged)?;
     }
