@@ -358,30 +358,43 @@ fn flatten_sequence(items: &[AstNode], arena: &mut AstArena, input: &str) -> Ast
                     // WRAPPER pattern (different keys like schemaId vs schemaBody): merge
 
                     // Get the first item's inner keys to compare against
-                    let first_inner_keys: Vec<String> = if let AstNode::Hash { pool_index, length } = &items[0] {
-                        let pairs = arena.get_hash_items(*pool_index as usize, *length as usize);
-                        if pairs.len() == 1 {
-                            if let AstNode::Hash { pool_index: inner_p, length: inner_l } = &pairs[0].1 {
-                                arena.get_hash_items(*inner_p as usize, *inner_l as usize)
-                                    .iter()
-                                    .map(|(k, _)| k.clone())
-                                    .collect()
+                    let first_inner_keys: Vec<String> =
+                        if let AstNode::Hash { pool_index, length } = &items[0] {
+                            let pairs =
+                                arena.get_hash_items(*pool_index as usize, *length as usize);
+                            if pairs.len() == 1 {
+                                if let AstNode::Hash {
+                                    pool_index: inner_p,
+                                    length: inner_l,
+                                } = &pairs[0].1
+                                {
+                                    arena
+                                        .get_hash_items(*inner_p as usize, *inner_l as usize)
+                                        .iter()
+                                        .map(|(k, _)| k.clone())
+                                        .collect()
+                                } else {
+                                    vec![]
+                                }
                             } else {
                                 vec![]
                             }
                         } else {
                             vec![]
-                        }
-                    } else {
-                        vec![]
-                    };
+                        };
 
                     let all_same_keys = items.iter().all(|item| {
                         if let AstNode::Hash { pool_index, length } = item {
-                            let pairs = arena.get_hash_items(*pool_index as usize, *length as usize);
+                            let pairs =
+                                arena.get_hash_items(*pool_index as usize, *length as usize);
                             if pairs.len() == 1 {
-                                if let AstNode::Hash { pool_index: inner_p, length: inner_l } = &pairs[0].1 {
-                                    let keys: Vec<String> = arena.get_hash_items(*inner_p as usize, *inner_l as usize)
+                                if let AstNode::Hash {
+                                    pool_index: inner_p,
+                                    length: inner_l,
+                                } = &pairs[0].1
+                                {
+                                    let keys: Vec<String> = arena
+                                        .get_hash_items(*inner_p as usize, *inner_l as usize)
                                         .iter()
                                         .map(|(k, _)| k.clone())
                                         .collect();
@@ -417,10 +430,10 @@ fn flatten_sequence(items: &[AstNode], arena: &mut AstArena, input: &str) -> Ast
                                         length: inner_l,
                                     } = pairs[0].1
                                     {
-                                        let inner_pairs =
-                                            arena.get_hash_items(inner_p as usize, inner_l as usize);
+                                        let inner_pairs = arena
+                                            .get_hash_items(inner_p as usize, inner_l as usize);
                                         for (k, v) in inner_pairs {
-                                            merged_inner.push((k.clone(), v.clone()));
+                                            merged_inner.push((k.clone(), v));
                                         }
                                     }
                                 }
