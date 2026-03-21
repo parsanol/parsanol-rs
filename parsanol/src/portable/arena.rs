@@ -306,7 +306,9 @@ impl AstArena {
     pub fn store_array(&mut self, items: &[AstNode]) -> (u32, u32) {
         let start = self.array_pool.len() as u32;
         for item in items {
-            self.array_pool.push(ArrayPoolEntry { value: item.clone() });
+            self.array_pool.push(ArrayPoolEntry {
+                value: item.clone(),
+            });
         }
         (start, items.len() as u32)
     }
@@ -322,7 +324,9 @@ impl AstArena {
         let tag_node = self.intern_string(tag);
         self.array_pool.push(ArrayPoolEntry { value: tag_node });
         for item in items {
-            self.array_pool.push(ArrayPoolEntry { value: item.clone() });
+            self.array_pool.push(ArrayPoolEntry {
+                value: item.clone(),
+            });
         }
         (start, items.len() as u32 + 1)
     }
@@ -353,7 +357,11 @@ impl AstArena {
                 let offset = self.string_data.len() as u32;
                 let length = key.len() as u32;
                 self.string_data.extend_from_slice(key.as_bytes());
-                self.string_pool.push(StringPoolEntry { offset, length, input_offset: 0 });
+                self.string_pool.push(StringPoolEntry {
+                    offset,
+                    length,
+                    input_offset: 0,
+                });
                 (self.string_pool.len() - 1) as u32
             };
 
@@ -438,7 +446,8 @@ impl AstArena {
     #[inline]
     pub fn alloc_hash(&mut self, pairs: Vec<(String, AstNode)>) -> AstNode {
         // Convert Vec<(String, AstNode)> to &[(&str, AstNode)]
-        let refs: Vec<(&str, AstNode)> = pairs.iter().map(|(k, v)| (k.as_str(), v.clone())).collect();
+        let refs: Vec<(&str, AstNode)> =
+            pairs.iter().map(|(k, v)| (k.as_str(), v.clone())).collect();
         let (pool_index, length) = self.store_hash(&refs);
         AstNode::Hash { pool_index, length }
     }
@@ -457,7 +466,7 @@ mod tests {
         let node3 = arena.intern_string("world");
 
         // Same string should return same pool index
-        match (node1, node2) {
+        match (&node1, &node2) {
             (AstNode::StringRef { pool_index: i1 }, AstNode::StringRef { pool_index: i2 }) => {
                 assert_eq!(i1, i2);
             }
@@ -465,7 +474,7 @@ mod tests {
         }
 
         // Different string should have different index
-        match (node1, node3) {
+        match (&node1, &node3) {
             (AstNode::StringRef { pool_index: i1 }, AstNode::StringRef { pool_index: i2 }) => {
                 assert_ne!(i1, i2);
             }

@@ -391,16 +391,17 @@ fn flatten_sequence(items: &[AstNode], arena: &mut AstArena, input: &str) -> Ast
                 let mut merged_inner: Vec<(String, AstNode)> = Vec::new();
                 for item in items {
                     if let AstNode::Hash { pool_index, length } = item {
-                        let pairs =
-                            arena.get_hash_items(*pool_index as usize, *length as usize);
+                        let pairs = arena.get_hash_items(*pool_index as usize, *length as usize);
                         for (k, v) in pairs {
                             merged_inner.push((k.clone(), v));
                         }
                     }
                 }
                 // Convert to borrowed slices for store_hash
-                let inner_refs: Vec<(&str, AstNode)> =
-                    merged_inner.iter().map(|(k, v)| (k.as_str(), v.clone())).collect();
+                let inner_refs: Vec<(&str, AstNode)> = merged_inner
+                    .iter()
+                    .map(|(k, v)| (k.as_str(), v.clone()))
+                    .collect();
                 let (inner_pool, inner_len) = arena.store_hash(&inner_refs);
                 // Use first key as wrapper key (any key works since we're merging)
                 let (pool_idx, len) = arena.store_hash(&[(
@@ -429,8 +430,10 @@ fn flatten_sequence(items: &[AstNode], arena: &mut AstArena, input: &str) -> Ast
     // If there are named captures (hashes), return ONLY the merged hash
     if !merged_hash.is_empty() {
         // Convert to borrowed slices for store_hash
-        let hash_refs: Vec<(&str, AstNode)> =
-            merged_hash.iter().map(|(k, v)| (k.as_str(), v.clone())).collect();
+        let hash_refs: Vec<(&str, AstNode)> = merged_hash
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.clone()))
+            .collect();
         let (pool_idx, len) = arena.store_hash(&hash_refs);
         return AstNode::Hash {
             pool_index: pool_idx,
@@ -548,7 +551,10 @@ mod tests {
             assert_eq!(items.len(), 4);
 
             // First item should be the :repetition tag
-            if let AstNode::StringRef { pool_index: tag_idx } = items[0] {
+            if let AstNode::StringRef {
+                pool_index: tag_idx,
+            } = items[0]
+            {
                 let (tag_str, _, _, _) = arena.get_string_parts(tag_idx as usize);
                 assert_eq!(tag_str, ":repetition");
             } else {

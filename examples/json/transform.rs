@@ -95,6 +95,10 @@ fn ast_to_json(node: &AstNode, arena: &AstArena, input: &str) -> Result<JsonValu
             }
             Ok(JsonValue::Object(map))
         }
+        AstNode::Tagged { value, .. } => {
+            // Tagged nodes contain inner values with metadata
+            ast_to_json(value, arena, input)
+        }
     }
 }
 
