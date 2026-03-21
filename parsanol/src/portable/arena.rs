@@ -11,14 +11,16 @@ use std::mem;
 /// String pool entry
 #[derive(Debug, Clone, Copy)]
 struct StringPoolEntry {
-    /// Offset into the string data
+    /// Offset into the string_data buffer
     offset: u32,
     /// Length of the string in bytes
     length: u32,
+    /// Original input offset (used when returning InputRef for batch encoding)
+    input_offset: u32,
 }
 
 /// Hash pool entry - key-value pair
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct HashPoolEntry {
     /// Key string pool index
     key_pool_index: u32,
@@ -27,7 +29,7 @@ struct HashPoolEntry {
 }
 
 /// Array pool entry - stores AstNode directly
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct ArrayPoolEntry {
     /// The AST node
     value: AstNode,
@@ -47,6 +49,8 @@ pub struct AstArena {
     array_pool: Vec<ArrayPoolEntry>,
     /// Hash pool - key-value pairs
     hash_pool: Vec<HashPoolEntry>,
+    /// Original input string (for InputRef offset lookup)
+    input: Option<String>,
 }
 
 impl Default for AstArena {
@@ -71,6 +75,7 @@ impl AstArena {
             string_hash: HashMap::new(),
             array_pool: Vec::with_capacity(capacity * 2),
             hash_pool: Vec::with_capacity(capacity),
+            input: None,
         }
     }
 
@@ -102,7 +107,20 @@ impl AstArena {
             string_hash: HashMap::with_capacity(string_capacity),
             array_pool: Vec::with_capacity(estimated_nodes * 2),
             hash_pool: Vec::with_capacity(estimated_nodes),
+            input: None,
         }
+    }
+
+    /// Set the original input string (for InputRef offset lookup)
+    #[inline]
+    pub fn set_input(&mut self, input: String) {
+        self.input = Some(input);
+    }
+
+    /// Get the original input string
+    #[inline]
+    pub fn get_input(&self) -> &str {
+        self.input.as_deref().unwrap_or("")
     }
 
     /// Get the current capacity
@@ -190,21 +208,39 @@ impl AstArena {
     ///
     /// If the same string has been interned before, returns a reference
     /// to the existing copy instead of allocating a new one.
+    ///
+    /// Returns InputRef (not StringRef) to preserve original input offset
+    /// for batch encoding. Uses 0 as placeholder offset for new strings.
     #[inline]
     pub fn intern_string(&mut self, s: &str) -> AstNode {
+        self.intern_string_with_offset(s, 0)
+    }
+
+    /// Intern a string and return an InputRef with the given input offset.
+    ///
+    /// This is used when we know the original input offset (e.g., for joined strings).
+    /// The InputRef's offset is set to the provided input_offset.
+    #[inline]
+    pub fn intern_string_with_offset(&mut self, s: &str, input_offset: u32) -> AstNode {
         // Check for existing string first
-        if let Some(index) = self.find_interned_string(s) {
-            return AstNode::StringRef {
-                pool_index: index as u32,
+        if let Some((index, _)) = self.find_interned_string_with_offset(s) {
+            let entry = &self.string_pool[index];
+            return AstNode::InputRef {
+                offset: entry.input_offset,
+                length: entry.length,
             };
         }
 
-        // Allocate new string
-        let offset = self.string_data.len() as u32;
+        // Allocate new string in pool
+        let pool_offset = self.string_data.len() as u32;
         let length = s.len() as u32;
 
         self.string_data.extend_from_slice(s.as_bytes());
-        self.string_pool.push(StringPoolEntry { offset, length });
+        self.string_pool.push(StringPoolEntry {
+            offset: pool_offset,
+            length,
+            input_offset,
+        });
 
         let pool_index = (self.string_pool.len() - 1) as u32;
 
@@ -212,7 +248,11 @@ impl AstArena {
         let hash = self.hash_string(s);
         self.string_hash.insert(hash, pool_index as usize);
 
-        AstNode::StringRef { pool_index }
+        // Return InputRef with the provided input_offset
+        AstNode::InputRef {
+            offset: input_offset,
+            length,
+        }
     }
 
     /// Compute a hash for a string (using ahash-like algorithm)
@@ -248,14 +288,14 @@ impl AstArena {
 
     /// Get string data from pool entry
     #[inline]
-    pub fn get_string_parts(&self, pool_index: usize) -> (&str, u32, u32) {
+    pub fn get_string_parts(&self, pool_index: usize) -> (&str, u32, u32, u32) {
         let entry = &self.string_pool[pool_index];
         let data = &self.string_data[entry.offset as usize..(entry.offset + entry.length) as usize];
         // SAFETY: All strings added to the pool via `add_string()` are valid UTF-8
         // because the function accepts a `&str` which is guaranteed to be valid UTF-8.
         // The bytes are stored unchanged and retrieved as the same slice.
         let s = unsafe { std::str::from_utf8_unchecked(data) };
-        (s, entry.offset, entry.length)
+        (s, entry.offset, entry.length, entry.input_offset)
     }
 
     /// Store an array in the pool
@@ -266,7 +306,7 @@ impl AstArena {
     pub fn store_array(&mut self, items: &[AstNode]) -> (u32, u32) {
         let start = self.array_pool.len() as u32;
         for item in items {
-            self.array_pool.push(ArrayPoolEntry { value: *item });
+            self.array_pool.push(ArrayPoolEntry { value: item.clone() });
         }
         (start, items.len() as u32)
     }
@@ -282,7 +322,7 @@ impl AstArena {
         let tag_node = self.intern_string(tag);
         self.array_pool.push(ArrayPoolEntry { value: tag_node });
         for item in items {
-            self.array_pool.push(ArrayPoolEntry { value: *item });
+            self.array_pool.push(ArrayPoolEntry { value: item.clone() });
         }
         (start, items.len() as u32 + 1)
     }
@@ -292,7 +332,7 @@ impl AstArena {
     pub fn get_array(&self, start: usize, len: usize) -> Vec<AstNode> {
         let mut result = Vec::with_capacity(len);
         for i in 0..len {
-            result.push(self.array_pool[start + i].value);
+            result.push(self.array_pool[start + i].value.clone());
         }
         result
     }
@@ -313,13 +353,13 @@ impl AstArena {
                 let offset = self.string_data.len() as u32;
                 let length = key.len() as u32;
                 self.string_data.extend_from_slice(key.as_bytes());
-                self.string_pool.push(StringPoolEntry { offset, length });
+                self.string_pool.push(StringPoolEntry { offset, length, input_offset: 0 });
                 (self.string_pool.len() - 1) as u32
             };
 
             self.hash_pool.push(HashPoolEntry {
                 key_pool_index,
-                value: *value,
+                value: value.clone(),
             });
         }
 
@@ -333,7 +373,7 @@ impl AstArena {
         for i in 0..len {
             let entry = &self.hash_pool[pool_index + i];
             let key = self.get_string(entry.key_pool_index as usize).to_string();
-            result.push((key, entry.value));
+            result.push((key, entry.value.clone()));
         }
         result
     }
@@ -353,6 +393,22 @@ impl AstArena {
                 &self.string_data[entry.offset as usize..(entry.offset + entry.length) as usize];
             if data == s.as_bytes() {
                 return Some(index);
+            }
+        }
+        None
+    }
+
+    /// Find interned string and return (pool_index, input_offset)
+    fn find_interned_string_with_offset(&self, s: &str) -> Option<(usize, u32)> {
+        // Use hash lookup for O(1) access
+        let hash = self.hash_string(s);
+        if let Some(&index) = self.string_hash.get(&hash) {
+            // Verify it's actually the same string (handle hash collisions)
+            let entry = &self.string_pool[index];
+            let data =
+                &self.string_data[entry.offset as usize..(entry.offset + entry.length) as usize];
+            if data == s.as_bytes() {
+                return Some((index, entry.input_offset));
             }
         }
         None
@@ -382,7 +438,7 @@ impl AstArena {
     #[inline]
     pub fn alloc_hash(&mut self, pairs: Vec<(String, AstNode)>) -> AstNode {
         // Convert Vec<(String, AstNode)> to &[(&str, AstNode)]
-        let refs: Vec<(&str, AstNode)> = pairs.iter().map(|(k, v)| (k.as_str(), *v)).collect();
+        let refs: Vec<(&str, AstNode)> = pairs.iter().map(|(k, v)| (k.as_str(), v.clone())).collect();
         let (pool_index, length) = self.store_hash(&refs);
         AstNode::Hash { pool_index, length }
     }

@@ -641,7 +641,7 @@ fn transform_ast_internal(
         AstNode::Int(n) => Ok(ruby.integer_from_i64(*n).as_value()),
         AstNode::Float(f) => Ok(ruby.float_from_f64(*f).as_value()),
         AstNode::StringRef { pool_index } => {
-            let (s, _, _) = arena.get_string_parts(*pool_index as usize);
+            let (s, _, _, _) = arena.get_string_parts(*pool_index as usize);
             if s.starts_with(':') {
                 return Ok(ruby.to_symbol(&s[1..]).as_value());
             }
@@ -665,7 +665,7 @@ fn transform_ast_internal(
                 pool_index: tag_idx,
             }) = items.first()
             {
-                let (tag, _, _) = arena.get_string_parts(*tag_idx as usize);
+                let (tag, _, _, _) = arena.get_string_parts(*tag_idx as usize);
                 if tag == ":sequence" || tag == ":repetition" || tag == ":maybe" {
                     let ary = ruby.ary_new_capa(items.len() as _);
                     let tag_sym = ruby.to_symbol(&tag[1..]);
@@ -721,6 +721,12 @@ fn transform_ast_internal(
             }
 
             Ok(hash.as_value())
+        }
+
+        AstNode::Tagged { tag, value } => {
+            // Tagged nodes should have been processed by to_parslet_compatible already
+            // For safety, just transform the inner value
+            transform_ast_internal(value, arena, input, ruby, depth)
         }
     }
 }

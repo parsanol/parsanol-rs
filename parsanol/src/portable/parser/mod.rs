@@ -373,7 +373,7 @@ impl<'a> PortableParser<'a> {
 
         if let Some((success, end_pos, ast_ref)) = cache_hit {
             return if success {
-                let cached = self.cached_nodes[ast_ref as usize];
+                let cached = self.cached_nodes[ast_ref as usize].clone();
                 Ok(ParseResult {
                     value: cached,
                     end_pos: end_pos as usize,
@@ -400,7 +400,7 @@ impl<'a> PortableParser<'a> {
                 ));
 
                 Ok(ParseResult {
-                    value: self.cached_nodes[ast_ref as usize],
+                    value: self.cached_nodes[ast_ref as usize].clone(),
                     end_pos: result.end_pos,
                     capture_state: None,
                 })
@@ -993,7 +993,7 @@ impl<'a> PortableParser<'a> {
             });
 
             return if success {
-                let cached = self.cached_nodes[ast_ref as usize];
+                let cached = self.cached_nodes[ast_ref as usize].clone();
                 Ok(ParseResult {
                     value: cached,
                     end_pos: end_pos as usize,

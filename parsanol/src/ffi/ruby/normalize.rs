@@ -144,7 +144,7 @@ pub fn normalize_ast(
         AstNode::Float(f) => Ok(ruby.float_from_f64(*f).as_value()),
 
         AstNode::StringRef { pool_index } => {
-            let (s, _, _) = arena.get_string_parts(*pool_index as usize);
+            let (s, _, _, _) = arena.get_string_parts(*pool_index as usize);
             // Interned strings don't have source position, create Slice with offset 0
             create_slice(ruby, 0, s, input)
         }
@@ -168,7 +168,7 @@ pub fn normalize_ast(
                 pool_index: tag_idx,
             }) = items.first()
             {
-                let (tag, _, _) = arena.get_string_parts(*tag_idx as usize);
+                let (tag, _, _, _) = arena.get_string_parts(*tag_idx as usize);
                 if tag == ":sequence" || tag == ":repetition" {
                     // Return as tagged array (consumer decides how to handle)
                     let ary = ruby.ary_new_capa((items.len()) as _);
@@ -227,6 +227,12 @@ pub fn normalize_ast(
             }
 
             Ok(hash.as_value())
+        }
+
+        AstNode::Tagged { tag, value } => {
+            // Tagged nodes should have been processed by to_parslet_compatible already
+            // For safety, just normalize the inner value
+            normalize_ast(value, arena, input, ruby)
         }
     }
 }
