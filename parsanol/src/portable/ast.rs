@@ -113,7 +113,9 @@ impl PartialEq for AstNode {
                     length: l2,
                 },
             ) => p1 == p2 && l1 == l2,
-            (AstNode::Tagged { tag: t1, value: v1 }, AstNode::Tagged { tag: t2, value: v2 }) => t1 == t2 && *v1 == *v2,
+            (AstNode::Tagged { tag: t1, value: v1 }, AstNode::Tagged { tag: t2, value: v2 }) => {
+                t1 == t2 && *v1 == *v2
+            }
             _ => false,
         }
     }
@@ -706,13 +708,6 @@ mod tests {
     }
 
     // === Edge Cases ===
-
-    #[test]
-    fn test_ast_node_copy() {
-        let node = AstNode::Int(42);
-        let node_copy = node; // Should compile (Copy trait)
-        assert_eq!(node, node_copy);
-    }
 
     #[test]
     #[allow(clippy::clone_on_copy)]

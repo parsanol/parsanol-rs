@@ -46,7 +46,7 @@ pub fn ast_to_value(node: &AstNode, arena: &AstArena, input: &str) -> Value {
             }
             Value::Hash(map)
         }
-        AstNode::Tagged { tag, value } => {
+        AstNode::Tagged { tag: _, value } => {
             // Tagged nodes should be handled by to_parslet_compatible transformation
             // For now, just return the inner value
             ast_to_value(value, arena, input)
