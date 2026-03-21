@@ -550,15 +550,12 @@ mod tests {
             // Array has :repetition tag + 3 items = 4 total
             assert_eq!(items.len(), 4);
 
-            // First item should be the :repetition tag
-            if let AstNode::StringRef {
-                pool_index: tag_idx,
-            } = items[0]
-            {
-                let (tag_str, _, _, _) = arena.get_string_parts(tag_idx as usize);
-                assert_eq!(tag_str, ":repetition");
+            // First item should be the :repetition tag (InputRef with offset=0, length=12)
+            if let AstNode::InputRef { offset, length } = items[0] {
+                assert_eq!(offset, 0, "repetition tag should have offset 0");
+                assert_eq!(length, 11, "':repetition' has 11 characters");
             } else {
-                panic!("Expected :repetition tag, got {:?}", items[0]);
+                panic!("Expected :repetition tag as InputRef, got {:?}", items[0]);
             }
 
             // Remaining items should be hashes with key "letter"

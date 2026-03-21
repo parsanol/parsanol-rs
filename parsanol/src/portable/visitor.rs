@@ -220,7 +220,7 @@ impl Visitor for NodeCounter {
 /// let node = arena.intern_string("hello");
 ///
 /// let mut collector = StringCollector::new();
-/// collector.visit_node(&node, &arena, "");
+/// collector.visit_node(&node, &arena, "hello world");
 ///
 /// assert_eq!(collector.strings, vec!["hello"]);
 /// ```
@@ -393,7 +393,8 @@ mod tests {
         let input_node = arena.input_ref(0, 5);
 
         let mut collector = StringCollector::new();
-        collector.visit_node(&string_node, &arena, "");
+        // intern_string returns InputRef; pass input that contains "hello"
+        collector.visit_node(&string_node, &arena, "hello world");
         assert_eq!(collector.strings, vec!["hello"]);
 
         collector = StringCollector::new();

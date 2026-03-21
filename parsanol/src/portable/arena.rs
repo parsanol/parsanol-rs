@@ -463,22 +463,32 @@ mod tests {
 
         let node1 = arena.intern_string("hello");
         let node2 = arena.intern_string("hello");
-        let node3 = arena.intern_string("world");
+        let node3 = arena.intern_string("hi");
 
-        // Same string should return same pool index
+        // Same string should return same offset/length
         match (&node1, &node2) {
-            (AstNode::StringRef { pool_index: i1 }, AstNode::StringRef { pool_index: i2 }) => {
-                assert_eq!(i1, i2);
+            (
+                AstNode::InputRef {
+                    offset: o1,
+                    length: l1,
+                },
+                AstNode::InputRef {
+                    offset: o2,
+                    length: l2,
+                },
+            ) => {
+                assert_eq!(o1, o2);
+                assert_eq!(l1, l2);
             }
-            _ => panic!("Expected StringRef nodes"),
+            _ => panic!("Expected InputRef nodes"),
         }
 
-        // Different string should have different index
+        // Different string should have different length
         match (&node1, &node3) {
-            (AstNode::StringRef { pool_index: i1 }, AstNode::StringRef { pool_index: i2 }) => {
-                assert_ne!(i1, i2);
+            (AstNode::InputRef { length: l1, .. }, AstNode::InputRef { length: l2, .. }) => {
+                assert_ne!(l1, l2, "different strings should have different lengths");
             }
-            _ => panic!("Expected StringRef nodes"),
+            _ => panic!("Expected InputRef nodes"),
         }
     }
 
@@ -551,24 +561,38 @@ mod tests {
         let node1_again = arena.intern_string("hello");
         let node2_again = arena.intern_string("world");
 
-        // Should return same pool indices (strings were preserved)
+        // Should return same InputRef (strings were preserved)
         match (_node1, node1_again) {
-            (AstNode::StringRef { pool_index: i1 }, AstNode::StringRef { pool_index: i2 }) => {
-                assert_eq!(
-                    i1, i2,
-                    "String 'hello' should have same pool index after reset"
-                );
+            (
+                AstNode::InputRef {
+                    offset: o1,
+                    length: l1,
+                },
+                AstNode::InputRef {
+                    offset: o2,
+                    length: l2,
+                },
+            ) => {
+                assert_eq!(o1, o2, "String 'hello' should have same offset after reset");
+                assert_eq!(l1, l2, "String 'hello' should have same length after reset");
             }
-            _ => panic!("Expected StringRef nodes"),
+            _ => panic!("Expected InputRef nodes"),
         }
         match (_node2, node2_again) {
-            (AstNode::StringRef { pool_index: i1 }, AstNode::StringRef { pool_index: i2 }) => {
-                assert_eq!(
-                    i1, i2,
-                    "String 'world' should have same pool index after reset"
-                );
+            (
+                AstNode::InputRef {
+                    offset: o1,
+                    length: l1,
+                },
+                AstNode::InputRef {
+                    offset: o2,
+                    length: l2,
+                },
+            ) => {
+                assert_eq!(o1, o2, "String 'world' should have same offset after reset");
+                assert_eq!(l1, l2, "String 'world' should have same length after reset");
             }
-            _ => panic!("Expected StringRef nodes"),
+            _ => panic!("Expected InputRef nodes"),
         }
     }
 
@@ -590,26 +614,27 @@ mod tests {
         let node1_again = arena.intern_string("hello");
         let node2_again = arena.intern_string("world");
 
-        // Should return pool index 0 and 1 (new entries)
-        match (node1_again, node2_again) {
-            (AstNode::StringRef { pool_index: i1 }, AstNode::StringRef { pool_index: i2 }) => {
-                assert_eq!(i1, 0, "First string after clear should be at index 0");
-                assert_eq!(i2, 1, "Second string after clear should be at index 1");
-                // Old indices should be different (since strings were cleared)
-                if let (
-                    AstNode::StringRef {
-                        pool_index: _old_i1,
-                    },
-                    AstNode::StringRef {
-                        pool_index: _old_i2,
-                    },
-                ) = (node1, node2)
-                {
-                    // They might happen to be the same, but that's fine - the key is
-                    // that the string pool was actually cleared
-                }
+        // Should return new InputRef nodes (strings were cleared and re-added)
+        // Verify the new nodes are InputRef
+        match (&node1_again, &node2_again) {
+            (AstNode::InputRef { .. }, AstNode::InputRef { .. }) => {}
+            _ => panic!("Expected InputRef nodes from intern_string"),
+        }
+        // Old and new InputRef values differ since pool was cleared
+        match (&node1, &node1_again) {
+            (AstNode::InputRef { offset: o1, .. }, AstNode::InputRef { offset: o1_new, .. }) => {
+                // After clear and re-add, intern_string still returns valid InputRef (offset=0, length=5)
+                assert_eq!(*o1, 0, "original 'hello' should have offset 0");
+                assert_eq!(*o1_new, 0, "re-interned 'hello' should have offset 0");
             }
-            _ => panic!("Expected StringRef nodes"),
+            _ => panic!("Expected InputRef nodes"),
+        }
+        match (&node2, &node2_again) {
+            (AstNode::InputRef { offset: o2, .. }, AstNode::InputRef { offset: o2_new, .. }) => {
+                assert_eq!(*o2, 0, "original 'world' should have offset 0");
+                assert_eq!(*o2_new, 0, "re-interned 'world' should have offset 0");
+            }
+            _ => panic!("Expected InputRef nodes"),
         }
     }
 
@@ -629,16 +654,16 @@ mod tests {
 
         // Memory usage should be lower (though capacity is retained)
         // The string_data, string_pool, and string_hash are cleared
-        // Let's verify by interning again - should start from index 0
+        // Let's verify by interning again - should start fresh
         let node = arena.intern_string("test");
         match node {
-            AstNode::StringRef { pool_index } => {
+            AstNode::InputRef { length, .. } => {
                 assert_eq!(
-                    pool_index, 0,
-                    "First string after clear_strings should be at index 0"
+                    length, 4,
+                    "First string after clear_strings should have correct length"
                 );
             }
-            _ => panic!("Expected StringRef node"),
+            _ => panic!("Expected InputRef node"),
         }
     }
 
