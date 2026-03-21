@@ -112,6 +112,10 @@ pub trait Visitor {
                 }
                 self.visit_hash_end(*pool_index, *length);
             }
+            AstNode::Tagged { tag: _, value } => {
+                // Tagged nodes: visit the inner value
+                self.visit_node(value, arena, input);
+            }
         }
     }
 }

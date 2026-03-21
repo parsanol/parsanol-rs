@@ -48,6 +48,10 @@ pub const TAG_HASH_KEY: u64 = 0x09;
 pub const TAG_INLINE_STRING: u64 = 0x0A;
 /// Tag for symbols (next: len, then u64 chunks of symbol bytes without leading ':')
 pub const TAG_SYMBOL: u64 = 0x0B;
+/// Tag for repetition marker (next: items as array) - preserves array structure
+pub const TAG_REPETITION: u64 = 0x0C;
+/// Tag for sequence marker (next: items as array) - preserves array structure
+pub const TAG_SEQUENCE: u64 = 0x0D;
 
 /// Write a symbol to the output buffer
 ///
@@ -120,7 +124,7 @@ pub fn flatten_ast_to_u64(node: &AstNode, arena: &AstArena, _input: &str, output
         AstNode::StringRef { pool_index } => {
             // StringRef points to interned strings in the arena's string pool
             // We need to write the actual string content inline
-            let (s, _, _) = arena.get_string_parts(*pool_index as usize);
+            let (s, _, _, _) = arena.get_string_parts(*pool_index as usize);
             let bytes = s.as_bytes();
             let len = bytes.len() as u64;
 
@@ -190,6 +194,17 @@ pub fn flatten_ast_to_u64(node: &AstNode, arena: &AstArena, _input: &str, output
             }
             output.push(TAG_HASH_END);
         }
+        AstNode::Tagged { tag, value } => {
+            // Get the tag string from the pool
+            let (tag_str, _, _, _) = arena.get_string_parts(*tag as usize);
+            if tag_str == ":repetition" {
+                output.push(TAG_REPETITION);
+            } else {
+                output.push(TAG_SEQUENCE);
+            }
+            // Flatten the inner value
+            flatten_ast_to_u64(value, arena, _input, output);
+        }
     }
 }
 
@@ -207,6 +222,9 @@ pub fn flatten_ast(node: &AstNode, arena: &AstArena, input: &str) -> Vec<u64> {
 ///
 /// Parses input with the given grammar and returns a flattened array.
 /// This is the primary entry point for batch FFI operations.
+///
+/// Note: This does NOT apply transformation. For transformed output, use
+/// `parse_and_transform_flat()` instead.
 pub fn parse_to_flat(
     grammar_json: &str,
     input: &str,
@@ -221,11 +239,52 @@ pub fn parse_to_flat(
     })?;
 
     let mut arena = AstArena::new();
+    arena.set_input(input.to_string());
     let mut parser = PortableParser::new(&grammar, input, &mut arena);
 
     let ast = parser.parse()?;
 
     Ok(flatten_ast(&ast, &arena, input))
+}
+
+/// Parse, transform, and flatten in one step
+///
+/// This is the recommended entry point for batch FFI operations when
+/// transformation is needed (e.g., for Parslet-compatible output).
+///
+/// This function:
+/// 1. Parses input with grammar
+/// 2. Transforms AST to Parslet-compatible format using `to_parslet_compatible()`
+/// 3. Flattens the transformed AST to batch format
+///
+/// The Ruby side can then decode the batch format without additional transformation.
+pub fn parse_and_transform_flat(
+    grammar_json: &str,
+    input: &str,
+) -> Result<Vec<u64>, crate::portable::ast::ParseError> {
+    use crate::portable::grammar::Grammar;
+    use crate::portable::parser::PortableParser;
+    use crate::portable::parslet_transform::to_parslet_compatible;
+
+    let grammar: Grammar = serde_json::from_str(grammar_json).map_err(|e| {
+        crate::portable::ast::ParseError::InvalidGrammar {
+            reason: e.to_string(),
+        }
+    })?;
+
+    let mut arena = AstArena::new();
+    arena.set_input(input.to_string());
+    let mut parser = PortableParser::new(&grammar, input, &mut arena);
+
+    // 1. Parse
+    let raw_ast = parser.parse()?;
+
+    // 2. Transform to Parslet-compatible format
+    // Note: to_parslet_compatible takes &mut arena because it may store new nodes
+    let transformed = to_parslet_compatible(&raw_ast, &mut arena, input);
+
+    // 3. Flatten transformed AST to batch format
+    Ok(flatten_ast(&transformed, &arena, input))
 }
 
 #[cfg(test)]

@@ -95,7 +95,7 @@ impl<'a> ParseContext<'a> {
     /// Get a cached node by index
     #[inline]
     pub fn get_cached_node(&self, idx: u32) -> AstNode {
-        self.cached_nodes[idx as usize]
+        self.cached_nodes[idx as usize].clone()
     }
 
     /// Enter a recursive call, incrementing depth counter

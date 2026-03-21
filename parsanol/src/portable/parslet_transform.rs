@@ -111,7 +111,17 @@ pub fn to_parslet_compatible(node: &AstNode, arena: &mut AstArena, input: &str) 
     match node {
         AstNode::Array { pool_index, length } => {
             let items = arena.get_array(*pool_index as usize, *length as usize);
-            let transformed_items: Vec<AstNode> = items
+
+            // Strip tags (strings starting with ':') from the items
+            // Tags like ":sequence", ":repetition" are metadata, not content
+            let mut tagged_items: Vec<AstNode> = Vec::with_capacity(items.len());
+            for item in items.iter() {
+                if !is_tag_node(item, arena) {
+                    tagged_items.push(item.clone());
+                }
+            }
+
+            let transformed_items: Vec<AstNode> = tagged_items
                 .iter()
                 .map(|item| to_parslet_compatible(item, arena, input))
                 .collect();
@@ -125,7 +135,28 @@ pub fn to_parslet_compatible(node: &AstNode, arena: &mut AstArena, input: &str) 
                 transform_multi_key_hash(&pairs, arena, input)
             }
         }
-        other => *other,
+        other => other.clone(),
+    }
+}
+
+/// Check if a node is a tag (StringRef or InputRef pointing to string starting with ':')
+fn is_tag_node(node: &AstNode, arena: &AstArena) -> bool {
+    match node {
+        AstNode::StringRef { pool_index } => {
+            let (s, _, _, _) = arena.get_string_parts(*pool_index as usize);
+            s.starts_with(':')
+        }
+        AstNode::InputRef { offset, length } => {
+            // Get string from input and check if it's a tag
+            let start = *offset as usize;
+            let end = start + *length as usize;
+            if let Some(s) = arena.get_input().get(start..end) {
+                s.starts_with(':')
+            } else {
+                false
+            }
+        }
+        _ => false,
     }
 }
 
@@ -182,7 +213,7 @@ fn transform_multi_key_hash(
 
     let transformed_refs: Vec<(&str, AstNode)> = transformed_owned
         .iter()
-        .map(|(k, v)| (k.as_str(), *v))
+        .map(|(k, v)| (k.as_str(), v.clone()))
         .collect();
 
     let (pool_idx, len) = arena.store_hash(&transformed_refs);
@@ -231,7 +262,7 @@ fn flatten_sequence(items: &[AstNode], arena: &mut AstArena, input: &str) -> Ast
             };
         }
         // Non-hash single item: return as-is
-        return items[0];
+        return items[0].clone();
     }
 
     // FIRST PASS: Detect repetition patterns
@@ -280,6 +311,7 @@ fn flatten_sequence(items: &[AstNode], arena: &mut AstArena, input: &str) -> Ast
     // Use owned Strings for keys to avoid lifetime issues
     let mut merged_hash: Vec<(String, AstNode)> = Vec::new();
     let mut string_parts: Vec<String> = Vec::new();
+    let mut first_input_offset: Option<u32> = None;
     let mut hash_count = 0;
     let mut total_items = 0;
 
@@ -299,6 +331,10 @@ fn flatten_sequence(items: &[AstNode], arena: &mut AstArena, input: &str) -> Ast
                 total_items += 1;
             }
             AstNode::InputRef { offset, length } => {
+                // Track first InputRef offset for joined strings
+                if first_input_offset.is_none() {
+                    first_input_offset = Some(*offset);
+                }
                 // Get string from input
                 let start = *offset as usize;
                 let end = start + *length as usize;
@@ -308,8 +344,11 @@ fn flatten_sequence(items: &[AstNode], arena: &mut AstArena, input: &str) -> Ast
                 total_items += 1;
             }
             AstNode::StringRef { pool_index } => {
-                let (s, _, _) = arena.get_string_parts(*pool_index as usize);
-                string_parts.push(s.to_string());
+                let (s, _, _, _) = arena.get_string_parts(*pool_index as usize);
+                // Skip tags (strings starting with ':') - these are metadata, not content
+                if !s.starts_with(':') {
+                    string_parts.push(s.to_string());
+                }
                 total_items += 1;
             }
             AstNode::Array { pool_index, length } => {
@@ -338,131 +377,43 @@ fn flatten_sequence(items: &[AstNode], arena: &mut AstArena, input: &str) -> Ast
                 .all(|item| get_single_key(item, arena).is_some_and(|k| k == first_key_clone));
 
             if all_same_key {
-                // Check if values are hashes (wrapper) or simple (repetition)
-                let all_values_are_hashes = items.iter().all(|item| {
+                // ALL hashes have the SAME outer key -> REPETITION pattern
+                // Keep items as array (do NOT merge)
+                // This matches Ruby's flatten_sequence: "return items unless all_values_are_hashes"
+                let (pool_idx, len) = arena.store_array(items);
+                return AstNode::Array {
+                    pool_index: pool_idx,
+                    length: len,
+                };
+            } else {
+                // DIFFERENT outer keys -> WRAPPER pattern
+                // Merge all inner hashes into a single hash under a synthetic key
+                let mut merged_inner: Vec<(String, AstNode)> = Vec::new();
+                for item in items {
                     if let AstNode::Hash { pool_index, length } = item {
-                        let pairs = arena.get_hash_items(*pool_index as usize, *length as usize);
-                        if pairs.len() == 1 {
-                            matches!(pairs[0].1, AstNode::Hash { .. })
-                        } else {
-                            false
+                        let pairs =
+                            arena.get_hash_items(*pool_index as usize, *length as usize);
+                        for (k, v) in pairs {
+                            merged_inner.push((k.clone(), v));
                         }
-                    } else {
-                        false
                     }
-                });
-
-                if all_values_are_hashes {
-                    // Check if inner hashes have the same keys or different keys
-                    // REPETITION pattern (same keys like entity_decl): keep as array
-                    // WRAPPER pattern (different keys like schemaId vs schemaBody): merge
-
-                    // Get the first item's inner keys to compare against
-                    let first_inner_keys: Vec<String> =
-                        if let AstNode::Hash { pool_index, length } = &items[0] {
-                            let pairs =
-                                arena.get_hash_items(*pool_index as usize, *length as usize);
-                            if pairs.len() == 1 {
-                                if let AstNode::Hash {
-                                    pool_index: inner_p,
-                                    length: inner_l,
-                                } = &pairs[0].1
-                                {
-                                    arena
-                                        .get_hash_items(*inner_p as usize, *inner_l as usize)
-                                        .iter()
-                                        .map(|(k, _)| k.clone())
-                                        .collect()
-                                } else {
-                                    vec![]
-                                }
-                            } else {
-                                vec![]
-                            }
-                        } else {
-                            vec![]
-                        };
-
-                    let all_same_keys = items.iter().all(|item| {
-                        if let AstNode::Hash { pool_index, length } = item {
-                            let pairs =
-                                arena.get_hash_items(*pool_index as usize, *length as usize);
-                            if pairs.len() == 1 {
-                                if let AstNode::Hash {
-                                    pool_index: inner_p,
-                                    length: inner_l,
-                                } = &pairs[0].1
-                                {
-                                    let keys: Vec<String> = arena
-                                        .get_hash_items(*inner_p as usize, *inner_l as usize)
-                                        .iter()
-                                        .map(|(k, _)| k.clone())
-                                        .collect();
-                                    keys == first_inner_keys
-                                } else {
-                                    false
-                                }
-                            } else {
-                                false
-                            }
-                        } else {
-                            false
-                        }
-                    });
-
-                    if all_same_keys {
-                        // REPETITION pattern: keep as array of hashes
-                        let (pool_idx, len) = arena.store_array(items);
-                        return AstNode::Array {
-                            pool_index: pool_idx,
-                            length: len,
-                        };
-                    } else {
-                        // WRAPPER pattern: merge inner hashes with different keys
-                        let mut merged_inner: Vec<(String, AstNode)> = Vec::new();
-                        for item in items {
-                            if let AstNode::Hash { pool_index, length } = item {
-                                let pairs =
-                                    arena.get_hash_items(*pool_index as usize, *length as usize);
-                                if pairs.len() == 1 {
-                                    if let AstNode::Hash {
-                                        pool_index: inner_p,
-                                        length: inner_l,
-                                    } = pairs[0].1
-                                    {
-                                        let inner_pairs = arena
-                                            .get_hash_items(inner_p as usize, inner_l as usize);
-                                        for (k, v) in inner_pairs {
-                                            merged_inner.push((k.clone(), v));
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        // Convert to borrowed slices for store_hash
-                        let inner_refs: Vec<(&str, AstNode)> =
-                            merged_inner.iter().map(|(k, v)| (k.as_str(), *v)).collect();
-                        let (inner_pool, inner_len) = arena.store_hash(&inner_refs);
-                        let (pool_idx, len) = arena.store_hash(&[(
-                            first_key.as_str(),
-                            AstNode::Hash {
-                                pool_index: inner_pool,
-                                length: inner_len,
-                            },
-                        )]);
-                        return AstNode::Hash {
-                            pool_index: pool_idx,
-                            length: len,
-                        };
-                    }
-                } else {
-                    // Repetition pattern: keep as array
-                    let (pool_idx, len) = arena.store_array(items);
-                    return AstNode::Array {
-                        pool_index: pool_idx,
-                        length: len,
-                    };
                 }
+                // Convert to borrowed slices for store_hash
+                let inner_refs: Vec<(&str, AstNode)> =
+                    merged_inner.iter().map(|(k, v)| (k.as_str(), v.clone())).collect();
+                let (inner_pool, inner_len) = arena.store_hash(&inner_refs);
+                // Use first key as wrapper key (any key works since we're merging)
+                let (pool_idx, len) = arena.store_hash(&[(
+                    first_key_clone.as_str(),
+                    AstNode::Hash {
+                        pool_index: inner_pool,
+                        length: inner_len,
+                    },
+                )]);
+                return AstNode::Hash {
+                    pool_index: pool_idx,
+                    length: len,
+                };
             }
         }
 
@@ -479,7 +430,7 @@ fn flatten_sequence(items: &[AstNode], arena: &mut AstArena, input: &str) -> Ast
     if !merged_hash.is_empty() {
         // Convert to borrowed slices for store_hash
         let hash_refs: Vec<(&str, AstNode)> =
-            merged_hash.iter().map(|(k, v)| (k.as_str(), *v)).collect();
+            merged_hash.iter().map(|(k, v)| (k.as_str(), v.clone())).collect();
         let (pool_idx, len) = arena.store_hash(&hash_refs);
         return AstNode::Hash {
             pool_index: pool_idx,
@@ -490,12 +441,16 @@ fn flatten_sequence(items: &[AstNode], arena: &mut AstArena, input: &str) -> Ast
     // No named captures - handle strings
     if !string_parts.is_empty() {
         if string_parts.len() == 1 {
-            // Return single string as StringRef
+            // Return single string as InputRef with correct offset
+            if let Some(offset) = first_input_offset {
+                return arena.intern_string_with_offset(&string_parts[0], offset);
+            }
             return arena.intern_string(&string_parts[0]);
         } else {
-            // Join strings
+            // Join strings with the correct input offset
             let joined: String = string_parts.join("");
-            return arena.intern_string(&joined);
+            let offset = first_input_offset.unwrap_or(0);
+            return arena.intern_string_with_offset(&joined, offset);
         }
     }
 
@@ -508,7 +463,7 @@ fn flatten_sequence(items: &[AstNode], arena: &mut AstArena, input: &str) -> Ast
     }
 
     if items.len() == 1 {
-        items[0]
+        items[0].clone()
     } else {
         let (pool_idx, len) = arena.store_array(items);
         AstNode::Array {
@@ -594,7 +549,7 @@ mod tests {
 
             // First item should be the :repetition tag
             if let AstNode::StringRef { pool_index: tag_idx } = items[0] {
-                let (tag_str, _, _) = arena.get_string_parts(tag_idx as usize);
+                let (tag_str, _, _, _) = arena.get_string_parts(tag_idx as usize);
                 assert_eq!(tag_str, ":repetition");
             } else {
                 panic!("Expected :repetition tag, got {:?}", items[0]);

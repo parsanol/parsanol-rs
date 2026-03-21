@@ -1355,10 +1355,10 @@ parsanol-ruby.
 
 The Ruby FFI provides:
 
-- **26x faster** parsing than pure Ruby (Parslet)
+- **17x faster** parsing than pure Ruby (Parslet)
 - **Single `parse()` API** - no confusing options
 - **Lazy line/column** - zero overhead unless needed
-- **Streaming Builder** - single-pass parsing with callbacks
+- **Batch FFI** - efficient u64 array transfer across language boundary
 
 ## Building for Ruby
 

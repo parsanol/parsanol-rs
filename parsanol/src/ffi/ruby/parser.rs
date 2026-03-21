@@ -2,9 +2,29 @@
 //!
 //! # Public API
 //!
+//! ## High-Level API (Recommended)
+//!
 //! ```ruby
-//! result = Parsanol::Native.parse(grammar_json, input)
+//! result = Parsanol::Native.parse(grammar, input)
+//! # Returns Parslet-compatible AST with lazy line/column support
 //! ```
+//!
+//! ## Raw API (For Custom Transformation)
+//!
+//! ```ruby
+//! result = Parsanol::Native.parse_raw(grammar, input)
+//! # Returns raw intermediate format (no transformation)
+//! ```
+//!
+//! # Architecture
+//!
+//! The parsing pipeline consists of:
+//! 1. **Rust parsing** - Fast parsing with packrat memoization
+//! 2. **Rust transformation** - `to_parslet_compatible` produces Parslet-compatible AST
+//! 3. **Batch encoding** - Flat u64 array for efficient FFI transfer
+//! 4. **Ruby decoding** - BatchDecoder produces Ruby Hash/Array/Slice objects
+//!
+//! # Slice Objects
 //!
 //! Slice objects support lazy line/column computation:
 //!
@@ -14,9 +34,28 @@
 //! slice.content           # => "hello" (always available)
 //! slice.line_and_column   # => [5, 1] (computed lazily on first call)
 //! ```
+//!
+//! # Batch Format
+//!
+//! The batch format uses tagged u64 values for efficient FFI:
+//!
+//! | Tag | Value | Description |
+//! |-----|-------|-------------|
+//! | 0x00 | - | nil |
+//! | 0x01 | 0 or 1 | bool |
+//! | 0x02 | value | int |
+//! | 0x03 | IEEE bits | float |
+//! | 0x04 | offset, length | Slice reference |
+//! | 0x05-0x06 | ... | array |
+//! | 0x07-0x08 | ... | hash |
+//! | 0x09 | len, data... | hash key |
+//! | 0x0A | len, data... | inline string |
+//! | 0x0B | len, data... | symbol |
+//! | 0x0C | items... | repetition marker |
+//! | 0x0D | items... | sequence marker |
 
 use crate::ffi::shared::flatten_ast_to_u64;
-use crate::portable::{AstArena, Grammar, PortableParser};
+use crate::portable::{to_parslet_compatible, AstArena, Grammar, PortableParser};
 use magnus::{Error, Ruby, Value};
 use std::hash::{Hash, Hasher};
 use std::sync::Mutex;
@@ -161,10 +200,16 @@ pub fn parse_with_stats(
     Ok((result, hits, misses, hit_rate))
 }
 
-/// Parse using batch FFI - returns flat array instead of Ruby objects
+/// Parse using batch FFI - returns flat array WITH transformation
 ///
-/// This is a low-level function primarily used for debugging and benchmarks.
-/// Most users should use `parse()` instead.
+/// This is the RECOMMENDED batch parsing function. It transforms the AST
+/// to Parslet-compatible format BEFORE flattening, so Ruby can decode
+/// directly without additional transformation.
+///
+/// Returns a flat u64 array where the AST is already transformed:
+/// - Sequences merged (unnamed discarded when named captures present)
+/// - Repetitions properly handled (arrays of named captures)
+/// - Consecutive slices joined
 pub fn parse_batch(grammar_json: String, input: String) -> Result<Vec<u64>, Error> {
     let ruby = Ruby::get().unwrap();
 
@@ -186,15 +231,22 @@ pub fn parse_batch(grammar_json: String, input: String) -> Result<Vec<u64>, Erro
     };
 
     let mut arena = AstArena::for_input(input.len());
+    arena.set_input(input.clone());
     let mut parser = PortableParser::new(&grammar, &input, &mut arena);
 
+    // 1. Parse
     let ast = parser
         .parse()
         .map_err(|e| Error::new(ruby.exception_runtime_error(), e.to_string()))?;
 
-    // Flatten AST to u64 array using unified implementation
+    // 2. Transform to Parslet-compatible format
+    // This is REQUIRED for Expressir use case - without it, the AST is in
+    // raw intermediate format that Builder cannot process.
+    let transformed = to_parslet_compatible(&ast, &mut arena, &input);
+
+    // 3. Flatten transformed AST to u64 array
     let mut result = Vec::new();
-    flatten_ast_to_u64(&ast, &arena, &input, &mut result);
+    flatten_ast_to_u64(&transformed, &arena, &input, &mut result);
     Ok(result)
 }
 

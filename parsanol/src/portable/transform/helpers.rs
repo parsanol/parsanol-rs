@@ -46,6 +46,11 @@ pub fn ast_to_value(node: &AstNode, arena: &AstArena, input: &str) -> Value {
             }
             Value::Hash(map)
         }
+        AstNode::Tagged { tag, value } => {
+            // Tagged nodes should be handled by to_parslet_compatible transformation
+            // For now, just return the inner value
+            ast_to_value(value, arena, input)
+        }
     }
 }
 
@@ -83,6 +88,10 @@ pub fn ast_node_span(
         } => {
             // Could compute span from children - for now, return None
             None
+        }
+        AstNode::Tagged { tag: _, value } => {
+            // Delegate to inner value's span
+            ast_node_span(value, input)
         }
         AstNode::Nil | AstNode::Bool(_) | AstNode::Int(_) | AstNode::Float(_) => None,
     }

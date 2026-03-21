@@ -711,6 +711,11 @@ fn walk_ast_inner<B: StreamingBuilder>(
 
             builder.on_hash_end(*length as usize)?;
         }
+        super::ast::AstNode::Tagged { tag, value } => {
+            // For Tagged nodes, just walk the inner value
+            // Tags are metadata for the batch encoder, not part of the AST structure
+            walk_ast_inner(value, arena, input, builder, depth)?;
+        }
     }
     Ok(())
 }
