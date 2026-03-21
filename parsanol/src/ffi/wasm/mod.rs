@@ -166,6 +166,11 @@ fn ast_to_js(node: &AstNode, arena: &AstArena, input: &str) -> JsValue {
             }
             obj.into()
         }
+
+        AstNode::Tagged { value, .. } => {
+            // Tagged nodes contain inner values with metadata
+            ast_to_js(value, arena, input)
+        }
     }
 }
 

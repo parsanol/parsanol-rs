@@ -672,7 +672,7 @@ fn transform_ast_internal(
                     ary.push(tag_sym)?;
                     for item in items.iter().skip(1) {
                         let ruby_item =
-                            transform_ast_internal(&item, arena, input, ruby, depth + 1)?;
+                            transform_ast_internal(item, arena, input, ruby, depth + 1)?;
                         ary.push(ruby_item)?;
                     }
                     return Ok(ary.as_value());

@@ -278,7 +278,7 @@ mod tests {
 
         // Test with StringRef
         let node = arena.intern_string("hello");
-        let result = direct_helpers::extract_string(&node, &arena, "").unwrap();
+        let result = direct_helpers::extract_string(&node, &arena, "hello").unwrap();
         assert_eq!(result, "hello");
 
         // Test with InputRef
