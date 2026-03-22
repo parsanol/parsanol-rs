@@ -100,6 +100,7 @@ fn join_slices_from_array(ary: &RArray, ruby: &Ruby, input: &str) -> Result<Valu
 /// Deep merge two hashes, recursively merging nested hashes
 /// For keys that exist in both hashes with hash values, merge the nested hashes
 /// For all other cases, right-hand value wins
+#[allow(clippy::only_used_in_recursion)]
 fn deep_merge_hashes(l: Value, r: Value, ruby: &Ruby, input: &str) -> Result<Value, Error> {
     let hash_class = ruby.class_hash();
 
@@ -112,8 +113,8 @@ fn deep_merge_hashes(l: Value, r: Value, ruby: &Ruby, input: &str) -> Result<Val
             for i in 0..r_keys_ary.len() {
                 if let Ok(r_key) = r_keys_ary.entry::<Value>(i as isize) {
                     // Get values from both hashes
-                    let l_val: Result<Value, _> = l.funcall("[]", (r_key.clone(),));
-                    let r_val: Result<Value, _> = r.funcall("[]", (r_key.clone(),));
+                    let l_val: Result<Value, _> = l.funcall("[]", (r_key,));
+                    let r_val: Result<Value, _> = r.funcall("[]", (r_key,));
 
                     match (l_val, r_val) {
                         (Ok(l_v), Ok(r_v)) => {
@@ -377,7 +378,7 @@ fn fold_sequence_from_array(ary: &RArray, ruby: &Ruby, input: &str) -> Result<Va
 
     // Process based on whether all items are hashes
     if all_hashes {
-        return fold_hash_array(&non_nil, ruby, input);
+        fold_hash_array(&non_nil, ruby, input)
     } else {
         // Not all items are hashes - separate hash from non-hash items
         let hash_items = ruby.ary_new_capa(non_nil_len as _);
@@ -420,7 +421,7 @@ fn fold_sequence_from_array(ary: &RArray, ruby: &Ruby, input: &str) -> Result<Va
             }
         }
 
-        return result_box.entry::<Value>(0);
+        result_box.entry::<Value>(0)
     }
 }
 
@@ -643,8 +644,8 @@ fn transform_ast_internal(
         AstNode::Float(f) => Ok(ruby.float_from_f64(*f).as_value()),
         AstNode::StringRef { pool_index } => {
             let (s, _, _, _) = arena.get_string_parts(*pool_index as usize);
-            if s.starts_with(':') {
-                return Ok(ruby.to_symbol(&s[1..]).as_value());
+            if let Some(stripped) = s.strip_prefix(':') {
+                return Ok(ruby.to_symbol(stripped).as_value());
             }
             create_slice(ruby, 0, s, input)
         }
@@ -724,7 +725,7 @@ fn transform_ast_internal(
             Ok(hash.as_value())
         }
 
-        AstNode::Tagged { tag, value } => {
+        AstNode::Tagged { tag: _, value } => {
             // Tagged nodes should have been processed by to_parslet_compatible already
             // For safety, just transform the inner value
             transform_ast_internal(value, arena, input, ruby, depth)
