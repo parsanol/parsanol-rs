@@ -28,44 +28,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Release v0.4.1 by @[object]
 - Lint by @[object]
-- Release v0.4.1 by @[object]
 - Release v0.4.0 by @[object]
 
-### Added
-
-- Add batch FFI support with tagged AST nodes by @[object]
-- Add :sequence/:repetition tags to batch format by @[object]
-- Update slice transform by @[object]
-- Use magnus and rb-sys compatible with ruby 4.0 by @[object]
-
-### Fixed
-
-- Intern_string returns StringRef, add #[non_exhaustive] to AstNode by @[object]
-- Update tests for intern_string returning InputRef by @[object]
-- Formatting and clippy for batch FFI changes by @[object]
-- Duplicate keys should keep last value (Parslet semantics) by @[object]
-- Wrapper vs repetition pattern detection in transform.rs by @[object]
-- Magnus version alignment and normalize.rs push fix by @[object]
-- Resolve Ruby FFI warnings and error by @[object]
-
-### Other
-
-- Lint by @[object]
-- Release v0.4.1 by @[object]
-- Release v0.4.0 by @[object]
-
-### Added
-
-- Use magnus and rb-sys compatible with ruby 4.0 by @[object]
-
-### Fixed
-
-- Magnus version alignment and normalize.rs push fix by @[object]
-- Resolve Ruby FFI warnings and error by @[object]
-
-### Other
-
-- Release v0.4.0 by @[object]
+## [0.4.0]
 
 ### Added
 
@@ -74,6 +39,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Update parsanol-derive version to 0.4.0 by @[object]
+
+## [0.3.0]
 
 ### Added
 
@@ -91,36 +58,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Linting by @[object]
 - Release v0.1.6 by @[object]
 
-### Other
-
-- Release v0.1.6 by @[object]
-- Update example count to 39 and add missing feature flags by @[object]
-- Update magnus from 0.7 to 0.8.2 by @[object]
-- Release v0.1.5 by @[object]
-
-### Other
-
-- Update example count to 39 and add missing feature flags by @[object]
-- Update magnus from 0.7 to 0.8.2 by @[object]
-- Release v0.1.5 by @[object]
-
-### Fixed
-
-- Add README to package and fix description typo by @[object]
-
-### Other
-
-- Release v0.1.5 ([#8](https://github.com/parsanol/parsanol-rs/pull/8)) by @[object]
-
-### Fixed
-
-- Add README to package and fix description typo by @[object]
-
-### Fixed
-
-- Resolve CI failures by @[object]
-- Remove unused transparent attribute and fix example paths by @[object]
-
-### Other
-
-- Restructure to match tokio workspace pattern by @[object]
