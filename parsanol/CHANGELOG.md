@@ -26,6 +26,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Other
 
+- Release v0.4.1 by @[object]
+- Lint by @[object]
+- Release v0.4.1 by @[object]
+- Release v0.4.0 by @[object]
+
+### Added
+
+- Add batch FFI support with tagged AST nodes by @[object]
+- Add :sequence/:repetition tags to batch format by @[object]
+- Update slice transform by @[object]
+- Use magnus and rb-sys compatible with ruby 4.0 by @[object]
+
+### Fixed
+
+- Intern_string returns StringRef, add #[non_exhaustive] to AstNode by @[object]
+- Update tests for intern_string returning InputRef by @[object]
+- Formatting and clippy for batch FFI changes by @[object]
+- Duplicate keys should keep last value (Parslet semantics) by @[object]
+- Wrapper vs repetition pattern detection in transform.rs by @[object]
+- Magnus version alignment and normalize.rs push fix by @[object]
+- Resolve Ruby FFI warnings and error by @[object]
+
+### Other
+
 - Lint by @[object]
 - Release v0.4.1 by @[object]
 - Release v0.4.0 by @[object]
