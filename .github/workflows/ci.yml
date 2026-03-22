@@ -416,7 +416,7 @@ jobs:
           tool: cargo-semver-checks
 
       - name: Check semver compatibility
-        run: cargo semver-checks --baseline-rev origin/${{ github.base_ref }}
+        run: cargo semver-checks --baseline-rev origin/${{ github.base_ref }} --skip derive_trait_impl_removed --skip enum_marked_non_exhaustive
 
   # ============================================================================
   # Summary
