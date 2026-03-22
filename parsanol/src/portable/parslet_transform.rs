@@ -240,6 +240,8 @@ fn is_hash_with_key(node: &AstNode, key: &str, arena: &AstArena) -> bool {
 /// 2. Discard unnamed strings when named captures present
 /// 3. Handle repetition vs wrapper patterns
 fn flatten_sequence(items: &[AstNode], arena: &mut AstArena, input: &str) -> AstNode {
+    eprintln!("flatten_sequence called with {} items", items.len());
+
     if items.is_empty() {
         return AstNode::Array {
             pool_index: 0,
@@ -294,11 +296,13 @@ fn flatten_sequence(items: &[AstNode], arena: &mut AstArena, input: &str) -> Ast
 
     // Check for repetition pattern: any key appearing more than once
     let has_repetition = key_counts.values().any(|&count| count > 1);
+    eprintln!("  key_counts: {:?}, has_repetition: {}", key_counts, has_repetition);
 
     if has_repetition {
         // REPETITION PATTERN: keep as array of hashes
         // Each item in the sequence should remain as-is
         // This matches Parslet's behavior for repetition with separator patterns
+        eprintln!("  -> REPETITION PATTERN, returning array");
         let (pool_idx, len) = arena.store_array(items);
         return AstNode::Array {
             pool_index: pool_idx,
@@ -376,10 +380,14 @@ fn flatten_sequence(items: &[AstNode], arena: &mut AstArena, input: &str) -> Ast
                 .iter()
                 .all(|item| get_single_key(item, arena).is_some_and(|k| k == first_key_clone));
 
+            eprintln!("  hash_count={}, total_items={}, first_key={}, all_same_key={}",
+                     hash_count, total_items, first_key, all_same_key);
+
             if all_same_key {
                 // ALL hashes have the SAME outer key -> REPETITION pattern
                 // Keep items as array (do NOT merge)
                 // This matches Ruby's flatten_sequence: "return items unless all_values_are_hashes"
+                eprintln!("  -> ALL SAME KEY, returning array");
                 let (pool_idx, len) = arena.store_array(items);
                 return AstNode::Array {
                     pool_index: pool_idx,
@@ -388,6 +396,7 @@ fn flatten_sequence(items: &[AstNode], arena: &mut AstArena, input: &str) -> Ast
             } else {
                 // DIFFERENT outer keys -> WRAPPER pattern
                 // Merge all inner hashes into a single hash under a synthetic key
+                eprintln!("  -> DIFFERENT KEYS, WRAPPER PATTERN");
                 let mut merged_inner: Vec<(String, AstNode)> = Vec::new();
                 for item in items {
                     if let AstNode::Hash { pool_index, length } = item {
@@ -419,6 +428,7 @@ fn flatten_sequence(items: &[AstNode], arena: &mut AstArena, input: &str) -> Ast
         }
 
         // Mixed keys or multiple keys: keep as array
+        eprintln!("  -> NO SINGLE KEY, returning array");
         let (pool_idx, len) = arena.store_array(items);
         return AstNode::Array {
             pool_index: pool_idx,
@@ -589,6 +599,37 @@ mod tests {
             assert_eq!(pairs[0].0, "word");
         } else {
             panic!("Expected hash, got {:?}", result);
+        }
+    }
+
+    #[test]
+    fn test_same_outer_key_repetition() {
+        // Grammar: A.repeat.label("x") >> B.repeat.label("x")
+        // This produces: [{x: A1}, {x: A2}, {x: B1}, {x: B2}]
+        // All hashes have the same outer key "x" -> should be REPETITION
+        let grammar = GrammarBuilder::new()
+            .rule(
+                "test",
+                seq(vec![
+                    str("a").label("x").repeat(1, None),
+                    str("b").label("x").repeat(1, None),
+                ]),
+            )
+            .build();
+
+        let (result, arena) = parse_and_transform("ab", &grammar);
+
+        // Should produce an ARRAY (repetition pattern), not a merged hash
+        match result {
+            AstNode::Array { pool_index, length } => {
+                let items = arena.get_array(pool_index as usize, length as usize);
+                assert_eq!(items.len(), 2, "should have 2 items in array");
+            }
+            AstNode::Hash { pool_index, length } => {
+                let pairs = arena.get_hash_items(pool_index as usize, length as usize);
+                panic!("Expected array, got hash with {} keys: {:?}", pairs.len(), pairs.iter().map(|(k, _)| k).collect::<Vec<_>>());
+            }
+            _ => panic!("Expected array, got {:?}", result),
         }
     }
 }

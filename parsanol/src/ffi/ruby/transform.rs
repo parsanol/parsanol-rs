@@ -535,10 +535,11 @@ fn fold_hash_array(ary: &RArray, ruby: &Ruby, _input: &str) -> Result<Value, Err
                     return Ok(ary.as_value());
                 }
 
-                // DUPLICATE KEYS pattern: same outer key with different inner keys
-                // Parslet semantics: KEEP THE LAST ONE (not merge)
-                // This matches Ruby's Hash#merge! behavior for duplicate keys
-                return ary.entry::<Value>((non_nil_len - 1) as isize);
+                // DIFFERENT INNER KEYS pattern: same outer key with different inner keys
+                // This is a WRAPPER pattern - keep all items as array
+                // Example: [{:syntax => {:spaces => ...}}, {:syntax => {:schemaDecl => [...]}}]
+                // Should NOT merge or drop items - keep all declarations
+                return Ok(ary.as_value());
             } else {
                 // Inner value is NOT a hash
                 // Check if all inner values have the same hash-like structure
