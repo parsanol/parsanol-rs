@@ -14,6 +14,7 @@ pub use super::source_location::SourcePosition;
 ///
 /// Nodes store references to arena-allocated data using indices.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub enum AstNode {
     /// Nil/null value
     Nil,
