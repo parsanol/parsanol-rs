@@ -303,7 +303,10 @@ fn flatten_sequence(items: &[AstNode], arena: &mut AstArena, input: &str) -> Ast
     let max_keys_per_item = items
         .iter()
         .map(|item| match item {
-            AstNode::Hash { pool_index, length } => *length as usize,
+            AstNode::Hash {
+                pool_index: _,
+                length,
+            } => *length as usize,
             _ => 0,
         })
         .max()
@@ -333,12 +336,11 @@ fn flatten_sequence(items: &[AstNode], arena: &mut AstArena, input: &str) -> Ast
 
             // Start with first item's key-value pairs
             let first_pairs: Vec<(String, AstNode)> = match &items[0] {
-                AstNode::Hash { pool_index, length } => {
-                    arena.get_hash_items(*pool_index as usize, *length as usize)
-                        .iter()
-                        .map(|(k, v)| (k.clone(), v.clone()))
-                        .collect()
-                }
+                AstNode::Hash { pool_index, length } => arena
+                    .get_hash_items(*pool_index as usize, *length as usize)
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
                 _ => vec![],
             };
 
@@ -357,7 +359,10 @@ fn flatten_sequence(items: &[AstNode], arena: &mut AstArena, input: &str) -> Ast
                         if let Some(ref dup_key) = duplicate_key {
                             if k.as_str() == dup_key.as_str() {
                                 // Replace the value for the duplicate key
-                                if let Some(pos) = merged.iter().position(|(key, _)| key.as_str() == k.as_str()) {
+                                if let Some(pos) = merged
+                                    .iter()
+                                    .position(|(key, _)| key.as_str() == k.as_str())
+                                {
                                     merged[pos] = (k.clone(), v.clone());
                                 } else {
                                     merged.push((k.clone(), v.clone()));
@@ -377,7 +382,8 @@ fn flatten_sequence(items: &[AstNode], arena: &mut AstArena, input: &str) -> Ast
             if let Some(ref dup_key) = duplicate_key {
                 // Get the last value for the duplicate key and wrap it
                 if let Some((_, last_value)) = merged.iter().find(|(k, _)| k == dup_key) {
-                    let (pool_idx, len) = arena.store_hash(&[(dup_key.as_str(), last_value.clone())]);
+                    let (pool_idx, len) =
+                        arena.store_hash(&[(dup_key.as_str(), last_value.clone())]);
                     return AstNode::Hash {
                         pool_index: pool_idx,
                         length: len,
