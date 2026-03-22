@@ -174,6 +174,22 @@ mod calc {
                     })
                 }
             }
+            AstNode::StringRef { pool_index } => {
+                // String interned in arena (e.g., operator tags like "+", "-")
+                let s = arena.get_string(*pool_index as usize);
+                if s.chars().all(|c| c.is_ascii_digit()) {
+                    let n = s.parse::<i64>().map_err(|_| "parse error")?;
+                    Ok(Expr {
+                        op: "num".into(),
+                        args: vec![n],
+                    })
+                } else {
+                    Ok(Expr {
+                        op: s.to_string(),
+                        args: vec![],
+                    })
+                }
+            }
             AstNode::Array { pool_index, length } => {
                 let items = arena.get_array(*pool_index as usize, *length as usize);
                 let mut args = vec![];

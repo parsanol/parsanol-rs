@@ -547,19 +547,15 @@ mod tests {
         // the result should be an ARRAY with :repetition tag + hashes
         if let AstNode::Array { pool_index, length } = result {
             let items = arena.get_array(pool_index as usize, length as usize);
-            // Array has :repetition tag + 3 items = 4 total
-            assert_eq!(items.len(), 4);
+            // Array has 3 items (tag is stripped by to_parslet_compatible)
+            assert_eq!(
+                items.len(),
+                3,
+                "should have 3 hash items after tag stripping"
+            );
 
-            // First item should be the :repetition tag (InputRef with offset=0, length=12)
-            if let AstNode::InputRef { offset, length } = items[0] {
-                assert_eq!(offset, 0, "repetition tag should have offset 0");
-                assert_eq!(length, 11, "':repetition' has 11 characters");
-            } else {
-                panic!("Expected :repetition tag as InputRef, got {:?}", items[0]);
-            }
-
-            // Remaining items should be hashes with key "letter"
-            for item in items.iter().skip(1) {
+            // All items should be hashes with key "letter" (no tag after stripping)
+            for item in items.iter() {
                 if let AstNode::Hash {
                     pool_index: h_p,
                     length: h_l,
