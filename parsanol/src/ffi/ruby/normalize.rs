@@ -229,7 +229,7 @@ pub fn normalize_ast(
             Ok(hash.as_value())
         }
 
-        AstNode::Tagged { tag, value } => {
+        AstNode::Tagged { tag: _, value } => {
             // Tagged nodes should have been processed by to_parslet_compatible already
             // For safety, just normalize the inner value
             normalize_ast(value, arena, input, ruby)

@@ -296,7 +296,10 @@ fn flatten_sequence(items: &[AstNode], arena: &mut AstArena, input: &str) -> Ast
 
     // Check for repetition pattern: any key appearing more than once
     let has_repetition = key_counts.values().any(|&count| count > 1);
-    eprintln!("  key_counts: {:?}, has_repetition: {}", key_counts, has_repetition);
+    eprintln!(
+        "  key_counts: {:?}, has_repetition: {}",
+        key_counts, has_repetition
+    );
 
     if has_repetition {
         // REPETITION PATTERN: keep as array of hashes
@@ -375,13 +378,14 @@ fn flatten_sequence(items: &[AstNode], arena: &mut AstArena, input: &str) -> Ast
     if hash_count == total_items && hash_count > 1 {
         // Check if all hashes have the same single key (wrapper vs repetition)
         if let Some(first_key) = get_single_key(&items[0], arena) {
-            let first_key_clone = first_key.clone();
             let all_same_key = items
                 .iter()
-                .all(|item| get_single_key(item, arena).is_some_and(|k| k == first_key_clone));
+                .all(|item| get_single_key(item, arena).is_some_and(|k| k == first_key));
 
-            eprintln!("  hash_count={}, total_items={}, first_key={}, all_same_key={}",
-                     hash_count, total_items, first_key, all_same_key);
+            eprintln!(
+                "  hash_count={}, total_items={}, first_key={}, all_same_key={}",
+                hash_count, total_items, first_key, all_same_key
+            );
 
             if all_same_key {
                 // ALL hashes have the SAME outer key -> REPETITION pattern
@@ -414,7 +418,7 @@ fn flatten_sequence(items: &[AstNode], arena: &mut AstArena, input: &str) -> Ast
                 let (inner_pool, inner_len) = arena.store_hash(&inner_refs);
                 // Use first key as wrapper key (any key works since we're merging)
                 let (pool_idx, len) = arena.store_hash(&[(
-                    first_key_clone.as_str(),
+                    first_key.as_str(),
                     AstNode::Hash {
                         pool_index: inner_pool,
                         length: inner_len,
@@ -627,7 +631,11 @@ mod tests {
             }
             AstNode::Hash { pool_index, length } => {
                 let pairs = arena.get_hash_items(pool_index as usize, length as usize);
-                panic!("Expected array, got hash with {} keys: {:?}", pairs.len(), pairs.iter().map(|(k, _)| k).collect::<Vec<_>>());
+                panic!(
+                    "Expected array, got hash with {} keys: {:?}",
+                    pairs.len(),
+                    pairs.iter().map(|(k, _)| k).collect::<Vec<_>>()
+                );
             }
             _ => panic!("Expected array, got {:?}", result),
         }
