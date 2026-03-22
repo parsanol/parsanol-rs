@@ -296,21 +296,112 @@ fn flatten_sequence(items: &[AstNode], arena: &mut AstArena, input: &str) -> Ast
 
     // Check for repetition pattern: any key appearing more than once
     let has_repetition = key_counts.values().any(|&count| count > 1);
-    eprintln!(
-        "  key_counts: {:?}, has_repetition: {}",
-        key_counts, has_repetition
-    );
+
+    // Check if items have single keys or multiple keys
+    // - Single key items with repeated outer key = true repetition (keep array)
+    // - Multiple key items with repeated outer key = duplicate labels in sequence (merge)
+    let max_keys_per_item = items
+        .iter()
+        .map(|item| match item {
+            AstNode::Hash { pool_index, length } => *length as usize,
+            _ => 0,
+        })
+        .max()
+        .unwrap_or(0);
+
+    // DUPLICATE LABELS IN SEQUENCE: multiple keys per item with repeated outer key
+    // Example: [{group: {char: 'a'}}, {group: {digit: '5'}}]
+    // Ruby semantics: merge with last value wins for the outer key
+    // This is different from true repetition where each item has exactly one key
+    let has_duplicate_labels = has_repetition && max_keys_per_item > 1;
 
     if has_repetition {
-        // REPETITION PATTERN: keep as array of hashes
-        // Each item in the sequence should remain as-is
-        // This matches Parslet's behavior for repetition with separator patterns
-        eprintln!("  -> REPETITION PATTERN, returning array");
-        let (pool_idx, len) = arena.store_array(items);
-        return AstNode::Array {
-            pool_index: pool_idx,
-            length: len,
-        };
+        if has_duplicate_labels {
+            // DUPLICATE LABELS PATTERN: items have multiple keys with repeated outer key
+            // This is a SEQUENCE with duplicate .as() labels
+            // Ruby semantics: merge and keep last value for the outer key
+            eprintln!("  -> DUPLICATE LABELS PATTERN, merging with last value wins");
+
+            // Collect first item with its keys, then merge subsequent items
+            if items.is_empty() {
+                let (pool_idx, len) = arena.store_array(items);
+                return AstNode::Array {
+                    pool_index: pool_idx,
+                    length: len,
+                };
+            }
+
+            // Start with first item's key-value pairs
+            let first_pairs: Vec<(String, AstNode)> = match &items[0] {
+                AstNode::Hash { pool_index, length } => {
+                    arena.get_hash_items(*pool_index as usize, *length as usize)
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect()
+                }
+                _ => vec![],
+            };
+
+            // Track which key is the duplicate (appears in multiple items)
+            let duplicate_key = key_counts
+                .iter()
+                .find(|(_, &count)| count > 1)
+                .map(|(k, _)| k.clone());
+
+            // Merge subsequent items, with last value winning for duplicate key
+            let mut merged: Vec<(String, AstNode)> = first_pairs;
+            for item in items.iter().skip(1) {
+                if let AstNode::Hash { pool_index, length } = item {
+                    let pairs = arena.get_hash_items(*pool_index as usize, *length as usize);
+                    for (k, v) in pairs {
+                        if let Some(ref dup_key) = duplicate_key {
+                            if k.as_str() == dup_key.as_str() {
+                                // Replace the value for the duplicate key
+                                if let Some(pos) = merged.iter().position(|(key, _)| key.as_str() == k.as_str()) {
+                                    merged[pos] = (k.clone(), v.clone());
+                                } else {
+                                    merged.push((k.clone(), v.clone()));
+                                }
+                                continue;
+                            }
+                        }
+                        // Add non-duplicate keys
+                        if !merged.iter().any(|(key, _)| key.as_str() == k.as_str()) {
+                            merged.push((k.clone(), v.clone()));
+                        }
+                    }
+                }
+            }
+
+            // If we have a duplicate key, wrap in a hash; otherwise return array
+            if let Some(ref dup_key) = duplicate_key {
+                // Get the last value for the duplicate key and wrap it
+                if let Some((_, last_value)) = merged.iter().find(|(k, _)| k == dup_key) {
+                    let (pool_idx, len) = arena.store_hash(&[(dup_key.as_str(), last_value.clone())]);
+                    return AstNode::Hash {
+                        pool_index: pool_idx,
+                        length: len,
+                    };
+                }
+            }
+
+            // Fallback: return array
+            let (pool_idx, len) = arena.store_array(items);
+            return AstNode::Array {
+                pool_index: pool_idx,
+                length: len,
+            };
+        } else {
+            // TRUE REPETITION: each item has exactly one key
+            // Keep as array of hashes
+            // Example: [{letter: 'a'}, {letter: 'b'}] or [{schemaDecl: ...}, {schemaDecl: ...}]
+            eprintln!("  -> TRUE REPETITION PATTERN, keeping array");
+            let (pool_idx, len) = arena.store_array(items);
+            return AstNode::Array {
+                pool_index: pool_idx,
+                length: len,
+            };
+        }
     }
 
     // SEQUENCE PATTERN: proceed with existing merge logic
