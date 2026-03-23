@@ -24,6 +24,7 @@
 #![allow(missing_docs)]
 
 mod builder;
+mod cache;
 mod dynamic;
 mod init;
 mod normalize;
@@ -42,6 +43,9 @@ pub use dynamic::{
     RubyDynamicCallback,
 };
 pub use normalize::normalize_ast;
-pub use parser::{parse_batch, parse_with_builder};
+pub use parser::{
+    clear_grammar_cache, grammar_cache_capacity, grammar_cache_size, parse_batch,
+    parse_with_builder,
+};
 pub use traits::RubyObject;
 pub use transform::transform_ast;
