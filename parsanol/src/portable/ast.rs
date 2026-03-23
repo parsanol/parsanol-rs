@@ -122,6 +122,44 @@ impl PartialEq for AstNode {
     }
 }
 
+impl AstNode {
+    /// Returns the number of entries if this is a Hash, otherwise None
+    #[inline]
+    pub fn hash_len(&self) -> Option<u32> {
+        match self {
+            AstNode::Hash { length, .. } => Some(*length),
+            _ => None,
+        }
+    }
+
+    /// Returns the number of items if this is an Array, otherwise None
+    #[inline]
+    pub fn array_len(&self) -> Option<u32> {
+        match self {
+            AstNode::Array { length, .. } => Some(*length),
+            _ => None,
+        }
+    }
+
+    /// Returns true if this node is a Hash
+    #[inline]
+    pub fn is_hash(&self) -> bool {
+        matches!(self, AstNode::Hash { .. })
+    }
+
+    /// Returns true if this node is an Array
+    #[inline]
+    pub fn is_array(&self) -> bool {
+        matches!(self, AstNode::Array { .. })
+    }
+
+    /// Returns true if this node is Nil
+    #[inline]
+    pub fn is_nil(&self) -> bool {
+        matches!(self, AstNode::Nil)
+    }
+}
+
 /// Result of a parse operation
 #[derive(Debug, Clone)]
 pub struct ParseResult {
