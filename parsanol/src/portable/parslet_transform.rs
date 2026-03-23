@@ -240,8 +240,6 @@ fn is_hash_with_key(node: &AstNode, key: &str, arena: &AstArena) -> bool {
 /// 2. Discard unnamed strings when named captures present
 /// 3. Handle repetition vs wrapper patterns
 fn flatten_sequence(items: &[AstNode], arena: &mut AstArena, input: &str) -> AstNode {
-    eprintln!("flatten_sequence called with {} items", items.len());
-
     if items.is_empty() {
         return AstNode::Array {
             pool_index: 0,
@@ -302,13 +300,7 @@ fn flatten_sequence(items: &[AstNode], arena: &mut AstArena, input: &str) -> Ast
     // - Multiple key items with repeated outer key = duplicate labels in sequence (merge)
     let max_keys_per_item = items
         .iter()
-        .map(|item| match item {
-            AstNode::Hash {
-                pool_index: _,
-                length,
-            } => *length as usize,
-            _ => 0,
-        })
+        .map(|item| item.hash_len().unwrap_or(0) as usize)
         .max()
         .unwrap_or(0);
 
@@ -323,7 +315,6 @@ fn flatten_sequence(items: &[AstNode], arena: &mut AstArena, input: &str) -> Ast
             // DUPLICATE LABELS PATTERN: items have multiple keys with repeated outer key
             // This is a SEQUENCE with duplicate .as() labels
             // Ruby semantics: merge and keep last value for the outer key
-            eprintln!("  -> DUPLICATE LABELS PATTERN, merging with last value wins");
 
             // Collect first item with its keys, then merge subsequent items
             if items.is_empty() {
@@ -401,7 +392,6 @@ fn flatten_sequence(items: &[AstNode], arena: &mut AstArena, input: &str) -> Ast
             // TRUE REPETITION: each item has exactly one key
             // Keep as array of hashes
             // Example: [{letter: 'a'}, {letter: 'b'}] or [{schemaDecl: ...}, {schemaDecl: ...}]
-            eprintln!("  -> TRUE REPETITION PATTERN, keeping array");
             let (pool_idx, len) = arena.store_array(items);
             return AstNode::Array {
                 pool_index: pool_idx,
@@ -479,16 +469,10 @@ fn flatten_sequence(items: &[AstNode], arena: &mut AstArena, input: &str) -> Ast
                 .iter()
                 .all(|item| get_single_key(item, arena).is_some_and(|k| k == first_key));
 
-            eprintln!(
-                "  hash_count={}, total_items={}, first_key={}, all_same_key={}",
-                hash_count, total_items, first_key, all_same_key
-            );
-
             if all_same_key {
                 // ALL hashes have the SAME outer key -> REPETITION pattern
                 // Keep items as array (do NOT merge)
                 // This matches Ruby's flatten_sequence: "return items unless all_values_are_hashes"
-                eprintln!("  -> ALL SAME KEY, returning array");
                 let (pool_idx, len) = arena.store_array(items);
                 return AstNode::Array {
                     pool_index: pool_idx,
@@ -497,7 +481,6 @@ fn flatten_sequence(items: &[AstNode], arena: &mut AstArena, input: &str) -> Ast
             } else {
                 // DIFFERENT outer keys -> WRAPPER pattern
                 // Merge all inner hashes into a single hash under a synthetic key
-                eprintln!("  -> DIFFERENT KEYS, WRAPPER PATTERN");
                 let mut merged_inner: Vec<(String, AstNode)> = Vec::new();
                 for item in items {
                     if let AstNode::Hash { pool_index, length } = item {
@@ -529,7 +512,6 @@ fn flatten_sequence(items: &[AstNode], arena: &mut AstArena, input: &str) -> Ast
         }
 
         // Mixed keys or multiple keys: keep as array
-        eprintln!("  -> NO SINGLE KEY, returning array");
         let (pool_idx, len) = arena.store_array(items);
         return AstNode::Array {
             pool_index: pool_idx,
