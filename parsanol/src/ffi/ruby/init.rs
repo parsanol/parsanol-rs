@@ -5,7 +5,10 @@ use magnus::{function, Error, Module, Ruby};
 use super::dynamic::{
     register_ruby_callback_with_global_registry, unregister_ruby_callback_from_global_registry,
 };
-use super::parser::{is_available, parse, parse_batch, parse_with_builder, parse_with_stats};
+use super::parser::{
+    clear_grammar_cache, grammar_cache_capacity, grammar_cache_size, is_available, parse,
+    parse_batch, parse_with_builder, parse_with_stats,
+};
 use crate::portable::dynamic::{
     clear_dynamic_callbacks, dynamic_callback_count, get_dynamic_callback_description,
     has_dynamic_callback,
@@ -92,6 +95,23 @@ pub fn init(ruby: &Ruby) -> Result<(), Error> {
 
     // Parsing with cache statistics (for debugging/benchmarks)
     native_module.define_module_function("parse_with_stats", function!(parse_with_stats, 2))?;
+
+    // =========================================================================
+    // GRAMMAR CACHE MANAGEMENT - For batch processing and memory management
+    // =========================================================================
+
+    // Clear the grammar cache to free memory
+    native_module
+        .define_module_function("clear_grammar_cache", function!(clear_grammar_cache, 0))?;
+
+    // Get current number of cached grammars
+    native_module.define_module_function("grammar_cache_size", function!(grammar_cache_size, 0))?;
+
+    // Get grammar cache capacity
+    native_module.define_module_function(
+        "grammar_cache_capacity",
+        function!(grammar_cache_capacity, 0),
+    )?;
 
     // =========================================================================
     // DYNAMIC CALLBACKS - For advanced use cases

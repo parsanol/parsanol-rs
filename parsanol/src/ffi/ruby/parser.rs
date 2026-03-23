@@ -54,6 +54,7 @@
 //! | 0x0C | items... | repetition marker |
 //! | 0x0D | items... | sequence marker |
 
+use crate::ffi::ruby::cache::LruCache;
 use crate::ffi::shared::flatten_ast_to_u64;
 use crate::portable::{to_parslet_compatible, AstArena, Grammar, PortableParser};
 use magnus::{Error, Ruby, Value};
@@ -63,12 +64,55 @@ use std::sync::Mutex;
 use super::builder::RubyBuilder;
 use super::transform::transform_ast;
 
-// Thread-safe global grammar cache
-static GRAMMAR_CACHE: std::sync::OnceLock<Mutex<hashbrown::HashMap<u64, Grammar>>> =
-    std::sync::OnceLock::new();
+/// Default maximum number of grammars to cache.
+/// This prevents unbounded memory growth during batch processing.
+const DEFAULT_GRAMMAR_CACHE_SIZE: usize = 100;
 
-fn get_grammar_cache() -> &'static Mutex<hashbrown::HashMap<u64, Grammar>> {
-    GRAMMAR_CACHE.get_or_init(|| Mutex::new(hashbrown::HashMap::new()))
+type GrammarCache = LruCache<u64, Grammar>;
+
+/// Thread-safe global grammar cache with bounded LRU eviction
+static GRAMMAR_CACHE: std::sync::OnceLock<Mutex<GrammarCache>> = std::sync::OnceLock::new();
+
+fn get_grammar_cache() -> &'static Mutex<GrammarCache> {
+    GRAMMAR_CACHE.get_or_init(|| Mutex::new(GrammarCache::new(DEFAULT_GRAMMAR_CACHE_SIZE)))
+}
+
+/// Clear the grammar cache, freeing all cached grammars.
+///
+/// This is useful for batch processing scenarios where you want to
+/// limit memory usage by clearing unused grammars.
+///
+/// # Example
+///
+/// ```ruby
+/// Parsanol::Native.clear_grammar_cache
+/// ```
+pub fn clear_grammar_cache() {
+    if let Some(cache) = GRAMMAR_CACHE.get() {
+        if let Ok(mut guard) = cache.lock() {
+            guard.clear();
+        }
+    }
+}
+
+/// Get the current number of cached grammars.
+pub fn grammar_cache_size() -> usize {
+    if let Some(cache) = GRAMMAR_CACHE.get() {
+        if let Ok(guard) = cache.lock() {
+            return guard.len();
+        }
+    }
+    0
+}
+
+/// Get the grammar cache capacity.
+pub fn grammar_cache_capacity() -> usize {
+    if let Some(cache) = GRAMMAR_CACHE.get() {
+        if let Ok(guard) = cache.lock() {
+            return guard.capacity();
+        }
+    }
+    DEFAULT_GRAMMAR_CACHE_SIZE
 }
 
 fn hash_string(s: &str) -> u64 {
@@ -124,20 +168,25 @@ pub fn is_available() -> bool {
 pub fn parse(grammar_json: String, input: String) -> Result<Value, Error> {
     let ruby = Ruby::get().unwrap();
 
-    // Get or compile grammar (thread-safe with caching)
+    // Get or compile grammar (thread-safe with LRU caching)
     let hash = hash_string(&grammar_json);
     let grammar = {
         let cache = get_grammar_cache();
-        let guard = cache.lock().unwrap();
+        let mut guard = cache.lock().unwrap();
         if let Some(cached) = guard.get(&hash) {
             cached.clone()
         } else {
             drop(guard);
             let grammar: Grammar = serde_json::from_str(&grammar_json)
                 .map_err(|e| Error::new(ruby.exception_arg_error(), e.to_string()))?;
-            let mut guard = cache.lock().unwrap();
-            guard.insert(hash, grammar.clone());
-            grammar
+            let mut guard = get_grammar_cache().lock().unwrap();
+            // Re-check in case another thread added it while we were parsing
+            if let Some(cached) = guard.get(&hash) {
+                cached.clone()
+            } else {
+                guard.insert(hash, grammar.clone());
+                grammar
+            }
         }
     };
 
@@ -166,20 +215,25 @@ pub fn parse_with_stats(
 ) -> Result<(Value, u64, u64, f64), Error> {
     let ruby = Ruby::get().unwrap();
 
-    // Get or compile grammar (thread-safe)
+    // Get or compile grammar (thread-safe with LRU caching)
     let hash = hash_string(&grammar_json);
     let grammar = {
         let cache = get_grammar_cache();
-        let guard = cache.lock().unwrap();
+        let mut guard = cache.lock().unwrap();
         if let Some(cached) = guard.get(&hash) {
             cached.clone()
         } else {
             drop(guard);
             let grammar: Grammar = serde_json::from_str(&grammar_json)
                 .map_err(|e| Error::new(ruby.exception_arg_error(), e.to_string()))?;
-            let mut guard = cache.lock().unwrap();
-            guard.insert(hash, grammar.clone());
-            grammar
+            let mut guard = get_grammar_cache().lock().unwrap();
+            // Re-check in case another thread added it while we were parsing
+            if let Some(cached) = guard.get(&hash) {
+                cached.clone()
+            } else {
+                guard.insert(hash, grammar.clone());
+                grammar
+            }
         }
     };
 
@@ -213,20 +267,25 @@ pub fn parse_with_stats(
 pub fn parse_batch(grammar_json: String, input: String) -> Result<Vec<u64>, Error> {
     let ruby = Ruby::get().unwrap();
 
-    // Get or compile grammar (thread-safe)
+    // Get or compile grammar (thread-safe with LRU caching)
     let hash = hash_string(&grammar_json);
     let grammar = {
         let cache = get_grammar_cache();
-        let guard = cache.lock().unwrap();
+        let mut guard = cache.lock().unwrap();
         if let Some(cached) = guard.get(&hash) {
             cached.clone()
         } else {
             drop(guard);
             let grammar: Grammar = serde_json::from_str(&grammar_json)
                 .map_err(|e| Error::new(ruby.exception_arg_error(), e.to_string()))?;
-            let mut guard = cache.lock().unwrap();
-            guard.insert(hash, grammar.clone());
-            grammar
+            let mut guard = get_grammar_cache().lock().unwrap();
+            // Re-check in case another thread added it while we were parsing
+            if let Some(cached) = guard.get(&hash) {
+                cached.clone()
+            } else {
+                guard.insert(hash, grammar.clone());
+                grammar
+            }
         }
     };
 
@@ -261,20 +320,25 @@ pub fn parse_with_builder(
 ) -> Result<Value, Error> {
     let ruby = Ruby::get().unwrap();
 
-    // Get or compile grammar
+    // Get or compile grammar (thread-safe with LRU caching)
     let hash = hash_string(&grammar_json);
     let grammar = {
         let cache = get_grammar_cache();
-        let guard = cache.lock().unwrap();
+        let mut guard = cache.lock().unwrap();
         if let Some(cached) = guard.get(&hash) {
             cached.clone()
         } else {
             drop(guard);
             let grammar: Grammar = serde_json::from_str(&grammar_json)
                 .map_err(|e| Error::new(ruby.exception_arg_error(), e.to_string()))?;
-            let mut guard = cache.lock().unwrap();
-            guard.insert(hash, grammar.clone());
-            grammar
+            let mut guard = get_grammar_cache().lock().unwrap();
+            // Re-check in case another thread added it while we were parsing
+            if let Some(cached) = guard.get(&hash) {
+                cached.clone()
+            } else {
+                guard.insert(hash, grammar.clone());
+                grammar
+            }
         }
     };
 
