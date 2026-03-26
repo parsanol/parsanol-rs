@@ -69,7 +69,7 @@ fn all_string_like(ary: &RArray, ruby: &Ruby) -> bool {
 }
 
 /// Join consecutive string-like values into a single Slice (filtering nils)
-fn join_slices_from_array(ary: &RArray, ruby: &Ruby, input: &str) -> Result<Value, Error> {
+fn join_slices_from_array(ary: &RArray, ruby: &Ruby, input_val: Value) -> Result<Value, Error> {
     let len = ary.len();
     let mut content = String::new();
     let mut first_offset: Option<u32> = None;
@@ -91,7 +91,7 @@ fn join_slices_from_array(ary: &RArray, ruby: &Ruby, input: &str) -> Result<Valu
     }
 
     if let Some(offset) = first_offset {
-        create_slice(ruby, offset, &content, input)
+        create_slice(ruby, offset, &content, input_val)
     } else {
         Ok(ruby.str_new(&content).as_value())
     }
@@ -101,7 +101,7 @@ fn join_slices_from_array(ary: &RArray, ruby: &Ruby, input: &str) -> Result<Valu
 /// For keys that exist in both hashes with hash values, merge the nested hashes
 /// For all other cases, right-hand value wins
 #[allow(clippy::only_used_in_recursion)]
-fn deep_merge_hashes(l: Value, r: Value, ruby: &Ruby, input: &str) -> Result<Value, Error> {
+fn deep_merge_hashes(l: Value, r: Value, ruby: &Ruby, input_val: Value) -> Result<Value, Error> {
     let hash_class = ruby.class_hash();
 
     // Start with a copy of left hash
@@ -123,7 +123,7 @@ fn deep_merge_hashes(l: Value, r: Value, ruby: &Ruby, input: &str) -> Result<Val
 
                             if l_is_hash && r_is_hash {
                                 // Both are hashes - recursively merge
-                                let merged = deep_merge_hashes(l_v, r_v, ruby, input)?;
+                                let merged = deep_merge_hashes(l_v, r_v, ruby, input_val)?;
                                 let _: Value = result.funcall("[]=", (r_key, merged))?;
                             } else {
                                 // Not both hashes - right wins
@@ -147,7 +147,7 @@ fn deep_merge_hashes(l: Value, r: Value, ruby: &Ruby, input: &str) -> Result<Val
 }
 
 /// Merge two values using Ruby's merge_fold logic
-fn merge_fold(l: Value, r: Value, ruby: &Ruby, input: &str) -> Result<Value, Error> {
+fn merge_fold(l: Value, r: Value, ruby: &Ruby, input_val: Value) -> Result<Value, Error> {
     // Safety checks: if either value is nil, return the other
     if !is_valid_value(l) {
         return Ok(r);
@@ -170,7 +170,7 @@ fn merge_fold(l: Value, r: Value, ruby: &Ruby, input: &str) -> Result<Value, Err
     // Two hashes: merge them with deep merge for shared keys with nested hashes
     if l_is_hash && r_is_hash {
         // Use deep_merge! for nested hash merging
-        return deep_merge_hashes(l, r, ruby, input);
+        return deep_merge_hashes(l, r, ruby, input_val);
     }
 
     // Two strings/slices: concatenate
@@ -179,7 +179,9 @@ fn merge_fold(l: Value, r: Value, ruby: &Ruby, input: &str) -> Result<Value, Err
             let l_content = slice_content(l);
             let r_content = slice_content(r);
             match slice_offset(l) {
-                Ok(offset) => return create_slice(ruby, offset, &(l_content + &r_content), input),
+                Ok(offset) => {
+                    return create_slice(ruby, offset, &(l_content + &r_content), input_val)
+                }
                 Err(_) => {
                     return Ok(ruby.str_new(&(l_content + &r_content)).as_value());
                 }
@@ -338,7 +340,7 @@ fn get_inner_keys(
 }
 
 /// Fold an array of values using merge_fold (like Ruby's flatten_sequence)
-fn fold_sequence_from_array(ary: &RArray, ruby: &Ruby, input: &str) -> Result<Value, Error> {
+fn fold_sequence_from_array(ary: &RArray, ruby: &Ruby, input_val: Value) -> Result<Value, Error> {
     let len = ary.len();
     if len == 0 {
         return Ok(ruby.qnil().as_value());
@@ -378,7 +380,7 @@ fn fold_sequence_from_array(ary: &RArray, ruby: &Ruby, input: &str) -> Result<Va
 
     // Process based on whether all items are hashes
     if all_hashes {
-        fold_hash_array(&non_nil, ruby, input)
+        fold_hash_array(&non_nil, ruby, input_val)
     } else {
         // Not all items are hashes - separate hash from non-hash items
         let hash_items = ruby.ary_new_capa(non_nil_len as _);
@@ -398,7 +400,7 @@ fn fold_sequence_from_array(ary: &RArray, ruby: &Ruby, input: &str) -> Result<Va
 
         // Process hash items with wrapper/repetition logic
         let hash_result = if hash_len > 0 {
-            fold_hash_array(&hash_items, ruby, input)?
+            fold_hash_array(&hash_items, ruby, input_val)?
         } else {
             ruby.qnil().as_value()
         };
@@ -415,7 +417,7 @@ fn fold_sequence_from_array(ary: &RArray, ruby: &Ruby, input: &str) -> Result<Va
         for i in 0..non_hash_len {
             if let Ok(item) = non_hash_items.entry::<Value>(i as isize) {
                 let current = result_box.entry::<Value>(0)?;
-                let merged = merge_fold(current, item, ruby, input)?;
+                let merged = merge_fold(current, item, ruby, input_val)?;
                 let _: Value = result_box.pop()?;
                 result_box.push(merged)?;
             }
@@ -427,7 +429,7 @@ fn fold_sequence_from_array(ary: &RArray, ruby: &Ruby, input: &str) -> Result<Va
 
 /// Fold an array of hash values using merge_fold
 /// Handles wrapper vs repetition pattern detection
-fn fold_hash_array(ary: &RArray, ruby: &Ruby, _input: &str) -> Result<Value, Error> {
+fn fold_hash_array(ary: &RArray, ruby: &Ruby, _input_val: Value) -> Result<Value, Error> {
     let non_nil_len = ary.len();
     if non_nil_len == 0 {
         return Ok(ruby.qnil().as_value());
@@ -595,7 +597,7 @@ fn fold_hash_array(ary: &RArray, ruby: &Ruby, _input: &str) -> Result<Value, Err
                         }
                         // else: DUPLICATE KEY pattern - fall through
                     } else {
-                        // REPETITION pattern: non-hash values (Slices, strings)
+                        // REPETITION pattern: non-hash values
                         return Ok(ary.as_value());
                     }
                 }
@@ -613,7 +615,7 @@ fn fold_hash_array(ary: &RArray, ruby: &Ruby, _input: &str) -> Result<Value, Err
     for i in 1..non_nil_len {
         let current = result_box.entry::<Value>(0)?;
         let next_item = ary.entry::<Value>(i as isize)?;
-        let merged = merge_fold(current, next_item, ruby, "")?;
+        let merged = merge_fold(current, next_item, ruby, ruby.qnil().as_value())?;
         let _: Value = result_box.pop()?;
         result_box.push(merged)?;
     }
@@ -626,6 +628,7 @@ fn transform_ast_internal(
     node: &AstNode,
     arena: &AstArena,
     input: &str,
+    input_val: &Value,
     ruby: &Ruby,
     depth: u32,
 ) -> Result<Value, Error> {
@@ -647,7 +650,7 @@ fn transform_ast_internal(
             if let Some(stripped) = s.strip_prefix(':') {
                 return Ok(ruby.to_symbol(stripped).as_value());
             }
-            create_slice(ruby, 0, s, input)
+            create_slice(ruby, 0, s, *input_val)
         }
         AstNode::InputRef { offset, length } => {
             let start = *offset as usize;
@@ -657,7 +660,7 @@ fn transform_ast_internal(
             } else {
                 ""
             };
-            create_slice(ruby, *offset, slice_str, input)
+            create_slice(ruby, *offset, slice_str, *input_val)
         }
         AstNode::Array { pool_index, length } => {
             let items = arena.get_array(*pool_index as usize, *length as usize);
@@ -674,7 +677,7 @@ fn transform_ast_internal(
                     ary.push(tag_sym)?;
                     for item in items.iter().skip(1) {
                         let ruby_item =
-                            transform_ast_internal(item, arena, input, ruby, depth + 1)?;
+                            transform_ast_internal(item, arena, input, input_val, ruby, depth + 1)?;
                         ary.push(ruby_item)?;
                     }
                     return Ok(ary.as_value());
@@ -684,17 +687,18 @@ fn transform_ast_internal(
             // Transform items into an RArray (keeps them rooted)
             let transformed = ruby.ary_new_capa(items.len() as _);
             for item in items.iter() {
-                let ruby_item = transform_ast_internal(item, arena, input, ruby, depth + 1)?;
+                let ruby_item =
+                    transform_ast_internal(item, arena, input, input_val, ruby, depth + 1)?;
                 transformed.push(ruby_item)?;
             }
 
             // Check if all string-like
             if all_string_like(&transformed, ruby) {
-                return join_slices_from_array(&transformed, ruby, input);
+                return join_slices_from_array(&transformed, ruby, *input_val);
             }
 
             // Fold the sequence
-            fold_sequence_from_array(&transformed, ruby, input)
+            fold_sequence_from_array(&transformed, ruby, *input_val)
         }
         AstNode::Hash { pool_index, length } => {
             let pairs = arena.get_hash_items(*pool_index as usize, *length as usize);
@@ -708,7 +712,8 @@ fn transform_ast_internal(
                 }
 
                 let sym_key = ruby.to_symbol(&key);
-                let ruby_value = transform_ast_internal(&value, arena, input, ruby, depth + 1)?;
+                let ruby_value =
+                    transform_ast_internal(&value, arena, input, input_val, ruby, depth + 1)?;
 
                 // Skip empty arrays
                 if ruby_value.is_kind_of(ruby.class_array()) {
@@ -728,17 +733,21 @@ fn transform_ast_internal(
         AstNode::Tagged { tag: _, value } => {
             // Tagged nodes should have been processed by to_parslet_compatible already
             // For safety, just transform the inner value
-            transform_ast_internal(value, arena, input, ruby, depth)
+            transform_ast_internal(value, arena, input, input_val, ruby, depth)
         }
     }
 }
 
 /// Transform AstNode to Ruby format (public entry point)
+///
+/// Creates a single shared Ruby String for the input and reuses it across
+/// all Slice objects, avoiding N copies of the input (one per Slice).
 pub fn transform_ast(
     node: &AstNode,
     arena: &AstArena,
     input: &str,
     ruby: &Ruby,
 ) -> Result<Value, Error> {
-    transform_ast_internal(node, arena, input, ruby, 0)
+    let input_val = ruby.str_new(input).as_value();
+    transform_ast_internal(node, arena, input, &input_val, ruby, 0)
 }

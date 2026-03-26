@@ -392,7 +392,18 @@ fn flatten_sequence(items: &[AstNode], arena: &mut AstArena, input: &str) -> Ast
             // TRUE REPETITION: each item has exactly one key
             // Keep as array of hashes
             // Example: [{letter: 'a'}, {letter: 'b'}] or [{schemaDecl: ...}, {schemaDecl: ...}]
-            let (pool_idx, len) = arena.store_array(items);
+            // Flatten nested arrays from repetition results into the parent level
+            let mut flat_items: Vec<AstNode> = Vec::new();
+            for item in items {
+                match item {
+                    AstNode::Array { pool_index, length } => {
+                        let nested = arena.get_array(*pool_index as usize, *length as usize);
+                        flat_items.extend(nested.iter().cloned());
+                    }
+                    _ => flat_items.push(item.clone()),
+                }
+            }
+            let (pool_idx, len) = arena.store_array(&flat_items);
             return AstNode::Array {
                 pool_index: pool_idx,
                 length: len,
@@ -587,7 +598,7 @@ mod tests {
     use super::*;
     use crate::portable::grammar::Grammar;
     use crate::portable::parser::PortableParser;
-    use crate::portable::parser_dsl::{dynamic, re, seq, str, GrammarBuilder, ParsletExt};
+    use crate::portable::parser_dsl::{dynamic, re, ref_, seq, str, GrammarBuilder, ParsletExt};
 
     fn parse_and_transform(input: &str, grammar: &Grammar) -> (AstNode, AstArena) {
         let mut arena = AstArena::for_input(input.len());
@@ -707,6 +718,73 @@ mod tests {
             AstNode::Array { pool_index, length } => {
                 let items = arena.get_array(pool_index as usize, length as usize);
                 assert_eq!(items.len(), 2, "should have 2 items in array");
+            }
+            AstNode::Hash { pool_index, length } => {
+                let pairs = arena.get_hash_items(pool_index as usize, length as usize);
+                panic!(
+                    "Expected array, got hash with {} keys: {:?}",
+                    pairs.len(),
+                    pairs.iter().map(|(k, _)| k).collect::<Vec<_>>()
+                );
+            }
+            _ => panic!("Expected array, got {:?}", result),
+        }
+    }
+
+    #[test]
+    fn test_separator_repetition_pattern() {
+        // Grammar: item >> (separator >> item).repeat  (X (',' X)*)
+        // The first item and repetition items share the same key (:name).
+        // The has_duplicate_labels check must NOT incorrectly merge these.
+        // This is the pattern used in EXPRESS USE clauses:
+        //   namedTypeOrRename >> (op_comma >> namedTypeOrRename).repeat
+        let grammar = GrammarBuilder::new()
+            .rule(
+                "list",
+                seq(vec![
+                    dynamic(ref_("item")),
+                    dynamic(seq(vec![dynamic(ref_("sep")), dynamic(ref_("item"))]).many()),
+                ]),
+            )
+            .rule("item", re("[a-z]+").label("name"))
+            .rule("sep", str(","))
+            .build();
+
+        let (result, arena) = parse_and_transform("a,b", &grammar);
+
+        // The result should be an array with 2 items (not merged into 1)
+        match result {
+            AstNode::Array { pool_index, length } => {
+                let items = arena.get_array(pool_index as usize, length as usize);
+                assert_eq!(
+                    items.len(),
+                    2,
+                    "should have 2 items in array, got {}: {:?}",
+                    items.len(),
+                    items
+                );
+
+                // Both items should be hashes with key "name"
+                for (i, item) in items.iter().enumerate() {
+                    if let AstNode::Hash {
+                        pool_index: h_p,
+                        length: h_l,
+                    } = item
+                    {
+                        let pairs = arena.get_hash_items(*h_p as usize, *h_l as usize);
+                        assert_eq!(
+                            pairs.len(),
+                            1,
+                            "item {} should have 1 key, got {}: {:?}",
+                            i,
+                            pairs.len(),
+                            pairs.iter().map(|(k, _)| k).collect::<Vec<_>>()
+                        );
+                        assert_eq!(pairs[0].0, "name", "item {} should have key 'name'", i);
+                    } else {
+                        panic!("Expected hash for item {}, got {:?}", i, item);
+                    }
+                }
             }
             AstNode::Hash { pool_index, length } => {
                 let pairs = arena.get_hash_items(pool_index as usize, length as usize);
