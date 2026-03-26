@@ -51,11 +51,19 @@ pub fn get_slice_class(ruby: &Ruby) -> Result<magnus::RClass, Error> {
 ///
 /// The Slice stores the input string reference so it can compute
 /// line/column lazily on demand.
-pub fn create_slice(ruby: &Ruby, offset: u32, content: &str, input: &str) -> Result<Value, Error> {
+///
+/// IMPORTANT: `input_val` should be a pre-created Ruby String to avoid
+/// creating N copies of the input (one per Slice). Create it once with
+/// `ruby.str_new(input)` and reuse for all Slices in a parse.
+pub fn create_slice(
+    ruby: &Ruby,
+    offset: u32,
+    content: &str,
+    input_val: Value,
+) -> Result<Value, Error> {
     let slice_class = get_slice_class(ruby)?;
     let offset_val = ruby.integer_from_i64(offset as i64);
     let content_val = ruby.str_new(content);
-    let input_val = ruby.str_new(input);
 
     // Slice.new(offset, content, input) - input stored for lazy line/col computation
     slice_class.new_instance((offset_val, content_val, input_val))
@@ -104,13 +112,13 @@ fn all_single_char_slices(items: &[Value], ruby: &Ruby) -> bool {
 }
 
 /// Join consecutive character Slices into a single Slice
-fn join_slices(items: &[Value], ruby: &Ruby, input: &str) -> Result<Value, Error> {
+fn join_slices(items: &[Value], ruby: &Ruby, input_val: Value) -> Result<Value, Error> {
     let first_slice = items.iter().find(|i| is_slice(**i, ruby));
     let content: String = items.iter().map(|i| slice_content(*i)).collect();
 
     if let Some(first) = first_slice {
         let offset = slice_offset(*first)?;
-        create_slice(ruby, offset, &content, input)
+        create_slice(ruby, offset, &content, input_val)
     } else {
         Ok(ruby.str_new(&content).as_value())
     }
@@ -128,10 +136,24 @@ fn join_slices(items: &[Value], ruby: &Ruby, input: &str) -> Result<Value, Error
 ///
 /// It does NOT perform domain-specific transformations like
 /// sequence merging or repetition handling.
+///
+/// A single shared Ruby String is created for the input and reused across
+/// all Slices to avoid duplicating the input string per Slice.
 pub fn normalize_ast(
     node: &AstNode,
     arena: &AstArena,
     input: &str,
+    ruby: &Ruby,
+) -> Result<Value, Error> {
+    let input_val = ruby.str_new(input).as_value();
+    normalize_ast_internal(node, arena, input, &input_val, ruby)
+}
+
+fn normalize_ast_internal(
+    node: &AstNode,
+    arena: &AstArena,
+    input: &str,
+    input_val: &Value,
     ruby: &Ruby,
 ) -> Result<Value, Error> {
     match node {
@@ -146,7 +168,7 @@ pub fn normalize_ast(
         AstNode::StringRef { pool_index } => {
             let (s, _, _, _) = arena.get_string_parts(*pool_index as usize);
             // Interned strings don't have source position, create Slice with offset 0
-            create_slice(ruby, 0, s, input)
+            create_slice(ruby, 0, s, *input_val)
         }
 
         AstNode::InputRef { offset, length } => {
@@ -157,7 +179,7 @@ pub fn normalize_ast(
             } else {
                 ""
             };
-            create_slice(ruby, *offset, slice_str, input)
+            create_slice(ruby, *offset, slice_str, *input_val)
         }
 
         AstNode::Array { pool_index, length } => {
@@ -173,7 +195,8 @@ pub fn normalize_ast(
                     // Return as tagged array (consumer decides how to handle)
                     let ary = ruby.ary_new_capa((items.len()) as _);
                     for item in &items {
-                        let ruby_item = normalize_ast(item, arena, input, ruby)?;
+                        let ruby_item =
+                            normalize_ast_internal(item, arena, input, input_val, ruby)?;
                         ary.push(ruby_item)?;
                     }
                     return Ok(ary.as_value());
@@ -183,12 +206,12 @@ pub fn normalize_ast(
             // Transform each item
             let transformed: Vec<Value> = items
                 .iter()
-                .map(|item| normalize_ast(item, arena, input, ruby))
+                .map(|item| normalize_ast_internal(item, arena, input, input_val, ruby))
                 .collect::<Result<Vec<_>, _>>()?;
 
             // Check if all items are single-character Slices - join them
             if all_single_char_slices(&transformed, ruby) {
-                return join_slices(&transformed, ruby, input);
+                return join_slices(&transformed, ruby, *input_val);
             }
 
             // Return as regular array
@@ -214,7 +237,7 @@ pub fn normalize_ast(
 
                 // Convert string key to symbol (Ruby idiom)
                 let sym_key = ruby.to_symbol(&key);
-                let ruby_value = normalize_ast(&value, arena, input, ruby)?;
+                let ruby_value = normalize_ast_internal(&value, arena, input, input_val, ruby)?;
 
                 // Skip if value is empty array (universal cleanup)
                 if let Some(ary) = RArray::from_value(ruby_value) {
@@ -232,7 +255,7 @@ pub fn normalize_ast(
         AstNode::Tagged { tag: _, value } => {
             // Tagged nodes should have been processed by to_parslet_compatible already
             // For safety, just normalize the inner value
-            normalize_ast(value, arena, input, ruby)
+            normalize_ast_internal(value, arena, input, input_val, ruby)
         }
     }
 }
