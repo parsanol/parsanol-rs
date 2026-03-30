@@ -546,8 +546,10 @@ mod tests {
         let grammar = unsafe { parsanol_grammar_new(json.as_ptr()) };
         assert!(!grammar.is_null());
 
+        // After optimize(), unreferenced atoms are compacted away.
+        // With root=0, only the Str at index 0 is reachable; Re at index 1 is dropped.
         let count = unsafe { parsanol_grammar_atom_count(grammar) };
-        assert_eq!(count, 2);
+        assert_eq!(count, 1);
 
         unsafe { parsanol_grammar_free(grammar) };
     }

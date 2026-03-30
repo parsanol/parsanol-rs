@@ -134,14 +134,10 @@ pub fn init(ruby: &Ruby) -> Result<(), Error> {
     native_module.define_module_function("callback_count", function!(ruby_callback_count, 0))?;
     native_module.define_module_function("clear_callbacks", function!(ruby_clear_callbacks, 0))?;
     native_module.define_module_function("has_callback", function!(ruby_has_callback, 1))?;
-    native_module.define_module_function(
-        "optimized_atom_count",
-        function!(optimized_atom_count, 1),
-    )?;
-    native_module.define_module_function(
-        "cacheable_atom_count",
-        function!(cacheable_atom_count, 1),
-    )?;
+    native_module
+        .define_module_function("optimized_atom_count", function!(optimized_atom_count, 1))?;
+    native_module
+        .define_module_function("cacheable_atom_count", function!(cacheable_atom_count, 1))?;
 
     Ok(())
 }
