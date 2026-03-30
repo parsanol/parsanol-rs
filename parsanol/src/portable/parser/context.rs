@@ -44,10 +44,7 @@ impl<'a> ParseContext<'a> {
     }
 
     /// Create a context with pre-existing cache (for incremental parsing)
-    pub fn with_cache(
-        arena: &'a mut AstArena,
-        cache: DenseCache,
-    ) -> Self {
+    pub fn with_cache(arena: &'a mut AstArena, cache: DenseCache) -> Self {
         Self {
             arena,
             cache,

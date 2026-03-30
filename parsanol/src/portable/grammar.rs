@@ -611,8 +611,8 @@ impl Grammar {
 
                         if i - run_start >= 2 {
                             let mut merged = String::new();
-                            for j in run_start..i {
-                                if let Atom::Re { pattern } = &self.atoms[children[j]] {
+                            for child in &children[run_start..i] {
+                                if let Atom::Re { pattern } = &self.atoms[*child] {
                                     merged.push_str(pattern);
                                 }
                             }
@@ -632,8 +632,8 @@ impl Grammar {
 
                         if i - run_start >= 2 {
                             let mut merged = String::new();
-                            for j in run_start..i {
-                                if let Atom::Str { pattern } = &self.atoms[children[j]] {
+                            for child in &children[run_start..i] {
+                                if let Atom::Str { pattern } = &self.atoms[*child] {
                                     merged.push_str(pattern);
                                 }
                             }
@@ -770,8 +770,8 @@ impl Grammar {
 
         // Step 4: Remove dead atoms
         let mut write = 0;
-        for read in 0..n {
-            if reachable[read] {
+        for (read, is_reachable) in reachable.iter().enumerate() {
+            if *is_reachable {
                 self.atoms.swap(write, read);
                 write += 1;
             }
@@ -1118,7 +1118,9 @@ mod tests {
         let json = grammar.to_json().unwrap();
         let parsed = Grammar::from_json(&json).unwrap();
 
-        assert_eq!(parsed.atom_count(), 2);
+        // After optimize(), unreferenced atoms are compacted away.
+        // The Sequence at index 1 is unreachable (root=0), so only 1 atom remains.
+        assert_eq!(parsed.atom_count(), 1);
     }
 
     #[test]

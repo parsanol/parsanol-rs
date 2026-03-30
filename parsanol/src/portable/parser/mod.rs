@@ -124,7 +124,7 @@ impl<'a> PortableParser<'a> {
 
         // Enable rollback when cache is effectively empty (parse_fresh scenario).
         // This allows arena cleanup on failed alternatives without corrupting cache.
-        let rollback_on_failure = cache.len() == 0;
+        let rollback_on_failure = cache.is_empty();
 
         Self {
             grammar,
@@ -403,10 +403,8 @@ impl<'a> PortableParser<'a> {
                 // CRITICAL: Cache failures too!
                 // Without this, failed alternatives are re-parsed exponentially
                 // This is the key to packrat parser performance
-                self.cache.insert(CacheEntry::failure(
-                    pos as u32,
-                    atom_id as u16,
-                ));
+                self.cache
+                    .insert(CacheEntry::failure(pos as u32, atom_id as u16));
                 Err(e)
             }
         }

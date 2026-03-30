@@ -106,7 +106,13 @@ impl Default for CacheEntry {
 impl CacheEntry {
     /// Create a new cache entry from an AstNode
     #[inline]
-    pub fn from_node(pos: u32, atom_id: u16, end_pos: u32, node: &AstNode, generation: u32) -> Self {
+    pub fn from_node(
+        pos: u32,
+        atom_id: u16,
+        end_pos: u32,
+        node: &AstNode,
+        generation: u32,
+    ) -> Self {
         let (tag, data_a, data_b) = match node {
             AstNode::Nil => (NodeTag::Nil, 0, 0),
             AstNode::StringRef { pool_index } => (NodeTag::StringRef, *pool_index, 0),
@@ -467,7 +473,7 @@ mod tests {
         cache.insert(CacheEntry::from_node(0, 1, 5, &node, 0));
 
         // Get
-        let entry = cache.get(0, 1);
+        let entry = cache.get(0, 1, 0);
         assert!(entry.is_some());
         let entry = entry.unwrap();
         assert!(entry.success);
@@ -487,12 +493,18 @@ mod tests {
                 offset: i * 100,
                 length: 100,
             };
-            cache.insert(CacheEntry::from_node(i * 100, (i % 5) as u16, (i + 1) * 100, &node, 0));
+            cache.insert(CacheEntry::from_node(
+                i * 100,
+                (i % 5) as u16,
+                (i + 1) * 100,
+                &node,
+                0,
+            ));
         }
 
         // Verify all can be retrieved
         for i in 0..10 {
-            let entry = cache.get(i * 100, (i % 5) as u16);
+            let entry = cache.get(i * 100, (i % 5) as u16, 0);
             assert!(entry.is_some(), "Entry {} not found", i);
         }
     }
@@ -501,7 +513,7 @@ mod tests {
     fn test_cache_miss() {
         let mut cache = DenseCache::new(16);
 
-        let entry = cache.get(0, 1);
+        let entry = cache.get(0, 1, 0);
         assert!(entry.is_none());
 
         let (hits, misses, _) = cache.stats();
@@ -525,7 +537,7 @@ mod tests {
 
         // All entries should still be accessible
         for i in 0..100 {
-            let entry = cache.get(i, 0);
+            let entry = cache.get(i, 0, 0);
             assert!(entry.is_some(), "Entry {} not found after resize", i);
         }
     }
@@ -542,7 +554,7 @@ mod tests {
         cache.clear();
 
         assert!(cache.is_empty());
-        assert!(cache.get(0, 1).is_none());
+        assert!(cache.get(0, 1, 0).is_none());
     }
 
     #[test]
@@ -553,11 +565,11 @@ mod tests {
         cache.insert(CacheEntry::from_node(0, 1, 5, &node, 0));
 
         // Hit
-        cache.get(0, 1);
+        cache.get(0, 1, 0);
         // Miss
-        cache.get(1, 1);
+        cache.get(1, 1, 0);
         // Hit
-        cache.get(0, 1);
+        cache.get(0, 1, 0);
 
         let (hits, misses, hit_rate) = cache.stats();
         assert_eq!(hits, 2);
@@ -568,8 +580,8 @@ mod tests {
     #[test]
     fn test_cache_entry_size() {
         // CacheEntry with inlined node data:
-        // pos(4) + end_pos(4) + data_a(4) + data_b(4) + atom_id(2) + tag(1) + success(1) = 20
-        assert_eq!(std::mem::size_of::<CacheEntry>(), 20);
+        // pos(4) + end_pos(4) + data_a(4) + data_b(4) + atom_id(2) + tag(1) + success(1) + generation(4) = 24
+        assert_eq!(std::mem::size_of::<CacheEntry>(), 24);
         assert_eq!(std::mem::align_of::<CacheEntry>(), 4);
     }
 
