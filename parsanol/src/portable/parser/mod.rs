@@ -76,11 +76,8 @@ pub struct PortableParser<'a> {
     /// AST arena for allocating nodes
     arena: &'a mut AstArena,
 
-    /// Packrat cache for memoization
+    /// Packrat cache for memoization (inlined node data)
     cache: DenseCache,
-
-    /// Cached AST nodes for cache hits
-    cached_nodes: Vec<AstNode>,
 
     // ========================================================================
     // Resource Management (delegated)
@@ -93,6 +90,11 @@ pub struct PortableParser<'a> {
     // ========================================================================
     /// Capture state for named captures
     capture_state: CaptureState,
+
+    /// Enable arena rollback on failed alternatives.
+    /// This is set when the cache is effectively empty (no memoization),
+    /// allowing safe cleanup of garbage from failed parse branches.
+    rollback_on_failure: bool,
 }
 
 impl<'a> PortableParser<'a> {
@@ -115,11 +117,14 @@ impl<'a> PortableParser<'a> {
         input: &'a str,
         arena: &'a mut AstArena,
         cache: DenseCache,
-        cached_nodes: Vec<AstNode>,
     ) -> Self {
         let governor = ResourceGovernor::new()
             .with_max_input_size(DEFAULT_MAX_INPUT_SIZE)
             .with_max_recursion_depth(DEFAULT_MAX_RECURSION_DEPTH);
+
+        // Enable rollback when cache is effectively empty (parse_fresh scenario).
+        // This allows arena cleanup on failed alternatives without corrupting cache.
+        let rollback_on_failure = cache.len() == 0;
 
         Self {
             grammar,
@@ -127,9 +132,9 @@ impl<'a> PortableParser<'a> {
             input_bytes: input.as_bytes(),
             arena,
             cache,
-            cached_nodes,
             governor,
             capture_state: CaptureState::new(),
+            rollback_on_failure,
         }
     }
 
@@ -143,7 +148,6 @@ impl<'a> PortableParser<'a> {
         max_recursion_depth: usize,
     ) -> Self {
         let cache = DenseCache::for_input(input.len(), grammar.atom_count());
-        let estimated_entries = (input.len() / 10).clamp(64, 10000);
 
         let governor = ResourceGovernor::new()
             .with_max_input_size(max_input_size)
@@ -155,16 +159,16 @@ impl<'a> PortableParser<'a> {
             input_bytes: input.as_bytes(),
             arena,
             cache,
-            cached_nodes: Vec::with_capacity(estimated_entries),
             governor,
             capture_state: CaptureState::new(),
+            rollback_on_failure: false,
         }
     }
 
-    /// Extract the cache and cached nodes
+    /// Extract the cache
     #[inline]
-    pub fn into_cache(self) -> (DenseCache, Vec<AstNode>) {
-        (self.cache, self.cached_nodes)
+    pub fn into_cache(self) -> DenseCache {
+        self.cache
     }
 
     /// Set maximum input size
@@ -336,17 +340,6 @@ impl<'a> PortableParser<'a> {
     }
 
     // ========================================================================
-    // Cache Management
-    // ========================================================================
-
-    #[inline(always)]
-    fn store_cached_node(&mut self, node: AstNode) -> u32 {
-        let idx = self.cached_nodes.len() as u32;
-        self.cached_nodes.push(node);
-        idx
-    }
-
-    // ========================================================================
     // Core Parsing - Try Atom
     // ========================================================================
 
@@ -365,17 +358,23 @@ impl<'a> PortableParser<'a> {
     pub fn try_atom(&mut self, atom_id: usize, pos: usize) -> Result<ParseResult, ParseError> {
         self.check_resources()?;
 
+        // Skip cache for atoms that don't benefit from memoization
+        // (terminals, pass-through wrappers). This saves significant memory
+        // since most atoms in a grammar are Re/Str terminals.
+        if self.grammar.is_no_cache(atom_id) {
+            return self.parse_atom_uncached(atom_id, pos);
+        }
+
         // Check cache
         let cache_hit = self
             .cache
-            .get(pos as u32, atom_id as u16)
-            .map(|e| (e.success(), e.end_pos, e.ast_ref()));
+            .get(pos as u32, atom_id as u16, self.arena.generation())
+            .map(|e| (e.success, e.end_pos, e.to_node()));
 
-        if let Some((success, end_pos, ast_ref)) = cache_hit {
+        if let Some((success, end_pos, cached_node)) = cache_hit {
             return if success {
-                let cached = self.cached_nodes[ast_ref as usize].clone();
                 Ok(ParseResult {
-                    value: cached,
+                    value: cached_node,
                     end_pos: end_pos as usize,
                     capture_state: None,
                 })
@@ -389,32 +388,24 @@ impl<'a> PortableParser<'a> {
         // Parse uncached
         match self.parse_atom_uncached(atom_id, pos) {
             Ok(result) => {
-                // Cache successful result
-                let ast_ref = self.store_cached_node(result.value);
-                self.cache.insert(CacheEntry::new(
+                // Cache successful result with inlined node data
+                self.cache.insert(CacheEntry::from_node(
                     pos as u32,
                     atom_id as u16,
-                    true,
                     result.end_pos as u32,
-                    ast_ref,
+                    &result.value,
+                    self.arena.generation(),
                 ));
 
-                Ok(ParseResult {
-                    value: self.cached_nodes[ast_ref as usize].clone(),
-                    end_pos: result.end_pos,
-                    capture_state: None,
-                })
+                Ok(result)
             }
             Err(e) => {
                 // CRITICAL: Cache failures too!
                 // Without this, failed alternatives are re-parsed exponentially
                 // This is the key to packrat parser performance
-                self.cache.insert(CacheEntry::new(
+                self.cache.insert(CacheEntry::failure(
                     pos as u32,
                     atom_id as u16,
-                    false, // failure
-                    pos as u32,
-                    0, // no ast_ref for failures
                 ));
                 Err(e)
             }
@@ -576,6 +567,25 @@ impl<'a> PortableParser<'a> {
         atoms: &[usize],
         pos: usize,
     ) -> Result<ParseResult, ParseError> {
+        // When rollback_on_failure is true (parse_fresh scenario), we checkpoint
+        // before each atom and rollback on failure. This keeps arena clean since
+        // there's no cache to corrupt.
+        //
+        // When rollback_on_failure is false (normal parse with cache), we don't
+        // rollback because failed branches may have valid cache entries that
+        // reference arena data - rollback would invalidate those references.
+        if self.rollback_on_failure {
+            for &atom_id in atoms {
+                let cp = self.arena.checkpoint();
+                if let Ok(result) = self.try_atom(atom_id, pos) {
+                    return Ok(result);
+                }
+                self.arena.rollback(cp);
+            }
+            return Err(ParseError::Failed { position: pos });
+        }
+
+        // Normal path: no rollback (cache protects against corruption)
         for &atom_id in atoms {
             if let Ok(result) = self.try_atom(atom_id, pos) {
                 return Ok(result);
@@ -979,12 +989,38 @@ impl<'a> PortableParser<'a> {
             depth,
         });
 
+        // Skip cache for atoms that don't benefit from memoization
+        if self.grammar.is_no_cache(atom_id) {
+            let result = self.parse_atom_uncached(atom_id, pos);
+            match &result {
+                Ok(r) => {
+                    trace.add(TraceEntry {
+                        position: pos,
+                        atom_id,
+                        action: TraceAction::Match {
+                            length: r.end_pos - pos,
+                        },
+                        depth,
+                    });
+                }
+                Err(_) => {
+                    trace.add(TraceEntry {
+                        position: pos,
+                        atom_id,
+                        action: TraceAction::Fail,
+                        depth,
+                    });
+                }
+            }
+            return result;
+        }
+
         let cache_hit = self
             .cache
-            .get(pos as u32, atom_id as u16)
-            .map(|e| (e.success(), e.end_pos, e.ast_ref()));
+            .get(pos as u32, atom_id as u16, self.arena.generation())
+            .map(|e| (e.success, e.end_pos, e.to_node()));
 
-        if let Some((success, end_pos, ast_ref)) = cache_hit {
+        if let Some((success, end_pos, cached_node)) = cache_hit {
             trace.add(TraceEntry {
                 position: pos,
                 atom_id,
@@ -993,9 +1029,8 @@ impl<'a> PortableParser<'a> {
             });
 
             return if success {
-                let cached = self.cached_nodes[ast_ref as usize].clone();
                 Ok(ParseResult {
-                    value: cached,
+                    value: cached_node,
                     end_pos: end_pos as usize,
                     capture_state: None,
                 })

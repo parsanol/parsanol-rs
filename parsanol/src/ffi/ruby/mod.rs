@@ -34,7 +34,7 @@ mod transform;
 
 // Public API - what users actually need
 pub use init::init;
-pub use parser::{is_available, parse};
+pub use parser::{is_available, parse, parse_fresh};
 
 // Low-level (for debugging/benchmarks)
 pub use builder::RubyBuilder;

@@ -31,7 +31,7 @@ impl WasmParser {
     /// If the grammar JSON is invalid
     #[wasm_bindgen(constructor)]
     pub fn new(grammar_json: &str) -> Result<WasmParser, JsValue> {
-        let grammar: Grammar = serde_json::from_str(grammar_json)
+        let grammar: Grammar = Grammar::from_json(grammar_json)
             .map_err(|e| JsValue::from_str(&format!("Invalid grammar JSON: {}", e)))?;
 
         Ok(WasmParser {

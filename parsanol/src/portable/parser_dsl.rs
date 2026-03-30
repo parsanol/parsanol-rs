@@ -111,7 +111,7 @@ impl GrammarBuilder {
             .and_then(|name| self.rules.get(&name).copied())
             .unwrap_or(0);
 
-        Grammar { atoms, root }
+        Grammar { atoms, root, no_cache: Vec::new() }
     }
 
     /// Get the current number of atoms

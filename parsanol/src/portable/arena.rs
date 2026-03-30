@@ -8,6 +8,14 @@ use super::ast::AstNode;
 use std::collections::HashMap;
 use std::mem;
 
+/// Checkpoint for arena rollback
+#[derive(Debug, Clone, Copy)]
+pub struct ArenaCheckpoint {
+    array_pool_len: usize,
+    hash_pool_len: usize,
+    generation: u32,
+}
+
 /// String pool entry
 #[derive(Debug, Clone, Copy)]
 struct StringPoolEntry {
@@ -51,6 +59,9 @@ pub struct AstArena {
     hash_pool: Vec<HashPoolEntry>,
     /// Original input string (for InputRef offset lookup)
     input: Option<String>,
+    /// Generation counter for cache invalidation on rollback
+    /// Incremented each time rollback is called
+    generation: u32,
 }
 
 impl Default for AstArena {
@@ -76,6 +87,7 @@ impl AstArena {
             array_pool: Vec::with_capacity(capacity * 2),
             hash_pool: Vec::with_capacity(capacity),
             input: None,
+            generation: 0,
         }
     }
 
@@ -92,8 +104,8 @@ impl AstArena {
     #[inline]
     pub fn for_input(input_len: usize) -> Self {
         // Estimate AST node count: roughly proportional to input size
-        // Typical grammars create 1-3 nodes per 10 characters
-        let estimated_nodes = (input_len / 10).clamp(64, 100_000);
+        // Use smaller estimate to limit pre-allocation and peak memory
+        let estimated_nodes = (input_len / 50).clamp(64, 20_000);
 
         // String pool: typically smaller than node count (only for keys/literals)
         let string_capacity = (estimated_nodes / 4).max(32);
@@ -108,6 +120,7 @@ impl AstArena {
             array_pool: Vec::with_capacity(estimated_nodes * 2),
             hash_pool: Vec::with_capacity(estimated_nodes),
             input: None,
+            generation: 0,
         }
     }
 
@@ -202,6 +215,38 @@ impl AstArena {
         self.string_data.clear();
         self.string_pool.clear();
         self.string_hash.clear();
+    }
+
+    /// Save a checkpoint of the arena state
+    ///
+    /// Returns the current pool lengths. Use with `rollback` to restore
+    /// the arena to this state, discarding all entries added after.
+    #[inline]
+    pub fn checkpoint(&self) -> ArenaCheckpoint {
+        ArenaCheckpoint {
+            array_pool_len: self.array_pool.len(),
+            hash_pool_len: self.hash_pool.len(),
+            generation: self.generation,
+        }
+    }
+
+    /// Rollback the arena to a previous checkpoint
+    ///
+    /// Discards all array and hash entries added after the checkpoint.
+    /// String pools are NOT rolled back (they're shared and cheap to keep).
+    /// Increments generation to invalidate stale cache entries.
+    #[inline]
+    pub fn rollback(&mut self, cp: ArenaCheckpoint) {
+        self.array_pool.truncate(cp.array_pool_len);
+        self.hash_pool.truncate(cp.hash_pool_len);
+        // Increment generation to invalidate cache entries referencing old arena data
+        self.generation = cp.generation.wrapping_add(1);
+    }
+
+    /// Get the current generation counter
+    #[inline]
+    pub fn generation(&self) -> u32 {
+        self.generation
     }
 
     /// Intern a string and return a reference to it
