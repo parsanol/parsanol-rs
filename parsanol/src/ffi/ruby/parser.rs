@@ -56,7 +56,7 @@
 
 use crate::ffi::ruby::cache::LruCache;
 use crate::ffi::shared::flatten_ast_to_u64;
-use crate::portable::{to_parslet_compatible, AstArena, Grammar, PortableParser};
+use crate::portable::{to_parslet_compatible, AstArena, DenseCache, Grammar, PortableParser};
 use magnus::{Error, Ruby, Value};
 use std::hash::{Hash, Hasher};
 use std::sync::Mutex;
@@ -121,6 +121,12 @@ fn hash_string(s: &str) -> u64 {
     hasher.finish()
 }
 
+/// Deserialize grammar from JSON, applying optimizations.
+/// The grammar is cached by hash after optimization.
+fn load_grammar(grammar_json: &str) -> Result<Grammar, serde_json::Error> {
+    Grammar::from_json(grammar_json)
+}
+
 /// Check if native extension is available
 pub fn is_available() -> bool {
     true
@@ -177,7 +183,7 @@ pub fn parse(grammar_json: String, input: String) -> Result<Value, Error> {
             cached.clone()
         } else {
             drop(guard);
-            let grammar: Grammar = serde_json::from_str(&grammar_json)
+            let grammar: Grammar = load_grammar(&grammar_json)
                 .map_err(|e| Error::new(ruby.exception_arg_error(), e.to_string()))?;
             let mut guard = get_grammar_cache().lock().unwrap();
             // Re-check in case another thread added it while we were parsing
@@ -198,6 +204,51 @@ pub fn parse(grammar_json: String, input: String) -> Result<Value, Error> {
         .map_err(|e| Error::new(ruby.exception_runtime_error(), e.to_string()))?;
 
     // Transform AST to Ruby format with full sequence/repetition handling
+    transform_ast(&ast, &arena, &input, &ruby)
+}
+
+/// Parse without packrat caching for memory-bounded operation
+///
+/// This creates a fresh arena and an empty cache (no memoization).
+/// Memory usage is bounded by AST size rather than input × atoms.
+/// Use for large files where memory is more important than speed.
+///
+/// Returns the same format as `parse()`.
+pub fn parse_fresh(grammar_json: String, input: String) -> Result<Value, Error> {
+    let ruby = Ruby::get().unwrap();
+
+    // Get or compile grammar (thread-safe with LRU caching)
+    let hash = hash_string(&grammar_json);
+    let grammar = {
+        let cache = get_grammar_cache();
+        let mut guard = cache.lock().unwrap();
+        if let Some(cached) = guard.get(&hash) {
+            cached.clone()
+        } else {
+            drop(guard);
+            let grammar: Grammar = load_grammar(&grammar_json)
+                .map_err(|e| Error::new(ruby.exception_arg_error(), e.to_string()))?;
+            let mut guard = get_grammar_cache().lock().unwrap();
+            if let Some(cached) = guard.get(&hash) {
+                cached.clone()
+            } else {
+                guard.insert(hash, grammar.clone());
+                grammar
+            }
+        }
+    };
+
+    // Create fresh arena (no reuse, no memory accumulation)
+    let mut arena = AstArena::for_input(input.len());
+    // Create empty cache — every lookup misses, no memoization
+    let cache = DenseCache::new(0);
+    let mut parser = PortableParser::new_with_cache(&grammar, &input, &mut arena, cache);
+
+    let ast = parser
+        .parse()
+        .map_err(|e| Error::new(ruby.exception_runtime_error(), e.to_string()))?;
+
+    // Transform AST to Ruby format
     transform_ast(&ast, &arena, &input, &ruby)
 }
 
@@ -224,7 +275,7 @@ pub fn parse_with_stats(
             cached.clone()
         } else {
             drop(guard);
-            let grammar: Grammar = serde_json::from_str(&grammar_json)
+            let grammar: Grammar = load_grammar(&grammar_json)
                 .map_err(|e| Error::new(ruby.exception_arg_error(), e.to_string()))?;
             let mut guard = get_grammar_cache().lock().unwrap();
             // Re-check in case another thread added it while we were parsing
@@ -245,7 +296,7 @@ pub fn parse_with_stats(
         .map_err(|e| Error::new(ruby.exception_runtime_error(), e.to_string()))?;
 
     // Get cache statistics before parser is consumed
-    let (cache, _) = parser.into_cache();
+    let cache = parser.into_cache();
     let (hits, misses, hit_rate) = cache.stats();
 
     // Transform AST to Ruby format
@@ -276,7 +327,7 @@ pub fn parse_batch(grammar_json: String, input: String) -> Result<Vec<u64>, Erro
             cached.clone()
         } else {
             drop(guard);
-            let grammar: Grammar = serde_json::from_str(&grammar_json)
+            let grammar: Grammar = load_grammar(&grammar_json)
                 .map_err(|e| Error::new(ruby.exception_arg_error(), e.to_string()))?;
             let mut guard = get_grammar_cache().lock().unwrap();
             // Re-check in case another thread added it while we were parsing
@@ -329,7 +380,7 @@ pub fn parse_with_builder(
             cached.clone()
         } else {
             drop(guard);
-            let grammar: Grammar = serde_json::from_str(&grammar_json)
+            let grammar: Grammar = load_grammar(&grammar_json)
                 .map_err(|e| Error::new(ruby.exception_arg_error(), e.to_string()))?;
             let mut guard = get_grammar_cache().lock().unwrap();
             // Re-check in case another thread added it while we were parsing
@@ -352,4 +403,20 @@ pub fn parse_with_builder(
     parser
         .parse_with_builder(&mut ruby_builder)
         .map_err(|e| Error::new(ruby.exception_runtime_error(), e.to_string()))
+}
+
+/// Return optimized atom count for a grammar JSON (diagnostic)
+pub fn optimized_atom_count(grammar_json: String) -> Result<usize, Error> {
+    let ruby = Ruby::get().unwrap();
+    let grammar: Grammar = load_grammar(&grammar_json)
+        .map_err(|e| Error::new(ruby.exception_arg_error(), e.to_string()))?;
+    Ok(grammar.atom_count())
+}
+
+/// Return count of atoms that need packrat caching (diagnostic)
+pub fn cacheable_atom_count(grammar_json: String) -> Result<usize, Error> {
+    let ruby = Ruby::get().unwrap();
+    let grammar: Grammar = load_grammar(&grammar_json)
+        .map_err(|e| Error::new(ruby.exception_arg_error(), e.to_string()))?;
+    Ok(grammar.cacheable_atom_count())
 }

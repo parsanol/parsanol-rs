@@ -19,92 +19,152 @@
 //!
 //! # Cache Entry Packing
 //!
-//! `CacheEntry` uses bit packing to minimize memory usage:
-//! - `success` flag is stored in the high bit of `packed_ast_ref`
-//! - Fields are reordered to minimize padding
-//! - Total size: 14 bytes (down from 16 bytes with naive layout)
+//! Each `CacheEntry` inlines the AST node data directly (24 bytes), eliminating
+//! the need for a separate `cached_nodes: Vec<AstNode>`. The node data consists
+//! of a type tag and up to two u32 data fields, covering all node types:
+//! Nil, StringRef, InputRef, Array, Hash.
 
-/// Bit mask for the success flag stored in the high bit of packed_ast_ref
-const SUCCESS_BIT: u32 = 0x8000_0000;
-/// Bit mask for the AST reference (lower 31 bits)
-const AST_REF_MASK: u32 = 0x7FFF_FFFF;
+use crate::portable::ast::AstNode;
 
-/// A cached parse result (16 bytes with alignment padding)
+/// Tag identifying the type of cached AST node
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[repr(u8)]
+pub enum NodeTag {
+    /// Nil/null value
+    #[default]
+    Nil = 0,
+    /// Reference to interned string in arena (data_a = pool_index)
+    StringRef = 1,
+    /// Reference to original input (data_a = offset, data_b = length)
+    InputRef = 2,
+    /// Array of child nodes (data_a = pool_index, data_b = length)
+    Array = 3,
+    /// Hash map (data_a = pool_index, data_b = length)
+    Hash = 4,
+}
+
+impl NodeTag {
+    /// Create from u8, returning None for invalid values
+    #[inline]
+    pub fn from_u8(v: u8) -> Option<Self> {
+        match v {
+            0 => Some(NodeTag::Nil),
+            1 => Some(NodeTag::StringRef),
+            2 => Some(NodeTag::InputRef),
+            3 => Some(NodeTag::Array),
+            4 => Some(NodeTag::Hash),
+            _ => None,
+        }
+    }
+}
+
+/// A cached parse result with inlined node data (24 bytes)
 ///
-/// Field order is optimized to minimize padding:
-/// - u32 fields first (pos, end_pos, packed_ast_ref)
-/// - u16 field last (atom_id)
+/// Instead of storing an index into a separate `cached_nodes: Vec<AstNode>`,
+/// the node data is packed directly into the entry. This eliminates the
+/// separate Vec (saving ~24 bytes per entry for the Vec element + allocation
+/// overhead) and avoids cloning on cache hits.
 ///
-/// The `success` flag is packed into the high bit of `packed_ast_ref`,
-/// allowing 31 bits for the arena node index (max ~2 billion nodes).
-///
-/// Note: While the logical size is 14 bytes, alignment padding brings it to 16 bytes.
-/// This is still optimal for cache line usage (4 entries per 64-byte cache line).
-#[derive(Debug, Clone, Copy, Default)]
+/// Layout: pos(4) + end_pos(4) + data_a(4) + data_b(4) + atom_id(2) + node_tag(1) + success(1) + generation(4) = 24
+#[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub struct CacheEntry {
     /// Position in input
     pub pos: u32,
     /// End position (if success)
     pub end_pos: u32,
-    /// Packed: high bit = success flag, lower 31 bits = arena node index
-    packed_ast_ref: u32,
+    /// Node data field A (pool_index or offset, depending on node_tag)
+    pub node_data_a: u32,
+    /// Node data field B (length, depending on node_tag)
+    pub node_data_b: u32,
     /// Atom ID in grammar
     pub atom_id: u16,
+    /// Type of cached node
+    pub node_tag: NodeTag,
+    /// Whether the parse succeeded
+    pub success: bool,
+    /// Arena generation at time of cache entry creation
+    /// Used to invalidate entries when arena is rolled back
+    pub generation: u32,
+}
+
+impl Default for CacheEntry {
+    fn default() -> Self {
+        Self {
+            pos: 0,
+            end_pos: 0,
+            node_data_a: 0,
+            node_data_b: 0,
+            atom_id: 0,
+            node_tag: NodeTag::Nil,
+            success: false,
+            generation: 0,
+        }
+    }
 }
 
 impl CacheEntry {
-    /// Create a new cache entry
+    /// Create a new cache entry from an AstNode
     #[inline]
-    pub fn new(pos: u32, atom_id: u16, success: bool, end_pos: u32, ast_ref: u32) -> Self {
-        let packed = if success {
-            SUCCESS_BIT | (ast_ref & AST_REF_MASK)
-        } else {
-            ast_ref & AST_REF_MASK
+    pub fn from_node(pos: u32, atom_id: u16, end_pos: u32, node: &AstNode, generation: u32) -> Self {
+        let (tag, data_a, data_b) = match node {
+            AstNode::Nil => (NodeTag::Nil, 0, 0),
+            AstNode::StringRef { pool_index } => (NodeTag::StringRef, *pool_index, 0),
+            AstNode::InputRef { offset, length } => (NodeTag::InputRef, *offset, *length),
+            AstNode::Array { pool_index, length } => (NodeTag::Array, *pool_index, *length),
+            AstNode::Hash { pool_index, length } => (NodeTag::Hash, *pool_index, *length),
+            // Bool, Int, Float, Tagged shouldn't be cached (Tagged is dead code,
+            // scalar types are returned directly without caching)
+            _ => (NodeTag::Nil, 0, 0),
         };
         Self {
             pos,
             end_pos,
-            packed_ast_ref: packed,
+            node_data_a: data_a,
+            node_data_b: data_b,
             atom_id,
+            node_tag: tag,
+            success: true,
+            generation,
         }
     }
 
-    /// Whether the parse succeeded
+    /// Create a failed cache entry
     #[inline]
-    pub fn success(&self) -> bool {
-        (self.packed_ast_ref & SUCCESS_BIT) != 0
-    }
-
-    /// Set the success flag
-    #[inline]
-    pub fn set_success(&mut self, success: bool) {
-        if success {
-            self.packed_ast_ref |= SUCCESS_BIT;
-        } else {
-            self.packed_ast_ref &= !SUCCESS_BIT;
+    pub fn failure(pos: u32, atom_id: u16) -> Self {
+        Self {
+            pos,
+            end_pos: pos,
+            node_data_a: 0,
+            node_data_b: 0,
+            atom_id,
+            node_tag: NodeTag::Nil,
+            success: false,
+            generation: 0, // Failures don't reference arena data
         }
     }
 
-    /// Get the AST reference (arena node index)
+    /// Reconstruct an AstNode from the inlined data
     #[inline]
-    pub fn ast_ref(&self) -> u32 {
-        self.packed_ast_ref & AST_REF_MASK
-    }
-
-    /// Set the AST reference (arena node index)
-    #[inline]
-    pub fn set_ast_ref(&mut self, ast_ref: u32) {
-        self.packed_ast_ref = (self.packed_ast_ref & SUCCESS_BIT) | (ast_ref & AST_REF_MASK);
-    }
-
-    /// Get both success and ast_ref (slightly more efficient when you need both)
-    #[inline]
-    pub fn success_and_ast_ref(&self) -> (bool, u32) {
-        (
-            self.packed_ast_ref & SUCCESS_BIT != 0,
-            self.packed_ast_ref & AST_REF_MASK,
-        )
+    pub fn to_node(&self) -> AstNode {
+        match self.node_tag {
+            NodeTag::Nil => AstNode::Nil,
+            NodeTag::StringRef => AstNode::StringRef {
+                pool_index: self.node_data_a,
+            },
+            NodeTag::InputRef => AstNode::InputRef {
+                offset: self.node_data_a,
+                length: self.node_data_b,
+            },
+            NodeTag::Array => AstNode::Array {
+                pool_index: self.node_data_a,
+                length: self.node_data_b,
+            },
+            NodeTag::Hash => AstNode::Hash {
+                pool_index: self.node_data_a,
+                length: self.node_data_b,
+            },
+        }
     }
 }
 
@@ -123,9 +183,15 @@ pub struct DenseCache {
     /// Load factor threshold (0.0 to 1.0)
     load_factor: f64,
 
+    /// Maximum entries to store (caps memory usage)
+    max_entries: usize,
+
     /// Statistics
     hits: u64,
     misses: u64,
+
+    /// Number of entries dropped due to max_entries cap
+    drops: u64,
 }
 
 impl Default for DenseCache {
@@ -140,14 +206,18 @@ impl DenseCache {
     pub fn new(estimated_entries: usize) -> Self {
         // Round up to power of 2 for fast modulo
         let capacity = estimated_entries.next_power_of_two().max(16);
+        // Cap entries at capacity * load_factor to prevent unbounded growth
+        let max_entries = ((capacity as f64 * 0.75) as usize).max(estimated_entries);
 
         Self {
             slots: vec![-1i32; capacity],
             entries: Vec::with_capacity(estimated_entries),
             capacity,
             load_factor: 0.75,
+            max_entries,
             hits: 0,
             misses: 0,
+            drops: 0,
         }
     }
 
@@ -185,7 +255,7 @@ impl DenseCache {
 
     /// Get a cached entry
     #[inline]
-    pub fn get(&mut self, pos: u32, atom_id: u16) -> Option<&CacheEntry> {
+    pub fn get(&mut self, pos: u32, atom_id: u16, generation: u32) -> Option<&CacheEntry> {
         let mut slot = self.hash(pos, atom_id);
 
         loop {
@@ -199,6 +269,12 @@ impl DenseCache {
 
             let entry = &self.entries[idx as usize];
             if entry.pos == pos && entry.atom_id == atom_id {
+                // Check generation to ensure arena hasn't rolled back
+                if entry.generation != generation {
+                    // Stale entry - arena was rolled back since this was cached
+                    self.misses += 1;
+                    return None;
+                }
                 // Found!
                 self.hits += 1;
                 return Some(entry);
@@ -210,8 +286,17 @@ impl DenseCache {
     }
 
     /// Insert an entry into the cache
+    ///
+    /// If the cache is at max_entries, the entry is silently dropped.
+    /// This caps memory usage by trading some re-parsing for bounded growth.
     #[inline]
     pub fn insert(&mut self, entry: CacheEntry) {
+        // Cap memory: skip insertion if at capacity
+        if self.entries.len() >= self.max_entries {
+            self.drops += 1;
+            return;
+        }
+
         // Check if we need to resize
         if self.entries.len() as f64 / self.capacity as f64 > self.load_factor {
             self.resize();
@@ -228,56 +313,6 @@ impl DenseCache {
         let idx = self.entries.len() as i32;
         self.entries.push(entry);
         self.slots[slot] = idx;
-    }
-
-    /// Get or insert an entry
-    ///
-    /// Returns a mutable reference to the entry and whether it was a cache hit.
-    #[inline]
-    pub fn get_or_insert_with<F>(&mut self, pos: u32, atom_id: u16, f: F) -> (&mut CacheEntry, bool)
-    where
-        F: FnOnce() -> CacheEntry,
-    {
-        // First, try to get
-        let mut slot = self.hash(pos, atom_id);
-
-        loop {
-            let idx = self.slots[slot];
-
-            if idx < 0 {
-                // Not found - insert
-                break;
-            }
-
-            let entry = &self.entries[idx as usize];
-            if entry.pos == pos && entry.atom_id == atom_id {
-                // Found!
-                self.hits += 1;
-                return (&mut self.entries[idx as usize], true);
-            }
-
-            // Linear probing
-            slot = (slot + 1) & (self.capacity - 1);
-        }
-
-        // Need to insert
-        self.misses += 1;
-
-        if self.entries.len() as f64 / self.capacity as f64 > self.load_factor {
-            self.resize();
-            // Recompute slot after resize
-            slot = self.hash(pos, atom_id);
-            while self.slots[slot] >= 0 {
-                slot = (slot + 1) & (self.capacity - 1);
-            }
-        }
-
-        let entry = f();
-        let idx = self.entries.len();
-        self.entries.push(entry);
-        self.slots[slot] = idx as i32;
-
-        (&mut self.entries[idx], false)
     }
 
     /// Clear the cache
@@ -424,16 +459,22 @@ mod tests {
     fn test_basic_operations() {
         let mut cache = DenseCache::new(16);
 
-        // Insert using new constructor
-        cache.insert(CacheEntry::new(0, 1, true, 5, 0));
+        // Insert a successful entry with InputRef node
+        let node = AstNode::InputRef {
+            offset: 0,
+            length: 5,
+        };
+        cache.insert(CacheEntry::from_node(0, 1, 5, &node, 0));
 
         // Get
         let entry = cache.get(0, 1);
         assert!(entry.is_some());
         let entry = entry.unwrap();
-        assert!(entry.success());
+        assert!(entry.success);
         assert_eq!(entry.end_pos, 5);
-        assert_eq!(entry.ast_ref(), 0);
+        assert_eq!(entry.node_tag, NodeTag::InputRef);
+        assert_eq!(entry.node_data_a, 0);
+        assert_eq!(entry.node_data_b, 5);
     }
 
     #[test]
@@ -442,13 +483,11 @@ mod tests {
 
         // Insert multiple entries
         for i in 0..10 {
-            cache.insert(CacheEntry::new(
-                i * 100,
-                (i % 5) as u16,
-                true,
-                (i + 1) * 100,
-                i,
-            ));
+            let node = AstNode::InputRef {
+                offset: i * 100,
+                length: 100,
+            };
+            cache.insert(CacheEntry::from_node(i * 100, (i % 5) as u16, (i + 1) * 100, &node, 0));
         }
 
         // Verify all can be retrieved
@@ -472,11 +511,16 @@ mod tests {
 
     #[test]
     fn test_resize() {
-        let mut cache = DenseCache::new(4);
+        // Use a large enough estimated size so max_entries doesn't cap inserts
+        let mut cache = DenseCache::new(128);
 
         // Insert enough entries to trigger resize
         for i in 0..100 {
-            cache.insert(CacheEntry::new(i, 0, true, i + 1, i));
+            let node = AstNode::InputRef {
+                offset: i,
+                length: 1,
+            };
+            cache.insert(CacheEntry::from_node(i, 0, i + 1, &node, 0));
         }
 
         // All entries should still be accessible
@@ -487,26 +531,11 @@ mod tests {
     }
 
     #[test]
-    fn test_get_or_insert() {
-        let mut cache = DenseCache::new(16);
-
-        // First call should insert
-        let (entry, was_hit) = cache.get_or_insert_with(0, 1, || CacheEntry::new(0, 1, true, 5, 0));
-        assert!(!was_hit);
-        assert!(entry.success());
-
-        // Second call should hit
-        let (entry, was_hit) =
-            cache.get_or_insert_with(0, 1, || CacheEntry::new(0, 1, false, 0, 0));
-        assert!(was_hit);
-        assert!(entry.success()); // Should still have original value
-    }
-
-    #[test]
     fn test_clear() {
         let mut cache = DenseCache::new(16);
 
-        cache.insert(CacheEntry::new(0, 1, true, 5, 0));
+        let node = AstNode::Nil;
+        cache.insert(CacheEntry::from_node(0, 1, 5, &node, 0));
 
         assert!(!cache.is_empty());
 
@@ -520,7 +549,8 @@ mod tests {
     fn test_hit_rate() {
         let mut cache = DenseCache::new(16);
 
-        cache.insert(CacheEntry::new(0, 1, true, 5, 0));
+        let node = AstNode::Nil;
+        cache.insert(CacheEntry::from_node(0, 1, 5, &node, 0));
 
         // Hit
         cache.get(0, 1);
@@ -537,68 +567,56 @@ mod tests {
 
     #[test]
     fn test_cache_entry_size() {
-        // CacheEntry uses bit packing for cleaner API:
-        // - success flag is packed into the high bit of packed_ast_ref
-        // - Field layout: pos(4) + end_pos(4) + packed_ast_ref(4) + atom_id(2) + padding(2) = 16 bytes
-        // - The 2 bytes of trailing padding are unavoidable due to u32 alignment
-        // - Still optimal for cache line usage (4 entries per 64-byte cache line)
-        assert_eq!(std::mem::size_of::<CacheEntry>(), 16);
+        // CacheEntry with inlined node data:
+        // pos(4) + end_pos(4) + data_a(4) + data_b(4) + atom_id(2) + tag(1) + success(1) = 20
+        assert_eq!(std::mem::size_of::<CacheEntry>(), 20);
         assert_eq!(std::mem::align_of::<CacheEntry>(), 4);
     }
 
     #[test]
-    fn test_cache_entry_packing() {
-        // Test success=true, ast_ref=0
-        let entry = CacheEntry::new(0, 0, true, 0, 0);
-        assert!(entry.success());
-        assert_eq!(entry.ast_ref(), 0);
+    fn test_node_reconstruction() {
+        // Test Nil
+        let entry = CacheEntry::from_node(0, 0, 0, &AstNode::Nil, 0);
+        assert!(entry.success);
+        assert_eq!(entry.node_tag, NodeTag::Nil);
+        assert_eq!(entry.to_node(), AstNode::Nil);
 
-        // Test success=true, ast_ref=12345
-        let entry = CacheEntry::new(0, 0, true, 0, 12345);
-        assert!(entry.success());
-        assert_eq!(entry.ast_ref(), 12345);
+        // Test StringRef
+        let node = AstNode::StringRef { pool_index: 42 };
+        let entry = CacheEntry::from_node(0, 0, 5, &node, 0);
+        assert_eq!(entry.to_node(), node);
 
-        // Test success=false, ast_ref=12345
-        let entry = CacheEntry::new(0, 0, false, 0, 12345);
-        assert!(!entry.success());
-        assert_eq!(entry.ast_ref(), 12345);
+        // Test InputRef
+        let node = AstNode::InputRef {
+            offset: 100,
+            length: 20,
+        };
+        let entry = CacheEntry::from_node(0, 0, 120, &node, 0);
+        assert_eq!(entry.to_node(), node);
 
-        // Test max ast_ref (2^31 - 1)
-        let max_ref = 0x7FFF_FFFF;
-        let entry = CacheEntry::new(0, 0, true, 0, max_ref);
-        assert!(entry.success());
-        assert_eq!(entry.ast_ref(), max_ref);
+        // Test Array
+        let node = AstNode::Array {
+            pool_index: 500,
+            length: 3,
+        };
+        let entry = CacheEntry::from_node(0, 0, 0, &node, 0);
+        assert_eq!(entry.to_node(), node);
 
-        // Test that ast_ref values above 2^31 are masked
-        let entry = CacheEntry::new(0, 0, false, 0, 0xFFFF_FFFF);
-        assert!(!entry.success());
-        assert_eq!(entry.ast_ref(), max_ref); // Should be masked to 2^31 - 1
+        // Test Hash
+        let node = AstNode::Hash {
+            pool_index: 1000,
+            length: 5,
+        };
+        let entry = CacheEntry::from_node(0, 0, 0, &node, 0);
+        assert_eq!(entry.to_node(), node);
     }
 
     #[test]
-    fn test_cache_entry_setters() {
-        let mut entry = CacheEntry::new(10, 5, true, 20, 100);
-
-        // Test set_success
-        entry.set_success(false);
-        assert!(!entry.success());
-        assert_eq!(entry.ast_ref(), 100); // ast_ref should be preserved
-
-        entry.set_success(true);
-        assert!(entry.success());
-        assert_eq!(entry.ast_ref(), 100);
-
-        // Test set_ast_ref
-        entry.set_ast_ref(200);
-        assert_eq!(entry.ast_ref(), 200);
-        assert!(entry.success()); // success should be preserved
-    }
-
-    #[test]
-    fn test_success_and_ast_ref() {
-        let entry = CacheEntry::new(0, 0, true, 0, 12345);
-        let (success, ast_ref) = entry.success_and_ast_ref();
-        assert!(success);
-        assert_eq!(ast_ref, 12345);
+    fn test_failure_entry() {
+        let entry = CacheEntry::failure(100, 42);
+        assert!(!entry.success);
+        assert_eq!(entry.pos, 100);
+        assert_eq!(entry.atom_id, 42);
+        assert_eq!(entry.node_tag, NodeTag::Nil);
     }
 }

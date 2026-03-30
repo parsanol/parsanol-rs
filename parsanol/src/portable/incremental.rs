@@ -305,9 +305,6 @@ pub struct IncrementalParser<'a> {
     /// Packrat cache (preserved across parses)
     cache: DenseCache,
 
-    /// Cached AST nodes (preserved across parses, referenced by cache entries)
-    cached_nodes: Vec<AstNode>,
-
     /// Dirty region tracker
     dirty_tracker: DirtyRegionTracker,
 
@@ -322,7 +319,6 @@ impl<'a> IncrementalParser<'a> {
         Self {
             grammar,
             cache: DenseCache::new(4096),
-            cached_nodes: Vec::new(),
             dirty_tracker: DirtyRegionTracker::new(),
             prev_input_len: 0,
         }
@@ -332,7 +328,6 @@ impl<'a> IncrementalParser<'a> {
     pub fn parse(&mut self, input: &str, arena: &mut AstArena) -> Result<AstNode, ParseError> {
         // Clear previous state
         self.cache.clear();
-        self.cached_nodes.clear();
         self.dirty_tracker.clear();
         self.prev_input_len = input.len();
 
@@ -341,9 +336,7 @@ impl<'a> IncrementalParser<'a> {
         let result = parser.parse();
 
         // Preserve cache for incremental parsing
-        let (cache, cached_nodes) = parser.into_cache();
-        self.cache = cache;
-        self.cached_nodes = cached_nodes;
+        self.cache = parser.into_cache();
 
         result
     }
@@ -478,16 +471,13 @@ impl<'a> IncrementalParser<'a> {
             input,
             arena,
             std::mem::take(&mut self.cache),
-            std::mem::take(&mut self.cached_nodes),
         );
 
         // Parse
         let result = parser.parse();
 
         // Extract and preserve cache for next incremental parse
-        let (cache, cached_nodes) = parser.into_cache();
-        self.cache = cache;
-        self.cached_nodes = cached_nodes;
+        self.cache = parser.into_cache();
 
         result
     }
@@ -507,7 +497,6 @@ impl<'a> IncrementalParser<'a> {
     /// Clear all cached state
     pub fn clear(&mut self) {
         self.cache.clear();
-        self.cached_nodes.clear();
         self.dirty_tracker.clear();
         self.prev_input_len = 0;
     }

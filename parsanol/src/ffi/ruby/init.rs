@@ -6,8 +6,9 @@ use super::dynamic::{
     register_ruby_callback_with_global_registry, unregister_ruby_callback_from_global_registry,
 };
 use super::parser::{
-    clear_grammar_cache, grammar_cache_capacity, grammar_cache_size, is_available, parse,
-    parse_batch, parse_with_builder, parse_with_stats,
+    cacheable_atom_count, clear_grammar_cache, grammar_cache_capacity, grammar_cache_size,
+    is_available, optimized_atom_count, parse, parse_batch, parse_fresh, parse_with_builder,
+    parse_with_stats,
 };
 use crate::portable::dynamic::{
     clear_dynamic_callbacks, dynamic_callback_count, get_dynamic_callback_description,
@@ -79,6 +80,9 @@ pub fn init(ruby: &Ruby) -> Result<(), Error> {
     // Named _parse_raw to avoid conflict with Ruby wrapper's parse method
     native_module.define_module_function("_parse_raw", function!(parse, 2))?;
 
+    // Memory-bounded parsing - no cache, fresh arena per call
+    native_module.define_module_function("_parse_fresh_raw", function!(parse_fresh, 2))?;
+
     // Batch parsing method - returns flat u64 array for minimal FFI overhead
     // Named _parse_batch_raw to avoid conflict with Ruby wrapper's parse_batch method
     native_module.define_module_function("_parse_batch_raw", function!(parse_batch, 2))?;
@@ -130,6 +134,14 @@ pub fn init(ruby: &Ruby) -> Result<(), Error> {
     native_module.define_module_function("callback_count", function!(ruby_callback_count, 0))?;
     native_module.define_module_function("clear_callbacks", function!(ruby_clear_callbacks, 0))?;
     native_module.define_module_function("has_callback", function!(ruby_has_callback, 1))?;
+    native_module.define_module_function(
+        "optimized_atom_count",
+        function!(optimized_atom_count, 1),
+    )?;
+    native_module.define_module_function(
+        "cacheable_atom_count",
+        function!(cacheable_atom_count, 1),
+    )?;
 
     Ok(())
 }

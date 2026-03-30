@@ -3,7 +3,7 @@
 //! Mutable state during parsing.
 
 use crate::portable::arena::AstArena;
-use crate::portable::ast::{AstNode, ParseError};
+use crate::portable::ast::ParseError;
 use crate::portable::cache::DenseCache;
 
 use super::config::TIMEOUT_CHECK_INTERVAL;
@@ -19,9 +19,6 @@ pub struct ParseContext<'a> {
     /// Packrat memoization cache
     pub cache: DenseCache,
 
-    /// Cached AST nodes for cache hits (stored separately to avoid lifetime issues)
-    pub cached_nodes: Vec<AstNode>,
-
     /// Current recursion depth (tracked during parsing)
     pub current_depth: usize,
 
@@ -36,12 +33,10 @@ impl<'a> ParseContext<'a> {
     /// Create a new parse context
     pub fn new(arena: &'a mut AstArena, input_len: usize, atom_count: usize) -> Self {
         let cache = DenseCache::for_input(input_len, atom_count);
-        let estimated_cache_entries = (input_len / 10).clamp(64, 10000);
 
         Self {
             arena,
             cache,
-            cached_nodes: Vec::with_capacity(estimated_cache_entries),
             current_depth: 0,
             start_time: None,
             op_count: 0,
@@ -52,12 +47,10 @@ impl<'a> ParseContext<'a> {
     pub fn with_cache(
         arena: &'a mut AstArena,
         cache: DenseCache,
-        cached_nodes: Vec<AstNode>,
     ) -> Self {
         Self {
             arena,
             cache,
-            cached_nodes,
             current_depth: 0,
             start_time: None,
             op_count: 0,
@@ -67,35 +60,20 @@ impl<'a> ParseContext<'a> {
     /// Reset context for parsing new input
     pub fn reset(&mut self, input_len: usize, atom_count: usize) {
         self.cache = DenseCache::for_input(input_len, atom_count);
-        self.cached_nodes.clear();
         self.current_depth = 0;
         self.start_time = None;
         self.op_count = 0;
     }
 
-    /// Extract the cache and cached nodes from this context
-    pub fn into_cache(self) -> (DenseCache, Vec<AstNode>) {
-        (self.cache, self.cached_nodes)
+    /// Extract the cache from this context
+    pub fn into_cache(self) -> DenseCache {
+        self.cache
     }
 
     /// Get current memory usage estimate
     #[inline]
     pub fn memory_usage(&self) -> usize {
         self.arena.memory_usage() + self.cache.memory_usage()
-    }
-
-    /// Store a cached node and return its index
-    #[inline(always)]
-    pub fn store_cached_node(&mut self, node: AstNode) -> u32 {
-        let idx = self.cached_nodes.len() as u32;
-        self.cached_nodes.push(node);
-        idx
-    }
-
-    /// Get a cached node by index
-    #[inline]
-    pub fn get_cached_node(&self, idx: u32) -> AstNode {
-        self.cached_nodes[idx as usize].clone()
     }
 
     /// Enter a recursive call, incrementing depth counter
