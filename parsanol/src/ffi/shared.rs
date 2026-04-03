@@ -194,17 +194,6 @@ pub fn flatten_ast_to_u64(node: &AstNode, arena: &AstArena, _input: &str, output
             }
             output.push(TAG_HASH_END);
         }
-        AstNode::Tagged { tag, value } => {
-            // Get the tag string from the pool
-            let (tag_str, _, _, _) = arena.get_string_parts(*tag as usize);
-            if tag_str == ":repetition" {
-                output.push(TAG_REPETITION);
-            } else {
-                output.push(TAG_SEQUENCE);
-            }
-            // Flatten the inner value
-            flatten_ast_to_u64(value, arena, _input, output);
-        }
     }
 }
 

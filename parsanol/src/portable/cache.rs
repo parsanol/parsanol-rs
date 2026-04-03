@@ -119,8 +119,7 @@ impl CacheEntry {
             AstNode::InputRef { offset, length } => (NodeTag::InputRef, *offset, *length),
             AstNode::Array { pool_index, length } => (NodeTag::Array, *pool_index, *length),
             AstNode::Hash { pool_index, length } => (NodeTag::Hash, *pool_index, *length),
-            // Bool, Int, Float, Tagged shouldn't be cached (Tagged is dead code,
-            // scalar types are returned directly without caching)
+            // Bool, Int, Float shouldn't be cached (scalar types returned directly)
             _ => (NodeTag::Nil, 0, 0),
         };
         Self {

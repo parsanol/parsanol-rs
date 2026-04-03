@@ -729,12 +729,6 @@ fn transform_ast_internal(
 
             Ok(hash.as_value())
         }
-
-        AstNode::Tagged { tag: _, value } => {
-            // Tagged nodes should have been processed by to_parslet_compatible already
-            // For safety, just transform the inner value
-            transform_ast_internal(value, arena, input, input_val, ruby, depth)
-        }
     }
 }
 

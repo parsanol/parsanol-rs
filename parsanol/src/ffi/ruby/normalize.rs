@@ -251,11 +251,5 @@ fn normalize_ast_internal(
 
             Ok(hash.as_value())
         }
-
-        AstNode::Tagged { tag: _, value } => {
-            // Tagged nodes should have been processed by to_parslet_compatible already
-            // For safety, just normalize the inner value
-            normalize_ast_internal(value, arena, input, input_val, ruby)
-        }
     }
 }
