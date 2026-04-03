@@ -63,16 +63,6 @@ pub enum AstNode {
         /// Number of entries
         length: u32,
     },
-
-    /// Tagged node for batch encoding (repetition/sequence markers)
-    ///
-    /// Used to preserve repetition/sequence semantics in the batch format.
-    Tagged {
-        /// Pool index of the tag string (":repetition" or ":sequence")
-        tag: u32,
-        /// Inner AST node (typically an Array)
-        value: Box<AstNode>,
-    },
 }
 
 // Manual PartialEq implementation (f64 doesn't impl Eq)
@@ -114,9 +104,6 @@ impl PartialEq for AstNode {
                     length: l2,
                 },
             ) => p1 == p2 && l1 == l2,
-            (AstNode::Tagged { tag: t1, value: v1 }, AstNode::Tagged { tag: t2, value: v2 }) => {
-                t1 == t2 && *v1 == *v2
-            }
             _ => false,
         }
     }
