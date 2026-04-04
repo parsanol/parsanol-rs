@@ -107,11 +107,6 @@ impl TreePrinter {
                 }
                 writeln!(output, "{}}}", indent).unwrap();
             }
-            AstNode::Tagged { tag, value } => {
-                let tag_str = arena.get_string(*tag as usize);
-                writeln!(output, "{}{}:", indent, tag_str).unwrap();
-                self.print_node(value, arena, input, depth + 1, output);
-            }
         }
     }
 }
