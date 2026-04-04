@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Other
+
+- Remove dead AstNode::Tagged variant ([#50](https://github.com/parsanol/parsanol-rs/pull/50)) by @[object]
+
 ### Added
 
 - Further fixes by @[object]
