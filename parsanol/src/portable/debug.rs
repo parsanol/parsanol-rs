@@ -225,7 +225,9 @@ impl<'a> GrammarVisualizer<'a> {
             Atom::Re { pattern } => format!("re({:?})", pattern),
             Atom::Sequence { atoms } => format!("seq({})", atoms.len()),
             Atom::Alternative { atoms } => format!("alt({})", atoms.len()),
-            Atom::Repetition { atom: _, min, max } => {
+            Atom::Repetition {
+                atom: _, min, max, ..
+            } => {
                 let max_str = max
                     .map(|m| m.to_string())
                     .unwrap_or_else(|| "∞".to_string());

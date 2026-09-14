@@ -99,7 +99,7 @@ impl Compiler {
             Atom::Re { pattern } => self.compile_re(&pattern),
             Atom::Sequence { atoms } => self.compile_sequence(&atoms),
             Atom::Alternative { atoms } => self.compile_alternative(&atoms),
-            Atom::Repetition { atom, min, max } => self.compile_repetition(atom, min, max),
+            Atom::Repetition { atom, min, max, .. } => self.compile_repetition(atom, min, max),
             Atom::Named { name, atom } => self.compile_named(&name, atom),
             Atom::Entity { atom } => self.compile_entity(atom),
             Atom::Lookahead { atom, positive } => self.compile_lookahead(atom, positive),
@@ -730,6 +730,7 @@ pub fn compile(grammar: Grammar) -> Result<Program, CompileError> {
 mod tests {
     use super::*;
     use crate::portable::grammar::Atom;
+    use crate::portable::grammar::RepetitionTag;
 
     fn make_simple_grammar() -> Grammar {
         let mut grammar = Grammar::new();
@@ -810,6 +811,7 @@ mod tests {
             atom: a,
             min: 0,
             max: None,
+            tag: RepetitionTag::Repetition,
         });
         grammar.root = 1;
 

@@ -6,6 +6,7 @@
 use super::*;
 use crate::portable::ast::AstNode;
 use crate::portable::bytecode::backend::Parser;
+use crate::portable::grammar::RepetitionTag;
 
 #[test]
 fn test_backend_parity_simple_capture() {
@@ -136,6 +137,7 @@ fn test_backend_parity_capture_with_repetition() {
         atom: a,
         min: 1,
         max: None,
+        tag: RepetitionTag::Repetition,
     });
     let letters = grammar.add_atom(Atom::Named {
         // 2
@@ -294,6 +296,7 @@ fn test_backend_parity_exponential_safe() {
         atom: a,
         min: 0,
         max: None,
+        tag: RepetitionTag::Repetition,
     });
 
     let second_rep = grammar.add_atom(Atom::Repetition {
@@ -301,6 +304,7 @@ fn test_backend_parity_exponential_safe() {
         atom: a,
         min: 0,
         max: None,
+        tag: RepetitionTag::Repetition,
     });
 
     let seq = grammar.add_atom(Atom::Sequence {
@@ -335,6 +339,7 @@ fn test_backend_parity_nested_repetition() {
         atom: a,
         min: 1,
         max: None,
+        tag: RepetitionTag::Repetition,
     });
 
     let outer = grammar.add_atom(Atom::Repetition {
@@ -342,6 +347,7 @@ fn test_backend_parity_nested_repetition() {
         atom: inner,
         min: 1,
         max: None,
+        tag: RepetitionTag::Repetition,
     });
 
     grammar.root = outer;
@@ -379,6 +385,7 @@ fn test_backend_parity_choice_in_repetition() {
         atom: choice,
         min: 0,
         max: None,
+        tag: RepetitionTag::Repetition,
     });
 
     grammar.root = rep;
@@ -464,6 +471,7 @@ fn test_backend_parity_empty_match() {
         atom: a,
         min: 0,
         max: None,
+        tag: RepetitionTag::Repetition,
     });
 
     grammar.root = rep;

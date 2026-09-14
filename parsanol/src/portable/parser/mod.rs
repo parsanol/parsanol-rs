@@ -30,7 +30,7 @@ use crate::portable::ast::{AstNode, ParseError, ParseResult};
 use crate::portable::cache::{CacheEntry, DenseCache};
 use crate::portable::capture_state::CaptureState;
 use crate::portable::char_class::{utf8_char_len, CharacterPattern};
-use crate::portable::grammar::{Atom, Grammar};
+use crate::portable::grammar::{Atom, Grammar, RepetitionTag};
 use crate::portable::regex_cache;
 
 /// Logging macros - no-op when logging feature is disabled
@@ -422,9 +422,12 @@ impl<'a> PortableParser<'a> {
                 Atom::Re { pattern } => self.parse_re(pattern, pos),
                 Atom::Sequence { atoms } => self.parse_sequence(atoms, pos),
                 Atom::Alternative { atoms } => self.parse_alternative(atoms, pos),
-                Atom::Repetition { atom, min, max } => {
-                    self.parse_repetition(*atom, *min, *max, pos)
-                }
+                Atom::Repetition {
+                    atom,
+                    min,
+                    max,
+                    tag,
+                } => self.parse_repetition(*atom, *min, *max, *tag, pos),
                 Atom::Named { name, atom } => self.parse_named(name, *atom, pos),
                 Atom::Entity { atom } => {
                     self.enter_recursive()?;
@@ -598,12 +601,13 @@ impl<'a> PortableParser<'a> {
         atom_id: usize,
         min: usize,
         max: Option<usize>,
+        tag: RepetitionTag,
         pos: usize,
     ) -> Result<ParseResult, ParseError> {
         // Check for SIMD optimization
         if let Some(Atom::Re { pattern }) = self.grammar.get_atom(atom_id) {
             if let Some(char_pattern) = CharacterPattern::from_pattern(pattern) {
-                return self.parse_repetition_bulk(char_pattern.predicate(), min, max, pos);
+                return self.parse_repetition_bulk(char_pattern.predicate(), min, max, tag, pos);
             }
         }
 
@@ -634,8 +638,24 @@ impl<'a> PortableParser<'a> {
             return Err(ParseError::Failed { position: pos });
         }
 
-        // Tag the array with :repetition for proper transformation
-        let (pool_idx, len) = self.arena.store_tagged_array(":repetition", &items);
+        // A PRESENT optional flattens to its value in every context
+        // ([:maybe, v] -> v), so only the absent case needs the tag
+        if tag == RepetitionTag::Maybe && items.len() == 1 {
+            let value = items.pop().unwrap_or(AstNode::Nil);
+            return Ok(ParseResult {
+                value,
+                end_pos: current_pos,
+                capture_state: None,
+            });
+        }
+
+        // Tag the array for proper transformation: :maybe flattens to
+        // nil-or-value, :repetition flattens to an array
+        let tag_str = match tag {
+            RepetitionTag::Maybe => ":maybe",
+            RepetitionTag::Repetition => ":repetition",
+        };
+        let (pool_idx, len) = self.arena.store_tagged_array(tag_str, &items);
         Ok(ParseResult {
             value: AstNode::Array {
                 pool_index: pool_idx,
@@ -652,6 +672,7 @@ impl<'a> PortableParser<'a> {
         predicate: fn(u8) -> bool,
         min: usize,
         max: Option<usize>,
+        tag: RepetitionTag,
         pos: usize,
     ) -> Result<ParseResult, ParseError> {
         use simd::skip_while;
@@ -674,8 +695,24 @@ impl<'a> PortableParser<'a> {
         };
 
         let actual_count = actual_end - pos;
+        let value = if tag == RepetitionTag::Maybe {
+            if actual_count == 1 {
+                // Present optional flattens to its value: no tag needed
+                self.arena.input_ref(pos, actual_count)
+            } else {
+                // Absent optional keeps the tag so downstream flattening
+                // yields nil (named) or "" (unnamed), never an empty match
+                let (pool_idx, len) = self.arena.store_tagged_array(":maybe", &[]);
+                AstNode::Array {
+                    pool_index: pool_idx,
+                    length: len,
+                }
+            }
+        } else {
+            self.arena.input_ref(pos, actual_count)
+        };
         Ok(ParseResult {
-            value: self.arena.input_ref(pos, actual_count),
+            value,
             end_pos: actual_end,
             capture_state: None,
         })

@@ -4,6 +4,7 @@
 
 use super::*;
 use crate::portable::bytecode::backend::{Backend, GrammarAnalysis, Parser};
+use crate::portable::grammar::RepetitionTag;
 
 #[test]
 fn test_backend_selection() {
@@ -302,11 +303,13 @@ fn test_backend_parity_complex_sequence() {
         atom: b,
         min: 1,
         max: None,
+        tag: RepetitionTag::Repetition,
     });
     let c_opt = grammar.add_atom(Atom::Repetition {
         atom: c,
         min: 0,
         max: Some(1),
+        tag: RepetitionTag::Repetition,
     });
     grammar.add_atom(Atom::Sequence {
         atoms: vec![a, b_plus, c_opt],

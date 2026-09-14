@@ -203,8 +203,12 @@ pub fn parse(grammar_json: String, input: String) -> Result<Value, Error> {
         .parse()
         .map_err(|e| Error::new(ruby.exception_runtime_error(), e.to_string()))?;
 
+    // Collapse adjacent input refs in the arena first: the join happens with
+    // zero Ruby object churn, so transform_ast only builds final values.
+    let collapsed = super::transform::collapse_ast(&ast, &mut arena);
+
     // Transform AST to Ruby format with full sequence/repetition handling
-    transform_ast(&ast, &arena, &input, &ruby)
+    transform_ast(&collapsed, &arena, &input, &ruby)
 }
 
 /// Parse without packrat caching for memory-bounded operation
