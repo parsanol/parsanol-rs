@@ -4,6 +4,7 @@
 
 use super::*;
 use crate::portable::bytecode::backend::Parser;
+use crate::portable::grammar::RepetitionTag;
 
 #[test]
 fn test_backend_parity_json_string() {
@@ -20,6 +21,7 @@ fn test_backend_parity_json_string() {
         atom: string_char,
         min: 0,
         max: None,
+        tag: RepetitionTag::Repetition,
     });
     let json_string = grammar.add_atom(Atom::Sequence {
         atoms: vec![quote, string_content, quote],
@@ -64,6 +66,7 @@ fn test_backend_parity_json_number() {
         atom: digit,
         min: 1,
         max: None,
+        tag: RepetitionTag::Repetition,
     });
 
     grammar.root = number;
@@ -195,11 +198,13 @@ fn test_backend_parity_deeply_nested_repetition() {
         atom: a,
         min: 1,
         max: None,
+        tag: RepetitionTag::Repetition,
     });
     let outer_plus = grammar.add_atom(Atom::Repetition {
         atom: a_plus,
         min: 1,
         max: None,
+        tag: RepetitionTag::Repetition,
     });
 
     grammar.root = outer_plus;
@@ -239,6 +244,7 @@ fn test_backend_parity_many_optional() {
         atom: a,
         min: 0,
         max: Some(1),
+        tag: RepetitionTag::Repetition,
     });
 
     // Sequence of 5 optional 'a's
@@ -281,6 +287,7 @@ fn test_backend_parity_complex_json_like() {
         atom: string_content,
         min: 0,
         max: None,
+        tag: RepetitionTag::Repetition,
     });
     let string_value = grammar.add_atom(Atom::Sequence {
         atoms: vec![quote, string_inner, quote],
@@ -293,6 +300,7 @@ fn test_backend_parity_complex_json_like() {
         atom: digit,
         min: 1,
         max: None,
+        tag: RepetitionTag::Repetition,
     });
 
     // Value = string | number
@@ -317,6 +325,7 @@ fn test_backend_parity_complex_json_like() {
         atom: comma_value,
         min: 0,
         max: None,
+        tag: RepetitionTag::Repetition,
     });
 
     // Array = '[' value (',' value)* ']'

@@ -243,6 +243,7 @@ impl FirstSetAnalysis {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::portable::grammar::RepetitionTag;
 
     #[test]
     fn test_fixed_len_analysis_str() {
@@ -296,6 +297,7 @@ mod tests {
             atom: 0,
             min: 0,
             max: None,
+            tag: RepetitionTag::Repetition,
         };
         assert_eq!(analysis.analyze(&atom), PatternNullability::Nullable);
     }

@@ -13,7 +13,7 @@ mod captures;
 mod complex;
 mod parity;
 
-use crate::portable::grammar::{Atom, Grammar};
+use crate::portable::grammar::{Atom, Grammar, RepetitionTag};
 
 // ========================================================================
 // Shared Grammar Builders
@@ -63,6 +63,7 @@ pub fn repetition_grammar() -> Grammar {
         atom: a,
         min: 0,
         max: None,
+        tag: RepetitionTag::Repetition,
     });
     grammar.root = 1;
     grammar
@@ -133,6 +134,7 @@ pub fn optional_grammar() -> Grammar {
         atom: a,
         min: 0,
         max: Some(1),
+        tag: RepetitionTag::Repetition,
     });
     grammar.add_atom(Atom::Sequence {
         atoms: vec![a_opt, b],
@@ -151,6 +153,7 @@ pub fn one_or_more_grammar() -> Grammar {
         atom: a,
         min: 1,
         max: None,
+        tag: RepetitionTag::Repetition,
     });
     grammar.root = 1;
     grammar
@@ -168,6 +171,7 @@ pub fn arithmetic_grammar() -> Grammar {
         atom: digit,
         min: 1,
         max: None,
+        tag: RepetitionTag::Repetition,
     });
 
     // Operators
@@ -189,6 +193,7 @@ pub fn arithmetic_grammar() -> Grammar {
         atom: ws,
         min: 0,
         max: None,
+        tag: RepetitionTag::Repetition,
     });
 
     // expr = ws* number (ws* op ws* number)*
@@ -199,6 +204,7 @@ pub fn arithmetic_grammar() -> Grammar {
         atom: op_and_num,
         min: 0,
         max: None,
+        tag: RepetitionTag::Repetition,
     });
 
     let expr = grammar.add_atom(Atom::Sequence {

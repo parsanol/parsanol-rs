@@ -14,7 +14,7 @@
 //!     .build();
 //! ```
 
-use super::grammar::{Atom, Grammar};
+use super::grammar::{Atom, Grammar, RepetitionTag};
 use std::collections::HashMap;
 
 /// Parslet trait - implemented by all parser combinators
@@ -327,10 +327,16 @@ fn remap_atom(atom: &Atom, offset: usize) -> Atom {
         Atom::Alternative { atoms } => Atom::Alternative {
             atoms: atoms.iter().map(|&idx| idx + offset).collect(),
         },
-        Atom::Repetition { atom, min, max } => Atom::Repetition {
+        Atom::Repetition {
+            atom,
+            min,
+            max,
+            tag,
+        } => Atom::Repetition {
             atom: atom + offset,
             min: *min,
             max: *max,
+            tag: *tag,
         },
         Atom::Named { name, atom } => Atom::Named {
             name: name.clone(),
@@ -597,6 +603,7 @@ pub struct Repeat<P> {
     inner: P,
     min: usize,
     max: Option<usize>,
+    tag: RepetitionTag,
 }
 
 impl<P: Parslet> Parslet for Repeat<P> {
@@ -606,6 +613,7 @@ impl<P: Parslet> Parslet for Repeat<P> {
             atom: inner_idx,
             min: self.min,
             max: self.max,
+            tag: self.tag,
         })
     }
 }
@@ -780,6 +788,7 @@ pub trait ParsletExt: Parslet + Sized {
             inner: self,
             min,
             max,
+            tag: RepetitionTag::Repetition,
         }
     }
 
@@ -789,6 +798,7 @@ pub trait ParsletExt: Parslet + Sized {
             inner: self,
             min: 0,
             max: None,
+            tag: RepetitionTag::Repetition,
         }
     }
 
@@ -798,6 +808,7 @@ pub trait ParsletExt: Parslet + Sized {
             inner: self,
             min: 1,
             max: None,
+            tag: RepetitionTag::Repetition,
         }
     }
 
@@ -807,6 +818,7 @@ pub trait ParsletExt: Parslet + Sized {
             inner: self,
             min: 0,
             max: Some(1),
+            tag: RepetitionTag::Maybe,
         }
     }
 

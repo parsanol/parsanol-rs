@@ -21,7 +21,7 @@
 //! }
 //! ```
 
-use crate::portable::grammar::{Atom, Grammar};
+use crate::portable::grammar::{Atom, Grammar, RepetitionTag};
 use std::collections::{HashMap, HashSet};
 
 /// Kind of grammar warning
@@ -402,6 +402,7 @@ impl<'a> GrammarAnalyzer<'a> {
             if let Atom::Repetition {
                 min: 0,
                 max: Some(0),
+                tag: RepetitionTag::Repetition,
                 ..
             } = atom
             {
@@ -687,6 +688,7 @@ mod tests {
             atom: 0,
             min: 0,
             max: Some(0),
+            tag: RepetitionTag::Repetition,
         });
         grammar.root = 1;
 
@@ -717,11 +719,13 @@ mod tests {
             atom: 0,
             min: 0,
             max: None,
+            tag: RepetitionTag::Repetition,
         });
         grammar.add_atom(Atom::Repetition {
             atom: 1,
             min: 0,
             max: None,
+            tag: RepetitionTag::Repetition,
         });
         grammar.root = 2;
 
@@ -744,6 +748,7 @@ mod tests {
             atom: 1,
             min: 0,
             max: None,
+            tag: RepetitionTag::Repetition,
         }); // Nullable (min=0)
         grammar.root = 2;
 

@@ -3,9 +3,127 @@
 //! This module provides transformation from raw native AST to clean format.
 //! It implements the merge_fold logic to match Ruby's flatten output.
 
-use magnus::{value::ReprValue, Error, IntoValue, RArray, Ruby, Value};
-
 use crate::portable::{AstArena, AstNode};
+use magnus::{value::ReprValue, Error, IntoValue, RArray, Ruby, Symbol, Value};
+
+/// Whether a node is an empty `[:maybe]` tagged array: an absent optional,
+/// which contributes zero bytes to a sequence fold.
+fn is_empty_maybe(node: &AstNode, arena: &AstArena) -> bool {
+    if let AstNode::Array { pool_index, length } = node {
+        if *length == 1 {
+            let items = arena.get_array(*pool_index as usize, *length as usize);
+            if let Some(AstNode::StringRef {
+                pool_index: tag_idx,
+            }) = items.first()
+            {
+                let (tag, _, _, _) = arena.get_string_parts(*tag_idx as usize);
+                return tag == ":maybe";
+            }
+        }
+    }
+    false
+}
+
+/// Bottom-up arena-level pre-pass that collapses runs of adjacent InputRefs
+/// into a single InputRef, mirroring the Ruby all-string join semantics
+/// without creating any intermediate Ruby objects.
+///
+/// * A `:sequence` whose children are InputRefs (plus Nil / absent-optional
+///   zero-length gaps) collapses to one InputRef spanning them.
+/// * A `:repetition` whose children are ALL InputRefs collapses the same way
+///   (Ruby joins all-string repetitions into one Slice).
+/// * Empty `:repetition`/`:maybe` tagged arrays keep their tags: downstream
+///   flattening needs them for the named-vs-unnamed distinction ([]/nil/"").
+pub(crate) fn collapse_ast(node: &AstNode, arena: &mut AstArena) -> AstNode {
+    match node {
+        AstNode::Array { pool_index, length } => {
+            let items = arena.get_array(*pool_index as usize, *length as usize);
+            // map to static strs so `tag` doesn't borrow the arena
+            let tag_str: Option<&'static str> = match items.first() {
+                Some(AstNode::StringRef {
+                    pool_index: tag_idx,
+                }) => {
+                    let (t, _, _, _) = arena.get_string_parts(*tag_idx as usize);
+                    match t {
+                        ":sequence" => Some(":sequence"),
+                        ":repetition" => Some(":repetition"),
+                        ":maybe" => Some(":maybe"),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            };
+
+            let Some(tag) = tag_str else {
+                return node.clone();
+            };
+
+            let mut collapsed: Vec<AstNode> = Vec::with_capacity(items.len());
+            let mut all_input_ref = true;
+            let mut all_zero_len_gaps = true;
+            let mut has_input_ref = false;
+            let mut contiguous = true;
+            let mut start: u32 = 0;
+            let mut last_end: Option<u32> = None;
+
+            for child in items.iter().skip(1) {
+                let c = collapse_ast(child, arena);
+                match &c {
+                    AstNode::InputRef { offset, length } => {
+                        has_input_ref = true;
+                        match last_end {
+                            None => start = *offset,
+                            Some(e) => {
+                                if *offset != e {
+                                    contiguous = false;
+                                }
+                            }
+                        }
+                        last_end = Some(offset + length);
+                    }
+                    AstNode::Nil => {
+                        all_input_ref = false;
+                    }
+                    other if is_empty_maybe(other, arena) => {
+                        all_input_ref = false;
+                    }
+                    _ => {
+                        all_input_ref = false;
+                        all_zero_len_gaps = false;
+                    }
+                }
+                collapsed.push(c);
+            }
+
+            // :sequence folds when every child contributes only input bytes
+            // (InputRefs, Nil, or absent optionals); :repetition is stricter
+            // still: only InputRefs (Ruby keeps an array for nil members).
+            let foldable = if tag == ":repetition" {
+                all_input_ref && has_input_ref
+            } else {
+                tag == ":sequence" && has_input_ref && all_zero_len_gaps
+            };
+
+            if foldable && contiguous {
+                let length = last_end.map(|e| e - start).unwrap_or(0);
+                return arena.input_ref(start as usize, length as usize);
+            }
+
+            let (pool_index, length) = arena.store_tagged_array(tag, &collapsed);
+            AstNode::Array { pool_index, length }
+        }
+        AstNode::Hash { pool_index, length } => {
+            let pairs = arena.get_hash_items(*pool_index as usize, *length as usize);
+            let mut refs: Vec<(&str, AstNode)> = Vec::with_capacity(pairs.len());
+            for (key, value) in &pairs {
+                refs.push((key.as_str(), collapse_ast(value, arena)));
+            }
+            let (pool_index, length) = arena.store_hash(&refs);
+            AstNode::Hash { pool_index, length }
+        }
+        _ => node.clone(),
+    }
+}
 
 use super::normalize::{create_slice, get_slice_class};
 
@@ -672,15 +790,52 @@ fn transform_ast_internal(
             {
                 let (tag, _, _, _) = arena.get_string_parts(*tag_idx as usize);
                 if tag == ":sequence" || tag == ":repetition" || tag == ":maybe" {
-                    let ary = ruby.ary_new_capa(items.len() as _);
-                    let tag_sym = ruby.to_symbol(&tag[1..]);
-                    ary.push(tag_sym)?;
+                    // Transform children once (rooting them in an RArray),
+                    // fusing the string-likeness scans into the same loop
+                    let transformed = ruby.ary_new_capa(items.len() as _);
+                    let mut any_item = false;
+                    let mut all_str_like = true;
+                    let mut all_slice_str = true;
                     for item in items.iter().skip(1) {
                         let ruby_item =
                             transform_ast_internal(item, arena, input, input_val, ruby, depth + 1)?;
-                        ary.push(ruby_item)?;
+                        let ruby_item = unwrap_maybe(ruby_item, ruby)?;
+                        if !ruby_item.is_nil() {
+                            any_item = true;
+                            if !is_slice_or_string(ruby_item, ruby) {
+                                all_str_like = false;
+                                all_slice_str = false;
+                            }
+                        } else {
+                            all_slice_str = false;
+                        }
+                        transformed.push(ruby_item)?;
                     }
-                    return Ok(ary.as_value());
+
+                    // Fast paths that fold common shapes in Rust so the Ruby
+                    // transformer can skip them. Each mirrors the exact Ruby
+                    // flattening semantics; anything else stays tagged.
+                    if tag == ":sequence" {
+                        if any_item && all_str_like {
+                            return fold_string_sequence(&transformed, ruby, *input_val);
+                        }
+                    } else if tag == ":repetition" {
+                        if all_slice_str && transformed.len() > 0 {
+                            return fold_string_repetition(&transformed, ruby, *input_val);
+                        }
+                    } else if transformed.len() == 1 {
+                        // [:maybe, v] with a non-nil value is context-free:
+                        // both named ({k: v}) and unnamed (v) agree on it
+                        if let Ok(v) = transformed.entry::<Value>(0) {
+                            if !v.is_nil() {
+                                return Ok(v);
+                            }
+                        }
+                    }
+
+                    let tag_sym = ruby.to_symbol(&tag[1..]);
+                    transformed.unshift(tag_sym)?;
+                    return Ok(transformed.as_value());
                 }
             }
 
@@ -689,6 +844,7 @@ fn transform_ast_internal(
             for item in items.iter() {
                 let ruby_item =
                     transform_ast_internal(item, arena, input, input_val, ruby, depth + 1)?;
+                let ruby_item = unwrap_maybe(ruby_item, ruby)?;
                 transformed.push(ruby_item)?;
             }
 
@@ -730,6 +886,91 @@ fn transform_ast_internal(
             Ok(hash.as_value())
         }
     }
+}
+
+/// Fold an all-string sequence, mirroring Ruby flatten_sequence's join:
+/// nils are dropped, position comes from the first Slice, no Slice at all
+/// means plain strings, and a single non-Slice part passes through as-is.
+fn fold_string_sequence(ary: &RArray, ruby: &Ruby, input_val: Value) -> Result<Value, Error> {
+    let len = ary.len();
+    let mut content = String::new();
+    let mut first_offset: Option<u32> = None;
+    let mut parts_len = 0usize;
+    let mut first_value: Option<Value> = None;
+
+    for i in 0..len {
+        if let Ok(item) = ary.entry::<Value>(i as isize) {
+            if item.is_nil() {
+                continue;
+            }
+            parts_len += 1;
+            if first_value.is_none() {
+                first_value = Some(item);
+            }
+            if first_offset.is_none() && is_slice(item, ruby) {
+                first_offset = Some(slice_offset(item)?);
+            }
+            content.push_str(&slice_content(item));
+        }
+    }
+
+    if parts_len == 0 {
+        return Ok(ruby.ary_new().as_value());
+    }
+    if let Some(offset) = first_offset {
+        return create_slice(ruby, offset, &content, input_val);
+    }
+    if parts_len == 1 {
+        return first_value
+            .ok_or_else(|| Error::new(ruby.exception_runtime_error(), "unreachable"));
+    }
+    Ok(ruby.str_new(&content).as_value())
+}
+
+/// Fold an all-string repetition, mirroring Ruby flatten_repetition's join:
+/// position comes from the first Slice, no Slice at all yields the joined
+/// String.
+fn fold_string_repetition(ary: &RArray, ruby: &Ruby, input_val: Value) -> Result<Value, Error> {
+    let len = ary.len();
+    let mut content = String::new();
+    let mut first_offset: Option<u32> = None;
+
+    for i in 0..len {
+        if let Ok(item) = ary.entry::<Value>(i as isize) {
+            if first_offset.is_none() && is_slice(item, ruby) {
+                first_offset = Some(slice_offset(item)?);
+            }
+            content.push_str(&slice_content(item));
+        }
+    }
+
+    if let Some(offset) = first_offset {
+        create_slice(ruby, offset, &content, input_val)
+    } else {
+        Ok(ruby.str_new(&content).as_value())
+    }
+}
+
+/// Unwrap an absent-optional `[:maybe]` tagged array while folding a
+/// sequence, matching Parslet's flatten semantics: an optional that did not
+/// match contributes "" (unnamed semantics inside a sequence fold).
+/// Present optionals never carry a tag: the parser emits their value
+/// directly, so only the len==1 shape can appear here.
+fn unwrap_maybe(value: Value, ruby: &Ruby) -> Result<Value, Error> {
+    if let Some(ary) = RArray::from_value(value) {
+        if ary.len() == 1 {
+            if let Ok(first) = ary.entry::<Value>(0) {
+                if let Some(sym) = Symbol::from_value(first) {
+                    if let Ok(name) = sym.name() {
+                        if name == "maybe" {
+                            return Ok(ruby.str_new("").as_value());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(value)
 }
 
 /// Transform AstNode to Ruby format (public entry point)

@@ -7,6 +7,20 @@ use crate::portable::grammar_analysis::{GrammarAnalyzer, GrammarWarning};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// Result tag for repetition atoms.
+///
+/// Parslet distinguishes `.maybe` (tag `:maybe`: nil-or-value) from
+/// `.repeat(0, 1)` (tag `:repetition`: empty-or-single-element array) when
+/// flattening results. The tag controls which one the parser emits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum RepetitionTag {
+    /// Plain repetition: flattens to an array of matched values
+    #[default]
+    Repetition,
+    /// Optional match (`.maybe`): flattens to nil-or-value
+    Maybe,
+}
+
 /// Atom types that make up a grammar
 ///
 /// These correspond to the different parsanol atom types.
@@ -44,6 +58,10 @@ pub enum Atom {
         min: usize,
         /// Maximum number of repetitions (None = unlimited)
         max: Option<usize>,
+        /// Result tag: `.maybe` flattens to nil-or-value, plain repetition
+        /// flattens to an array
+        #[serde(default)]
+        tag: RepetitionTag,
     },
 
     /// Name the result
@@ -938,7 +956,7 @@ impl Grammar {
                     }
                     visitor.visit_alternative_post(atoms);
                 }
-                Atom::Repetition { atom, min, max } => {
+                Atom::Repetition { atom, min, max, .. } => {
                     visitor.visit_repetition_pre(*atom, *min, *max);
                     self.visit_atom(*atom, visitor);
                     visitor.visit_repetition_post(*atom, *min, *max);
@@ -1134,6 +1152,7 @@ mod tests {
             atom: 0,
             min: 0,
             max: Some(100),
+            tag: RepetitionTag::Repetition,
         });
 
         let analysis = grammar.analyze();
@@ -1141,5 +1160,22 @@ mod tests {
         assert_eq!(analysis.total_atoms, 2);
         assert!(analysis.has_repetitions);
         assert!(!analysis.has_lookaheads);
+    }
+}
+
+#[cfg(test)]
+mod tag_tests {
+    use super::*;
+
+    #[test]
+    fn test_repetition_tag_deserialize() {
+        let json = r#"{"atoms":[{"Str":{"pattern":"a"}},{"Repetition":{"atom":0,"min":0,"max":1,"tag":"Maybe"}}],"root":1}"#;
+        let g = Grammar::from_json(json).unwrap();
+        match g.get_atom(1) {
+            Some(Atom::Repetition { tag, .. }) => {
+                assert_eq!(*tag, RepetitionTag::Maybe);
+            }
+            other => panic!("expected Repetition, got {:?}", other.map(|_| ())),
+        }
     }
 }

@@ -16,7 +16,7 @@
 //! );
 //! ```
 
-use super::grammar::Atom;
+use super::grammar::{Atom, RepetitionTag};
 use super::parser_dsl::{GrammarBuilder, Parslet, Ref, Str};
 
 /// Operator associativity
@@ -153,6 +153,7 @@ impl<'a> InfixBuilder<'a> {
                     atom: seq_idx,
                     min: 0,
                     max: None,
+                    tag: RepetitionTag::Repetition,
                 });
                 builder.add_atom(Atom::Sequence {
                     atoms: vec![operand, repeat_idx],
@@ -176,6 +177,7 @@ impl<'a> InfixBuilder<'a> {
                     atom: seq_idx,
                     min: 0,
                     max: Some(1),
+                    tag: RepetitionTag::Repetition,
                 });
 
                 // Build the final expression: operand (op expr)?
@@ -199,6 +201,7 @@ impl<'a> InfixBuilder<'a> {
                     atom: seq_idx,
                     min: 0,
                     max: Some(1),
+                    tag: RepetitionTag::Repetition,
                 });
                 builder.add_atom(Atom::Sequence {
                     atoms: vec![operand, opt_idx],

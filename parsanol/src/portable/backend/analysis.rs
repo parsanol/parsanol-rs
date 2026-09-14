@@ -64,6 +64,7 @@ impl GrammarAnalysis {
 mod tests {
     use super::*;
     use crate::portable::grammar::Grammar;
+    use crate::portable::grammar::RepetitionTag;
 
     fn simple_grammar() -> Grammar {
         let mut grammar = Grammar::new();
@@ -83,11 +84,13 @@ mod tests {
             atom: a,
             min: 0,
             max: None,
+            tag: RepetitionTag::Repetition,
         });
         let outer = grammar.add_atom(Atom::Repetition {
             atom: inner,
             min: 0,
             max: None,
+            tag: RepetitionTag::Repetition,
         });
         grammar.root = outer;
         grammar
