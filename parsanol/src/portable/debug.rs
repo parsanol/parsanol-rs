@@ -60,7 +60,7 @@ impl TreePrinter {
     ) {
         if let Some(max) = self.max_depth {
             if depth > max {
-                writeln!(output, "{}...", &self.indent.repeat(depth)).unwrap();
+                writeln!(output, "{}...", self.indent.repeat(depth)).unwrap();
                 return;
             }
         }
