@@ -115,7 +115,7 @@ impl<'a> InfixBuilder<'a> {
 
         // Sort operators by precedence (highest first)
         let mut operators = self.operators;
-        operators.sort_by(|a, b| b.1.cmp(&a.1));
+        operators.sort_by_key(|(_op, precedence, _assoc)| std::cmp::Reverse(*precedence));
 
         if operators.is_empty() {
             return primary_idx;

@@ -133,13 +133,9 @@ impl Pattern {
                     Some(hash) => {
                         let mut bindings = Bindings::new();
                         for (field_name, field_pattern) in fields {
-                            match hash.get(field_name) {
-                                Some(field_value) => {
-                                    let field_bindings = field_pattern.match_value(field_value)?;
-                                    bindings.merge(field_bindings)?;
-                                }
-                                None => return None,
-                            }
+                            let field_value = hash.get(field_name)?;
+                            let field_bindings = field_pattern.match_value(field_value)?;
+                            bindings.merge(field_bindings)?;
                         }
                         // Check if there are extra fields not in the pattern
                         if !*allow_extra {
@@ -165,10 +161,8 @@ impl Pattern {
             Pattern::AllOf(patterns) => {
                 let mut combined = Bindings::new();
                 for pattern in patterns {
-                    match pattern.match_value(value) {
-                        Some(bindings) => combined.merge(bindings)?,
-                        None => return None,
-                    }
+                    let bindings = pattern.match_value(value)?;
+                    combined.merge(bindings)?;
                 }
                 Some(combined)
             }

@@ -112,11 +112,7 @@ fn parse_or_expr(input: &str) -> Result<BoolExpr, String> {
         match c {
             '(' => depth += 1,
             ')' => depth -= 1,
-            _ if depth == 0 => {
-                if input[i..].starts_with(" or ") {
-                    or_pos = Some(i);
-                }
-            }
+            _ if depth == 0 && input[i..].starts_with(" or ") => or_pos = Some(i),
             _ => {}
         }
     }
@@ -142,11 +138,7 @@ fn parse_and_expr(input: &str) -> Result<BoolExpr, String> {
         match c {
             '(' => depth += 1,
             ')' => depth -= 1,
-            _ if depth == 0 => {
-                if input[i..].starts_with(" and ") {
-                    and_pos = Some(i);
-                }
-            }
+            _ if depth == 0 && input[i..].starts_with(" and ") => and_pos = Some(i),
             _ => {}
         }
     }
