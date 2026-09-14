@@ -7,8 +7,8 @@ use super::dynamic::{
 };
 use super::parser::{
     cacheable_atom_count, clear_grammar_cache, grammar_cache_capacity, grammar_cache_size,
-    is_available, optimized_atom_count, parse, parse_batch, parse_fresh, parse_with_builder,
-    parse_with_stats,
+    is_available, optimized_atom_count, parse, parse_batch, parse_fresh, parse_handle,
+    parse_with_builder, parse_with_stats, register_grammar, release_grammar,
 };
 use crate::portable::dynamic::{
     clear_dynamic_callbacks, dynamic_callback_count, get_dynamic_callback_description,
@@ -86,6 +86,12 @@ pub fn init(ruby: &Ruby) -> Result<(), Error> {
     // Batch parsing method - returns flat u64 array for minimal FFI overhead
     // Named _parse_batch_raw to avoid conflict with Ruby wrapper's parse_batch method
     native_module.define_module_function("_parse_batch_raw", function!(parse_batch, 2))?;
+
+    // Handle-based parsing: register a grammar once, then parse by handle.
+    // Avoids the per-call JSON marshal + hash and copies of the input string.
+    native_module.define_module_function("_register_grammar", function!(register_grammar, 1))?;
+    native_module.define_module_function("_release_grammar", function!(release_grammar, 1))?;
+    native_module.define_module_function("_parse_handle", function!(parse_handle, 2))?;
 
     // =========================================================================
     // LOW-LEVEL API - For advanced users / debugging

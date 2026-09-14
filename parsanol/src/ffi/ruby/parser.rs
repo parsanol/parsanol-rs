@@ -56,10 +56,12 @@
 
 use crate::ffi::ruby::cache::LruCache;
 use crate::ffi::shared::flatten_ast_to_u64;
-use crate::portable::{to_parslet_compatible, AstArena, DenseCache, Grammar, PortableParser};
-use magnus::{Error, Ruby, Value};
+use crate::portable::{to_parslet_compatible, AstArena, Atom, DenseCache, Grammar, PortableParser};
+use magnus::{Error, RString, Ruby, Value};
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use super::builder::RubyBuilder;
 use super::transform::transform_ast;
@@ -72,6 +74,24 @@ type GrammarCache = LruCache<u64, Grammar>;
 
 /// Thread-safe global grammar cache with bounded LRU eviction
 static GRAMMAR_CACHE: std::sync::OnceLock<Mutex<GrammarCache>> = std::sync::OnceLock::new();
+
+/// Grammar registered by explicit handle, avoiding the per-call JSON
+/// marshal + hash of the LRU path. `has_dynamic` gates the zero-copy
+/// input borrow: a Dynamic atom calls back into Ruby during the parse,
+/// and we must not hold a borrowed `&str` across that.
+#[derive(Clone)]
+struct HandleEntry {
+    grammar: Arc<Grammar>,
+    has_dynamic: bool,
+}
+
+static HANDLE_MAP: std::sync::OnceLock<Mutex<HashMap<u64, HandleEntry>>> =
+    std::sync::OnceLock::new();
+static NEXT_HANDLE: AtomicU64 = AtomicU64::new(1);
+
+fn get_handle_map() -> &'static Mutex<HashMap<u64, HandleEntry>> {
+    HANDLE_MAP.get_or_init(|| Mutex::new(HashMap::new()))
+}
 
 fn get_grammar_cache() -> &'static Mutex<GrammarCache> {
     GRAMMAR_CACHE.get_or_init(|| Mutex::new(GrammarCache::new(DEFAULT_GRAMMAR_CACHE_SIZE)))
@@ -90,6 +110,11 @@ fn get_grammar_cache() -> &'static Mutex<GrammarCache> {
 pub fn clear_grammar_cache() {
     if let Some(cache) = GRAMMAR_CACHE.get() {
         if let Ok(mut guard) = cache.lock() {
+            guard.clear();
+        }
+    }
+    if let Some(map) = HANDLE_MAP.get() {
+        if let Ok(mut guard) = map.lock() {
             guard.clear();
         }
     }
@@ -133,7 +158,94 @@ pub fn is_available() -> bool {
 }
 
 // ============================================================================
-// PUBLIC API - What most users need
+// Handle-based API
+//
+// The JSON-string API pays a marshal + hash of the grammar JSON on every
+// call. Registering once and passing a small integer handle removes that
+// per-call cost entirely, and lets `parse_handle` borrow the input string
+// instead of copying it.
+// ============================================================================
+
+/// Register a grammar JSON and return a handle for `parse_handle`.
+///
+/// # Example
+///
+/// ```ruby
+/// handle = Parsanol::Native._register_grammar(grammar_json)
+/// result = Parsanol::Native._parse_handle(handle, input)
+/// ```
+pub fn register_grammar(grammar_json: String) -> Result<u64, Error> {
+    let ruby = Ruby::get().unwrap();
+    let grammar: Grammar = load_grammar(&grammar_json)
+        .map_err(|e| Error::new(ruby.exception_arg_error(), e.to_string()))?;
+    let has_dynamic = grammar
+        .atoms
+        .iter()
+        .any(|a| matches!(a, Atom::Dynamic { .. }));
+    let handle = NEXT_HANDLE.fetch_add(1, Ordering::Relaxed);
+    get_handle_map().lock().unwrap().insert(
+        handle,
+        HandleEntry {
+            grammar: Arc::new(grammar),
+            has_dynamic,
+        },
+    );
+    Ok(handle)
+}
+
+/// Release a grammar previously registered with `register_grammar`.
+/// Returns true when a handle was removed.
+pub fn release_grammar(handle: u64) -> bool {
+    get_handle_map().lock().unwrap().remove(&handle).is_some()
+}
+
+/// Parse with a registered grammar handle, borrowing the input string
+/// (zero copy) when the grammar has no Dynamic atoms.
+pub fn parse_handle(handle: u64, input: RString) -> Result<Value, Error> {
+    let ruby = Ruby::get().unwrap();
+    let entry = get_handle_map().lock().unwrap().get(&handle).cloned();
+    let Some(entry) = entry else {
+        return Err(Error::new(
+            ruby.exception_arg_error(),
+            format!("unknown grammar handle: {}", handle),
+        ));
+    };
+
+    // SAFETY: the borrowed &str is used for the duration of this call only.
+    // Nothing mutates the input string while we hold the reference: Ruby
+    // code only re-enters via Dynamic atoms (excluded by `has_dynamic`);
+    // object allocation during transform can run the GC but cannot move or
+    // mutate a string (compaction requires an explicit GC.compact that
+    // user code cannot run inside this call).
+    let input_str: &str = unsafe { input.as_str()? };
+
+    if entry.has_dynamic {
+        let owned = input_str.to_string();
+        parse_with_grammar(&ruby, &entry.grammar, &owned)
+    } else {
+        parse_with_grammar(&ruby, &entry.grammar, input_str)
+    }
+}
+
+/// Shared parse + collapse + transform over an already-resolved grammar.
+fn parse_with_grammar(ruby: &Ruby, grammar: &Grammar, input: &str) -> Result<Value, Error> {
+    let mut arena = AstArena::for_input(input.len());
+    let mut parser = PortableParser::new(grammar, input, &mut arena);
+
+    let ast = parser
+        .parse()
+        .map_err(|e| Error::new(ruby.exception_runtime_error(), e.to_string()))?;
+
+    // Collapse adjacent input refs in the arena first: the join happens with
+    // zero Ruby object churn, so transform_ast only builds final values.
+    let collapsed = super::transform::collapse_ast(&ast, &mut arena);
+
+    // Transform AST to Ruby format with full sequence/repetition handling
+    transform_ast(&collapsed, &arena, input, ruby)
+}
+
+// ============================================================================
+// HIGH-LEVEL API
 // ============================================================================
 
 /// Parse input and return transformed AST with lazy line/column support
@@ -171,6 +283,7 @@ pub fn is_available() -> bool {
 /// slice = result[:name]
 /// slice.line_and_column  # => [1, 1]
 /// ```
+/// Parse with a grammar JSON string (LRU-cached by content hash).
 pub fn parse(grammar_json: String, input: String) -> Result<Value, Error> {
     let ruby = Ruby::get().unwrap();
 
@@ -196,19 +309,7 @@ pub fn parse(grammar_json: String, input: String) -> Result<Value, Error> {
         }
     };
 
-    let mut arena = AstArena::for_input(input.len());
-    let mut parser = PortableParser::new(&grammar, &input, &mut arena);
-
-    let ast = parser
-        .parse()
-        .map_err(|e| Error::new(ruby.exception_runtime_error(), e.to_string()))?;
-
-    // Collapse adjacent input refs in the arena first: the join happens with
-    // zero Ruby object churn, so transform_ast only builds final values.
-    let collapsed = super::transform::collapse_ast(&ast, &mut arena);
-
-    // Transform AST to Ruby format with full sequence/repetition handling
-    transform_ast(&collapsed, &arena, &input, &ruby)
+    parse_with_grammar(&ruby, &grammar, &input)
 }
 
 /// Parse without packrat caching for memory-bounded operation
