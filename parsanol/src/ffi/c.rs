@@ -735,7 +735,7 @@ mod tests {
 
         // Buffer-too-small reports the needed size.
         let needed = unsafe { parsanol_c_parse(handle, input.as_ptr(), buf.as_mut_ptr(), 1) };
-        assert_eq!(needed, -(written as isize));
+        assert_eq!(needed, -written);
 
         // A failing input reports 0 with a clean error.
         let bad = CString::new("zz").unwrap();
