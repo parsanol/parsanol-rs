@@ -57,7 +57,7 @@
 use crate::ffi::ruby::cache::LruCache;
 use crate::ffi::shared::flatten_ast_to_u64;
 use crate::portable::{to_parslet_compatible, AstArena, Atom, DenseCache, Grammar, PortableParser};
-use magnus::{Error, RString, Ruby, Value};
+use magnus::{value::ReprValue, Error, RString, Ruby, Value};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -237,11 +237,24 @@ fn parse_with_grammar(ruby: &Ruby, grammar: &Grammar, input: &str) -> Result<Val
         .map_err(|e| Error::new(ruby.exception_runtime_error(), e.to_string()))?;
 
     // Collapse adjacent input refs in the arena first: the join happens with
-    // zero Ruby object churn, so transform_ast only builds final values.
+    // zero Ruby object churn, so the flat encoding stays small.
     let collapsed = super::transform::collapse_ast(&ast, &mut arena);
 
-    // Transform AST to Ruby format with full sequence/repetition handling
-    transform_ast(&collapsed, &arena, input, ruby)
+    // One decode path for every tier: flatten the RAW tagged tree to the
+    // shared flat-u64 batch format (same as the C-ABI tier) and let the
+    // Ruby-side BatchDecoder + AstTransformer produce the final tree.
+    // The old transform_ast built nested Ruby objects here and the
+    // transformer re-walked them — two passes with different heuristics;
+    // this way there is exactly one set of semantics (and the ffi tier's
+    // differential results cover the extension tier verbatim).
+    let mut flat: Vec<u64> = Vec::new();
+    flatten_ast_to_u64(&collapsed, &arena, input, &mut flat);
+
+    let ary = ruby.ary_new_capa(flat.len() as _);
+    for cell in &flat {
+        ary.push(*cell as i64)?;
+    }
+    Ok(ary.as_value())
 }
 
 // ============================================================================
