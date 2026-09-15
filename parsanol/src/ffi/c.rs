@@ -742,7 +742,7 @@ mod tests {
         let failed = unsafe { parsanol_c_parse(handle, bad.as_ptr(), buf.as_mut_ptr(), buf.len()) };
         assert_eq!(failed, 0);
 
-        unsafe { parsanol_c_release(handle) };
+        parsanol_c_release(handle);
     }
 
     #[test]
