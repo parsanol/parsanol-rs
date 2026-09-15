@@ -138,7 +138,6 @@ pub(crate) fn collapse_ast(node: &AstNode, arena: &mut AstArena) -> AstNode {
     }
 }
 
-
 // Tag constants for flat array format
 /// Tag for nil values
 pub const TAG_NIL: u64 = 0x00;

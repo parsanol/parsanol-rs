@@ -297,8 +297,7 @@ pub unsafe extern "C" fn parsanol_c_parse(
     // the RAW tagged tree — NOT to_parslet_compatible's pre-fold. The
     // Ruby-side AstTransformer must see the same tagged shapes on every
     // tier, or the backends build different trees for one grammar.
-    let collapsed =
-        crate::ffi::shared::collapse_ast(&ast, &mut arena);
+    let collapsed = crate::ffi::shared::collapse_ast(&ast, &mut arena);
     let mut flat: Vec<u64> = Vec::new();
     flatten_ast_to_u64(&collapsed, &arena, input_str, &mut flat);
 

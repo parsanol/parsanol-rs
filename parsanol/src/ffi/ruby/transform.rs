@@ -6,12 +6,10 @@
 use crate::portable::{AstArena, AstNode};
 use magnus::{value::ReprValue, Error, IntoValue, RArray, Ruby, Symbol, Value};
 
-
 /// Bottom-up arena-level pre-pass that collapses runs of adjacent InputRefs
 /// into a single InputRef, mirroring the Ruby all-string join semantics
 /// without creating any intermediate Ruby objects.
 ///
-
 use super::normalize::{create_slice, get_slice_class};
 
 /// Maximum recursion depth to prevent stack overflow
