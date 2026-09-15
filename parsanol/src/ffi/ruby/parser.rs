@@ -238,7 +238,7 @@ fn parse_with_grammar(ruby: &Ruby, grammar: &Grammar, input: &str) -> Result<Val
 
     // Collapse adjacent input refs in the arena first: the join happens with
     // zero Ruby object churn, so the flat encoding stays small.
-    let collapsed = super::transform::collapse_ast(&ast, &mut arena);
+    let collapsed = crate::ffi::shared::collapse_ast(&ast, &mut arena);
 
     // One decode path for every tier: flatten the RAW tagged tree to the
     // shared flat-u64 batch format (same as the C-ABI tier) and let the
