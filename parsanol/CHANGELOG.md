@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- C-ABI handle + batch functions; build the cdylib by @[object]
+- Distinguish maybe from repeat(0,1) and collapse input refs in Ruby transform by @[object]
+
+### Fixed
+
+- Drop the redundant isize cast in the c-api test by @[object]
+- Drop unnecessary unsafe on the safe release call in the c-api test by @[object]
+- Never mutate shared atoms when merging Str/Re runs in optimize() by @[object]
+- Bump magnus to 9407bd9 for 32-bit musl timespec fix by @[object]
+- Satisfy clippy -D warnings with current toolchain by @[object]
+
+### Other
+
+- Cargo fmt by @[object]
+- Collapse in the C-ABI tier too; collapse_ast moves to shared by @[object]
+- One decode path — extension tier returns the raw batch format by @[object]
+- Handle-based grammar API with zero-copy input by @[object]
+- Release v0.5.0 by @[object]
+- Remove dead AstNode::Tagged variant ([#50](https://github.com/parsanol/parsanol-rs/pull/50)) by @[object]
+
 ### Other
 
 - Remove dead AstNode::Tagged variant ([#50](https://github.com/parsanol/parsanol-rs/pull/50)) by @[object]
