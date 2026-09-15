@@ -36,6 +36,9 @@ AsciiDoc = "AsciiDoc"
 
 # Common abbreviations in code
 serde = "serde"
+
+# Test pattern literals (shared-atom merge regression test)
+abd = "abd"
 clippy = "clippy"
 rustfmt = "rustfmt"
 wasm = "wasm"
