@@ -5,10 +5,13 @@ edition = "2021"
 description = "C-ABI cdylib for parsanol: register-once handle parsing with batch results"
 license = "MIT"
 publish = false
+documentation = false
 
 [lib]
 name = "parsanol"
 crate-type = ["cdylib"]
+# rustdoc output would collide with the real parsanol crate's
+doc = false
 
 [dependencies]
 parsanol = { path = "../parsanol" }
