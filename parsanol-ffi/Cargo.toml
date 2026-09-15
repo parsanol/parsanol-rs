@@ -5,7 +5,6 @@ edition = "2021"
 description = "C-ABI cdylib for parsanol: register-once handle parsing with batch results"
 license = "MIT"
 publish = false
-documentation = false
 
 [lib]
 name = "parsanol"
