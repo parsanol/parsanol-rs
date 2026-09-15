@@ -16,9 +16,7 @@ rust-version = "1.86"
 ignored = ["winnow"]
 
 [lib]
-# cdylib additionally exports the C ABI (parsanol_c_*) as libparsanol.so /
-# .dylib / .dll for the Ruby ffi-gem tier and other non-C-API runtimes.
-crate-type = ["rlib", "cdylib"]
+crate-type = ["rlib"]
 
 [features]
 default = []

@@ -1,0 +1,14 @@
+[package]
+name = "parsanol-ffi"
+version = "0.5.1"
+edition = "2021"
+description = "C-ABI cdylib for parsanol: register-once handle parsing with batch results"
+license = "MIT"
+publish = false
+
+[lib]
+name = "parsanol"
+crate-type = ["cdylib"]
+
+[dependencies]
+parsanol = { path = "../parsanol" }
