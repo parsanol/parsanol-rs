@@ -599,20 +599,22 @@ impl Grammar {
     /// - Fewer arena allocations during parsing
     /// - Less memory overall
     pub fn optimize(&mut self) {
-        // Phase 1: For each Sequence, merge adjacent Re/Str atoms in-place.
-        // The first atom of each run gets the merged pattern; subsequent atoms
-        // in the run become dead (unreferenced). The sequence children are
-        // updated to skip dead atoms.
+        // Phase 1: For each Sequence, merge adjacent Re/Str runs. The merged
+        // pattern is appended as a NEW atom and only this sequence's children
+        // are rewritten to point at it — the original atoms are never
+        // mutated, because they may be shared with other sequences (a
+        // mutated shared atom silently changes what those sequences match).
         //
-        // After this pass, there may be unreferenced atoms in self.atoms.
+        // After this pass, the run's original atoms may be unreferenced.
         // Phase 2 compacts them away.
 
-        for seq_idx in 0..self.atoms.len() {
+        let initial_len = self.atoms.len();
+        for seq_idx in 0..initial_len {
             if let Atom::Sequence { atoms: children } = &self.atoms[seq_idx] {
                 // Find runs and plan the merge
                 let mut new_children: Vec<usize> = Vec::with_capacity(children.len());
-                let mut merges: Vec<(usize, String, bool)> = Vec::new();
-                // (first_atom_idx, merged_pattern, is_re)
+                let mut merges: Vec<(String, bool)> = Vec::new();
+                // (merged_pattern, is_re); scan order matches placeholder order
                 let mut i = 0;
                 let children = children.clone();
 
@@ -634,9 +636,8 @@ impl Grammar {
                                     merged.push_str(pattern);
                                 }
                             }
-                            let first_idx = children[run_start];
-                            merges.push((first_idx, merged, true));
-                            new_children.push(first_idx);
+                            merges.push((merged, true));
+                            new_children.push(usize::MAX);
                         } else {
                             new_children.push(idx);
                         }
@@ -655,9 +656,8 @@ impl Grammar {
                                     merged.push_str(pattern);
                                 }
                             }
-                            let first_idx = children[run_start];
-                            merges.push((first_idx, merged, false));
-                            new_children.push(first_idx);
+                            merges.push((merged, false));
+                            new_children.push(usize::MAX);
                         } else {
                             new_children.push(idx);
                         }
@@ -668,16 +668,26 @@ impl Grammar {
                 }
 
                 if !merges.is_empty() {
-                    // Apply merges: update first atom's pattern
-                    for (idx, pattern, is_re) in &merges {
-                        if *is_re {
-                            self.atoms[*idx] = Atom::Re {
-                                pattern: pattern.clone(),
-                            };
-                        } else {
-                            self.atoms[*idx] = Atom::Str {
-                                pattern: pattern.clone(),
-                            };
+                    // Append each merged pattern as a fresh atom, replacing
+                    // its placeholder in scan order; the run's original atoms
+                    // fall out of this sequence and the compaction pass
+                    // removes them when nothing else references them.
+                    let mut next_merge = 0;
+                    for slot in new_children.iter_mut() {
+                        if *slot == usize::MAX {
+                            let (pattern, is_re) = &merges[next_merge];
+                            next_merge += 1;
+                            let new_idx = self.atoms.len();
+                            if *is_re {
+                                self.atoms.push(Atom::Re {
+                                    pattern: pattern.clone(),
+                                });
+                            } else {
+                                self.atoms.push(Atom::Str {
+                                    pattern: pattern.clone(),
+                                });
+                            }
+                            *slot = new_idx;
                         }
                     }
                     // Update sequence children
@@ -1099,6 +1109,52 @@ impl AtomVisitor for AtomTypeCounter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_optimize_does_not_mutate_shared_atoms() {
+        // Str("ab") is shared by two sequences, each with a different
+        // adjacent Str. Merging one run must not change what the other
+        // sequence matches.
+        let mut grammar = Grammar::new();
+        let ab = grammar.add_atom(Atom::Str {
+            pattern: "ab".to_string(),
+        });
+        let c = grammar.add_atom(Atom::Str {
+            pattern: "c".to_string(),
+        });
+        let seq1 = grammar.add_atom(Atom::Sequence { atoms: vec![ab, c] });
+        let d = grammar.add_atom(Atom::Str {
+            pattern: "d".to_string(),
+        });
+        let seq2 = grammar.add_atom(Atom::Sequence { atoms: vec![ab, d] });
+        let root = grammar.add_atom(Atom::Alternative {
+            atoms: vec![seq1, seq2],
+        });
+        grammar.root = root;
+
+        grammar.optimize();
+
+        let seq1 = match grammar.get_atom(grammar.root) {
+            Some(Atom::Alternative { atoms }) => match grammar.get_atom(atoms[0]) {
+                Some(Atom::Sequence { atoms }) => atoms.clone(),
+                other => panic!("branch 0 is not a sequence: {other:?}"),
+            },
+            other => panic!("root is not an alternative: {other:?}"),
+        };
+        let seq2 = match grammar.get_atom(grammar.root) {
+            Some(Atom::Alternative { atoms }) => match grammar.get_atom(atoms[1]) {
+                Some(Atom::Sequence { atoms }) => atoms.clone(),
+                other => panic!("branch 1 is not a sequence: {other:?}"),
+            },
+            other => panic!("root is not an alternative: {other:?}"),
+        };
+        let branch_pattern = |children: &Vec<usize>| match grammar.get_atom(children[0]) {
+            Some(Atom::Str { pattern }) => pattern.clone(),
+            other => panic!("first child is not a Str: {other:?}"),
+        };
+        assert_eq!(branch_pattern(&seq1), "abc");
+        assert_eq!(branch_pattern(&seq2), "abd");
+    }
 
     #[test]
     fn test_grammar_new() {
