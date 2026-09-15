@@ -47,7 +47,7 @@ fn is_empty_maybe(node: &AstNode, arena: &AstArena) -> bool {
 ///   (Ruby joins all-string repetitions into one Slice).
 /// * Empty `:repetition`/`:maybe` tagged arrays keep their tags: downstream
 ///   flattening needs them for the named-vs-unnamed distinction ([]/nil/"").
-pub(crate) fn collapse_ast(node: &AstNode, arena: &mut AstArena) -> AstNode {
+pub fn collapse_ast(node: &AstNode, arena: &mut AstArena) -> AstNode {
     match node {
         AstNode::Array { pool_index, length } => {
             let items = arena.get_array(*pool_index as usize, *length as usize);
