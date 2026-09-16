@@ -622,25 +622,13 @@ impl Grammar {
                     let idx = children[i];
 
                     if matches!(self.atoms.get(idx), Some(Atom::Re { .. })) {
-                        let run_start = i;
-                        while i < children.len()
-                            && matches!(self.atoms.get(children[i]), Some(Atom::Re { .. }))
-                        {
-                            i += 1;
-                        }
-
-                        if i - run_start >= 2 {
-                            let mut merged = String::new();
-                            for child in &children[run_start..i] {
-                                if let Atom::Re { pattern } = &self.atoms[*child] {
-                                    merged.push_str(pattern);
-                                }
-                            }
-                            merges.push((merged, true));
-                            new_children.push(usize::MAX);
-                        } else {
-                            new_children.push(idx);
-                        }
+                        // Re runs stay UNMERGED: concatenating regex sources
+                        // is not language-preserving ("a|" + "b" = "a|b"),
+                        // and a merged run could accept tokens the original
+                        // sequence would reject (issue parsanol-ruby#39:
+                        // H2/_2O accepted under native, rejected by parslet).
+                        new_children.push(idx);
+                        i += 1;
                     } else if matches!(self.atoms.get(idx), Some(Atom::Str { .. })) {
                         let run_start = i;
                         while i < children.len()
