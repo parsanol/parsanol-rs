@@ -229,6 +229,44 @@ pub fn parse_handle(handle: u64, input: RString) -> Result<Value, Error> {
     }
 }
 
+/// Parse with a registered grammar handle WITHOUT requiring full-input
+/// consumption (the Ruby engine's `prefix: true` mode). Returns
+/// [value, end_pos]; unmatched trailing input is simply left over.
+pub fn parse_handle_prefix(handle: u64, input: RString) -> Result<Value, Error> {
+    let ruby = Ruby::get().unwrap();
+    let entry = get_handle_map().lock().unwrap().get(&handle).cloned();
+    let Some(entry) = entry else {
+        return Err(Error::new(
+            ruby.exception_arg_error(),
+            format!("unknown grammar handle: {}", handle),
+        ));
+    };
+
+    // SAFETY: same borrow discipline as parse_handle.
+    let input_str: &str = unsafe { input.as_str()? };
+
+    let mut arena = AstArena::for_input(input_str.len());
+    arena.set_input(input_str.to_string());
+    let mut parser = PortableParser::new(&entry.grammar, input_str, &mut arena);
+    let result = match parser.parse_with_end_pos() {
+        Ok(result) => result,
+        Err(e) => {
+            let diagnostics = parser.failure_diagnostics();
+            return Err(Error::new(
+                ruby.exception_runtime_error(),
+                native_failure_message(&e, diagnostics),
+            ));
+        }
+    };
+
+    let collapsed = crate::ffi::shared::collapse_ast(&result.value, &mut arena);
+    let value = transform_ast(&collapsed, &arena, input_str, &ruby)?;
+    let pair = ruby.ary_new_capa(2);
+    pair.push(value)?;
+    pair.push(result.end_pos as i64)?;
+    Ok(pair.as_value())
+}
+
 /// Shared parse + collapse + transform over an already-resolved grammar.
 
 /// Format a native parse failure for the Ruby tier: a parslet-style
