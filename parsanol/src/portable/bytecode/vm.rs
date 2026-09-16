@@ -210,7 +210,6 @@ impl<'a> BytecodeVM<'a> {
                     if !self.backtrack()? {
                         return Err(ParseError::Failed {
                             position: self.furthest_failure,
-                            expected: Vec::new(),
                         });
                     }
                 }

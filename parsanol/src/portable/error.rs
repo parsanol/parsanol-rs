@@ -393,7 +393,7 @@ impl ParseError {
         use super::source_location::SourcePosition;
 
         let (position, message) = match &self {
-            ParseError::Failed { position, .. } => (*position, "Parse failed".to_string()),
+            ParseError::Failed { position } => (*position, "Parse failed".to_string()),
             ParseError::Incomplete { expected, actual } => {
                 return RichError::at(
                     format!(
