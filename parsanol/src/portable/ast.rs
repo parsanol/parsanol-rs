@@ -206,6 +206,10 @@ pub enum ParseError {
     Failed {
         /// The byte offset where parsing failed
         position: usize,
+        /// Labels of the terminals expected at that offset, deepest-first.
+        /// Populated by PortableParser's failure tracker; empty when a
+        /// failure was never traced (e.g. cache hits).
+        expected: Vec<String>,
     },
 
     /// Parse didn't consume entire input
@@ -271,13 +275,16 @@ impl ParseError {
     /// Create a new Failed error
     #[inline]
     pub fn at_position(position: usize) -> Self {
-        ParseError::Failed { position }
+        ParseError::Failed {
+            position,
+            expected: Vec::new(),
+        }
     }
 
     /// Add source position information to error message
     pub fn format_with_position(&self, input: &str) -> String {
         match self {
-            ParseError::Failed { position } => {
+            ParseError::Failed { position, .. } => {
                 let sp = offset_to_position(input, *position);
                 format!(
                     "Parse failed at line {}, column {} (byte offset {})",
@@ -346,7 +353,7 @@ pub fn offset_to_position(input: &str, offset: usize) -> SourcePosition {
 impl fmt::Display for ParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ParseError::Failed { position } => {
+            ParseError::Failed { position, .. } => {
                 write!(f, "Parse failed at position {}", position)
             }
             ParseError::Incomplete { expected, actual } => {
@@ -523,7 +530,10 @@ mod tests {
 
     #[test]
     fn test_parse_error_failed() {
-        let err = ParseError::Failed { position: 42 };
+        let err = ParseError::Failed {
+            position: 42,
+            expected: Vec::new(),
+        };
         assert!(err.to_string().contains("42"));
         assert!(err.to_string().contains("failed"));
     }
@@ -605,7 +615,7 @@ mod tests {
     fn test_parse_error_at_position() {
         let err = ParseError::at_position(42);
         match err {
-            ParseError::Failed { position } => assert_eq!(position, 42),
+            ParseError::Failed { position, .. } => assert_eq!(position, 42),
             _ => panic!("Expected Failed variant"),
         }
     }
@@ -613,7 +623,10 @@ mod tests {
     #[test]
     fn test_parse_error_format_with_position() {
         let input = "hello\nworld";
-        let err = ParseError::Failed { position: 7 };
+        let err = ParseError::Failed {
+            position: 7,
+            expected: Vec::new(),
+        };
         let formatted = err.format_with_position(input);
         assert!(formatted.contains("line 2"));
         assert!(formatted.contains("column 2"));
@@ -745,7 +758,10 @@ mod tests {
 
     #[test]
     fn test_parse_error_is_std_error() {
-        let err = ParseError::Failed { position: 0 };
+        let err = ParseError::Failed {
+            position: 0,
+            expected: Vec::new(),
+        };
         let _: &dyn std::error::Error = &err; // Should compile
     }
 }

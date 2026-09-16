@@ -70,6 +70,12 @@ pub struct PortableParser<'a> {
     /// Input as bytes (for fast indexing)
     input_bytes: &'a [u8],
 
+    // Deepest-failure tracking for cause diagnostics: the furthest
+    // position any terminal failed at, and the labels expected there.
+    deepest_failure_pos: usize,
+    has_failure: bool,
+    expected_labels: Vec<String>,
+
     // ========================================================================
     // Output (mutable)
     // ========================================================================
@@ -130,6 +136,9 @@ impl<'a> PortableParser<'a> {
             grammar,
             input,
             input_bytes: input.as_bytes(),
+            deepest_failure_pos: 0,
+            has_failure: false,
+            expected_labels: Vec::new(),
             arena,
             cache,
             governor,
@@ -157,6 +166,9 @@ impl<'a> PortableParser<'a> {
             grammar,
             input,
             input_bytes: input.as_bytes(),
+            deepest_failure_pos: 0,
+            has_failure: false,
+            expected_labels: Vec::new(),
             arena,
             cache,
             governor,
@@ -285,7 +297,18 @@ impl<'a> PortableParser<'a> {
                     })
                 }
             }
-            Err(e) => Err(e),
+            Err(mut e) => {
+                if self.has_failure {
+                    // The cause points at the deepest failure, not the
+                    // outermost construct that propagated it — the
+                    // position a reader actually wants to look at.
+                    if let ParseError::Failed { position, expected } = &mut e {
+                        *position = self.deepest_failure_pos;
+                        *expected = self.expected_labels.clone();
+                    }
+                }
+                Err(e)
+            }
         }
     }
 
@@ -381,7 +404,10 @@ impl<'a> PortableParser<'a> {
             } else {
                 // Cached failure - this is important for PEG performance!
                 // Without caching failures, we'd re-parse failed alternatives every time
-                Err(ParseError::Failed { position: pos })
+                Err(ParseError::Failed {
+                    position: pos,
+                    expected: Vec::new(),
+                })
             };
         }
 
@@ -465,13 +491,33 @@ impl<'a> PortableParser<'a> {
     // ========================================================================
 
     #[inline]
+    /// Record a terminal failure for cause diagnostics. Only the
+    /// deepest position's expectations are kept, mirroring how the
+    /// Ruby engine's reporter collects the expected set.
+    fn note_failure(&mut self, pos: usize, label: String) {
+        if !self.has_failure || pos > self.deepest_failure_pos {
+            self.has_failure = true;
+            self.deepest_failure_pos = pos;
+            self.expected_labels.clear();
+            self.expected_labels.push(label);
+        } else if pos == self.deepest_failure_pos && !self.expected_labels.contains(&label) {
+            self.expected_labels.push(label);
+        }
+    }
+
+    #[inline]
     fn parse_str(&mut self, pattern: &str, pos: usize) -> Result<ParseResult, ParseError> {
         let pattern_bytes = pattern.as_bytes();
         let pattern_len = pattern_bytes.len();
         let end = pos + pattern_len;
 
+        let str_label = format!("'{}'", pattern);
         if end > self.input.len() {
-            return Err(ParseError::Failed { position: pos });
+            self.note_failure(pos, str_label);
+            return Err(ParseError::Failed {
+                position: pos,
+                expected: Vec::new(),
+            });
         }
 
         let slice = &self.input_bytes[pos..end];
@@ -482,14 +528,23 @@ impl<'a> PortableParser<'a> {
                 capture_state: None,
             })
         } else {
-            Err(ParseError::Failed { position: pos })
+            self.note_failure(pos, str_label);
+            Err(ParseError::Failed {
+                position: pos,
+                expected: Vec::new(),
+            })
         }
     }
 
     #[inline]
     fn parse_re(&mut self, pattern: &str, pos: usize) -> Result<ParseResult, ParseError> {
+        let re_label = pattern.to_string();
         if pos >= self.input.len() {
-            return Err(ParseError::Failed { position: pos });
+            self.note_failure(pos, re_label);
+            return Err(ParseError::Failed {
+                position: pos,
+                expected: Vec::new(),
+            });
         }
 
         let b = self.input_bytes[pos];
@@ -510,7 +565,11 @@ impl<'a> PortableParser<'a> {
                     capture_state: None,
                 });
             } else {
-                return Err(ParseError::Failed { position: pos });
+                self.note_failure(pos, re_label);
+                return Err(ParseError::Failed {
+                    position: pos,
+                    expected: Vec::new(),
+                });
             }
         }
 
@@ -536,7 +595,11 @@ impl<'a> PortableParser<'a> {
             }
         }
 
-        Err(ParseError::Failed { position: pos })
+        self.note_failure(pos, re_label);
+        Err(ParseError::Failed {
+            position: pos,
+            expected: Vec::new(),
+        })
     }
 
     #[inline]
@@ -583,7 +646,10 @@ impl<'a> PortableParser<'a> {
                 }
                 self.arena.rollback(cp);
             }
-            return Err(ParseError::Failed { position: pos });
+            return Err(ParseError::Failed {
+                position: pos,
+                expected: Vec::new(),
+            });
         }
 
         // Normal path: no rollback (cache protects against corruption)
@@ -592,7 +658,10 @@ impl<'a> PortableParser<'a> {
                 return Ok(result);
             }
         }
-        Err(ParseError::Failed { position: pos })
+        Err(ParseError::Failed {
+            position: pos,
+            expected: Vec::new(),
+        })
     }
 
     #[inline]
@@ -607,7 +676,15 @@ impl<'a> PortableParser<'a> {
         // Check for SIMD optimization
         if let Some(Atom::Re { pattern }) = self.grammar.get_atom(atom_id) {
             if let Some(char_pattern) = CharacterPattern::from_pattern(pattern) {
-                return self.parse_repetition_bulk(char_pattern.predicate(), min, max, tag, pos);
+                let bulk_label = pattern.to_string();
+                return self
+                    .parse_repetition_bulk(char_pattern.predicate(), min, max, tag, pos)
+                    .map_err(|e| {
+                        if matches!(e, ParseError::Failed { .. }) {
+                            self.note_failure(pos, bulk_label.clone());
+                        }
+                        e
+                    });
             }
         }
 
@@ -635,7 +712,10 @@ impl<'a> PortableParser<'a> {
         }
 
         if count < min {
-            return Err(ParseError::Failed { position: pos });
+            return Err(ParseError::Failed {
+                position: pos,
+                expected: Vec::new(),
+            });
         }
 
         // A PRESENT optional flattens to its value in every context
@@ -681,7 +761,10 @@ impl<'a> PortableParser<'a> {
         let count = end_pos - pos;
 
         if count < min {
-            return Err(ParseError::Failed { position: pos });
+            return Err(ParseError::Failed {
+                position: pos,
+                expected: Vec::new(),
+            });
         }
 
         let actual_end = if let Some(max_count) = max {
@@ -752,7 +835,10 @@ impl<'a> PortableParser<'a> {
                 capture_state: None,
             })
         } else {
-            Err(ParseError::Failed { position: pos })
+            Err(ParseError::Failed {
+                position: pos,
+                expected: Vec::new(),
+            })
         }
     }
 
@@ -771,7 +857,10 @@ impl<'a> PortableParser<'a> {
                     capture_state: None,
                 })
             }
-            None => Err(ParseError::Failed { position: pos }),
+            None => Err(ParseError::Failed {
+                position: pos,
+                expected: Vec::new(),
+            }),
         }
     }
 
@@ -833,8 +922,10 @@ impl<'a> PortableParser<'a> {
         let ctx = DynamicContext::new(self.input, pos, self.capture_state.clone());
 
         // Invoke callback to get the atom
-        let atom = invoke_dynamic_callback(callback_id, &ctx)
-            .ok_or(ParseError::Failed { position: pos })?;
+        let atom = invoke_dynamic_callback(callback_id, &ctx).ok_or(ParseError::Failed {
+            position: pos,
+            expected: Vec::new(),
+        })?;
 
         // Create a temporary grammar and add the atom
         let mut temp_grammar = self.grammar.clone();
@@ -903,7 +994,7 @@ impl<'a> PortableParser<'a> {
 
         match self.try_atom(atom_id, pos) {
             Ok(result) => Ok(result),
-            Err(ParseError::Failed { position }) => {
+            Err(ParseError::Failed { position, .. }) => {
                 let (line, col) = offset_to_line_col(self.input, position);
                 let span = Span::at(position, line, col);
                 let atom = self.grammar.get_atom(atom_id);
@@ -1070,7 +1161,10 @@ impl<'a> PortableParser<'a> {
                     capture_state: None,
                 })
             } else {
-                Err(ParseError::Failed { position: pos })
+                Err(ParseError::Failed {
+                    position: pos,
+                    expected: Vec::new(),
+                })
             };
         }
 
