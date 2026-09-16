@@ -2,53 +2,17 @@
 //!
 //! A separate crate so the MRI extension never links this artifact: the
 //! `ffi`-gem tier (JRuby, TruffleRuby, MRI without a binary) dlopens the
-//! produced libparsanol.{so,dylib,dll} and calls the `parsanol_c_*`
-//! exports below, which delegate to `parsanol::ffi::c`. Grammars
-//! register once into Rust-side handles; parses return the shared
-//! flat-u64 batch encoding.
+//! produced libparsanol.{so,dylib,dll}. The `#[no_mangle] parsanol_c_*`
+//! exports come from the parsanol rlib itself — linking it here is what
+//! publishes them; no wrappers, no duplicated symbols. Grammars register
+//! once into Rust-side handles; parses return the shared flat-u64 batch
+//! encoding.
 
-use std::ffi::c_char;
-
+// Force the dependency into the link even under aggressive stripping.
+#[allow(unused_imports)]
 use parsanol::ffi::c::{
-    parsanol_c_last_error as c_last_error, parsanol_c_parse as c_parse,
-    parsanol_c_register as c_register, parsanol_c_release as c_release,
+    parsanol_c_last_error, parsanol_c_parse, parsanol_c_register, parsanol_c_release,
 };
-
-/// # Safety
-/// - `json` must be a valid null-terminated C string
-#[no_mangle]
-pub unsafe extern "C" fn parsanol_c_register(json: *const c_char) -> u64 {
-    unsafe { c_register(json) }
-}
-
-/// # Safety
-/// - `handle` must come from `parsanol_c_register` and not be released
-/// - `input` must be a valid null-terminated C string
-/// - `out` must be valid for writes of `cap` u64 cells
-#[no_mangle]
-pub unsafe extern "C" fn parsanol_c_parse(
-    handle: u64,
-    input: *const c_char,
-    out: *mut u64,
-    cap: usize,
-) -> isize {
-    unsafe { c_parse(handle, input, out, cap) }
-}
-
-/// Release a grammar registered with `parsanol_c_register`.
-#[no_mangle]
-pub extern "C" fn parsanol_c_release(handle: u64) {
-    c_release(handle)
-}
-
-/// Last error message from `parsanol_c_register`/`parsanol_c_parse`.
-///
-/// The returned pointer stays valid until the next library call and must
-/// not be freed.
-#[no_mangle]
-pub extern "C" fn parsanol_c_last_error() -> *const c_char {
-    c_last_error()
-}
 
 #[cfg(test)]
 mod tests {

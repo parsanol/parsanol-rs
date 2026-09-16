@@ -498,6 +498,7 @@ fn c_set_error(msg: &str) {
 /// # Safety
 ///
 /// - `json` must be a valid null-terminated C string
+#[no_mangle]
 pub unsafe extern "C" fn parsanol_c_register(json: *const c_char) -> u64 {
     if json.is_null() {
         c_set_error("null grammar json");
@@ -528,6 +529,7 @@ pub unsafe extern "C" fn parsanol_c_register(json: *const c_char) -> u64 {
 /// Release a grammar registered with `parsanol_c_register`.
 ///
 /// Safe to call with an unknown handle (no-op).
+#[no_mangle]
 pub extern "C" fn parsanol_c_release(handle: u64) {
     if let Ok(mut map) = c_handle_map().lock() {
         map.remove(&handle);
@@ -538,6 +540,7 @@ pub extern "C" fn parsanol_c_release(handle: u64) {
 ///
 /// The returned pointer stays valid until the next library call and must
 /// not be freed.
+#[no_mangle]
 pub extern "C" fn parsanol_c_last_error() -> *const c_char {
     // The string lives in a static Mutex and is never freed; callers read it
     // before issuing the next call. A NUL terminator is guaranteed.
@@ -568,6 +571,7 @@ pub extern "C" fn parsanol_c_last_error() -> *const c_char {
 /// - `handle` must come from `parsanol_c_register` and not be released
 /// - `input` must be a valid null-terminated C string
 /// - `out` must be valid for writes of `cap` u64 cells
+#[no_mangle]
 pub unsafe extern "C" fn parsanol_c_parse(
     handle: u64,
     input: *const c_char,
