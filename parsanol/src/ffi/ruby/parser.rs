@@ -234,8 +234,12 @@ pub fn parse_handle(handle: u64, input: RString) -> Result<Value, Error> {
 /// Format a native parse failure for the Ruby tier: a parslet-style
 /// expected-set message plus a machine-readable position marker the
 /// Ruby side strips before raising Parsanol::ParseFailed.
-fn native_failure_message(e: &ParseError) -> String {
-    if let ParseError::Failed { position, expected } = e {
+fn native_failure_message(e: &ParseError, diagnostics: Option<(usize, Vec<String>)>) -> String {
+    if let ParseError::Failed { position } = e {
+        let (position, expected) = match diagnostics {
+            Some((pos, labels)) => (pos, labels),
+            None => (*position, Vec::new()),
+        };
         let what = if expected.is_empty() {
             "no further input".to_string()
         } else {
@@ -255,9 +259,16 @@ fn parse_with_grammar(ruby: &Ruby, grammar: &Grammar, input: &str) -> Result<Val
     let mut arena = AstArena::for_input(input.len());
     let mut parser = PortableParser::new(grammar, input, &mut arena);
 
-    let ast = parser
-        .parse()
-        .map_err(|e| Error::new(ruby.exception_runtime_error(), native_failure_message(&e)))?;
+    let ast = match parser.parse() {
+        Ok(ast) => ast,
+        Err(e) => {
+            let diagnostics = parser.failure_diagnostics();
+            return Err(Error::new(
+                ruby.exception_runtime_error(),
+                native_failure_message(&e, diagnostics),
+            ));
+        }
+    };
 
     // Collapse adjacent input refs in the arena first: the join happens with
     // zero Ruby object churn, so the flat encoding stays small.
