@@ -56,7 +56,9 @@
 
 use crate::ffi::ruby::cache::LruCache;
 use crate::ffi::shared::flatten_ast_to_u64;
-use crate::portable::{to_parslet_compatible, AstArena, Atom, DenseCache, Grammar, PortableParser};
+use crate::portable::{
+    to_parslet_compatible, AstArena, Atom, DenseCache, Grammar, ParseError, PortableParser,
+};
 use magnus::{value::ReprValue, Error, RString, Ruby, Value};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -228,13 +230,34 @@ pub fn parse_handle(handle: u64, input: RString) -> Result<Value, Error> {
 }
 
 /// Shared parse + collapse + transform over an already-resolved grammar.
+
+/// Format a native parse failure for the Ruby tier: a parslet-style
+/// expected-set message plus a machine-readable position marker the
+/// Ruby side strips before raising Parsanol::ParseFailed.
+fn native_failure_message(e: &ParseError) -> String {
+    if let ParseError::Failed { position, expected } = e {
+        let what = if expected.is_empty() {
+            "no further input".to_string()
+        } else {
+            format!("one of [{}]", expected.join(", "))
+        };
+        // Position suffix comes from Cause#to_s on the Ruby side; the
+        // marker line carries the byte offset for cause construction.
+        return format!(
+            "Failed to match: expected {}\n@@parsanol_pos:{}",
+            what, position
+        );
+    }
+    e.to_string()
+}
+
 fn parse_with_grammar(ruby: &Ruby, grammar: &Grammar, input: &str) -> Result<Value, Error> {
     let mut arena = AstArena::for_input(input.len());
     let mut parser = PortableParser::new(grammar, input, &mut arena);
 
     let ast = parser
         .parse()
-        .map_err(|e| Error::new(ruby.exception_runtime_error(), e.to_string()))?;
+        .map_err(|e| Error::new(ruby.exception_runtime_error(), native_failure_message(&e)))?;
 
     // Collapse adjacent input refs in the arena first: the join happens with
     // zero Ruby object churn, so the flat encoding stays small.
