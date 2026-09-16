@@ -240,21 +240,14 @@ fn parse_with_grammar(ruby: &Ruby, grammar: &Grammar, input: &str) -> Result<Val
     // zero Ruby object churn, so the flat encoding stays small.
     let collapsed = crate::ffi::shared::collapse_ast(&ast, &mut arena);
 
-    // One decode path for every tier: flatten the RAW tagged tree to the
-    // shared flat-u64 batch format (same as the C-ABI tier) and let the
-    // Ruby-side BatchDecoder + AstTransformer produce the final tree.
-    // The old transform_ast built nested Ruby objects here and the
-    // transformer re-walked them — two passes with different heuristics;
-    // this way there is exactly one set of semantics (and the ffi tier's
-    // differential results cover the extension tier verbatim).
-    let mut flat: Vec<u64> = Vec::new();
-    flatten_ast_to_u64(&collapsed, &arena, input, &mut flat);
-
-    let ary = ruby.ary_new_capa(flat.len() as _);
-    for cell in &flat {
-        ary.push(*cell as i64)?;
-    }
-    Ok(ary.as_value())
+    // Build Ruby objects directly. A batch-encoding detour (u64 cells
+    // boxed into Integers, then re-walked by the Ruby decoder) measured
+    // 1.7x SLOWER than parslet on a real ~90-rule compat grammar
+    // (issue parsanol-ruby#25) versus ~3x faster with this direct
+    // build; the batch path stays in the C-ABI tier where it is the
+    // only option. The transformer heuristics on both paths are kept
+    // in agreement by the shared differential corpus.
+    transform_ast(&collapsed, &arena, input, ruby)
 }
 
 // ============================================================================
