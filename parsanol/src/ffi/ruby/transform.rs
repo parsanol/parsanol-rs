@@ -401,6 +401,15 @@ fn fold_sequence_from_array(ary: &RArray, ruby: &Ruby, input_val: Value) -> Resu
         let hash_len = hash_items.len();
         let non_hash_len = non_hash_items.len();
 
+        // Bare sibling captures repeat legally in parslet:
+        // ident >> ("->".as(:arrow) >> product.as(:product)).repeat
+        // returns [{first: A}, {arrow: ->, product: B}, {arrow: ->, product: C}],
+        // not one Hash with B overwritten by C. Detect duplicate keys
+        // across sibling Hashes BEFORE folding them.
+        if hash_len > 1 && repeated_hash_keys(&hash_items, ruby)? {
+            return Ok(non_nil.as_value());
+        }
+
         // Process hash items with wrapper/repetition logic
         let hash_result = if hash_len > 0 {
             fold_hash_array(&hash_items, ruby, input_val)?
@@ -428,6 +437,29 @@ fn fold_sequence_from_array(ary: &RArray, ruby: &Ruby, input_val: Value) -> Resu
 
         result_box.entry::<Value>(0)
     }
+}
+
+fn repeated_hash_keys(ary: &RArray, ruby: &Ruby) -> Result<bool, Error> {
+    let mut seen = std::collections::HashSet::new();
+    for i in 0..ary.len() {
+        let item = ary.entry::<Value>(i as isize)?;
+        let keys = item.funcall::<_, _, Value>("keys", ())?;
+        if let Some(keys_ary) = RArray::from_value(keys) {
+            for j in 0..keys_ary.len() {
+                let key = keys_ary.entry::<Value>(j as isize)?;
+                let key_str = key.funcall::<_, _, String>("to_s", ())?;
+                if !seen.insert(key_str) {
+                    return Ok(true);
+                }
+            }
+        } else {
+            return Err(Error::new(
+                ruby.exception_runtime_error(),
+                "Hash#keys did not return an Array",
+            ));
+        }
+    }
+    Ok(false)
 }
 
 /// Fold an array of hash values using merge_fold
