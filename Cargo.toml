@@ -35,5 +35,6 @@ opt-level = "s"
 
 # Patch rb-sys to use latest main for magnus compatibility
 [patch.crates-io]
+magnus = { git = "https://github.com/matsadler/magnus", rev = "9407bd9" }
 rb-sys = { git = "https://github.com/oxidize-rb/rb-sys.git", rev = "b42b5fba0424fcc6778fed9a01e05215eaa53f85" }
 
