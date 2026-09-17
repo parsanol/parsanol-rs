@@ -7,6 +7,7 @@ use super::instruction::{CaptureKind, Instruction};
 use super::program::{CharSet, Program};
 use crate::portable::char_class::CharacterPattern;
 use crate::portable::grammar::{Atom, Grammar};
+use std::collections::VecDeque;
 
 /// Placeholder for forward references (will be patched later)
 const PLACEHOLDER_OFFSET: i32 = 0;
@@ -32,6 +33,11 @@ pub struct Compiler {
 
     /// Pending label patches: (instruction index, atom index to jump to)
     pending_patches: Vec<(usize, usize)>,
+
+    /// Entity-referenced rules whose bodies still need to be compiled as
+    /// subroutines after the main code (a call's return address points to
+    /// the instruction after the call, so bodies must not sit inline).
+    subroutine_queue: VecDeque<usize>,
 }
 
 impl Compiler {
@@ -44,6 +50,7 @@ impl Compiler {
             program: Program::with_capacity(atom_count * 4, atom_count, atom_count / 4),
             state: CompilerState { current_atom: 0 },
             pending_patches: Vec::new(),
+            subroutine_queue: VecDeque::new(),
         }
     }
 
@@ -54,6 +61,16 @@ impl Compiler {
 
         // Set entry point
         self.program.set_entry_point(entry);
+
+        // Compile referenced rule bodies as subroutines. Nested references
+        // enqueue more bodies; each body ends with Return.
+        while let Some(atom_idx) = self.subroutine_queue.pop_front() {
+            if self.program.get_rule_address(atom_idx).is_some() {
+                continue;
+            }
+            self.compile_atom(atom_idx)?;
+            self.program.add_instruction(Instruction::ret());
+        }
 
         // Add final End instruction
         self.program.add_instruction(Instruction::end());
@@ -452,10 +469,14 @@ impl Compiler {
             let offset = (target_addr as i32) - (entry as i32 + 1);
             self.program.add_instruction(Instruction::call(offset));
         } else {
-            // Forward reference: use placeholder, patch later
+            // Forward reference: use placeholder, patch later. The body is
+            // queued as a trailing subroutine — it must not be compiled
+            // inline after the call, because the call's return address is
+            // the instruction that follows it.
             self.program
                 .add_instruction(Instruction::call(PLACEHOLDER_OFFSET));
             self.pending_patches.push((entry, atom_idx));
+            self.subroutine_queue.push_back(atom_idx);
         }
 
         Ok(entry)

@@ -268,6 +268,23 @@ impl ResourceGovernor {
         Ok(())
     }
 
+    /// Check all resources, computing memory usage lazily
+    ///
+    /// The hot path calls this once per atom attempt; measuring memory is
+    /// wasted work unless a limit is set and the check interval has been
+    /// reached, so usage is only computed when both hold.
+    #[inline]
+    pub fn check_resources_lazy<F: FnOnce() -> usize>(
+        &mut self,
+        measure_memory: F,
+    ) -> Result<(), ParseError> {
+        self.check_timeout()?;
+        if self.max_memory > 0 && self.op_count % TIMEOUT_CHECK_INTERVAL == 0 {
+            self.check_memory(measure_memory())?;
+        }
+        Ok(())
+    }
+
     /// Reset state for a new parsing operation
     #[inline]
     pub fn reset(&mut self) {

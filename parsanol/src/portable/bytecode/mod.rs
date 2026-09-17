@@ -31,6 +31,7 @@ pub mod compiler;
 pub mod error;
 pub mod instruction;
 pub mod optimizer;
+pub mod packrat_differential;
 pub mod pattern_analysis;
 pub mod program;
 pub mod vm;
