@@ -512,6 +512,28 @@ mod tests {
     }
 
     #[test]
+    fn test_recycles_at_cap_instead_of_freezing() {
+        // The cap bounds memory by recycling the cache, not by silently
+        // dropping future inserts: after the cap is exceeded, a previously
+        // missing key must still hit (parsanol-ruby#52 regression).
+        let mut cache = DenseCache::new(8);
+        let node = AstNode::InputRef {
+            offset: 0,
+            length: 1,
+        };
+
+        for i in 0..64u32 {
+            cache.insert(CacheEntry::from_node(i, 1, i + 1, &node, 0));
+        }
+
+        // The first window is gone, but the most recent inserts must hit.
+        assert!(cache.get(63, 1, 0).is_some(), "recent insert must hit");
+        assert!(cache.get(63, 1, 0).is_some(), "repeat lookup must hit");
+        // Memory stays bounded at the cap.
+        assert!(cache.len() <= 8, "len must stay within the cap");
+    }
+
+    #[test]
     fn test_cache_miss() {
         let mut cache = DenseCache::new(16);
 
