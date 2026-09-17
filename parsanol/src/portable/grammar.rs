@@ -1072,6 +1072,35 @@ impl AtomVisitor for AtomTypeCounter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::portable::parser_dsl::{choice, dynamic, re, seq, str, GrammarBuilder};
+
+    #[test]
+    fn test_from_json_memoizes_every_atom_kind() {
+        // The JSON registration path (used by the Ruby FFI) must not exempt
+        // any atom kind from packrat memoization: exempting them re-executes
+        // non-terminal subtrees from every structural path and collapses
+        // large-input performance (parsanol-ruby#52 regression).
+        let grammar = GrammarBuilder::new()
+            .rule(
+                "root",
+                choice(vec![
+                    dynamic(seq(vec![dynamic(str("a")), dynamic(str("b"))])),
+                    dynamic(re("[0-9]+")),
+                ]),
+            )
+            .build();
+
+        let round_tripped = Grammar::from_json(&grammar.to_json().unwrap()).unwrap();
+
+        assert!(
+            round_tripped.no_cache.iter().all(|&nc| !nc),
+            "no atom may be marked no-cache after registration"
+        );
+        assert_eq!(
+            round_tripped.cacheable_atom_count(),
+            round_tripped.atom_count()
+        );
+    }
 
     #[test]
     fn test_optimize_does_not_mutate_shared_atoms() {
