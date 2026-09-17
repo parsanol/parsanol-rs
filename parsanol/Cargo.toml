@@ -247,3 +247,8 @@ harness = false
 name = "all-examples"
 path = "../benches/all-examples.rs"
 harness = false
+
+[[bench]]
+name = "large-input"
+path = "../benches/large-input.rs"
+harness = false
