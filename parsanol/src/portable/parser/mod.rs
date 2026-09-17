@@ -266,7 +266,8 @@ impl<'a> PortableParser<'a> {
     /// Check resources (timeout and memory)
     #[inline]
     fn check_resources(&mut self) -> Result<(), ParseError> {
-        self.governor.check_resources(self.memory_usage())
+        self.governor
+            .check_resources_lazy(|| self.arena.memory_usage() + self.cache.memory_usage())
     }
 
     // ========================================================================
