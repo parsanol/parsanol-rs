@@ -207,12 +207,10 @@ pub struct Grammar {
     /// Index of the root atom
     pub root: usize,
 
-    /// Bitset marking atoms that don't need packrat caching.
-    ///
-    /// Terminal atoms (Re, Str, Cut) and pass-through wrappers (Named, Entity,
-    /// Ignore, Scope, Capture) whose inner is also no-cache are O(1) to evaluate
-    /// or just forward to their child. Caching them wastes memory without saving
-    /// work. This bitset is computed during `optimize()` and skipped by serde.
+    /// Atoms excluded from packrat caching. Empty: every atom kind is a pure
+    /// function of (input, position), so all results are memoizable. Memory is
+    /// bounded by the `DenseCache` entry cap, not by exempting atom kinds.
+    /// Computed during `optimize()` and skipped by serde.
     #[serde(skip, default)]
     pub no_cache: Vec<bool>,
 }
@@ -281,43 +279,20 @@ impl Grammar {
 
     /// Compute which atoms don't need packrat caching.
     ///
-    /// In PEG parsing, the only atoms that truly benefit from memoization are:
-    /// - **Alternative**: Without caching, failed alternatives are re-tried on
-    ///   every backtrack. This is the #1 source of exponential blowup.
-    /// - **Repetition**: Without caching, the same repetition is re-evaluated
-    ///   when backtracking through alternatives.
+    /// Every atom kind is a pure function of (input, position): successes and
+    /// failures alike are deterministic, so every result is memoizable.
+    /// Restricting memoization to a few atom kinds makes large inputs
+    /// super-linear (parsanol-ruby#52: ~99% of CPU samples in
+    /// try_atom/parse_atom_uncached with almost no cache traffic), because
+    /// non-memoized subtrees are re-executed from every structural path that
+    /// reaches them. Memory stays bounded through `DenseCache`'s `max_entries`
+    /// cap, which recycles the oldest window of entries instead of growing.
     ///
-    /// All other atoms are deterministic at each position:
-    /// - Str, Re: O(1) terminal match
-    /// - Sequence: deterministic — children succeed/fail independently
-    /// - Named, Entity, Ignore, Scope, Capture: pass-through wrappers
-    /// - Lookahead: evaluates inner once (deterministic at position)
-    /// - Cut: always succeeds, O(1)
-    /// - Dynamic, Custom: too risky to skip
+    /// Nothing is currently marked no-cache; the bitset is kept so callers and
+    /// the serialized surface stay stable.
     fn compute_no_cache(&mut self) {
+        self.no_cache.clear();
         self.no_cache.resize(self.atoms.len(), false);
-
-        for i in 0..self.atoms.len() {
-            self.no_cache[i] = match &self.atoms[i] {
-                // Only Alternative and Repetition need caching
-                Atom::Alternative { .. } | Atom::Repetition { .. } => false,
-
-                // Dynamic and Custom: conservatively cache (unknown behavior)
-                Atom::Dynamic { .. } | Atom::Custom { .. } => false,
-
-                // Everything else is deterministic at each position — no need to cache
-                Atom::Str { .. }
-                | Atom::Re { .. }
-                | Atom::Sequence { .. }
-                | Atom::Named { .. }
-                | Atom::Entity { .. }
-                | Atom::Lookahead { .. }
-                | Atom::Cut
-                | Atom::Ignore { .. }
-                | Atom::Capture { .. }
-                | Atom::Scope { .. } => true,
-            };
-        }
     }
 
     /// Serialize to JSON

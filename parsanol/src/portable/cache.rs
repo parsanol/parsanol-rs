@@ -292,14 +292,17 @@ impl DenseCache {
 
     /// Insert an entry into the cache
     ///
-    /// If the cache is at max_entries, the entry is silently dropped.
-    /// This caps memory usage by trading some re-parsing for bounded growth.
+    /// When the cache reaches `max_entries`, the oldest window of entries is
+    /// recycled and insertion continues. Silently freezing at the cap would
+    /// disable memoization for the rest of a large parse (the dominant cost in
+    /// parsanol-ruby#52); a reset keeps memory bounded while entries near the
+    /// current position — the ones backtracking re-visits — stay warm.
     #[inline]
     pub fn insert(&mut self, entry: CacheEntry) {
-        // Cap memory: skip insertion if at capacity
         if self.entries.len() >= self.max_entries {
-            self.drops += 1;
-            return;
+            self.drops += self.entries.len() as u64;
+            self.slots.fill(-1);
+            self.entries.clear();
         }
 
         // Check if we need to resize
