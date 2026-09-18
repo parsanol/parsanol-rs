@@ -489,45 +489,15 @@ fn flatten_sequence(items: &[AstNode], arena: &mut AstArena, input: &str) -> Ast
                     pool_index: pool_idx,
                     length: len,
                 };
-            } else {
-                // DIFFERENT outer keys -> WRAPPER pattern
-                // Merge all inner hashes into a single hash under a synthetic key
-                let mut merged_inner: Vec<(String, AstNode)> = Vec::new();
-                for item in items {
-                    if let AstNode::Hash { pool_index, length } = item {
-                        let pairs = arena.get_hash_items(*pool_index as usize, *length as usize);
-                        for (k, v) in pairs {
-                            merged_inner.push((k.clone(), v));
-                        }
-                    }
-                }
-                // Convert to borrowed slices for store_hash
-                let inner_refs: Vec<(&str, AstNode)> = merged_inner
-                    .iter()
-                    .map(|(k, v)| (k.as_str(), v.clone()))
-                    .collect();
-                let (inner_pool, inner_len) = arena.store_hash(&inner_refs);
-                // Use first key as wrapper key (any key works since we're merging)
-                let (pool_idx, len) = arena.store_hash(&[(
-                    first_key.as_str(),
-                    AstNode::Hash {
-                        pool_index: inner_pool,
-                        length: inner_len,
-                    },
-                )]);
-                return AstNode::Hash {
-                    pool_index: pool_idx,
-                    length: len,
-                };
             }
+
+            // DIFFERENT outer keys -> plain sequence merge of the item
+            // hashes (siblings), matching Ruby's "MIXED KEYS: merge into
+            // single hash". Falls through to the merged_hash return below.
         }
 
-        // Mixed keys or multiple keys: keep as array
-        let (pool_idx, len) = arena.store_array(items);
-        return AstNode::Array {
-            pool_index: pool_idx,
-            length: len,
-        };
+        // First item is not a single-key hash: also a plain sequence
+        // merge in Ruby semantics — falls through to merged_hash.
     }
 
     // PARSLET SEQUENCE SEMANTICS:
