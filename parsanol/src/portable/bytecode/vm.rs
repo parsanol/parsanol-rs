@@ -5,7 +5,7 @@
 
 use super::capture::{CaptureFrame, CaptureProcessor};
 use super::error::{instruction_to_expected, ErrorTracker};
-use super::instruction::{CaptureKind, Instruction};
+use super::instruction::Instruction;
 use super::program::Program;
 use crate::portable::arena::AstArena;
 use crate::portable::ast::{AstNode, ParseError, ParseResult};
@@ -57,6 +57,14 @@ pub struct VMResult {
     pub end_pos: usize,
 }
 
+/// Packrat memo entry for a rule call: (rule pc, position) -> outcome.
+#[derive(Debug, Clone)]
+struct MemoEntry {
+    success: bool,
+    end_pos: usize,
+    value: Option<AstNode>,
+}
+
 /// What a backtrack frame represents when failure unwinds to it
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FrameKind {
@@ -87,6 +95,9 @@ struct BacktrackFrame {
     caps_height: usize,
     /// What this frame is
     kind: FrameKind,
+    /// For Return frames: the memo key's rule pc, recorded on return
+    /// (success) or on unwinding past the frame (failure).
+    memo_rule: Option<usize>,
 }
 
 /// The bytecode virtual machine
@@ -142,6 +153,12 @@ pub struct BytecodeVM<'a> {
     /// Backtrack count (diagnostics/budgeting)
     backtracks: u64,
 
+    /// Rule-call memoization: (rule body pc, position) -> outcome.
+    /// PEG parse results are context-free at a call boundary (Dynamic
+    /// atoms are gated out of VM programs), so successes and failures
+    /// alike are memoizable.
+    memo: std::collections::HashMap<(usize, usize), MemoEntry>,
+
     /// Budget for parse_with_vm_capped; None = unlimited.
     backtrack_budget: Option<u64>,
 
@@ -178,6 +195,7 @@ impl<'a> BytecodeVM<'a> {
             backtracks: 0,
             backtrack_budget: None,
             budget_exceeded: false,
+            memo: std::collections::HashMap::new(),
         }
     }
 
@@ -304,6 +322,29 @@ impl<'a> BytecodeVM<'a> {
             reg_height: self.rep_registers.len(),
             caps_height: self.recorded_captures.len(),
             kind,
+            memo_rule: None,
+        }
+    }
+
+    fn return_frame(&self, return_ip: usize, memo_rule: usize) -> BacktrackFrame {
+        BacktrackFrame {
+            return_ip,
+            position: self.position,
+            capture_height: self.capture_stack.len(),
+            value_height: self.value_stack.len(),
+            reg_height: self.rep_registers.len(),
+            caps_height: self.recorded_captures.len(),
+            kind: FrameKind::Return,
+            memo_rule: Some(memo_rule),
+        }
+    }
+
+    /// Record a memo outcome unless the entry pool is saturated.
+    #[inline]
+    fn memo_store(&mut self, rule_pc: usize, pos: usize, entry: MemoEntry) {
+        const MEMO_MAX: usize = 2_000_000;
+        if self.memo.len() < MEMO_MAX {
+            self.memo.insert((rule_pc, pos), entry);
         }
     }
 
@@ -493,17 +534,45 @@ impl<'a> BytecodeVM<'a> {
             Instruction::Jump { offset } => Ok(ExecutionResult::Jump(*offset)),
 
             Instruction::Call { offset } => {
-                // Push return frame
-                self.backtrack_stack
-                    .push(self.frame_snapshot(self.ip + 1, FrameKind::Return));
+                let target = (self.ip as i32 + 1 + offset) as usize;
+                let pos = self.position;
 
-                Ok(ExecutionResult::Jump(*offset))
+                // Packrat memoization: rule outcomes are context-free at
+                // a call boundary (Dynamic atoms are gated out of VM
+                // programs), so successes and failures alike reuse.
+                if let Some(entry) = self.memo.get(&(target, pos)) {
+                    if entry.success {
+                        let value = entry.value.clone().unwrap_or(AstNode::Nil);
+                        self.position = entry.end_pos;
+                        self.value_stack.push(value);
+                        Ok(ExecutionResult::Continue)
+                    } else {
+                        self.track_failure();
+                        Ok(ExecutionResult::Fail)
+                    }
+                } else {
+                    self.backtrack_stack
+                        .push(self.return_frame(self.ip + 1, target));
+                    Ok(ExecutionResult::Jump(*offset))
+                }
             }
 
             Instruction::Return => {
                 // Pop return frame
                 if let Some(frame) = self.backtrack_stack.pop() {
                     if frame.kind == FrameKind::Return {
+                        if let Some(rule_pc) = frame.memo_rule {
+                            let value = self.value_stack.last().cloned();
+                            self.memo_store(
+                                rule_pc,
+                                frame.position,
+                                MemoEntry {
+                                    success: true,
+                                    end_pos: self.position,
+                                    value,
+                                },
+                            );
+                        }
                         self.ip = frame.return_ip;
                         return Ok(ExecutionResult::Jump(-1)); // -1 because we'll add 1 in the main loop
                     }
@@ -703,13 +772,12 @@ impl<'a> BytecodeVM<'a> {
                         let start_pos = self.position;
                         self.position = custom_result.end_pos;
 
-                        // If the custom atom returned a value, push it to captures
-                        if custom_result.value.is_some() {
-                            let mut frame = CaptureFrame::open(start_pos, CaptureKind::Simple, 0);
-                            frame.close(self.position);
-                            // Note: The value is already an AstNode, we just need to track it
-                            // For now, we push the frame and let the processor handle it
-                            self.capture_stack.push(frame);
+                        // The matched span is the value, mirroring every
+                        // other terminal in the tree-walker value model.
+                        if let Some(value) = custom_result.value {
+                            self.value_stack.push(value);
+                        } else {
+                            self.push_span_value(start_pos);
                         }
 
                         Ok(ExecutionResult::Continue)
@@ -955,11 +1023,31 @@ impl<'a> BytecodeVM<'a> {
             self.position = frame.position;
             self.truncate_to(&frame);
 
+            // A failed memoized rule body records its failure — unless
+            // the budget tripped, in which case the unwind is an abort,
+            // not a parse outcome.
+            if frame.kind == FrameKind::Return {
+                if let Some(rule_pc) = frame.memo_rule {
+                    if !self.budget_exceeded {
+                        self.memo_store(
+                            rule_pc,
+                            frame.position,
+                            MemoEntry {
+                                success: false,
+                                end_pos: frame.position,
+                                value: None,
+                            },
+                        );
+                    }
+                }
+                continue;
+            }
+
             match frame.kind {
                 // These frames have no alternative: continue backtracking.
-                // Returning from a subroutine during failure unwinding must
-                // not resume the caller, and predicate/mark frames only
-                // bound a region whose side effects are already truncated.
+                // Predicate/mark frames only bound a region whose side
+                // effects are already truncated; Return frames had their
+                // failure memoized above.
                 FrameKind::Return | FrameKind::Predicate | FrameKind::Mark => continue,
                 FrameKind::Choice => {
                     self.ip = frame.return_ip;
