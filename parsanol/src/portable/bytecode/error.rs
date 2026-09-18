@@ -42,6 +42,23 @@ pub enum Expected {
     Unknown,
 }
 
+impl Expected {
+    /// The label this expectation contributes to a failure message,
+    /// formatted like the tree-walker's expected-set entries.
+    pub fn label(&self) -> String {
+        match self {
+            Expected::Char(c) => format!("{c}"),
+            Expected::CharSet(chars) => chars.clone(),
+            Expected::String(s) => s.clone(),
+            Expected::Regex(p) => p.clone(),
+            Expected::Any(_) => "any character".to_string(),
+            Expected::EndOfInput => "end of input".to_string(),
+            Expected::Label(l) => l.clone(),
+            Expected::Unknown => "input".to_string(),
+        }
+    }
+}
+
 impl std::fmt::Display for Expected {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -136,6 +153,22 @@ impl ErrorTracker {
     /// Get all expected items at the furthest position
     pub fn expected_items(&self) -> Vec<&Expected> {
         self.contexts.iter().map(|ctx| &ctx.expected).collect()
+    }
+
+    /// Expected labels recorded at the furthest failure position, in
+    /// recording order, deduplicated.
+    pub fn expected_labels_at_furthest(&self) -> Vec<String> {
+        let furthest = self.furthest_position();
+        let mut labels: Vec<String> = Vec::new();
+        for ctx in &self.contexts {
+            if ctx.position == furthest {
+                let label = ctx.expected.label();
+                if !labels.contains(&label) {
+                    labels.push(label);
+                }
+            }
+        }
+        labels
     }
 }
 

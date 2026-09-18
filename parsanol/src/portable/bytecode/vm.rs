@@ -138,6 +138,15 @@ pub struct BytecodeVM<'a> {
 
     /// Recorded captures: (name table index, start, length)
     recorded_captures: Vec<(u32, u32, u32)>,
+
+    /// Backtrack count (diagnostics/budgeting)
+    backtracks: u64,
+
+    /// Budget for parse_with_vm_capped; None = unlimited.
+    backtrack_budget: Option<u64>,
+
+    /// Set when the budget tripped.
+    budget_exceeded: bool,
 }
 
 impl<'a> BytecodeVM<'a> {
@@ -166,7 +175,29 @@ impl<'a> BytecodeVM<'a> {
             value_stack: Vec::with_capacity(64),
             rep_registers: Vec::with_capacity(16),
             recorded_captures: Vec::new(),
+            backtracks: 0,
+            backtrack_budget: None,
+            budget_exceeded: false,
         }
+    }
+
+    /// Number of backtracks performed during the run.
+    pub fn backtrack_count(&self) -> u64 {
+        self.backtracks
+    }
+
+    /// Whether any terminal failure was tracked during the run.
+    pub fn error_tracker_has_failures(&self) -> bool {
+        self.error_tracker.has_failures()
+    }
+
+    /// Deepest terminal failure: the furthest position and its expected
+    /// labels (see `parse_with_vm_diag`).
+    pub fn failure_diagnostics(&self) -> (usize, Vec<String>) {
+        (
+            self.error_tracker.furthest_position(),
+            self.error_tracker.expected_labels_at_furthest(),
+        )
     }
 
     /// Run the VM and return the result
@@ -881,6 +912,13 @@ impl<'a> BytecodeVM<'a> {
 
     /// Backtrack to the previous choice point
     fn backtrack(&mut self) -> Result<bool, ParseError> {
+        self.backtracks += 1;
+        if let Some(budget) = self.backtrack_budget {
+            if self.backtracks > budget {
+                self.budget_exceeded = true;
+                return Ok(false);
+            }
+        }
         loop {
             if self.backtrack_stack.is_empty() {
                 return Ok(false);
@@ -971,14 +1009,89 @@ pub fn parse_with_vm(
     input: &str,
     arena: &mut AstArena,
 ) -> Result<ParseResult, ParseError> {
+    parse_with_vm_diag(program, input, arena).0
+}
+
+/// Result plus out-of-band deepest-failure diagnostics.
+pub type VmParseWithDiagnostics = (
+    Result<ParseResult, ParseError>,
+    Option<(usize, Vec<String>)>,
+);
+
+/// Parse with a precompiled program, also returning the deepest-failure
+/// diagnostics: `(position, expected labels)` at the furthest failure,
+/// carried out-of-band like `PortableParser::failure_diagnostics`.
+pub fn parse_with_vm_diag(
+    program: &Program,
+    input: &str,
+    arena: &mut AstArena,
+) -> VmParseWithDiagnostics {
     let config = VMConfig::default();
     let mut vm = BytecodeVM::new(program, input, arena, config);
-    let result = vm.run()?;
-    Ok(ParseResult {
+    let result = vm.run().map(|result| ParseResult {
         value: result.value,
         end_pos: result.end_pos,
         capture_state: None,
-    })
+    });
+    let diagnostics = if vm.error_tracker_has_failures() {
+        Some(vm.failure_diagnostics())
+    } else {
+        None
+    };
+    (result, diagnostics)
+}
+
+/// Outcome of a budget-capped VM parse.
+#[derive(Debug)]
+pub enum VmCappedOutcome {
+    /// The parse ran to completion (or a real failure) within budget.
+    Parsed {
+        /// The parse result.
+        result: Result<ParseResult, ParseError>,
+        /// Deepest-failure diagnostics, when any failure was tracked.
+        diagnostics: Option<(usize, Vec<String>)>,
+    },
+    /// The backtrack budget tripped: the grammar is backtracking-heavy
+    /// and the memoized packrat engine will serve it better.
+    BudgetExceeded,
+}
+
+/// Parse with a backtrack budget. Grammars whose choice structure makes
+/// the (memo-less) VM thrash trip the budget early and fall back to the
+/// packrat engine; linear grammars never come close.
+pub fn parse_with_vm_capped(
+    program: &Program,
+    input: &str,
+    arena: &mut AstArena,
+    max_backtracks: u64,
+) -> VmCappedOutcome {
+    let config = VMConfig::default();
+    let mut vm = BytecodeVM::new(program, input, arena, config);
+    vm.backtrack_budget = Some(max_backtracks);
+    let result = vm.run().map(|result| ParseResult {
+        value: result.value,
+        end_pos: result.end_pos,
+        capture_state: None,
+    });
+    if vm.budget_exceeded {
+        return VmCappedOutcome::BudgetExceeded;
+    }
+    let diagnostics = if vm.error_tracker_has_failures() {
+        Some(vm.failure_diagnostics())
+    } else {
+        None
+    };
+    if std::env::var("PARSANOL_VM_DEBUG").is_ok() {
+        eprintln!(
+            "parsanol-vm: input {} bytes, {} backtracks",
+            input.len(),
+            vm.backtrack_count()
+        );
+    }
+    VmCappedOutcome::Parsed {
+        result,
+        diagnostics,
+    }
 }
 
 #[cfg(test)]
