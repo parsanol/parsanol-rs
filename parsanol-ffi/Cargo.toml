@@ -1,6 +1,6 @@
 [package]
 name = "parsanol-ffi"
-version = "0.7.0"
+version = "0.7.1"
 edition = "2021"
 description = "C-ABI cdylib for parsanol: register-once handle parsing with batch results"
 license = "MIT"
