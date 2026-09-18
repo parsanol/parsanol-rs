@@ -9,6 +9,7 @@
 //! Ruby FFI, and the only path where per-atom caching policy is computed.
 
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
+use parsanol::portable::bytecode::{compile_bytecode, parse_with_vm};
 use parsanol::portable::parser_dsl::{
     capture, choice, dynamic, re, ref_, seq, str, GrammarBuilder, ParsletExt,
 };
@@ -57,6 +58,7 @@ fn from_json() -> Grammar {
 
 fn bench_parse(c: &mut Criterion) {
     let grammar = from_json();
+    let program = compile_bytecode(grammar.clone()).unwrap();
     let small = input_bytes(80);
     let large = input_bytes(2_500); // ~64 KB
     let mut truncated = large.clone();
@@ -75,6 +77,15 @@ fn bench_parse(c: &mut Criterion) {
                 let mut arena = AstArena::for_input(black_box(input).len());
                 let mut parser = PortableParser::new(&grammar, black_box(input), &mut arena);
                 black_box(parser.parse().is_ok())
+            })
+        });
+
+        // Bytecode VM with the program compiled once (the registration-time
+        // model the FFI handle path uses): parse-only execution cost.
+        group.bench_function(format!("{name}_vm"), |b| {
+            b.iter(|| {
+                let mut arena = AstArena::for_input(black_box(input).len());
+                black_box(parse_with_vm(&program, black_box(input), &mut arena).is_ok())
             })
         });
     }

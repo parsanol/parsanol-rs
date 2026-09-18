@@ -242,6 +242,36 @@ pub enum Opcode {
     ///
     /// Calls a registered dynamic callback to determine which atom to parse.
     InvokeDynamic = 30,
+
+    /// Push nil (tree-walker value model)
+    ToNil = 31,
+
+    /// Build a sequence envelope
+    BuildSeq = 32,
+
+    /// Open a repetition register
+    RepOpen = 33,
+
+    /// Count a repetition iteration
+    RepCount = 34,
+
+    /// Build a repetition envelope
+    BuildRep = 35,
+
+    /// Build a Named hash
+    BuildHash = 36,
+
+    /// Mark a capture start
+    CapMark = 37,
+
+    /// Record a capture
+    RecordCapture = 38,
+
+    /// End a scope
+    ScopeEnd = 39,
+
+    /// Push nil (non-consuming)
+    PushNil = 40,
 }
 
 /// Capture kind for capture instructions
@@ -498,6 +528,58 @@ pub enum Instruction {
         /// The dynamic callback ID (registered via `register_dynamic_callback()`)
         callback_id: u64,
     },
+
+    // ============================================================================
+    // Tree-walker value model
+    // ============================================================================
+    // These instructions reproduce the packrat tree-walker's raw AST shape
+    // (tagged sequence/repetition envelopes, deferred captures, Named hashes)
+    // so the VM's output is byte-identical to the reference implementation.
+    // ============================================================================
+    /// Push a literal nil (Ignore, Cut, lookahead results)
+    ToNil,
+
+    /// Pop n values and push a `[:sequence, v1..vn]` envelope
+    BuildSeq {
+        /// Number of child values
+        n: u32,
+    },
+
+    /// Open a repetition register (counts iterations, anchors BuildRep)
+    RepOpen,
+
+    /// Count one completed repetition iteration into the top register
+    RepCount,
+
+    /// Pop the top register and that many values; push the tagged
+    /// repetition envelope. A Maybe tag with exactly one value flattens
+    /// to that value, matching the tree-walker.
+    BuildRep {
+        /// Which envelope tag to apply
+        maybe: bool,
+    },
+
+    /// Pop one value and push `{name: value}`
+    BuildHash {
+        /// Index into the program's string table (the rule name)
+        name_idx: u32,
+    },
+
+    /// Mark the start of a capture region (records the position)
+    CapMark,
+
+    /// Record a capture (name, start, length) from the CapMark frame;
+    /// the body's value passes through unchanged
+    RecordCapture {
+        /// Index into the program's string table (the capture name)
+        name_idx: u32,
+    },
+
+    /// End a scope: discard captures recorded since the CapMark frame
+    ScopeEnd,
+
+    /// Push nil without consuming a value (lookahead and cut results)
+    PushNil,
 }
 
 impl Instruction {
@@ -536,6 +618,16 @@ impl Instruction {
             Instruction::PushScope => Opcode::PushScope,
             Instruction::PopScope => Opcode::PopScope,
             Instruction::InvokeDynamic { .. } => Opcode::InvokeDynamic,
+            Instruction::ToNil => Opcode::ToNil,
+            Instruction::BuildSeq { .. } => Opcode::BuildSeq,
+            Instruction::RepOpen => Opcode::RepOpen,
+            Instruction::RepCount => Opcode::RepCount,
+            Instruction::BuildRep { .. } => Opcode::BuildRep,
+            Instruction::BuildHash { .. } => Opcode::BuildHash,
+            Instruction::CapMark => Opcode::CapMark,
+            Instruction::RecordCapture { .. } => Opcode::RecordCapture,
+            Instruction::ScopeEnd => Opcode::ScopeEnd,
+            Instruction::PushNil => Opcode::PushNil,
         }
     }
 
@@ -646,6 +738,66 @@ impl Instruction {
     #[inline]
     pub fn end() -> Self {
         Instruction::End
+    }
+
+    /// Create a ToNil instruction
+    #[inline]
+    pub fn to_nil() -> Self {
+        Instruction::ToNil
+    }
+
+    /// Create a BuildSeq instruction
+    #[inline]
+    pub fn build_seq(n: u32) -> Self {
+        Instruction::BuildSeq { n }
+    }
+
+    /// Create a RepOpen instruction
+    #[inline]
+    pub fn rep_open() -> Self {
+        Instruction::RepOpen
+    }
+
+    /// Create a RepCount instruction
+    #[inline]
+    pub fn rep_count() -> Self {
+        Instruction::RepCount
+    }
+
+    /// Create a BuildRep instruction
+    #[inline]
+    pub fn build_rep(maybe: bool) -> Self {
+        Instruction::BuildRep { maybe }
+    }
+
+    /// Create a BuildHash instruction
+    #[inline]
+    pub fn build_hash(name_idx: u32) -> Self {
+        Instruction::BuildHash { name_idx }
+    }
+
+    /// Create a CapMark instruction
+    #[inline]
+    pub fn cap_mark() -> Self {
+        Instruction::CapMark
+    }
+
+    /// Create a RecordCapture instruction
+    #[inline]
+    pub fn record_capture(name_idx: u32) -> Self {
+        Instruction::RecordCapture { name_idx }
+    }
+
+    /// Create a ScopeEnd instruction
+    #[inline]
+    pub fn scope_end() -> Self {
+        Instruction::ScopeEnd
+    }
+
+    /// Create a PushNil instruction
+    #[inline]
+    pub fn push_nil() -> Self {
+        Instruction::PushNil
     }
 
     /// Create a Choice instruction
@@ -794,6 +946,20 @@ impl fmt::Display for Instruction {
             Instruction::InvokeDynamic { callback_id } => {
                 write!(f, "InvokeDynamic #{}", callback_id)
             }
+            Instruction::ToNil => write!(f, "ToNil"),
+            Instruction::BuildSeq { n } => write!(f, "BuildSeq {}", n),
+            Instruction::RepOpen => write!(f, "RepOpen"),
+            Instruction::RepCount => write!(f, "RepCount"),
+            Instruction::BuildRep { maybe } => write!(
+                f,
+                "BuildRep {}",
+                if *maybe { ":maybe" } else { ":repetition" }
+            ),
+            Instruction::BuildHash { name_idx } => write!(f, "BuildHash [{}]", name_idx),
+            Instruction::CapMark => write!(f, "CapMark"),
+            Instruction::RecordCapture { name_idx } => write!(f, "RecordCapture [{}]", name_idx),
+            Instruction::ScopeEnd => write!(f, "ScopeEnd"),
+            Instruction::PushNil => write!(f, "PushNil"),
         }
     }
 }

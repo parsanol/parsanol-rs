@@ -57,19 +57,36 @@ pub struct VMResult {
     pub end_pos: usize,
 }
 
-/// Backtrack stack frame
-///
-/// Stores state to restore when backtracking.
+/// What a backtrack frame represents when failure unwinds to it
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FrameKind {
+    /// Ordered-choice point: jump to the alternative address
+    Choice,
+    /// Subroutine return address: skip during unwinding
+    Return,
+    /// Lookahead predicate boundary: skip during unwinding
+    Predicate,
+    /// Region marker (capture start / scope): skip during unwinding,
+    /// truncating the marked region's side effects
+    Mark,
+}
+
 #[derive(Debug, Clone)]
 struct BacktrackFrame {
-    /// Return instruction pointer
+    /// Return instruction pointer (choice alternative or return address)
     return_ip: usize,
     /// Position to restore
     position: usize,
     /// Capture stack height to restore
     capture_height: usize,
-    /// Is this a predicate frame?
-    is_predicate: bool,
+    /// Value stack height to restore
+    value_height: usize,
+    /// Repetition register height to restore
+    reg_height: usize,
+    /// Recorded capture height to restore
+    caps_height: usize,
+    /// What this frame is
+    kind: FrameKind,
 }
 
 /// The bytecode virtual machine
@@ -112,6 +129,15 @@ pub struct BytecodeVM<'a> {
 
     /// Capture state for generational scopes
     capture_state: CaptureState,
+
+    /// Tree-walker value model: produced values (one per completed atom)
+    value_stack: Vec<AstNode>,
+
+    /// Repetition registers: iteration counts anchoring BuildRep
+    rep_registers: Vec<u32>,
+
+    /// Recorded captures: (name table index, start, length)
+    recorded_captures: Vec<(u32, u32, u32)>,
 }
 
 impl<'a> BytecodeVM<'a> {
@@ -137,6 +163,9 @@ impl<'a> BytecodeVM<'a> {
             furthest_failure: 0,
             error_tracker: ErrorTracker::new(),
             capture_state: CaptureState::new(),
+            value_stack: Vec::with_capacity(64),
+            rep_registers: Vec::with_capacity(16),
+            recorded_captures: Vec::new(),
         }
     }
 
@@ -217,7 +246,36 @@ impl<'a> BytecodeVM<'a> {
         }
     }
 
-    /// Execute a single instruction
+    /// Push a value for the current atom's match span
+    #[inline]
+    fn push_span_value(&mut self, start: usize) {
+        let len = self.position - start;
+        self.value_stack.push(self.arena.input_ref(start, len));
+    }
+
+    /// Restore all stacks to a frame's recorded heights
+    #[inline]
+    fn truncate_to(&mut self, frame: &BacktrackFrame) {
+        self.capture_stack.truncate(frame.capture_height);
+        self.value_stack.truncate(frame.value_height);
+        self.rep_registers.truncate(frame.reg_height);
+        self.recorded_captures.truncate(frame.caps_height);
+    }
+
+    /// Capture a snapshot frame of the current state
+    #[inline]
+    fn frame_snapshot(&self, return_ip: usize, kind: FrameKind) -> BacktrackFrame {
+        BacktrackFrame {
+            return_ip,
+            position: self.position,
+            capture_height: self.capture_stack.len(),
+            value_height: self.value_stack.len(),
+            reg_height: self.rep_registers.len(),
+            caps_height: self.recorded_captures.len(),
+            kind,
+        }
+    }
+
     fn execute_instruction(&mut self, instr: &Instruction) -> Result<ExecutionResult, ParseError> {
         match instr {
             // ========================================================================
@@ -225,6 +283,7 @@ impl<'a> BytecodeVM<'a> {
             // ========================================================================
             Instruction::Any { n } => {
                 let n = *n as usize;
+                let start = self.position;
                 if self.position + n <= self.input.len() {
                     // Advance position by n characters (not bytes)
                     let mut chars = 0usize;
@@ -236,6 +295,7 @@ impl<'a> BytecodeVM<'a> {
                     }
                     if chars == n {
                         self.position = pos;
+                        self.push_span_value(start);
                         Ok(ExecutionResult::Continue)
                     } else {
                         self.track_failure_with_context();
@@ -249,7 +309,9 @@ impl<'a> BytecodeVM<'a> {
 
             Instruction::Char { byte } => {
                 if self.position < self.input.len() && self.input[self.position] == *byte {
+                    let start = self.position;
                     self.position += 1;
+                    self.push_span_value(start);
                     Ok(ExecutionResult::Continue)
                 } else {
                     self.track_failure_with_context();
@@ -266,8 +328,10 @@ impl<'a> BytecodeVM<'a> {
                         })?;
 
                 if self.position < self.input.len() && set.contains(self.input[self.position]) {
+                    let start = self.position;
                     let char_len = utf8_char_len(self.input[self.position]);
                     self.position += char_len;
+                    self.push_span_value(start);
                     Ok(ExecutionResult::Continue)
                 } else {
                     self.track_failure_with_context();
@@ -290,7 +354,9 @@ impl<'a> BytecodeVM<'a> {
                     && &self.input[self.position..end] == s_bytes
                     && *len as usize == s_bytes.len()
                 {
+                    let start = self.position;
                     self.position = end;
+                    self.push_span_value(start);
                     Ok(ExecutionResult::Continue)
                 } else {
                     self.track_failure_with_context();
@@ -312,10 +378,19 @@ impl<'a> BytecodeVM<'a> {
                         message: format!("Failed to compile regex: {}", pattern),
                     })?;
 
+                // The tree-walker rejects regexes at end-of-input (even
+                // zero-width-matchable ones) — parity requires the same.
+                if self.position >= self.input.len() {
+                    self.track_failure_with_context();
+                    return Ok(ExecutionResult::Fail);
+                }
+
                 // Match at current position
                 if let Some(m) = re.find_at(self.input_str, self.position) {
                     if m.start() == self.position {
+                        let start = self.position;
                         self.position = m.end();
+                        self.push_span_value(start);
                         return Ok(ExecutionResult::Continue);
                     }
                 }
@@ -329,7 +404,9 @@ impl<'a> BytecodeVM<'a> {
             // ========================================================================
             Instruction::TestChar { byte, offset } => {
                 if self.position < self.input.len() && self.input[self.position] == *byte {
+                    let start = self.position;
                     self.position += 1;
+                    self.push_span_value(start);
                     Ok(ExecutionResult::Continue)
                 } else {
                     self.track_failure();
@@ -346,8 +423,10 @@ impl<'a> BytecodeVM<'a> {
                         })?;
 
                 if self.position < self.input.len() && set.contains(self.input[self.position]) {
+                    let start = self.position;
                     let char_len = utf8_char_len(self.input[self.position]);
                     self.position += char_len;
+                    self.push_span_value(start);
                     Ok(ExecutionResult::Continue)
                 } else {
                     self.track_failure();
@@ -357,6 +436,7 @@ impl<'a> BytecodeVM<'a> {
 
             Instruction::TestAny { n, offset } => {
                 let n = *n as usize;
+                let start = self.position;
                 if self.position + n <= self.input.len() {
                     // Check for n characters
                     let mut chars = 0usize;
@@ -368,6 +448,7 @@ impl<'a> BytecodeVM<'a> {
                     }
                     if chars == n {
                         self.position = pos;
+                        self.push_span_value(start);
                         return Ok(ExecutionResult::Continue);
                     }
                 }
@@ -382,12 +463,8 @@ impl<'a> BytecodeVM<'a> {
 
             Instruction::Call { offset } => {
                 // Push return frame
-                self.backtrack_stack.push(BacktrackFrame {
-                    return_ip: self.ip + 1,
-                    position: self.position,
-                    capture_height: self.capture_stack.len(),
-                    is_predicate: false,
-                });
+                self.backtrack_stack
+                    .push(self.frame_snapshot(self.ip + 1, FrameKind::Return));
 
                 Ok(ExecutionResult::Jump(*offset))
             }
@@ -395,7 +472,7 @@ impl<'a> BytecodeVM<'a> {
             Instruction::Return => {
                 // Pop return frame
                 if let Some(frame) = self.backtrack_stack.pop() {
-                    if !frame.is_predicate {
+                    if frame.kind == FrameKind::Return {
                         self.ip = frame.return_ip;
                         return Ok(ExecutionResult::Jump(-1)); // -1 because we'll add 1 in the main loop
                     }
@@ -407,7 +484,11 @@ impl<'a> BytecodeVM<'a> {
             }
 
             Instruction::End => {
-                let value = self.build_result()?;
+                let value = if self.value_stack.len() == 1 {
+                    self.value_stack.pop().unwrap_or(AstNode::Nil)
+                } else {
+                    self.build_result()?
+                };
                 Ok(ExecutionResult::Success(value))
             }
 
@@ -415,12 +496,9 @@ impl<'a> BytecodeVM<'a> {
             // Backtracking
             // ========================================================================
             Instruction::Choice { offset } => {
-                self.backtrack_stack.push(BacktrackFrame {
-                    return_ip: (self.ip as i32 + 1 + offset) as usize,
-                    position: self.position,
-                    capture_height: self.capture_stack.len(),
-                    is_predicate: false,
-                });
+                let alt = (self.ip as i32 + 1 + offset) as usize;
+                self.backtrack_stack
+                    .push(self.frame_snapshot(alt, FrameKind::Choice));
                 Ok(ExecutionResult::Continue)
             }
 
@@ -431,10 +509,15 @@ impl<'a> BytecodeVM<'a> {
             }
 
             Instruction::PartialCommit { offset } => {
-                // Update the choice point with current position
+                // Update the choice point with current position and the
+                // completed iterations' side effects, so a later failure
+                // keeps them and only discards the failing iteration.
                 if let Some(frame) = self.backtrack_stack.last_mut() {
                     frame.position = self.position;
                     frame.capture_height = self.capture_stack.len();
+                    frame.value_height = self.value_stack.len();
+                    frame.reg_height = self.rep_registers.len();
+                    frame.caps_height = self.recorded_captures.len();
                 }
                 Ok(ExecutionResult::Jump(*offset))
             }
@@ -443,7 +526,7 @@ impl<'a> BytecodeVM<'a> {
                 // Pop frame, restore position, then jump
                 if let Some(frame) = self.backtrack_stack.pop() {
                     self.position = frame.position;
-                    self.capture_stack.truncate(frame.capture_height);
+                    self.truncate_to(&frame);
                 }
                 Ok(ExecutionResult::Jump(*offset))
             }
@@ -455,8 +538,10 @@ impl<'a> BytecodeVM<'a> {
 
             Instruction::FailTwice => {
                 self.track_failure();
-                // Pop one frame first
-                self.backtrack_stack.pop();
+                // Pop one frame first, discarding its side effects
+                if let Some(frame) = self.backtrack_stack.pop() {
+                    self.truncate_to(&frame);
+                }
                 Ok(ExecutionResult::Fail)
             }
 
@@ -501,12 +586,9 @@ impl<'a> BytecodeVM<'a> {
             // Predicates
             // ========================================================================
             Instruction::PredChoice { offset } => {
-                self.backtrack_stack.push(BacktrackFrame {
-                    return_ip: (self.ip as i32 + 1 + offset) as usize,
-                    position: self.position,
-                    capture_height: self.capture_stack.len(),
-                    is_predicate: true,
-                });
+                let alt = (self.ip as i32 + 1 + offset) as usize;
+                self.backtrack_stack
+                    .push(self.frame_snapshot(alt, FrameKind::Predicate));
                 Ok(ExecutionResult::Continue)
             }
 
@@ -569,11 +651,13 @@ impl<'a> BytecodeVM<'a> {
                         })?;
 
                 // Match zero or more characters from the set
+                let start = self.position;
                 while self.position < self.input.len() && set.contains(self.input[self.position]) {
                     let char_len = utf8_char_len(self.input[self.position]);
                     self.position += char_len;
                 }
 
+                self.push_span_value(start);
                 Ok(ExecutionResult::Continue)
             }
 
@@ -674,6 +758,124 @@ impl<'a> BytecodeVM<'a> {
                     }
                 }
             }
+
+            // ========================================================================
+            // Tree-walker value model
+            // ========================================================================
+            Instruction::ToNil => {
+                self.value_stack.pop();
+                self.value_stack.push(AstNode::Nil);
+                Ok(ExecutionResult::Continue)
+            }
+
+            Instruction::PushNil => {
+                self.value_stack.push(AstNode::Nil);
+                Ok(ExecutionResult::Continue)
+            }
+
+            Instruction::BuildSeq { n } => {
+                let n = *n as usize;
+                if self.value_stack.len() < n {
+                    return Err(ParseError::Internal {
+                        message: format!("BuildSeq underflow: need {n} values"),
+                    });
+                }
+                let items = self.value_stack.split_off(self.value_stack.len() - n);
+                let (pool_idx, len) = self.arena.store_tagged_array(":sequence", &items);
+                self.value_stack.push(AstNode::Array {
+                    pool_index: pool_idx,
+                    length: len,
+                });
+                Ok(ExecutionResult::Continue)
+            }
+
+            Instruction::RepOpen => {
+                self.rep_registers.push(0);
+                Ok(ExecutionResult::Continue)
+            }
+
+            Instruction::RepCount => {
+                if let Some(count) = self.rep_registers.last_mut() {
+                    *count += 1;
+                }
+                Ok(ExecutionResult::Continue)
+            }
+
+            Instruction::BuildRep { maybe } => {
+                let n = self.rep_registers.pop().unwrap_or(0) as usize;
+                if self.value_stack.len() < n {
+                    return Err(ParseError::Internal {
+                        message: format!("BuildRep underflow: need {n} values"),
+                    });
+                }
+                let mut items = self.value_stack.split_off(self.value_stack.len() - n);
+                if *maybe && items.len() == 1 {
+                    // A present optional flattens to its value in every
+                    // context; only the absent case keeps the tag.
+                    let value = items.pop().unwrap_or(AstNode::Nil);
+                    self.value_stack.push(value);
+                } else {
+                    let tag = if *maybe { ":maybe" } else { ":repetition" };
+                    let (pool_idx, len) = self.arena.store_tagged_array(tag, &items);
+                    self.value_stack.push(AstNode::Array {
+                        pool_index: pool_idx,
+                        length: len,
+                    });
+                }
+                Ok(ExecutionResult::Continue)
+            }
+
+            Instruction::BuildHash { name_idx } => {
+                let name =
+                    self.program
+                        .get_string(*name_idx)
+                        .ok_or_else(|| ParseError::Internal {
+                            message: format!("Invalid string index: {name_idx}"),
+                        })?;
+                let value = self.value_stack.pop().ok_or_else(|| ParseError::Internal {
+                    message: "BuildHash underflow".to_string(),
+                })?;
+                let (pool_idx, len) = self.arena.store_hash(&[(name, value)]);
+                self.value_stack.push(AstNode::Hash {
+                    pool_index: pool_idx,
+                    length: len,
+                });
+                Ok(ExecutionResult::Continue)
+            }
+
+            Instruction::CapMark => {
+                self.backtrack_stack
+                    .push(self.frame_snapshot(0, FrameKind::Mark));
+                Ok(ExecutionResult::Continue)
+            }
+
+            Instruction::RecordCapture { name_idx } => {
+                if let Some(frame) = self.backtrack_stack.pop() {
+                    if frame.kind != FrameKind::Mark {
+                        return Err(ParseError::Internal {
+                            message: "RecordCapture without CapMark".to_string(),
+                        });
+                    }
+                    let len = self.position.saturating_sub(frame.position) as u32;
+                    self.recorded_captures
+                        .push((*name_idx, frame.position as u32, len));
+                }
+                Ok(ExecutionResult::Continue)
+            }
+
+            Instruction::ScopeEnd => {
+                if let Some(frame) = self.backtrack_stack.pop() {
+                    if frame.kind != FrameKind::Mark {
+                        return Err(ParseError::Internal {
+                            message: "ScopeEnd without CapMark".to_string(),
+                        });
+                    }
+                    // Captures recorded inside the scope are discarded;
+                    // the body's value passes through.
+                    self.recorded_captures.truncate(frame.caps_height);
+                }
+                Ok(ExecutionResult::Continue)
+            }
         }
     }
 
@@ -695,16 +897,19 @@ impl<'a> BytecodeVM<'a> {
 
             // Restore state
             self.position = frame.position;
-            self.capture_stack.truncate(frame.capture_height);
+            self.truncate_to(&frame);
 
-            if frame.is_predicate {
-                // Predicate frames don't have alternatives, continue backtracking
-                continue;
+            match frame.kind {
+                // These frames have no alternative: continue backtracking.
+                // Returning from a subroutine during failure unwinding must
+                // not resume the caller, and predicate/mark frames only
+                // bound a region whose side effects are already truncated.
+                FrameKind::Return | FrameKind::Predicate | FrameKind::Mark => continue,
+                FrameKind::Choice => {
+                    self.ip = frame.return_ip;
+                    return Ok(true);
+                }
             }
-
-            // Jump to alternative
-            self.ip = frame.return_ip;
-            return Ok(true);
         }
     }
 
