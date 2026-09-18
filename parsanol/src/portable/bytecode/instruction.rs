@@ -272,6 +272,9 @@ pub enum Opcode {
 
     /// Push nil (non-consuming)
     PushNil = 40,
+
+    /// Dispatch on lead byte
+    ByteDispatch = 41,
 }
 
 /// Capture kind for capture instructions
@@ -580,6 +583,15 @@ pub enum Instruction {
 
     /// Push nil without consuming a value (lookahead and cut results)
     PushNil,
+
+    /// Dispatch on the lead byte to an alternative branch.
+    /// The table maps each byte to a relative offset (-1: no branch can
+    /// start with it, fail). Emitted only for alternatives whose
+    /// branches have provably disjoint, non-nullable first sets.
+    ByteDispatch {
+        /// Index into the program's dispatch table pool
+        table_idx: u32,
+    },
 }
 
 impl Instruction {
@@ -628,6 +640,7 @@ impl Instruction {
             Instruction::RecordCapture { .. } => Opcode::RecordCapture,
             Instruction::ScopeEnd => Opcode::ScopeEnd,
             Instruction::PushNil => Opcode::PushNil,
+            Instruction::ByteDispatch { .. } => Opcode::ByteDispatch,
         }
     }
 
@@ -800,6 +813,12 @@ impl Instruction {
         Instruction::PushNil
     }
 
+    /// Create a ByteDispatch instruction
+    #[inline]
+    pub fn byte_dispatch(table_idx: u32) -> Self {
+        Instruction::ByteDispatch { table_idx }
+    }
+
     /// Create a Choice instruction
     #[inline]
     pub fn choice(offset: i32) -> Self {
@@ -960,6 +979,7 @@ impl fmt::Display for Instruction {
             Instruction::RecordCapture { name_idx } => write!(f, "RecordCapture [{}]", name_idx),
             Instruction::ScopeEnd => write!(f, "ScopeEnd"),
             Instruction::PushNil => write!(f, "PushNil"),
+            Instruction::ByteDispatch { table_idx } => write!(f, "ByteDispatch [{}]", table_idx),
         }
     }
 }

@@ -282,3 +282,52 @@ fn differential_maybe_tag() {
         assert_agree(&g, input);
     }
 }
+
+fn dispatch_grammar() -> String {
+    // Branches with provably disjoint lead-byte sets: the compiler
+    // emits ByteDispatch for this shape, and the differential asserts
+    // the dispatched program matches the tree-walker byte-for-byte.
+    let item = choice(vec![
+        dynamic(seq(vec![
+            dynamic(str("(")),
+            dynamic(capture("group", ref_("list"))),
+            dynamic(str(")")),
+        ])),
+        dynamic(capture("atom", re("[a-z]+"))),
+        dynamic(capture("num", re("[0-9]+"))),
+    ]);
+    let list = seq(vec![
+        dynamic(ref_("item")),
+        dynamic(
+            seq(vec![
+                dynamic(re(r"\s*,\s*").ignore()),
+                dynamic(ref_("item")),
+            ])
+            .many(),
+        ),
+    ]);
+    GrammarBuilder::new()
+        .rule("root", ref_("list"))
+        .rule("list", list)
+        .rule("item", item)
+        .build()
+        .to_json()
+        .unwrap()
+}
+
+#[test]
+fn differential_lead_byte_dispatch() {
+    let g = dispatch_grammar();
+    for input in [
+        "abc",
+        "abc, 42",
+        "(abc), 7, (xy, 3), zz",
+        "42",
+        "(abc",
+        "abc,,42",
+        "",
+        "(",
+    ] {
+        assert_agree(&g, input);
+    }
+}
