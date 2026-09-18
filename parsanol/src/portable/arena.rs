@@ -286,16 +286,21 @@ impl AstArena {
 
     /// Intern a string and return an InputRef with the given input offset.
     ///
-    /// This is used when we know the original input offset (e.g., for joined strings).
-    /// The InputRef's offset is set to the provided input_offset.
+    /// An existing pool entry is reused only when both content and
+    /// stored input offset match: InputRef semantics are "a slice of
+    /// the original input at this offset", so deduping an equal string
+    /// interned at a different position would hand back a node whose
+    /// input slice reads different bytes than the interned content.
     #[inline]
     pub fn intern_string_with_offset(&mut self, s: &str, input_offset: u32) -> AstNode {
         // Check for existing string first
         if let Some((index, stored_offset)) = self.find_interned_string_with_offset(s) {
-            return AstNode::InputRef {
-                offset: stored_offset,
-                length: self.string_pool[index].length,
-            };
+            if stored_offset == input_offset {
+                return AstNode::InputRef {
+                    offset: stored_offset,
+                    length: self.string_pool[index].length,
+                };
+            }
         }
 
         // Allocate new string in pool
