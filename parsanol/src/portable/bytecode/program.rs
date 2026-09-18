@@ -123,6 +123,9 @@ pub struct Program {
     /// Character set table (for CharSet instructions)
     char_sets: Vec<CharSet>,
 
+    /// Byte-dispatch tables for alternatives (256 relative offsets each)
+    dispatch_tables: Vec<[i32; 256]>,
+
     /// Regex pattern table (for Regex instructions)
     regexes: Vec<String>,
 
@@ -153,6 +156,7 @@ impl Program {
             instructions: Vec::new(),
             strings: Vec::new(),
             char_sets: Vec::new(),
+            dispatch_tables: Vec::new(),
             regexes: Vec::new(),
             keys: Vec::new(),
             labels: Vec::new(),
@@ -168,6 +172,7 @@ impl Program {
             instructions: Vec::with_capacity(instructions),
             strings: Vec::with_capacity(strings),
             char_sets: Vec::with_capacity(sets),
+            dispatch_tables: Vec::new(),
             regexes: Vec::new(),
             keys: Vec::with_capacity(strings),
             labels: Vec::new(),
@@ -272,6 +277,24 @@ impl Program {
     ///
     /// Uses interning to avoid duplicates.
     #[inline]
+    /// Register a byte-dispatch table and return its index
+    pub fn add_dispatch_table(&mut self, table: [i32; 256]) -> u32 {
+        self.dispatch_tables.push(table);
+        (self.dispatch_tables.len() - 1) as u32
+    }
+
+    /// Get a byte-dispatch table
+    #[inline]
+    pub fn get_dispatch_table(&self, idx: u32) -> Option<&[i32; 256]> {
+        self.dispatch_tables.get(idx as usize)
+    }
+
+    /// Number of registered dispatch tables
+    pub fn dispatch_table_count(&self) -> usize {
+        self.dispatch_tables.len()
+    }
+
+    /// Register a character set and return its index (deduplicates)
     pub fn add_char_set(&mut self, set: CharSet) -> u32 {
         // Check for existing set
         for (i, existing) in self.char_sets.iter().enumerate() {

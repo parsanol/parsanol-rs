@@ -50,6 +50,10 @@ pub struct Compiler {
     /// Rules whose subroutine body has been emitted.
     compiled_rules: std::collections::HashSet<usize>,
 
+    /// Dispatch tables emitted; the peephole optimizer shifts
+    /// instruction indices and cannot fix up table offsets.
+    emitted_dispatch: bool,
+
     /// True while emitting a rule's own body (the body itself compiles
     /// inline; only references to OTHER rules become calls).
     compiling_rule_body: bool,
@@ -71,6 +75,7 @@ impl Compiler {
             rule_atoms,
             compiled_rules: std::collections::HashSet::new(),
             compiling_rule_body: false,
+            emitted_dispatch: false,
         }
     }
 
@@ -129,8 +134,13 @@ impl Compiler {
         // Patch all forward references
         self.patch_references()?;
 
-        // Optimize the program
-        self.program.optimize();
+        // The peephole pass rewrites and removes instructions, shifting
+        // indices; dispatch tables bake absolute-relative offsets at
+        // emission and cannot be fixed up afterwards. Dispatch IS the
+        // optimization for the programs that use it.
+        if !self.emitted_dispatch {
+            self.program.optimize();
+        }
 
         Ok(self.program)
     }
@@ -155,6 +165,56 @@ impl Compiler {
         let result = self.compile_atom_inner(atom_idx);
         self.compile_depth -= 1;
         result
+    }
+
+    /// Compile an ordered choice whose branches have provably disjoint
+    /// non-nullable lead-byte sets: a 256-way table jump selects the
+    /// branch directly; a lead byte in no set fails the choice. Each
+    /// branch still matches its own lead character, so value semantics
+    /// are identical to the interleaved compilation.
+    fn compile_dispatch_alternative(
+        &mut self,
+        atoms: &[usize],
+        sets: &[Vec<u8>],
+    ) -> Result<usize, CompileError> {
+        let entry = self.program.instruction_count();
+        self.program
+            .add_instruction(Instruction::byte_dispatch(u32::MAX));
+        let dispatch_idx = entry;
+
+        let mut branch_starts = Vec::with_capacity(atoms.len());
+        let mut jump_idxs = Vec::with_capacity(atoms.len().saturating_sub(1));
+        for (i, &atom_idx) in atoms.iter().enumerate() {
+            branch_starts.push(self.program.instruction_count());
+            self.compile_atom(atom_idx)?;
+            if i + 1 < atoms.len() {
+                // A dispatched branch must not fall into the next one.
+                let jump_idx = self.program.instruction_count();
+                self.program
+                    .add_instruction(Instruction::jump(PLACEHOLDER_OFFSET));
+                jump_idxs.push(jump_idx);
+            }
+        }
+        let end_idx = self.program.instruction_count();
+        for jump_idx in jump_idxs {
+            let offset = (end_idx as i32) - (jump_idx as i32 + 1);
+            self.program
+                .set_instruction(jump_idx, Instruction::jump(offset));
+        }
+
+        let mut table = [-1i32; 256];
+        for (branch, set) in sets.iter().enumerate() {
+            let offset = (branch_starts[branch] as i32) - (dispatch_idx as i32 + 1);
+            for &b in set {
+                table[b as usize] = offset;
+            }
+        }
+        let table_idx = self.program.add_dispatch_table(table);
+        self.program
+            .set_instruction(dispatch_idx, Instruction::byte_dispatch(table_idx));
+        self.emitted_dispatch = true;
+
+        Ok(entry)
     }
 
     /// Emit a call to a rule's (possibly not yet compiled) body and
@@ -336,6 +396,163 @@ impl Compiler {
         Ok(entry)
     }
 
+    /// Conservative first-byte analysis for dispatch compilation.
+    /// Returns (charset, provably_non_nullable) or None when the lead
+    /// byte cannot be proven — in which case dispatch is not emitted.
+    fn provable_first_set(
+        &self,
+        atom_idx: usize,
+        visited: &mut std::collections::HashSet<usize>,
+    ) -> Option<(Vec<u8>, bool)> {
+        if !visited.insert(atom_idx) {
+            return None; // cycle: unprovable
+        }
+        let result = match self.grammar.get_atom(atom_idx)? {
+            Atom::Str { pattern } => {
+                let bytes = pattern.as_bytes();
+                if bytes.is_empty() {
+                    None
+                } else {
+                    Some((vec![bytes[0]], true))
+                }
+            }
+            Atom::Re { pattern } => self.regex_first_bytes(pattern).map(|cs| (cs, true)),
+            Atom::Sequence { atoms } => {
+                // Union of leading nullable children's sets, then the
+                // first provably non-nullable child's set. A nullable
+                // child CAN consume its lead byte, so its set must be
+                // part of the union for ordering to stay sound.
+                let mut union: Vec<u8> = Vec::new();
+                for &child in atoms {
+                    let (set, non_nullable) = self.provable_first_set(child, visited)?;
+                    for b in set {
+                        if !union.contains(&b) {
+                            union.push(b);
+                        }
+                    }
+                    if non_nullable {
+                        return Some((union, true));
+                    }
+                }
+                Some((union, false))
+            }
+            Atom::Alternative { atoms } => {
+                let mut union: Vec<u8> = Vec::new();
+                let mut all_non_nullable = true;
+                for &child in atoms {
+                    let (set, non_nullable) = self.provable_first_set(child, visited)?;
+                    all_non_nullable &= non_nullable;
+                    for b in set {
+                        if !union.contains(&b) {
+                            union.push(b);
+                        }
+                    }
+                }
+                Some((union, all_non_nullable))
+            }
+            Atom::Repetition { atom, min, .. } => {
+                let (set, non_nullable) = self.provable_first_set(*atom, visited)?;
+                Some((set, non_nullable && *min >= 1))
+            }
+            Atom::Named { atom, .. }
+            | Atom::Entity { atom }
+            | Atom::Ignore { atom }
+            | Atom::Capture { atom, .. }
+            | Atom::Scope { atom } => self.provable_first_set(*atom, visited),
+            Atom::Lookahead { .. } | Atom::Cut | Atom::Dynamic { .. } | Atom::Custom { .. } => None,
+        };
+        visited.remove(&atom_idx);
+        result
+    }
+
+    /// Lead bytes of a regex we can prove: a single character class
+    /// `[...]` with no quantifier, alternation, or anchor anything else.
+    fn regex_first_bytes(&self, pattern: &str) -> Option<Vec<u8>> {
+        if !(pattern.starts_with('[') && pattern.ends_with(']')) || pattern.len() < 3 {
+            return None;
+        }
+        let inner = &pattern[1..pattern.len() - 1];
+        if inner.contains("||") || inner.is_empty() {
+            return None;
+        }
+        let mut negated = false;
+        let mut chars = inner.char_indices().peekable();
+        if let Some((_, first)) = chars.peek() {
+            if *first == '^' {
+                negated = true;
+                chars.next();
+            }
+        }
+        let mut allowed = [false; 256];
+        let mut any = false;
+        let bytes = inner.as_bytes();
+        let _ = chars;
+        let mut i = if negated { 1 } else { 0 };
+        while i < bytes.len() {
+            match bytes[i] {
+                b'\\' => {
+                    let esc = bytes.get(i + 1)?;
+                    match esc {
+                        b'd' => (b'0'..=b'9').for_each(|b| allowed[b as usize] = true),
+                        b'w' => {
+                            (b'a'..=b'z').for_each(|b| allowed[b as usize] = true);
+                            (b'A'..=b'Z').for_each(|b| allowed[b as usize] = true);
+                            (b'0'..=b'9').for_each(|b| allowed[b as usize] = true);
+                            allowed[b'_' as usize] = true;
+                        }
+                        b's' | b' ' | b'\t' | b'\n' | b'\r' | 0x0b | 0x0c => {
+                            // \s and literal whitespace escapes
+                            for b in [b' ', b'\t', b'\n', b'\r', 0x0b, 0x0c] {
+                                allowed[b as usize] = true;
+                            }
+                        }
+                        b'n' => allowed[b'\n' as usize] = true,
+                        b'r' => allowed[b'\r' as usize] = true,
+                        b't' => allowed[b'\t' as usize] = true,
+                        b'f' => allowed[0x0c] = true,
+                        b'v' => allowed[0x0b] = true,
+                        other => allowed[*other as usize] = true,
+                    }
+                    any = true;
+                    i += 2;
+                }
+                b'-' if i > 0 && i + 1 < bytes.len() => {
+                    let lo = bytes[i - 1];
+                    let hi = bytes[i + 1];
+                    if lo > hi {
+                        return None;
+                    }
+                    (lo..=hi).for_each(|b| allowed[b as usize] = true);
+                    any = true;
+                    i += 2;
+                }
+                b']' if i > 0 => {
+                    return None; // nested class: unsupported
+                }
+                b => {
+                    allowed[b as usize] = true;
+                    any = true;
+                    i += 1;
+                }
+            }
+        }
+        if negated {
+            for slot in allowed.iter_mut() {
+                *slot = !*slot;
+            }
+            any = true;
+        }
+        if !any {
+            return None;
+        }
+        Some(
+            (0..256u32)
+                .filter(|&b| allowed[b as usize])
+                .map(|b| b as u8)
+                .collect(),
+        )
+    }
+
     /// Compile alternatives (ordered choice)
     fn compile_alternative(&mut self, atoms: &[usize]) -> Result<usize, CompileError> {
         let entry = self.program.instruction_count();
@@ -346,6 +563,39 @@ impl Compiler {
 
         if atoms.len() == 1 {
             return self.compile_atom(atoms[0]);
+        }
+
+        // Lead-byte dispatch: when every branch's first byte set is
+        // provable, non-nullable, and pairwise disjoint, one table
+        // lookup replaces the serial probing of branches (the EXPRESS
+        // grammar's choice-heavy structure measures ~16 backtracks per
+        // byte without it).
+        // Conservative dispatch: EVERY branch must be provably
+        // non-nullable with a pairwise-disjoint lead-byte set. Nullable
+        // branches (which can match empty at any byte and must be tried
+        // first) and overlaps fall back to the interleaved choice. A
+        // lead byte in no set fails the choice outright.
+        let analyzed: Option<Vec<Vec<u8>>> = atoms
+            .iter()
+            .map(|&a| {
+                let mut visited = std::collections::HashSet::new();
+                self.provable_first_set(a, &mut visited)
+                    .and_then(|(set, non_nullable)| non_nullable.then_some(set))
+            })
+            .collect();
+        if let Some(sets) = analyzed {
+            let mut disjoint = true;
+            'outer: for (i, set) in sets.iter().enumerate() {
+                for other in sets.iter().skip(i + 1) {
+                    if set.iter().any(|b| other.contains(b)) {
+                        disjoint = false;
+                        break 'outer;
+                    }
+                }
+            }
+            if disjoint {
+                return self.compile_dispatch_alternative(atoms, &sets);
+            }
         }
 
         // Ordered choice, LPeg-interleaved: each Choice sits directly

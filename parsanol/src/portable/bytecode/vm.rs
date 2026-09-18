@@ -804,6 +804,24 @@ impl<'a> BytecodeVM<'a> {
                 Ok(ExecutionResult::Continue)
             }
 
+            Instruction::ByteDispatch { table_idx } => {
+                let table = self.program.get_dispatch_table(*table_idx).ok_or_else(|| {
+                    ParseError::Internal {
+                        message: format!("Invalid dispatch table index: {table_idx}"),
+                    }
+                })?;
+                if self.position >= self.input.len() {
+                    self.track_failure_with_context();
+                    return Ok(ExecutionResult::Fail);
+                }
+                let offset = table[self.input[self.position] as usize];
+                if offset < 0 {
+                    self.track_failure_with_context();
+                    return Ok(ExecutionResult::Fail);
+                }
+                Ok(ExecutionResult::Jump(offset))
+            }
+
             Instruction::BuildSeq { n } => {
                 let n = *n as usize;
                 if self.value_stack.len() < n {
