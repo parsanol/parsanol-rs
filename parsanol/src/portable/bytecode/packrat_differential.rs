@@ -216,7 +216,6 @@ fn maybe_tag_grammar() -> String {
 }
 
 #[test]
-#[ignore = "VM defect: repetition-of-entity loops (Return pops a choice frame); see TODO.max-perf/4"]
 fn differential_kv_grammar() {
     let g = kv_grammar();
     for input in [
@@ -236,7 +235,6 @@ fn differential_kv_grammar() {
 }
 
 #[test]
-#[ignore = "VM defect: valid input fails after an optional/choice in sequence; see TODO.max-perf/4"]
 fn differential_captures() {
     let g = captures_grammar();
     for input in [
@@ -253,7 +251,6 @@ fn differential_captures() {
 }
 
 #[test]
-#[ignore = "VM value divergence: no :sequence envelope, capture hashes instead of CaptureState folding; see TODO.max-perf/4"]
 fn differential_lookahead() {
     let g = lookahead_grammar();
     for input in ["if 1", "if two", "if", "xx 9", "if 3x", ""] {
@@ -262,7 +259,6 @@ fn differential_lookahead() {
 }
 
 #[test]
-#[ignore = "VM value divergence: no :sequence/:repetition envelopes, capture hoisting; see TODO.max-perf/4"]
 fn differential_nested_repetition() {
     let g = nested_repetition_grammar();
     for input in [
@@ -280,7 +276,6 @@ fn differential_nested_repetition() {
 }
 
 #[test]
-#[ignore = "VM value divergence: Maybe tag not honored (compiled as plain repetition); see TODO.max-perf/4"]
 fn differential_maybe_tag() {
     let g = maybe_tag_grammar();
     for input in ["key: 12", "key: ", "key:", "key", ":", "key: x"] {

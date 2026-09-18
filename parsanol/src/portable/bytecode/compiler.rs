@@ -3,10 +3,10 @@
 //! This module implements the compiler that transforms parsanol's `Grammar`
 //! (represented as `Atom` nodes) into a `Program` of bytecode instructions.
 
-use super::instruction::{CaptureKind, Instruction};
+use super::instruction::Instruction;
 use super::program::{CharSet, Program};
 use crate::portable::char_class::CharacterPattern;
-use crate::portable::grammar::{Atom, Grammar};
+use crate::portable::grammar::{Atom, Grammar, RepetitionTag};
 use std::collections::VecDeque;
 
 /// Placeholder for forward references (will be patched later)
@@ -62,6 +62,10 @@ impl Compiler {
         // Set entry point
         self.program.set_entry_point(entry);
 
+        // Terminate the main path: a successful root parse must stop here
+        // instead of falling through into the subroutine bodies below.
+        self.program.add_instruction(Instruction::end());
+
         // Compile referenced rule bodies as subroutines. Nested references
         // enqueue more bodies; each body ends with Return.
         while let Some(atom_idx) = self.subroutine_queue.pop_front() {
@@ -96,15 +100,6 @@ impl Compiler {
                     max: self.grammar.atoms.len(),
                 })?;
 
-        // Only cache addresses for Entity atoms (rule references)
-        // Inline atoms (Str, Re, etc.) should be compiled fresh each time
-        if matches!(atom, Atom::Entity { .. }) {
-            // Check if this rule already has a compiled address
-            if let Some(addr) = self.program.get_rule_address(atom_idx) {
-                return Ok(addr);
-            }
-        }
-
         // Record the entry point for this atom (primarily for Entity references)
         let entry = self.program.instruction_count();
         self.program.add_rule_address(atom_idx, entry);
@@ -116,7 +111,12 @@ impl Compiler {
             Atom::Re { pattern } => self.compile_re(&pattern),
             Atom::Sequence { atoms } => self.compile_sequence(&atoms),
             Atom::Alternative { atoms } => self.compile_alternative(&atoms),
-            Atom::Repetition { atom, min, max, .. } => self.compile_repetition(atom, min, max),
+            Atom::Repetition {
+                atom,
+                min,
+                max,
+                tag,
+            } => self.compile_repetition(atom, min, max, tag),
             Atom::Named { name, atom } => self.compile_named(&name, atom),
             Atom::Entity { atom } => self.compile_entity(atom),
             Atom::Lookahead { atom, positive } => self.compile_lookahead(atom, positive),
@@ -134,7 +134,9 @@ impl Compiler {
         let entry = self.program.instruction_count();
 
         if pattern.is_empty() {
-            // Empty string always matches
+            // Empty string always matches; still produce a zero-width
+            // value so every atom leaves exactly one value.
+            self.program.add_instruction(Instruction::any(0));
             return Ok(entry);
         }
 
@@ -239,14 +241,13 @@ impl Compiler {
     fn compile_sequence(&mut self, atoms: &[usize]) -> Result<usize, CompileError> {
         let entry = self.program.instruction_count();
 
-        if atoms.is_empty() {
-            return Ok(entry);
-        }
-
-        // Compile each atom in sequence
+        // Each child pushes one value; fold them into a :sequence-tagged
+        // envelope exactly like the tree-walker's parse_sequence.
         for &atom_idx in atoms {
             self.compile_atom(atom_idx)?;
         }
+        self.program
+            .add_instruction(Instruction::build_seq(atoms.len() as u32));
 
         Ok(entry)
     }
@@ -263,61 +264,55 @@ impl Compiler {
             return self.compile_atom(atoms[0]);
         }
 
-        // For alternatives (ordered choice in PEG):
-        // Choice L2        ; if alt1 fails, backtrack to L2
-        // <alt1>
-        // Commit End        ; alt1 succeeded, commit and skip remaining alts
-        // L2: Choice L3    ; if alt2 fails, backtrack to L3
-        // <alt2>
-        // Commit End
-        // ...
-        // Ln: <altN>       ; last alternative, no choice needed
-        // End:
-
-        // First, add all Choice instructions with placeholder offsets
-        // We need (n-1) choices for n alternatives
-        let choice_indices: Vec<usize> = (0..atoms.len() - 1)
-            .map(|_| {
+        // Ordered choice, LPeg-interleaved: each Choice sits directly
+        // before its own branch, so a branch failure pops exactly that
+        // Choice and lands on the NEXT branch, and a branch success pops
+        // the same Choice at its Commit:
+        //
+        //   Choice L2     ; try branch 1
+        //   <p1>
+        //   Commit End    ; branch 1 succeeded, skip the rest
+        //   L2: Choice L3 ; try branch 2
+        //   <p2>
+        //   Commit End
+        //   ...
+        //   Ln: <pn>      ; last branch, no Choice needed
+        //   End:
+        let mut choice_idxs = Vec::with_capacity(atoms.len() - 1);
+        let mut commit_idxs = Vec::with_capacity(atoms.len() - 1);
+        for (i, &atom_idx) in atoms.iter().enumerate() {
+            if i < atoms.len() - 1 {
                 let idx = self.program.instruction_count();
                 self.program
                     .add_instruction(Instruction::choice(PLACEHOLDER_OFFSET));
-                idx
-            })
-            .collect();
-
-        // Compile each alternative, tracking where each starts
-        let mut alt_starts = Vec::with_capacity(atoms.len());
-        let mut jump_indices = Vec::with_capacity(atoms.len() - 1);
-
-        for (i, &atom_idx) in atoms.iter().enumerate() {
-            // Record where this alternative starts
-            alt_starts.push(self.program.instruction_count());
-
-            // Compile the alternative
+                choice_idxs.push(idx);
+            }
             self.compile_atom(atom_idx)?;
-
-            // If not the last alternative, add Commit to end (pops choice point)
             if i < atoms.len() - 1 {
-                let commit_idx = self.program.instruction_count();
+                let idx = self.program.instruction_count();
                 self.program
                     .add_instruction(Instruction::commit(PLACEHOLDER_OFFSET));
-                jump_indices.push(commit_idx);
+                commit_idxs.push(idx);
             }
         }
 
         let end_idx = self.program.instruction_count();
 
-        // Patch Choice instructions: each Choice should backtrack to the next alternative
-        for (i, &choice_idx) in choice_indices.iter().enumerate() {
-            // Choice i should jump to alternative (i+1)
-            let next_alt_start = alt_starts[i + 1];
-            let offset = (next_alt_start as i32) - (choice_idx as i32 + 1);
+        // Choice i's alternative is the Choice (or last branch) that
+        // follows branch i's Commit.
+        for (i, &choice_idx) in choice_idxs.iter().enumerate() {
+            let next_start = if i + 1 < choice_idxs.len() {
+                choice_idxs[i + 1]
+            } else {
+                commit_idxs[i] + 1
+            };
+            let offset = (next_start as i32) - (choice_idx as i32 + 1);
             self.program
                 .set_instruction(choice_idx, Instruction::choice(offset));
         }
 
-        // Patch Commit instructions: each Commit should skip to the end
-        for &commit_idx in &jump_indices {
+        // Every Commit skips the remaining branches.
+        for &commit_idx in &commit_idxs {
             let offset = (end_idx as i32) - (commit_idx as i32 + 1);
             self.program
                 .set_instruction(commit_idx, Instruction::commit(offset));
@@ -327,93 +322,82 @@ impl Compiler {
     }
 
     /// Compile repetition (min, max)
+    #[allow(clippy::too_many_arguments)]
     fn compile_repetition(
         &mut self,
         atom_idx: usize,
         min: usize,
         max: Option<usize>,
+        tag: RepetitionTag,
     ) -> Result<usize, CompileError> {
         let entry = self.program.instruction_count();
+        let maybe = tag == RepetitionTag::Maybe;
+
+        // The tree-walker collects one value per iteration into a tagged
+        // envelope; a present Maybe flattens to its single value.
+        self.program.add_instruction(Instruction::rep_open());
 
         if min == 0 && max == Some(0) {
-            // Zero repetitions: always matches
+            self.program.add_instruction(Instruction::build_rep(maybe));
             return Ok(entry);
         }
 
-        if min == 0 && max == Some(1) {
-            // Optional: Choice, <atom>, Commit
-            let choice_idx = self.program.instruction_count();
-            self.program
-                .add_instruction(Instruction::choice(PLACEHOLDER_OFFSET));
-            self.compile_atom(atom_idx)?;
-            let _commit_idx = self.program.instruction_count();
-            self.program.add_instruction(Instruction::commit(0));
-            let after_commit = self.program.instruction_count();
-
-            // Patch choice to skip to after commit on failure
-            let choice_offset = (after_commit as i32) - (choice_idx as i32 + 1);
-            self.program
-                .set_instruction(choice_idx, Instruction::choice(choice_offset));
-
-            return Ok(entry);
-        }
-
-        // For min..max:
-        // First, match 'min' times (mandatory)
+        // Mandatory iterations: failure propagates naturally.
         for _ in 0..min {
             self.compile_atom(atom_idx)?;
+            self.program.add_instruction(Instruction::rep_count());
         }
 
-        // Then, optionally match up to (max - min) more times
         match max {
             None => {
-                // Unlimited: loop until failure
-                // Use Span optimization if possible for character classes
+                // Unlimited: loop with Choice/PartialCommit. PartialCommit
+                // must jump to the BODY, not the Choice - the frame is kept
+                // and updated, so a later failure keeps completed iterations.
                 if let Some(set_idx) = self.try_get_charset_for_atom(atom_idx) {
-                    // Optimize: use Span instruction
+                    // Character-class body: a single Span matches the whole run.
                     self.program.add_instruction(Instruction::span(set_idx));
+                    self.program.add_instruction(Instruction::rep_count());
                 } else {
-                    // General case: loop with Choice/PartialCommit
-                    // Structure:
-                    //   loop_start: Choice partial_commit (skip to after loop on failure)
-                    //   <atom>
-                    //   PartialCommit loop_start
-                    //   after_loop:
-                    let loop_start = self.program.instruction_count();
+                    let choice_idx = self.program.instruction_count();
                     self.program
                         .add_instruction(Instruction::choice(PLACEHOLDER_OFFSET));
+                    let body_start = self.program.instruction_count();
                     self.compile_atom(atom_idx)?;
-                    let partial_commit_idx = self.program.instruction_count();
-
-                    // Calculate offset to loop back
-                    let loop_offset = (loop_start as i32) - (partial_commit_idx as i32 + 1);
+                    self.program.add_instruction(Instruction::rep_count());
+                    let partial_idx = self.program.instruction_count();
+                    let loop_offset = (body_start as i32) - (partial_idx as i32 + 1);
                     self.program
                         .add_instruction(Instruction::partial_commit(loop_offset));
 
                     let after_loop = self.program.instruction_count();
-
-                    // Patch choice to skip to after loop on failure
-                    let choice_offset = (after_loop as i32) - (loop_start as i32 + 1);
+                    let choice_offset = (after_loop as i32) - (choice_idx as i32 + 1);
                     self.program
-                        .set_instruction(loop_start, Instruction::choice(choice_offset));
+                        .set_instruction(choice_idx, Instruction::choice(choice_offset));
                 }
             }
             Some(max_val) => {
-                // Limited: try to match up to (max - min) more times
+                // Bounded: one Choice per optional iteration; each Commit
+                // pops its frame on success, keeping the iteration's value.
+                let mut choice_idxs = Vec::new();
                 for _ in 0..(max_val - min) {
                     let choice_idx = self.program.instruction_count();
                     self.program
                         .add_instruction(Instruction::choice(PLACEHOLDER_OFFSET));
+                    choice_idxs.push(choice_idx);
                     self.compile_atom(atom_idx)?;
-                    let after_atom = self.program.instruction_count();
-
-                    // Patch choice to skip to after atom on failure
-                    let choice_offset = (after_atom as i32) - (choice_idx as i32 + 1);
+                    self.program.add_instruction(Instruction::rep_count());
+                    self.program.add_instruction(Instruction::commit(0));
+                }
+                let after_all = self.program.instruction_count();
+                for choice_idx in choice_idxs {
+                    let choice_offset = (after_all as i32) - (choice_idx as i32 + 1);
                     self.program
                         .set_instruction(choice_idx, Instruction::choice(choice_offset));
                 }
             }
         }
+
+        self.program.add_instruction(Instruction::build_rep(maybe));
 
         Ok(entry)
     }
@@ -447,14 +431,11 @@ impl Compiler {
     fn compile_named(&mut self, name: &str, atom_idx: usize) -> Result<usize, CompileError> {
         let entry = self.program.instruction_count();
 
-        let key_idx = self.program.add_key(name);
-
-        // OpenCapture, <atom>, CloseCapture
-        self.program
-            .add_instruction(Instruction::open_capture(CaptureKind::Named, key_idx));
+        // The tree-walker wraps the child value as {name: value}.
+        let name_idx = self.program.add_string(name);
         self.compile_atom(atom_idx)?;
         self.program
-            .add_instruction(Instruction::close_capture(CaptureKind::Named, key_idx));
+            .add_instruction(Instruction::build_hash(name_idx));
 
         Ok(entry)
     }
@@ -552,6 +533,11 @@ impl Compiler {
                 .set_instruction(choice_idx, Instruction::choice(choice_offset));
         }
 
+        // The tree-walker yields nil for lookahead results. The body's
+        // value is already gone (BackCommit truncates it), so this pushes
+        // rather than replaces.
+        self.program.add_instruction(Instruction::push_nil());
+
         Ok(entry)
     }
 
@@ -559,14 +545,9 @@ impl Compiler {
     fn compile_cut(&mut self) -> Result<usize, CompileError> {
         let entry = self.program.instruction_count();
 
-        // Cut: commit the current choice, preventing backtracking
-        // This is implemented as FailTwice which pops the choice and fails
-        // But in the context of the grammar, Cut should never be reached on success
-        // It's used to prevent backtracking in sequences
-
-        // Actually, Cut in PEG means "commit to this alternative"
-        // We implement it by committing all pending choices
-        self.program.add_instruction(Instruction::commit(0));
+        // The tree-walker's Cut always succeeds consuming nothing and
+        // yields nil (the commit semantics live in the Ruby engine).
+        self.program.add_instruction(Instruction::push_nil());
 
         Ok(entry)
     }
@@ -575,12 +556,9 @@ impl Compiler {
     fn compile_ignore(&mut self, atom_idx: usize) -> Result<usize, CompileError> {
         let entry = self.program.instruction_count();
 
-        // Compile the atom, then push a Nil result
+        // The tree-walker discards the child's value and yields nil.
         self.compile_atom(atom_idx)?;
-
-        // For now, we don't track results at the VM level
-        // The capture system handles result building
-        // Ignore just means don't create a capture
+        self.program.add_instruction(Instruction::to_nil());
 
         Ok(entry)
     }
@@ -591,21 +569,13 @@ impl Compiler {
     fn compile_capture(&mut self, name: &str, atom_idx: usize) -> Result<usize, CompileError> {
         let entry = self.program.instruction_count();
 
-        // Get or add the key index
-        let key_idx = self.program.add_key(name);
-
-        // Open capture, compile child, close capture
-        self.program.add_instruction(Instruction::OpenCapture {
-            kind: CaptureKind::Named,
-            key_idx,
-        });
-
+        // The tree-walker records the (name, span) pair and passes the
+        // child's value through unchanged.
+        let name_idx = self.program.add_string(name);
+        self.program.add_instruction(Instruction::cap_mark());
         self.compile_atom(atom_idx)?;
-
-        self.program.add_instruction(Instruction::CloseCapture {
-            kind: CaptureKind::Named,
-            key_idx,
-        });
+        self.program
+            .add_instruction(Instruction::record_capture(name_idx));
 
         Ok(entry)
     }
@@ -616,12 +586,11 @@ impl Compiler {
     fn compile_scope(&mut self, atom_idx: usize) -> Result<usize, CompileError> {
         let entry = self.program.instruction_count();
 
-        // Push scope, compile child, pop scope
-        self.program.add_instruction(Instruction::PushScope);
-
+        // Mark the region; ScopeEnd discards captures recorded inside it,
+        // mirroring the tree-walker's CaptureState push/pop.
+        self.program.add_instruction(Instruction::cap_mark());
         self.compile_atom(atom_idx)?;
-
-        self.program.add_instruction(Instruction::PopScope);
+        self.program.add_instruction(Instruction::scope_end());
 
         Ok(entry)
     }
@@ -629,14 +598,11 @@ impl Compiler {
     /// Compile a dynamic atom
     ///
     /// Invokes a callback at runtime to determine which atom to parse.
-    fn compile_dynamic(&mut self, callback_id: u64) -> Result<usize, CompileError> {
-        let entry = self.program.instruction_count();
-
-        // Emit InvokeDynamic instruction
-        self.program
-            .add_instruction(Instruction::InvokeDynamic { callback_id });
-
-        Ok(entry)
+    fn compile_dynamic(&mut self, _callback_id: u64) -> Result<usize, CompileError> {
+        Err(CompileError::UnsupportedFeature {
+            feature: "Dynamic atoms (phase 3; grammars using them stay on the packrat engine)"
+                .to_string(),
+        })
     }
 
     /// Compile custom atom
@@ -870,18 +836,14 @@ mod tests {
 
         let program = Compiler::new(grammar).compile().unwrap();
 
-        // Should have OpenCapture, Char, CloseCapture
-        let has_open = program
+        // Named compiles to the body followed by a BuildHash envelope,
+        // mirroring the tree-walker's {name: value} wrapping.
+        let has_build_hash = program
             .instructions()
             .iter()
-            .any(|i| matches!(i, Instruction::OpenCapture { .. }));
-        let has_close = program
-            .instructions()
-            .iter()
-            .any(|i| matches!(i, Instruction::CloseCapture { .. }));
+            .any(|i| matches!(i, Instruction::BuildHash { .. }));
 
-        assert!(has_open);
-        assert!(has_close);
+        assert!(has_build_hash);
     }
 
     #[test]
