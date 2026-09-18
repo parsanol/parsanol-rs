@@ -7,7 +7,7 @@
 
 use crate::portable::arena::AstArena;
 use crate::portable::bytecode::{compile_bytecode, parse_with_vm};
-use crate::portable::grammar::Grammar;
+use crate::portable::grammar::{Atom, Grammar};
 use crate::portable::parser::PortableParser;
 use crate::portable::parser_dsl::{
     capture, choice, dynamic, re, ref_, seq, str, GrammarBuilder, ParsletExt,
@@ -329,5 +329,67 @@ fn differential_lead_byte_dispatch() {
         "(",
     ] {
         assert_agree(&g, input);
+    }
+}
+
+#[test]
+fn differential_custom_atom() {
+    // Custom atoms have no DSL constructor; the grammar is built through
+    // the atom API directly (exactly one Custom atom as an alternative
+    // branch against a class regex).
+    struct Digits;
+    impl crate::portable::custom::CustomAtom for Digits {
+        fn parse(&self, input: &str, pos: usize) -> Option<crate::portable::custom::CustomResult> {
+            let bytes = input.as_bytes();
+            let mut end = pos;
+            while end < bytes.len() && bytes[end].is_ascii_digit() {
+                end += 1;
+            }
+            (end > pos).then(|| crate::portable::custom::CustomResult {
+                end_pos: end,
+                value: Some(crate::portable::ast::AstNode::InputRef {
+                    offset: pos as u32,
+                    length: (end - pos) as u32,
+                }),
+            })
+        }
+
+        fn description(&self) -> &str {
+            "digits"
+        }
+    }
+    let id = crate::portable::custom::register_custom_atom_auto(Box::new(Digits));
+
+    let mut grammar = Grammar::new();
+    let digits = grammar.add_atom(Atom::Custom { id });
+    let word = grammar.add_atom(Atom::Re {
+        pattern: "[a-z]+".to_string(),
+    });
+    let alt = grammar.add_atom(Atom::Alternative {
+        atoms: vec![digits, word],
+    });
+    grammar.root = alt;
+
+    let program = compile_bytecode(grammar.clone()).expect("compiles");
+    for input in ["123", "abc", "42xyz", "xyz42", ""] {
+        let mut packrat_arena = AstArena::new();
+        let mut packrat_parser = PortableParser::new(&grammar, input, &mut packrat_arena);
+        let packrat = packrat_parser.parse_with_end_pos();
+
+        let mut vm_arena = AstArena::new();
+        let vm = parse_with_vm(&program, input, &mut vm_arena);
+
+        match (&packrat, &vm) {
+            (Ok(p), Ok(v)) => {
+                assert_eq!(p.end_pos, v.end_pos, "end_pos differs for {input:?}");
+                assert_eq!(
+                    materialize(&p.value, &packrat_arena, input),
+                    materialize(&v.value, &vm_arena, input),
+                    "tree differs for {input:?}"
+                );
+            }
+            (Err(_), Err(_)) => {}
+            (p, v) => panic!("mismatch for {input:?}: packrat={p:?} vm={v:?}"),
+        }
     }
 }
