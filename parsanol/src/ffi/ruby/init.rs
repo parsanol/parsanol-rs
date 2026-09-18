@@ -15,6 +15,14 @@ use crate::portable::dynamic::{
     has_dynamic_callback,
 };
 
+// CRuby exports this to let extensions declare Ractor safety for the
+// bindings they define afterwards. rb-sys does not generate a binding
+// for the static-inline helper, so declare it directly; the symbol
+// resolves against libruby in every link that compiles this module.
+extern "C" {
+    fn rb_ext_ractor_safe(flag: bool);
+}
+
 // ============================================================================
 // FFI wrapper functions for Ruby
 // ============================================================================
@@ -69,6 +77,17 @@ fn ruby_has_callback(id: u64) -> bool {
 /// Initialize the Ruby native extension module
 #[magnus::init]
 pub fn init(ruby: &Ruby) -> Result<(), Error> {
+    // The parse API keeps all global state behind Mutexes/OnceLocks (or
+    // thread-locals), so its functions are Ractor-callable: consumers
+    // can run native parses on Ractor pools instead of forking. Must be
+    // declared before the bindings are defined.
+    unsafe {
+        rb_ext_ractor_safe(true);
+        if std::env::var("PARSANOL_VM_DEBUG").is_ok() {
+            eprintln!("parsanol: rb_ext_ractor_safe(true) applied");
+        }
+    }
+
     let module = ruby.define_module("Parsanol")?;
     let native_module = module.define_module("Native")?;
 
