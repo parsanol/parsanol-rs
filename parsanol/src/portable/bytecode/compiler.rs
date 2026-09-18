@@ -38,6 +38,21 @@ pub struct Compiler {
     /// subroutines after the main code (a call's return address points to
     /// the instruction after the call, so bodies must not sit inline).
     subroutine_queue: VecDeque<usize>,
+
+    /// Recursion guard depth for compile_atom.
+    compile_depth: u32,
+
+    /// Atoms that act as rules: every Named atom and every Entity
+    /// target. Rule references (shared, possibly cyclic through them)
+    /// compile as subroutine calls, never inline.
+    rule_atoms: std::collections::HashSet<usize>,
+
+    /// Rules whose subroutine body has been emitted.
+    compiled_rules: std::collections::HashSet<usize>,
+
+    /// True while emitting a rule's own body (the body itself compiles
+    /// inline; only references to OTHER rules become calls).
+    compiling_rule_body: bool,
 }
 
 impl Compiler {
@@ -45,13 +60,38 @@ impl Compiler {
     #[inline]
     pub fn new(grammar: Grammar) -> Self {
         let atom_count = grammar.atoms.len();
+        let rule_atoms = Self::discover_rule_atoms(&grammar);
         Self {
             grammar,
             program: Program::with_capacity(atom_count * 4, atom_count, atom_count / 4),
             state: CompilerState { current_atom: 0 },
             pending_patches: Vec::new(),
             subroutine_queue: VecDeque::new(),
+            compile_depth: 0,
+            rule_atoms,
+            compiled_rules: std::collections::HashSet::new(),
+            compiling_rule_body: false,
         }
+    }
+
+    /// Rule-boundary discovery: Named atoms wrap grammar rules, and
+    /// Entity atoms point at rule bodies. Serializers may emit rule
+    /// references as shared inlined atoms (cycles included), so these
+    /// boundaries are what makes compilation terminate.
+    fn discover_rule_atoms(grammar: &Grammar) -> std::collections::HashSet<usize> {
+        let mut rules = std::collections::HashSet::new();
+        for (idx, atom) in grammar.atoms.iter().enumerate() {
+            match atom {
+                Atom::Named { .. } => {
+                    rules.insert(idx);
+                }
+                Atom::Entity { atom: target } => {
+                    rules.insert(*target);
+                }
+                _ => {}
+            }
+        }
+        rules
     }
 
     /// Compile the grammar into a program
@@ -69,10 +109,17 @@ impl Compiler {
         // Compile referenced rule bodies as subroutines. Nested references
         // enqueue more bodies; each body ends with Return.
         while let Some(atom_idx) = self.subroutine_queue.pop_front() {
-            if self.program.get_rule_address(atom_idx).is_some() {
+            if self.compiled_rules.contains(&atom_idx) {
                 continue;
             }
-            self.compile_atom(atom_idx)?;
+            self.compiled_rules.insert(atom_idx);
+            let entry = self.program.instruction_count();
+            self.program.add_rule_address(atom_idx, entry);
+            let prev = self.compiling_rule_body;
+            self.compiling_rule_body = true;
+            let result = self.compile_atom(atom_idx);
+            self.compiling_rule_body = prev;
+            result?;
             self.program.add_instruction(Instruction::ret());
         }
 
@@ -90,6 +137,43 @@ impl Compiler {
 
     /// Compile a single atom and return the entry instruction index
     fn compile_atom(&mut self, atom_idx: usize) -> Result<usize, CompileError> {
+        // Rule atoms compile once, as subroutines; every reference to
+        // them is a call. This is what keeps shared/cyclic rule
+        // references from recursing the compiler.
+        // One-shot: the flag marks exactly the top atom of a rule body
+        // being emitted; nested references to other rules must call.
+        if self.rule_atoms.contains(&atom_idx) && !std::mem::take(&mut self.compiling_rule_body) {
+            return self.compile_reference(atom_idx);
+        }
+
+        self.compile_depth += 1;
+        if self.compile_depth > 4_096 {
+            return Err(CompileError::UnsupportedFeature {
+                feature: format!("grammar nesting exceeds compilation depth at atom {atom_idx}"),
+            });
+        }
+        let result = self.compile_atom_inner(atom_idx);
+        self.compile_depth -= 1;
+        result
+    }
+
+    /// Emit a call to a rule's (possibly not yet compiled) body and
+    /// queue the body for trailing subroutine compilation.
+    fn compile_reference(&mut self, atom_idx: usize) -> Result<usize, CompileError> {
+        let entry = self.program.instruction_count();
+        if let Some(target_addr) = self.program.get_rule_address(atom_idx) {
+            let offset = (target_addr as i32) - (entry as i32 + 1);
+            self.program.add_instruction(Instruction::call(offset));
+        } else {
+            self.program
+                .add_instruction(Instruction::call(PLACEHOLDER_OFFSET));
+            self.pending_patches.push((entry, atom_idx));
+            self.subroutine_queue.push_back(atom_idx);
+        }
+        Ok(entry)
+    }
+
+    fn compile_atom_inner(&mut self, atom_idx: usize) -> Result<usize, CompileError> {
         // Get the atom first to check if it's an Entity (rule reference)
         let atom =
             self.grammar
@@ -118,7 +202,7 @@ impl Compiler {
                 tag,
             } => self.compile_repetition(atom, min, max, tag),
             Atom::Named { name, atom } => self.compile_named(&name, atom),
-            Atom::Entity { atom } => self.compile_entity(atom),
+            Atom::Entity { atom } => self.compile_reference(atom),
             Atom::Lookahead { atom, positive } => self.compile_lookahead(atom, positive),
             Atom::Cut => self.compile_cut(),
             Atom::Ignore { atom } => self.compile_ignore(atom),
@@ -439,30 +523,6 @@ impl Compiler {
 
         Ok(entry)
     }
-
-    /// Compile an entity reference (forward reference)
-    fn compile_entity(&mut self, atom_idx: usize) -> Result<usize, CompileError> {
-        let entry = self.program.instruction_count();
-
-        // Check if the target atom is already compiled
-        if let Some(target_addr) = self.program.get_rule_address(atom_idx) {
-            // Direct call
-            let offset = (target_addr as i32) - (entry as i32 + 1);
-            self.program.add_instruction(Instruction::call(offset));
-        } else {
-            // Forward reference: use placeholder, patch later. The body is
-            // queued as a trailing subroutine — it must not be compiled
-            // inline after the call, because the call's return address is
-            // the instruction that follows it.
-            self.program
-                .add_instruction(Instruction::call(PLACEHOLDER_OFFSET));
-            self.pending_patches.push((entry, atom_idx));
-            self.subroutine_queue.push_back(atom_idx);
-        }
-
-        Ok(entry)
-    }
-
     /// Compile lookahead (positive or negative)
     fn compile_lookahead(
         &mut self,

@@ -56,6 +56,7 @@
 
 use crate::ffi::ruby::cache::LruCache;
 use crate::ffi::shared::flatten_ast_to_u64;
+use crate::portable::bytecode::{parse_with_vm_capped, Program, VmCappedOutcome};
 use crate::portable::{
     to_parslet_compatible, AstArena, Atom, DenseCache, Grammar, ParseError, PortableParser,
 };
@@ -77,6 +78,67 @@ type GrammarCache = LruCache<u64, Grammar>;
 /// Thread-safe global grammar cache with bounded LRU eviction
 static GRAMMAR_CACHE: std::sync::OnceLock<Mutex<GrammarCache>> = std::sync::OnceLock::new();
 
+/// Programs compiled for grammars in the LRU cache, keyed by the same
+/// structure hash, so one-shot paths (parse_fresh) skip recompilation.
+static PROGRAM_CACHE: std::sync::OnceLock<Mutex<HashMap<u64, Arc<Program>>>> =
+    std::sync::OnceLock::new();
+
+fn get_program_cache() -> &'static Mutex<HashMap<u64, Arc<Program>>> {
+    PROGRAM_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Grammars whose one-shot (parse_fresh) parses tripped the VM budget.
+static VM_STICKY_OFF: std::sync::OnceLock<Mutex<std::collections::HashSet<u64>>> =
+    std::sync::OnceLock::new();
+
+fn vm_sticky_off(hash: u64) -> bool {
+    VM_STICKY_OFF
+        .get_or_init(|| Mutex::new(std::collections::HashSet::new()))
+        .lock()
+        .unwrap()
+        .contains(&hash)
+}
+
+fn mark_vm_sticky_off(hash: u64) {
+    VM_STICKY_OFF
+        .get_or_init(|| Mutex::new(std::collections::HashSet::new()))
+        .lock()
+        .unwrap()
+        .insert(hash);
+}
+
+fn cached_program(hash: u64, grammar: &Grammar) -> Option<Arc<Program>> {
+    {
+        let guard = get_program_cache().lock().unwrap();
+        if let Some(program) = guard.get(&hash) {
+            return Some(program.clone());
+        }
+    }
+    let compiled = compile_program_on_big_stack(grammar).map(Arc::new);
+    if let Some(program) = &compiled {
+        get_program_cache()
+            .lock()
+            .unwrap()
+            .insert(hash, program.clone());
+    }
+    compiled
+}
+
+/// Compilation recurses over the grammar's atom tree, and a deep grammar
+/// (the EXPRESS grammar is ~2,273 atoms) can exceed the Ruby thread's
+/// stack guard mid-call. Compiling on a dedicated thread with a large
+/// stack keeps registration safe; the program itself is plain data.
+fn compile_program_on_big_stack(grammar: &Grammar) -> Option<Program> {
+    let grammar = grammar.clone();
+    match std::thread::Builder::new()
+        .stack_size(256 * 1024 * 1024)
+        .spawn(move || crate::portable::bytecode::compile_bytecode(grammar).ok())
+    {
+        Ok(handle) => handle.join().ok().flatten(),
+        Err(_) => None,
+    }
+}
+
 /// Grammar registered by explicit handle, avoiding the per-call JSON
 /// marshal + hash of the LRU path. `has_dynamic` gates the zero-copy
 /// input borrow: a Dynamic atom calls back into Ruby during the parse,
@@ -85,6 +147,30 @@ static GRAMMAR_CACHE: std::sync::OnceLock<Mutex<GrammarCache>> = std::sync::Once
 struct HandleEntry {
     grammar: Arc<Grammar>,
     has_dynamic: bool,
+    /// Program compiled once at registration for the bytecode VM tier.
+    /// None when the grammar uses atoms the VM cannot express (e.g.
+    /// Dynamic) — those grammars stay on the packrat engine entirely.
+    program: Option<Arc<Program>>,
+    /// Sticky VM disable: set once a parse tripped the backtrack budget,
+    /// so backtracking-heavy grammars stop paying the retry cost.
+    vm_disabled: Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// Inputs at or above this size parse on the bytecode VM when the
+/// grammar compiled; below it the packrat tree-walker wins on setup
+/// cost (2 KB: VM -16%; 64 KB: VM +176% — TODO.max-perf/4 phase 1).
+const VM_INPUT_THRESHOLD: usize = 8 * 1024;
+
+/// Backtrack budget for a VM parse. Measured rates: linear grammars
+/// backtrack ~0.0001/byte (the KV bench grammar: 2 backtracks for
+/// 47.5 KB), while the EXPRESS grammar runs ~16/byte and the memo-less
+/// VM loses to packrat there. The budget sits six orders of magnitude
+/// above the linear class and trips the heavy class within ~0.1% of
+/// its work, falling back to the walker for that parse and sticking
+/// the handle off.
+#[inline]
+fn vm_backtrack_budget(input_len: usize) -> u64 {
+    input_len as u64 / 64 + 16
 }
 
 static HANDLE_MAP: std::sync::OnceLock<Mutex<HashMap<u64, HandleEntry>>> =
@@ -184,12 +270,17 @@ pub fn register_grammar(grammar_json: String) -> Result<u64, Error> {
         .atoms
         .iter()
         .any(|a| matches!(a, Atom::Dynamic { .. }));
+    // Precompile the VM program once; grammars the VM cannot express
+    // (compile error, currently Dynamic/Custom) keep the packrat engine.
+    let program = compile_program_on_big_stack(&grammar).map(Arc::new);
     let handle = NEXT_HANDLE.fetch_add(1, Ordering::Relaxed);
     get_handle_map().lock().unwrap().insert(
         handle,
         HandleEntry {
             grammar: Arc::new(grammar),
             has_dynamic,
+            program,
+            vm_disabled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         },
     );
     Ok(handle)
@@ -221,11 +312,21 @@ pub fn parse_handle(handle: u64, input: RString) -> Result<Value, Error> {
     // user code cannot run inside this call).
     let input_str: &str = unsafe { input.as_str()? };
 
+    let program = entry
+        .program
+        .as_deref()
+        .filter(|_| !entry.vm_disabled.load(Ordering::Relaxed));
     if entry.has_dynamic {
         let owned = input_str.to_string();
-        parse_with_grammar(&ruby, &entry.grammar, &owned)
+        parse_with_grammar(&ruby, &entry.grammar, program, &owned, &entry.vm_disabled)
     } else {
-        parse_with_grammar(&ruby, &entry.grammar, input_str)
+        parse_with_grammar(
+            &ruby,
+            &entry.grammar,
+            program,
+            input_str,
+            &entry.vm_disabled,
+        )
     }
 }
 
@@ -244,6 +345,45 @@ pub fn parse_handle_prefix(handle: u64, input: RString) -> Result<Value, Error> 
 
     // SAFETY: same borrow discipline as parse_handle.
     let input_str: &str = unsafe { input.as_str()? };
+
+    let program = entry
+        .program
+        .as_deref()
+        .filter(|_| !entry.vm_disabled.load(Ordering::Relaxed));
+    if let Some(program) = program {
+        if input_str.len() >= VM_INPUT_THRESHOLD {
+            let mut arena = AstArena::for_input(input_str.len());
+            arena.set_input(input_str.to_string());
+            let outcome = parse_with_vm_capped(
+                program,
+                input_str,
+                &mut arena,
+                vm_backtrack_budget(input_str.len()),
+            );
+            if let VmCappedOutcome::Parsed {
+                result,
+                diagnostics,
+            } = outcome
+            {
+                let result = match result {
+                    Ok(result) => result,
+                    Err(e) => {
+                        return Err(Error::new(
+                            ruby.exception_runtime_error(),
+                            native_failure_message(&e, diagnostics),
+                        ));
+                    }
+                };
+                let collapsed = crate::ffi::shared::collapse_ast(&result.value, &mut arena);
+                let value = transform_ast(&collapsed, &arena, input_str, &ruby)?;
+                let pair = ruby.ary_new_capa(2);
+                pair.push(value)?;
+                pair.push(result.end_pos as i64)?;
+                return Ok(pair.as_value());
+            }
+            entry.vm_disabled.store(true, Ordering::Relaxed);
+        }
+    }
 
     let mut arena = AstArena::for_input(input_str.len());
     arena.set_input(input_str.to_string());
@@ -293,7 +433,53 @@ fn native_failure_message(e: &ParseError, diagnostics: Option<(usize, Vec<String
     e.to_string()
 }
 
-fn parse_with_grammar(ruby: &Ruby, grammar: &Grammar, input: &str) -> Result<Value, Error> {
+fn parse_with_grammar(
+    ruby: &Ruby,
+    grammar: &Grammar,
+    program: Option<&Program>,
+    input: &str,
+    vm_disabled: &std::sync::atomic::AtomicBool,
+) -> Result<Value, Error> {
+    // Large inputs run on the precompiled bytecode VM (TODO.max-perf/4
+    // phase 2): byte-identical trees per the differential gate, 2.76x
+    // on 64 KB inputs.
+    if let Some(program) = program {
+        if input.len() >= VM_INPUT_THRESHOLD {
+            let mut arena = AstArena::for_input(input.len());
+            arena.set_input(input.to_string());
+            let outcome =
+                parse_with_vm_capped(program, input, &mut arena, vm_backtrack_budget(input.len()));
+            match outcome {
+                VmCappedOutcome::BudgetExceeded => {
+                    if std::env::var("PARSANOL_VM_DEBUG").is_ok() {
+                        eprintln!(
+                            "parsanol: VM backtrack budget tripped ({} bytes); sticking handle to packrat",
+                            input.len()
+                        );
+                    }
+                    vm_disabled.store(true, Ordering::Relaxed);
+                    // fall through to the walker with a FRESH arena
+                }
+                VmCappedOutcome::Parsed {
+                    result,
+                    diagnostics,
+                } => {
+                    let result = match result {
+                        Ok(result) => result,
+                        Err(e) => {
+                            return Err(Error::new(
+                                ruby.exception_runtime_error(),
+                                native_failure_message(&e, diagnostics),
+                            ));
+                        }
+                    };
+                    let collapsed = crate::ffi::shared::collapse_ast(&result.value, &mut arena);
+                    return transform_ast(&collapsed, &arena, input, ruby);
+                }
+            }
+        }
+    }
+
     let mut arena = AstArena::for_input(input.len());
     let mut parser = PortableParser::new(grammar, input, &mut arena);
 
@@ -387,7 +573,11 @@ pub fn parse(grammar_json: String, input: String) -> Result<Value, Error> {
         }
     };
 
-    parse_with_grammar(&ruby, &grammar, &input)
+    // One-shot parses have no registered program; the tree-walker path
+    // serves them directly.
+    static NO_PROGRAM_OFF: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+    parse_with_grammar(&ruby, &grammar, None, &input, &NO_PROGRAM_OFF)
 }
 
 /// Parse without packrat caching for memory-bounded operation
@@ -420,6 +610,40 @@ pub fn parse_fresh(grammar_json: String, input: String) -> Result<Value, Error> 
             }
         }
     };
+
+    // The VM carries no memo table, so it is inherently the
+    // memory-bounded engine; prefer it whenever the grammar compiled
+    // and the input clears the size threshold.
+    if input.len() >= VM_INPUT_THRESHOLD && !vm_sticky_off(hash) {
+        if let Some(program) = cached_program(hash, &grammar) {
+            let mut arena = AstArena::for_input(input.len());
+            arena.set_input(input.clone());
+            let outcome = parse_with_vm_capped(
+                &program,
+                &input,
+                &mut arena,
+                vm_backtrack_budget(input.len()),
+            );
+            if let VmCappedOutcome::Parsed {
+                result,
+                diagnostics,
+            } = outcome
+            {
+                let result = match result {
+                    Ok(result) => result,
+                    Err(e) => {
+                        return Err(Error::new(
+                            ruby.exception_runtime_error(),
+                            native_failure_message(&e, diagnostics),
+                        ));
+                    }
+                };
+                let collapsed = crate::ffi::shared::collapse_ast(&result.value, &mut arena);
+                return transform_ast(&collapsed, &arena, &input, &ruby);
+            }
+            mark_vm_sticky_off(hash);
+        }
+    }
 
     // Create fresh arena (no reuse, no memory accumulation)
     let mut arena = AstArena::for_input(input.len());

@@ -44,4 +44,7 @@ pub use instruction::{CaptureKind, Instruction, Opcode};
 pub use optimizer::{OptimizationPass, PeepholeOptimizer};
 pub use pattern_analysis::{FixedLenAnalysis, NullableAnalysis, PatternLength, PatternNullability};
 pub use program::{CharSet, Program};
-pub use vm::{parse_with_vm, BytecodeVM, VMConfig, VMResult};
+pub use vm::{
+    parse_with_vm, parse_with_vm_capped, parse_with_vm_diag, BytecodeVM, VMConfig, VMResult,
+    VmCappedOutcome,
+};
