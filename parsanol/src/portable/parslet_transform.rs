@@ -121,6 +121,22 @@ pub fn to_parslet_compatible(node: &AstNode, arena: &mut AstArena, input: &str) 
                 }
             }
 
+            // An empty :sequence or :maybe matched no content and flattens
+            // to "" (Ruby semantics; e.g. the EXPRESS entityHead.subsuper
+            // when neither SUPERTYPE nor SUBTYPE is present). An empty
+            // :repetition keeps empty-array semantics.
+            if tagged_items.is_empty() && !items.is_empty() {
+                let tag = items[0].clone();
+                if !matches!(tag, AstNode::StringRef { pool_index } if arena.get_string(pool_index as usize) == ":repetition")
+                    && !matches!(tag, AstNode::InputRef { offset, length } if arena
+                        .get_input()
+                        .get(offset as usize..(offset + length) as usize)
+                        .is_some_and(|s| s == ":repetition"))
+                {
+                    return arena.intern_string("");
+                }
+            }
+
             let transformed_items: Vec<AstNode> = tagged_items
                 .iter()
                 .map(|item| to_parslet_compatible(item, arena, input))
@@ -765,6 +781,47 @@ mod tests {
                 );
             }
             _ => panic!("Expected array, got {:?}", result),
+        }
+    }
+
+    #[test]
+    fn test_empty_sequence_flattens_to_empty_string() {
+        // Grammar: str("E") >> (str("A").optional >> str("B").optional).label("m") >> str("z")
+        // A labeled sequence whose content matched nothing flattens to ""
+        // (Ruby native semantics; e.g. EXPRESS entityHead.subsuper with
+        // neither SUPERTYPE nor SUBTYPE present).
+        let grammar = GrammarBuilder::new()
+            .rule(
+                "test",
+                seq(vec![
+                    dynamic(str("E")),
+                    dynamic(seq(vec![str("A").optional(), str("B").optional()]).label("m")),
+                    dynamic(str("z")),
+                ]),
+            )
+            .build();
+
+        let (result, arena) = parse_and_transform("Ez", &grammar);
+
+        match result {
+            AstNode::Hash { pool_index, length } => {
+                let pairs = arena.get_hash_items(pool_index as usize, length as usize);
+                assert_eq!(pairs.len(), 1);
+                assert_eq!(pairs[0].0, "m");
+                let text = match &pairs[0].1 {
+                    AstNode::StringRef { pool_index } => {
+                        arena.get_string(*pool_index as usize).to_string()
+                    }
+                    AstNode::InputRef { offset, length } => arena
+                        .get_input()
+                        .get(*offset as usize..(*offset + *length) as usize)
+                        .expect("valid input range")
+                        .to_string(),
+                    other => panic!("expected empty string, got {:?}", other),
+                };
+                assert_eq!(text, "");
+            }
+            other => panic!("expected hash, got {:?}", other),
         }
     }
 }
