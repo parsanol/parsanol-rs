@@ -57,6 +57,7 @@ pub mod custom;
 pub mod debug;
 pub mod dynamic;
 pub mod error;
+pub mod events;
 pub mod grammar;
 pub mod grammar_analysis;
 pub mod incremental;
