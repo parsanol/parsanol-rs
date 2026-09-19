@@ -15,6 +15,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Resolve the Parsanol/Native constants as modules in the dynamic bridge by @[object]
 
+### Other
+
+- Release v0.7.4 by @[object]
+
+### Added
+
+- Resolve_fragment for native Dynamic atoms (WIP, GH-85) by @[object]
+
+### Fixed
+
+- Resolve the Parsanol/Native constants as modules in the dynamic bridge by @[object]
+
 ### Added
 
 - Flat event stream API for the parslet-shaped AST by @[object]
