@@ -895,18 +895,21 @@ impl<'a> PortableParser<'a> {
         // Invoke callback: a fragment grammar (self-consistent atom
         // indices, the shape host bridges produce) wins over a single
         // index-free atom, which is appended to a grammar clone.
+        if std::env::var("PARSANOL_DYN_TRACE").is_ok() {
+            eprintln!("DYN: parse_dynamic id={} pos={}", callback_id, pos);
+        }
         let grammar = self.grammar;
         let (temp_grammar, temp_atom_id) = with_dynamic_callback(callback_id, |cb| {
-                if let Some((fragment, root)) = cb.resolve_fragment(&ctx) {
-                    return Some((fragment, root));
-                }
-                cb.resolve(&ctx).map(|atom| {
-                    let mut g = grammar.clone();
-                    let id = g.add_atom(atom);
-                    (g, id)
-                })
+            if let Some((fragment, root)) = cb.resolve_fragment(&ctx) {
+                return Some((fragment, root));
+            }
+            cb.resolve(&ctx).map(|atom| {
+                let mut g = grammar.clone();
+                let id = g.add_atom(atom);
+                (g, id)
             })
-            .ok_or(ParseError::Failed { position: pos })?;
+        })
+        .ok_or(ParseError::Failed { position: pos })?;
 
         // Parse using the returned atom
         // Note: We create a temporary parser to avoid borrowing issues
