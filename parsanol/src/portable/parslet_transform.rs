@@ -112,32 +112,47 @@ pub fn to_parslet_compatible(node: &AstNode, arena: &mut AstArena, input: &str) 
         AstNode::Array { pool_index, length } => {
             let items = arena.get_array(*pool_index as usize, *length as usize);
 
-            // Strip tags (strings starting with ':') from the items
-            // Tags like ":sequence", ":repetition" are metadata, not content
-            let mut tagged_items: Vec<AstNode> = Vec::with_capacity(items.len());
-            for item in items.iter() {
-                if !is_tag_node(item, arena) {
-                    tagged_items.push(item.clone());
+            // Only the FIRST element can be a tag (":sequence",
+            // ":repetition", ":maybe"). Stripping ':'-prefixed strings
+            // anywhere else would eat literal colons from the input,
+            // which the Ruby transformer never does.
+            let (tag_kind, content): (Option<String>, Vec<AstNode>) =
+                match items.split_first() {
+                    Some((first, rest)) if is_tag_node(first, arena) => {
+                        (Some(tag_text(first, arena)), rest.to_vec())
+                    }
+                    _ => (None, items.clone()),
+                };
+
+            match tag_kind.as_deref() {
+                // A maybe flattens to its single value, never to an array.
+                Some(":maybe") => {
+                    if content.is_empty() {
+                        return arena.intern_string("");
+                    }
+                    return to_parslet_compatible(&content[0], arena, input);
                 }
+                // Repetitions keep their items (joined only when every
+                // item is a string); they never merge named captures.
+                Some(":repetition") => {
+                    let transformed_items: Vec<AstNode> = content
+                        .iter()
+                        .map(|item| to_parslet_compatible(item, arena, input))
+                        .collect();
+                    return flatten_repetition(&transformed_items, arena, input);
+                }
+                // An empty :sequence matched no content and flattens to
+                // "" (Ruby semantics; e.g. a labeled sequence of optional
+                // clauses with none present).
+                Some(_) => {
+                    if content.is_empty() {
+                        return arena.intern_string("");
+                    }
+                }
+                None => {}
             }
 
-            // An empty :sequence or :maybe matched no content and flattens
-            // to "" (Ruby semantics; e.g. the EXPRESS entityHead.subsuper
-            // when neither SUPERTYPE nor SUBTYPE is present). An empty
-            // :repetition keeps empty-array semantics.
-            if tagged_items.is_empty() && !items.is_empty() {
-                let tag = items[0].clone();
-                if !matches!(tag, AstNode::StringRef { pool_index } if arena.get_string(pool_index as usize) == ":repetition")
-                    && !matches!(tag, AstNode::InputRef { offset, length } if arena
-                        .get_input()
-                        .get(offset as usize..(offset + length) as usize)
-                        .is_some_and(|s| s == ":repetition"))
-                {
-                    return arena.intern_string("");
-                }
-            }
-
-            let transformed_items: Vec<AstNode> = tagged_items
+            let transformed_items: Vec<AstNode> = content
                 .iter()
                 .map(|item| to_parslet_compatible(item, arena, input))
                 .collect();
@@ -176,9 +191,126 @@ fn is_tag_node(node: &AstNode, arena: &AstArena) -> bool {
     }
 }
 
+/// Text of a tag node (the tag string itself).
+fn tag_text(node: &AstNode, arena: &AstArena) -> String {
+    match node {
+        AstNode::StringRef { pool_index } => arena.get_string(*pool_index as usize).to_string(),
+        AstNode::InputRef { offset, length } => arena
+            .get_input()
+            .get(*offset as usize..(*offset + *length) as usize)
+            .unwrap_or("")
+            .to_string(),
+        _ => String::new(),
+    }
+}
+
+/// Array node whose first element is the given tag.
+fn is_tagged_with(node: &AstNode, tag: &str, arena: &AstArena) -> bool {
+    match node {
+        AstNode::Array { pool_index, length } if *length > 0 => {
+            let items = arena.get_array(*pool_index as usize, *length as usize);
+            items
+                .first()
+                .is_some_and(|first| is_tag_node(first, arena) && tag_text(first, arena) == tag)
+        }
+        _ => false,
+    }
+}
+
+/// Empty string node (zero-length input ref or empty interned string).
+fn is_empty_string_node(node: &AstNode, arena: &AstArena) -> bool {
+    match node {
+        AstNode::InputRef { length, .. } => *length == 0,
+        AstNode::StringRef { pool_index } => arena.get_string(*pool_index as usize).is_empty(),
+        _ => false,
+    }
+}
+
+/// Items of an array node, when the node is an array.
+fn array_items_of(node: &AstNode, arena: &AstArena) -> Option<Vec<AstNode>> {
+    match node {
+        AstNode::Array { pool_index, length } => {
+            Some(arena.get_array(*pool_index as usize, *length as usize))
+        }
+        _ => None,
+    }
+}
+
+/// All items are single-key hashes carrying `key`.
+fn all_items_hash_with_key(items: &[AstNode], key: &str, arena: &AstArena) -> bool {
+    !items.is_empty() && items.iter().all(|item| is_hash_with_key(item, key, arena))
+}
+
+/// Repetition flattening (port of the Ruby transformer's
+/// flatten_repetition): flatten one level of nested arrays, join when
+/// every remaining item is a string, otherwise keep the item array.
+fn flatten_repetition(items: &[AstNode], arena: &mut AstArena, input: &str) -> AstNode {
+    let mut flat: Vec<AstNode> = Vec::with_capacity(items.len());
+    for item in items {
+        match item {
+            AstNode::Array { pool_index, length } => {
+                flat.extend(arena.get_array(*pool_index as usize, *length as usize));
+            }
+            other => flat.push(other.clone()),
+        }
+    }
+    if flat.is_empty() {
+        return store_array_node(&[], arena);
+    }
+    let mut string_parts: Vec<String> = Vec::with_capacity(flat.len());
+    let mut first_input_offset: Option<u32> = None;
+    for item in &flat {
+        match item {
+            AstNode::InputRef { offset, length } => {
+                if first_input_offset.is_none() {
+                    first_input_offset = Some(*offset);
+                }
+                if let Some(s) = input.get(*offset as usize..(*offset + *length) as usize) {
+                    string_parts.push(s.to_string());
+                }
+            }
+            AstNode::StringRef { pool_index } => {
+                let (s, _, _, _) = arena.get_string_parts(*pool_index as usize);
+                if !s.starts_with(':') {
+                    string_parts.push(s.to_string());
+                }
+            }
+            _ => return store_array_node(&flat, arena),
+        }
+    }
+    join_string_parts(&string_parts, first_input_offset, arena)
+}
+
+fn store_array_node(items: &[AstNode], arena: &mut AstArena) -> AstNode {
+    let (pool_index, length) = arena.store_array(items);
+    AstNode::Array {
+        pool_index,
+        length,
+    }
+}
+
+fn join_string_parts(
+    string_parts: &[String],
+    first_input_offset: Option<u32>,
+    arena: &mut AstArena,
+) -> AstNode {
+    if string_parts.len() == 1 {
+        if let Some(offset) = first_input_offset {
+            return arena.intern_string_with_offset(&string_parts[0], offset);
+        }
+        return arena.intern_string(&string_parts[0]);
+    }
+    let joined: String = string_parts.concat();
+    let offset = first_input_offset.unwrap_or(0);
+    arena.intern_string_with_offset(&joined, offset)
+}
+
 /// Transform a single-key hash (the common case)
 ///
 /// Single-key hashes are produced by named captures like `.label("name")`.
+/// Ports the Ruby transformer's transform_single_key_hash, including its
+/// repetition detection: a repetition value keeps its items (each
+/// non-hash item re-wrapped under the key) instead of merging.
 fn transform_single_key_hash(
     pair: &(String, AstNode),
     arena: &mut AstArena,
@@ -188,31 +320,75 @@ fn transform_single_key_hash(
     let key_str = key.as_str();
     let transformed = to_parslet_compatible(value, arena, input);
 
-    // Check if this is a repetition result (array of named items)
-    if let AstNode::Array { pool_index, length } = transformed {
-        let items = arena.get_array(pool_index as usize, length as usize);
+    let is_tagged_repetition = is_tagged_with(value, ":repetition", arena);
+    let is_raw_array_repetition = array_items_of(value, arena)
+        .map(|items| {
+            // Exclude the tag itself when checking raw items.
+            let content: Vec<AstNode> = items
+                .into_iter()
+                .filter(|i| !is_tag_node(i, arena))
+                .collect();
+            all_items_hash_with_key(&content, key_str, arena)
+        })
+        .unwrap_or(false);
+    let is_empty_repetition = matches!(value, AstNode::Array { length: 0, .. });
+    let is_transformed_repetition = array_items_of(&transformed, arena)
+        .map(|items| all_items_hash_with_key(&items, key_str, arena))
+        .unwrap_or(false);
+    let is_repetition = is_tagged_repetition
+        || is_raw_array_repetition
+        || is_transformed_repetition
+        || is_empty_repetition;
 
-        // Check if all items are hashes with the same key
-        if items.len() > 1
-            && items
-                .iter()
-                .all(|item| is_hash_with_key(item, key_str, arena))
-        {
-            // This is a named repetition: return as array of hashes
-            let (new_pool_idx, new_len) = arena.store_hash(&[(key_str, transformed)]);
-            return AstNode::Hash {
-                pool_index: new_pool_idx,
-                length: new_len,
-            };
-        }
+    if is_repetition {
+        transform_repetition_value(key_str, transformed, arena)
+    } else if let AstNode::Array { .. } = transformed {
+        transform_array_value(key_str, &transformed, arena)
+    } else {
+        wrap_with_key(key_str, transformed, arena)
     }
+}
 
-    // Default: wrap transformed value with the key
-    let (pool_idx, len) = arena.store_hash(&[(key_str, transformed)]);
+fn wrap_with_key(key: &str, value: AstNode, arena: &mut AstArena) -> AstNode {
+    let (pool_idx, len) = arena.store_hash(&[(key, value)]);
     AstNode::Hash {
         pool_index: pool_idx,
         length: len,
     }
+}
+
+/// Port of the Ruby transformer's transform_repetition_value.
+fn transform_repetition_value(key: &str, transformed: AstNode, arena: &mut AstArena) -> AstNode {
+    let result = match &transformed {
+        AstNode::Array { pool_index, length } => {
+            let items = arena.get_array(*pool_index as usize, *length as usize);
+            if items.is_empty() {
+                store_array_node(&[], arena)
+            } else if items.iter().all(|i| matches!(i, AstNode::Hash { .. })) {
+                transformed.clone()
+            } else {
+                let rewrapped: Vec<AstNode> = items
+                    .iter()
+                    .map(|item| wrap_with_key(key, item.clone(), arena))
+                    .collect();
+                store_array_node(&rewrapped, arena)
+            }
+        }
+        other if is_empty_string_node(other, arena) => store_array_node(&[], arena),
+        other => other.clone(),
+    };
+    wrap_with_key(key, result, arena)
+}
+
+/// Port of the Ruby transformer's transform_array_value (non-repetition
+/// arrays): empty arrays become an empty string, anything else is kept.
+fn transform_array_value(key: &str, transformed: &AstNode, arena: &mut AstArena) -> AstNode {
+    let value = if let AstNode::Array { length: 0, .. } = transformed {
+        arena.intern_string_with_offset("", 0)
+    } else {
+        transformed.clone()
+    };
+    wrap_with_key(key, value, arena)
 }
 
 /// Transform a multi-key hash (rare case)
@@ -782,6 +958,46 @@ mod tests {
             }
             _ => panic!("Expected array, got {:?}", result),
         }
+    }
+
+    #[test]
+    fn test_literal_colon_not_stripped_as_tag() {
+        // Grammar: str("--") >> match("[0-9IP:]").repeat(1, None), all
+        // labeled "m". A ':' in the input is content, not a tag: the
+        // joined string must keep every character. (Regressed as
+        // "--IP1:" remarks truncating to "--I" when colons were
+        // stripped anywhere in an array.)
+        let grammar = GrammarBuilder::new()
+            .rule(
+                "test",
+                seq(vec![
+                    dynamic(str("--")),
+                    dynamic(re("[0-9IP:]").repeat(1, None)),
+                ])
+                .label("m"),
+            )
+            .build();
+
+        let (result, arena) = parse_and_transform("--IP1:", &grammar);
+
+        let text = match &result {
+            AstNode::Hash { pool_index, length } => {
+                let pairs = arena.get_hash_items(*pool_index as usize, *length as usize);
+                assert_eq!(pairs.len(), 1);
+                match &pairs[0].1 {
+                    AstNode::StringRef { pool_index } => {
+                        arena.get_string(*pool_index as usize).to_string()
+                    }
+                    AstNode::InputRef { offset, length } => "--IP1:"
+                        .get(*offset as usize..(*offset + *length) as usize)
+                        .expect("valid range")
+                        .to_string(),
+                    other => panic!("expected string, got {:?}", other),
+                }
+            }
+            other => panic!("expected hash, got {:?}", other),
+        };
+        assert_eq!(text, "--IP1:");
     }
 
     #[test]
