@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Flat event stream API for the parslet-shaped AST by @[object]
+
+### Fixed
+
+- Reach full AST parity for the parslet transform by @[object]
+- Keep position integrity when interning joined strings by @[object]
+- Flatten empty sequences and maybes to empty string in parslet transform by @[object]
+- Merge mixed-key sequence hashes as siblings in parslet transform by @[object]
+
+### Other
+
+- Satisfy rustfmt and clippy by @[object]
+
 ### Other
 
 - Remove dead AstNode::Tagged variant ([#50](https://github.com/parsanol/parsanol-rs/pull/50)) by @[object]
