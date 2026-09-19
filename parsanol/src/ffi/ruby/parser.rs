@@ -367,7 +367,7 @@ pub fn parse_handle_events(handle: u64, input: RString) -> Result<Value, Error> 
     // allocation and one unpack("q*") on the Ruby side, instead of one
     // Integer object per event.
     let bytes: Vec<u8> = events.iter().flat_map(|e| e.to_le_bytes()).collect();
-    let events_str = RString::from_slice(&bytes);
+    let events_str = ruby.str_from_slice(&bytes);
     let strings_ary = ruby.ary_new_capa(strings.len());
     for s in strings {
         strings_ary.push(s.as_str())?;
@@ -454,8 +454,6 @@ pub fn parse_handle_prefix(handle: u64, input: RString) -> Result<Value, Error> 
     pair.push(result.end_pos as i64)?;
     Ok(pair.as_value())
 }
-
-/// Shared parse + collapse + transform over an already-resolved grammar.
 
 /// Format a native parse failure for the Ruby tier: a parslet-style
 /// expected-set message plus a machine-readable position marker the

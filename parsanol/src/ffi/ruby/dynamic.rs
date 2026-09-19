@@ -41,10 +41,7 @@ impl DynamicCallback for RubyDynamicCallback {
         pattern.ok().map(|pattern| Atom::Str { pattern })
     }
 
-    fn resolve_fragment(
-        &self,
-        ctx: &DynamicContext,
-    ) -> Option<(crate::portable::Grammar, usize)> {
+    fn resolve_fragment(&self, ctx: &DynamicContext) -> Option<(crate::portable::Grammar, usize)> {
         let value = self.invoke_block(ctx)?;
         let responds: bool = value.respond_to("to_atom_json", false).ok()?;
         if !responds {
@@ -65,19 +62,70 @@ impl RubyDynamicCallback {
     /// Shared block invocation: builds the Ruby context hash and calls
     /// Parsanol::Native::Dynamic.invoke_from_rust.
     fn invoke_block(&self, ctx: &DynamicContext) -> Option<Value> {
-        let ruby = Ruby::get().ok()?;
-        let ruby_ctx = build_ruby_context(ctx, &ruby)?;
+        let trace = std::env::var("PARSANOL_DYN_TRACE").is_ok();
+        let Ok(ruby) = Ruby::get() else {
+            if trace {
+                eprintln!("DYN-BRIDGE: no ruby");
+            }
+            return None;
+        };
+        let Some(ruby_ctx) = build_ruby_context(ctx, &ruby) else {
+            if trace {
+                eprintln!("DYN-BRIDGE: context build failed");
+            }
+            return None;
+        };
 
         let object_class: RClass = ruby.class_object();
-        let parsanol_mod: RClass = object_class.const_get::<_, RClass>("Parsanol").ok()?;
-        let native_mod: RClass = parsanol_mod.const_get::<_, RClass>("Native").ok()?;
-        let dynamic_mod: Value = native_mod.const_get::<_, Value>("Dynamic").ok()?;
+        let parsanol_mod = match object_class.const_get::<_, magnus::RModule>("Parsanol") {
+            Ok(m) => m,
+            Err(e) => {
+                if trace {
+                    eprintln!("DYN-BRIDGE: Parsanol const_get failed: {e:?}");
+                }
+                return None;
+            }
+        };
+        let native_mod = match parsanol_mod.const_get::<_, magnus::RModule>("Native") {
+            Ok(m) => m,
+            Err(e) => {
+                if trace {
+                    eprintln!("DYN-BRIDGE: Native const_get failed: {e:?}");
+                }
+                return None;
+            }
+        };
+        let dynamic_mod = match native_mod.const_get::<_, Value>("Dynamic") {
+            Ok(m) => m,
+            Err(e) => {
+                if trace {
+                    eprintln!("DYN-BRIDGE: Dynamic const_get failed: {e:?}");
+                }
+                return None;
+            }
+        };
 
         let result: Result<Value, Error> =
             dynamic_mod.funcall("invoke_from_rust", (self.callback_id, ruby_ctx));
         match result {
-            Ok(value) if !value.is_nil() => Some(value),
-            _ => None,
+            Ok(value) if !value.is_nil() => {
+                if trace {
+                    eprintln!("DYN-BRIDGE: invoked ok");
+                }
+                Some(value)
+            }
+            Ok(_) => {
+                if trace {
+                    eprintln!("DYN-BRIDGE: invoked -> nil");
+                }
+                None
+            }
+            Err(e) => {
+                if trace {
+                    eprintln!("DYN-BRIDGE: funcall failed: {e:?}");
+                }
+                None
+            }
         }
     }
 }

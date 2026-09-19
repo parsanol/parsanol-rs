@@ -170,15 +170,10 @@ pub trait DynamicCallback: Send + Sync {
     /// therefore only make sense inside their own grammar (the shape
     /// host-language bridges produce when a callback returns an atom
     /// subtree). Takes precedence over #resolve when it returns Some.
-    fn resolve_fragment(
-        &self,
-        _ctx: &DynamicContext,
-    ) -> Option<(super::grammar::Grammar, usize)> {
+    fn resolve_fragment(&self, _ctx: &DynamicContext) -> Option<(super::grammar::Grammar, usize)> {
         None
     }
 }
-
-
 
 // ============================================================================
 // Global Registry
@@ -307,9 +302,18 @@ pub fn with_dynamic_callback<T>(
 ) -> Option<T> {
     let registry = get_registry();
     let guard = registry.lock().ok()?;
-    guard.callbacks.get(&id).and_then(|cb| f(cb.as_ref()))
+    let found = guard.callbacks.get(&id);
+    if std::env::var("PARSANOL_DYN_TRACE").is_ok() {
+        eprintln!(
+            "DYN: with_dynamic_callback id={} found={}",
+            id,
+            found.is_some()
+        );
+    }
+    found.and_then(|cb| f(cb.as_ref()))
 }
 
+/// Get the description of a registered callback by ID.
 pub fn get_dynamic_callback_description(id: u64) -> Option<String> {
     let registry = get_registry();
     let guard = registry.lock().unwrap();
