@@ -116,13 +116,12 @@ pub fn to_parslet_compatible(node: &AstNode, arena: &mut AstArena, input: &str) 
             // ":repetition", ":maybe"). Stripping ':'-prefixed strings
             // anywhere else would eat literal colons from the input,
             // which the Ruby transformer never does.
-            let (tag_kind, content): (Option<String>, Vec<AstNode>) =
-                match items.split_first() {
-                    Some((first, rest)) if is_tag_node(first, arena) => {
-                        (Some(tag_text(first, arena)), rest.to_vec())
-                    }
-                    _ => (None, items.clone()),
-                };
+            let (tag_kind, content): (Option<String>, Vec<AstNode>) = match items.split_first() {
+                Some((first, rest)) if is_tag_node(first, arena) => {
+                    (Some(tag_text(first, arena)), rest.to_vec())
+                }
+                _ => (None, items.clone()),
+            };
 
             match tag_kind.as_deref() {
                 // A maybe flattens to its single value, never to an array.
@@ -144,12 +143,10 @@ pub fn to_parslet_compatible(node: &AstNode, arena: &mut AstArena, input: &str) 
                 // An empty :sequence matched no content and flattens to
                 // "" (Ruby semantics; e.g. a labeled sequence of optional
                 // clauses with none present).
-                Some(_) => {
-                    if content.is_empty() {
-                        return arena.intern_string("");
-                    }
+                Some(tag) if tag != ":repetition" && tag != ":maybe" && content.is_empty() => {
+                    return arena.intern_string("");
                 }
-                None => {}
+                Some(_) | None => {}
             }
 
             let transformed_items: Vec<AstNode> = content
@@ -283,10 +280,7 @@ fn flatten_repetition(items: &[AstNode], arena: &mut AstArena, input: &str) -> A
 
 fn store_array_node(items: &[AstNode], arena: &mut AstArena) -> AstNode {
     let (pool_index, length) = arena.store_array(items);
-    AstNode::Array {
-        pool_index,
-        length,
-    }
+    AstNode::Array { pool_index, length }
 }
 
 fn join_string_parts(
