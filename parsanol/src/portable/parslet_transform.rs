@@ -378,7 +378,7 @@ fn transform_repetition_value(key: &str, transformed: AstNode, arena: &mut AstAr
 /// arrays): empty arrays become an empty string, anything else is kept.
 fn transform_array_value(key: &str, transformed: &AstNode, arena: &mut AstArena) -> AstNode {
     let value = if let AstNode::Array { length: 0, .. } = transformed {
-        arena.intern_string_with_offset("", 0)
+        arena.intern_string("")
     } else {
         transformed.clone()
     };

@@ -252,3 +252,8 @@ harness = false
 name = "large-input"
 path = "../benches/large-input.rs"
 harness = false
+
+[[bench]]
+name = "event-stream"
+path = "../benches/event-stream.rs"
+harness = false

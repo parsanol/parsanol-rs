@@ -330,6 +330,54 @@ pub fn parse_handle(handle: u64, input: RString) -> Result<Value, Error> {
     }
 }
 
+/// Parse with a registered grammar handle and return the parslet-shaped
+/// AST as a flat event stream: [[events...], [strings...]].
+///
+/// Single FFI return, no per-node Ruby objects — the opcode stream
+/// mirrors `parse_native`'s output exactly (see `portable::events` for
+/// the opcode table); consumers replay the stream or attach domain
+/// handling directly to the opcodes.
+pub fn parse_handle_events(handle: u64, input: RString) -> Result<Value, Error> {
+    let ruby = Ruby::get().unwrap();
+    let entry = get_handle_map().lock().unwrap().get(&handle).cloned();
+    let Some(entry) = entry else {
+        return Err(Error::new(
+            ruby.exception_arg_error(),
+            format!("unknown grammar handle: {}", handle),
+        ));
+    };
+
+    // SAFETY: same borrow discipline as parse_handle.
+    let input_str: &str = unsafe { input.as_str()? };
+
+    let mut arena = AstArena::for_input(input_str.len());
+    arena.set_input(input_str.to_string());
+    let mut parser = PortableParser::new(&entry.grammar, input_str, &mut arena);
+    let raw = parser.parse().map_err(|e| {
+        let diagnostics = parser.failure_diagnostics();
+        Error::new(
+            ruby.exception_runtime_error(),
+            native_failure_message(&e, diagnostics),
+        )
+    })?;
+    let shaped = to_parslet_compatible(&raw, &mut arena, input_str);
+    let (events, strings) = crate::portable::events::linearize_events(&shaped, &mut arena);
+
+    // Pack the opcode stream into one binary string: a single Ruby
+    // allocation and one unpack("q*") on the Ruby side, instead of one
+    // Integer object per event.
+    let bytes: Vec<u8> = events.iter().flat_map(|e| e.to_le_bytes()).collect();
+    let events_str = RString::from_slice(&bytes);
+    let strings_ary = ruby.ary_new_capa(strings.len());
+    for s in strings {
+        strings_ary.push(s.as_str())?;
+    }
+    let pair = ruby.ary_new_capa(2);
+    pair.push(events_str)?;
+    pair.push(strings_ary)?;
+    Ok(pair.as_value())
+}
+
 /// Parse with a registered grammar handle WITHOUT requiring full-input
 /// consumption (the Ruby engine's `prefix: true` mode). Returns
 /// [value, end_pos]; unmatched trailing input is simply left over.
