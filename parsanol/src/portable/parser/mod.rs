@@ -887,18 +887,26 @@ impl<'a> PortableParser<'a> {
     /// Invokes a registered callback to determine which atom to parse.
     #[inline]
     fn parse_dynamic(&mut self, callback_id: u64, pos: usize) -> Result<ParseResult, ParseError> {
-        use super::dynamic::{invoke_dynamic_callback, DynamicContext};
+        use super::dynamic::{with_dynamic_callback, DynamicContext};
 
         // Create context for callback
         let ctx = DynamicContext::new(self.input, pos, self.capture_state.clone());
 
-        // Invoke callback to get the atom
-        let atom = invoke_dynamic_callback(callback_id, &ctx)
+        // Invoke callback: a fragment grammar (self-consistent atom
+        // indices, the shape host bridges produce) wins over a single
+        // index-free atom, which is appended to a grammar clone.
+        let grammar = self.grammar;
+        let (temp_grammar, temp_atom_id) = with_dynamic_callback(callback_id, |cb| {
+                if let Some((fragment, root)) = cb.resolve_fragment(&ctx) {
+                    return Some((fragment, root));
+                }
+                cb.resolve(&ctx).map(|atom| {
+                    let mut g = grammar.clone();
+                    let id = g.add_atom(atom);
+                    (g, id)
+                })
+            })
             .ok_or(ParseError::Failed { position: pos })?;
-
-        // Create a temporary grammar and add the atom
-        let mut temp_grammar = self.grammar.clone();
-        let temp_atom_id = temp_grammar.add_atom(atom);
 
         // Parse using the returned atom
         // Note: We create a temporary parser to avoid borrowing issues

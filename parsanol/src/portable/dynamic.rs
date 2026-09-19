@@ -163,7 +163,22 @@ pub trait DynamicCallback: Send + Sync {
     ///
     /// Used for error messages and debugging.
     fn description(&self) -> &str;
+
+    /// Resolve a self-contained fragment grammar at runtime.
+    ///
+    /// Use when the resolved atoms reference each other by index and
+    /// therefore only make sense inside their own grammar (the shape
+    /// host-language bridges produce when a callback returns an atom
+    /// subtree). Takes precedence over #resolve when it returns Some.
+    fn resolve_fragment(
+        &self,
+        _ctx: &DynamicContext,
+    ) -> Option<(super::grammar::Grammar, usize)> {
+        None
+    }
 }
+
+
 
 // ============================================================================
 // Global Registry
@@ -281,6 +296,20 @@ pub fn invoke_dynamic_callback(id: u64, ctx: &DynamicContext) -> Option<Atom> {
 /// # Returns
 ///
 /// The description string, or `None` if not registered.
+/// Fetch a registered callback by id (used by engines that need the
+/// full callback surface, e.g. fragment resolution).
+/// Run a closure with the registered callback, under the registry
+/// lock. Engines use this to access the full callback surface
+/// (resolve / resolve_fragment) without cloning.
+pub fn with_dynamic_callback<T>(
+    id: u64,
+    f: impl FnOnce(&dyn DynamicCallback) -> Option<T>,
+) -> Option<T> {
+    let registry = get_registry();
+    let guard = registry.lock().ok()?;
+    guard.callbacks.get(&id).and_then(|cb| f(cb.as_ref()))
+}
+
 pub fn get_dynamic_callback_description(id: u64) -> Option<String> {
     let registry = get_registry();
     let guard = registry.lock().unwrap();
