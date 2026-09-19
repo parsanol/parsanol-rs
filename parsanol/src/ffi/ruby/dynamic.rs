@@ -35,33 +35,25 @@ impl RubyDynamicCallback {
 
 impl DynamicCallback for RubyDynamicCallback {
     fn resolve(&self, ctx: &DynamicContext) -> Option<Atom> {
-        // Get Ruby instance
-        let ruby = Ruby::get().ok()?;
+        let value = self.invoke_block(ctx)?;
+        // A plain String is an index-free literal match.
+        let pattern: Result<String, Error> = TryConvert::try_convert(value);
+        pattern.ok().map(|pattern| Atom::Str { pattern })
+    }
 
-        // Build context hash for Ruby
-        let ruby_ctx = build_ruby_context(ctx, &ruby)?;
-
-        // Get Parsanol::Native::Dynamic module from Ruby
-        let object_class: RClass = ruby.class_object();
-        let parsanol_mod: RClass = object_class.const_get::<_, RClass>("Parsanol").ok()?;
-        let native_mod: RClass = parsanol_mod.const_get::<_, RClass>("Native").ok()?;
-        let dynamic_mod: Value = native_mod.const_get::<_, Value>("Dynamic").ok()?;
-
-        // Call Dynamic.invoke_from_rust(callback_id, context)
-        let result: Result<Value, Error> =
-            dynamic_mod.funcall("invoke_from_rust", (self.callback_id, ruby_ctx));
-
-        match result {
-            Ok(value) => {
-                // Check if nil using ReprValue trait
-                if value.is_nil() {
-                    return None;
-                }
-                // Convert to Atom
-                ruby_value_to_atom(value)
-            }
-            Err(_) => None,
+    fn resolve_fragment(
+        &self,
+        ctx: &DynamicContext,
+    ) -> Option<(crate::portable::Grammar, usize)> {
+        let value = self.invoke_block(ctx)?;
+        let responds: bool = value.respond_to("to_atom_json", false).ok()?;
+        if !responds {
+            return None;
         }
+        let json: Result<String, Error> = value.funcall("to_atom_json", ());
+        let grammar = crate::portable::Grammar::from_json(&json.ok()?).ok()?;
+        let root = grammar.root;
+        Some((grammar, root))
     }
 
     fn description(&self) -> &str {
@@ -69,57 +61,42 @@ impl DynamicCallback for RubyDynamicCallback {
     }
 }
 
+impl RubyDynamicCallback {
+    /// Shared block invocation: builds the Ruby context hash and calls
+    /// Parsanol::Native::Dynamic.invoke_from_rust.
+    fn invoke_block(&self, ctx: &DynamicContext) -> Option<Value> {
+        let ruby = Ruby::get().ok()?;
+        let ruby_ctx = build_ruby_context(ctx, &ruby)?;
+
+        let object_class: RClass = ruby.class_object();
+        let parsanol_mod: RClass = object_class.const_get::<_, RClass>("Parsanol").ok()?;
+        let native_mod: RClass = parsanol_mod.const_get::<_, RClass>("Native").ok()?;
+        let dynamic_mod: Value = native_mod.const_get::<_, Value>("Dynamic").ok()?;
+
+        let result: Result<Value, Error> =
+            dynamic_mod.funcall("invoke_from_rust", (self.callback_id, ruby_ctx));
+        match result {
+            Ok(value) if !value.is_nil() => Some(value),
+            _ => None,
+        }
+    }
+}
+
 /// Build a Ruby context hash from a DynamicContext
 fn build_ruby_context(ctx: &DynamicContext, ruby: &Ruby) -> Option<Value> {
     let hash = ruby.hash_new();
-
-    // Add input
     let _ = hash.aset(ruby.to_symbol("input"), ctx.input());
-
-    // Add position
     let _ = hash.aset(ruby.to_symbol("pos"), ctx.pos() as i64);
-
-    // Add remaining
     let _ = hash.aset(ruby.to_symbol("remaining"), ctx.remaining());
-
-    // Add captures as a hash
     let captures_hash = ruby.hash_new();
-
     for name in ctx.captures.names() {
         if let Some(value) = ctx.captures.get(name) {
             let text = value.get_text(ctx.input());
             let _ = captures_hash.aset(ruby.to_symbol(name.as_str()), text);
         }
     }
-
     let _ = hash.aset(ruby.to_symbol("captures"), captures_hash);
-
-    // Convert RHash to Value
     Some(hash.into_value_with(ruby))
-}
-
-/// Convert a Ruby value to an Atom
-fn ruby_value_to_atom(value: Value) -> Option<Atom> {
-    // Check if it's a string - TryConvert only takes one argument
-    if let Ok(s) = TryConvert::try_convert(value) {
-        return Some(Atom::Str { pattern: s });
-    }
-
-    // Check if the value responds to to_json (would be a Parsanol atom object)
-    // respond_to returns Result<bool, Error>
-    let responds_to_json: bool = value.respond_to("to_json", false).ok()?;
-    if responds_to_json {
-        // Call to_json to get the JSON string
-        let json_result: Result<String, Error> = value.funcall("to_json", ());
-        if let Ok(json_str) = json_result {
-            // Parse JSON to Atom
-            if let Ok(atom) = serde_json::from_str::<Atom>(&json_str) {
-                return Some(atom);
-            }
-        }
-    }
-
-    None
 }
 
 /// Register a Ruby callback with the global dynamic callback registry
