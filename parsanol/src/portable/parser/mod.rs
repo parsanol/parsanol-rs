@@ -892,37 +892,11 @@ impl<'a> PortableParser<'a> {
         // Fragment recursion guard: a grammar whose dispatch never
         // converges (e.g. captures that stay invisible to the block)
         // recurses through nested fragment parses forever. Hard-fail
-        // loudly instead of hanging (GH-76 follow-up).
-        thread_local! {
-            static DYNAMIC_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
-            static DYNAMIC_CALLS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
-        }
-        // Two guards: nesting depth (mutually recursive fragments) and
-        // total invocations (backtracking re-invokes callbacks on every
-        // retry — shallow but unbounded loops OOM'd before this). Both
-        // fail loudly instead of hanging or ballooning (GH-76).
-        let depth_ok = DYNAMIC_DEPTH.with(|d| {
-            let v = d.get();
-            if v < 256 {
-                d.set(v + 1);
-                true
-            } else {
-                false
-            }
-        }) && DYNAMIC_CALLS.with(|c| {
-            let v = c.get();
-            if v < 10_000 {
-                c.set(v + 1);
-                true
-            } else {
-                false
-            }
-        });
-        if !depth_ok {
-            return Err(ParseError::Failed {
-                position: pos,
-            });
-        }
+        // loudly instead of hanging (GH-76 follow-up). Depth and call
+        // budget live in `dynamic` so both engines share one policy;
+        // the RAII guard decrements on every exit path.
+        let _guard = super::dynamic::enter_dynamic()
+            .ok_or(ParseError::Failed { position: pos })?;
 
         // Create context for callback
         let ctx = DynamicContext::new(self.input, pos, self.capture_state.clone());
@@ -960,7 +934,7 @@ impl<'a> PortableParser<'a> {
         }
 
         let result = temp_parser.try_atom(temp_atom_id, pos);
-        DYNAMIC_DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
+        drop(_guard);
         let result = result?;
 
         // Merge captures from temp parser
