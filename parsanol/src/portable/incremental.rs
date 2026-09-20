@@ -300,10 +300,14 @@ impl Default for DirtyRegionTracker {
 /// Incremental parser that efficiently re-parses after edits
 pub struct IncrementalParser<'a> {
     /// The compiled grammar
-    grammar: &'a Grammar,
+    grammar: std::borrow::Cow<'a, Grammar>,
 
     /// Packrat cache (preserved across parses)
     cache: DenseCache,
+
+    /// Stable arena backing snapshot-marked cache entries: adopted
+    /// node data that must survive across parses (TODO.perf/4).
+    snapshot_arena: AstArena,
 
     /// Dirty region tracker
     dirty_tracker: DirtyRegionTracker,
@@ -317,8 +321,22 @@ impl<'a> IncrementalParser<'a> {
     #[inline]
     pub fn new(grammar: &'a Grammar) -> Self {
         Self {
-            grammar,
+            grammar: std::borrow::Cow::Borrowed(grammar),
             cache: DenseCache::new(4096),
+            snapshot_arena: AstArena::new(),
+            dirty_tracker: DirtyRegionTracker::new(),
+            prev_input_len: 0,
+        }
+    }
+
+    /// Create a new incremental parser owning its grammar (FFI
+    /// sessions hold the grammar and the parser together).
+    #[inline]
+    pub fn owned(grammar: Grammar) -> IncrementalParser<'static> {
+        IncrementalParser {
+            grammar: std::borrow::Cow::Owned(grammar),
+            cache: DenseCache::new(4096),
+            snapshot_arena: AstArena::new(),
             dirty_tracker: DirtyRegionTracker::new(),
             prev_input_len: 0,
         }
@@ -328,17 +346,68 @@ impl<'a> IncrementalParser<'a> {
     pub fn parse(&mut self, input: &str, arena: &mut AstArena) -> Result<AstNode, ParseError> {
         // Clear previous state
         self.cache.clear();
+        self.snapshot_arena = AstArena::new();
         self.dirty_tracker.clear();
+        self.prev_input_len = 0;
+
+        // Initial parse, then snapshot the whole successful cache so
+        // the first incremental parse starts from valid cross-parse
+        // entries.
+        let (result, _, _) = self.parse_and_snapshot(input, arena);
+        result
+    }
+
+    /// Parse against the retained cache, then convert the entries the
+    /// dirty regions did not touch into snapshots. Returns the tree
+    /// plus before/after entry counts for the efficiency stats.
+    fn parse_and_snapshot(
+        &mut self,
+        input: &str,
+        arena: &mut AstArena,
+    ) -> (Result<AstNode, ParseError>, usize, usize) {
+        let before = self.cache.len();
+        let cutoff = self
+            .dirty_tracker
+            .regions()
+            .iter()
+            .map(|r| r.start)
+            .min()
+            .unwrap_or(usize::MAX);
+        let root_atom = self.grammar.root as u16;
+        let input_len_changed = self.prev_input_len != input.len();
         self.prev_input_len = input.len();
 
-        // Use standard parser for initial parse, then preserve cache
-        let mut parser = super::parser::PortableParser::new(self.grammar, input, arena);
+        let mut parser = super::parser::PortableParser::new_with_cache_and_snap(
+            &self.grammar,
+            input,
+            arena,
+            std::mem::take(&mut self.cache),
+            Some(&self.snapshot_arena),
+        );
         let result = parser.parse();
-
-        // Preserve cache for incremental parsing
         self.cache = parser.into_cache();
 
-        result
+        // Budget guard: a snapshot arena past the cap is dropped
+        // wholesale; the next parse runs cold instead of growing
+        // without bound across edit sessions.
+        if self.snapshot_arena.memory_usage() > 32 * 1024 * 1024 {
+            self.snapshot_arena = AstArena::new();
+            self.cache.drop_snapshots();
+        }
+
+        let mut snap_arena = std::mem::take(&mut self.snapshot_arena);
+        self.cache.retain_snapshot_adopt(
+            |entry| {
+                let entry_end = entry.end_pos as usize;
+                let is_root_at_start = entry.pos == 0 && entry.atom_id == root_atom;
+                entry_end <= cutoff && !(input_len_changed && is_root_at_start)
+            },
+            |node| snap_arena.adopt_node(arena, node),
+        );
+        self.snapshot_arena = snap_arena;
+        self.dirty_tracker.clear();
+
+        (result, before, self.cache.len())
     }
 
     /// Re-parse after an edit
@@ -348,23 +417,8 @@ impl<'a> IncrementalParser<'a> {
         arena: &mut AstArena,
         edit: Edit,
     ) -> Result<IncrementalResult, ParseError> {
-        // Track the edit
         self.dirty_tracker.mark_edit(&edit);
-
-        // Invalidate affected cache entries
-        let invalidated = self.invalidate_cache(&edit);
-
-        // Update input length
-        self.prev_input_len = input.len();
-
-        // Re-parse from the first dirty position
-        let result = self.parse_incremental(input, arena)?;
-
-        Ok(IncrementalResult {
-            ast: result,
-            reused_cache_entries: self.cache.len() - invalidated,
-            invalidated_cache_entries: invalidated,
-        })
+        self.finish_parse(input, arena)
     }
 
     /// Re-parse after multiple edits
@@ -374,112 +428,35 @@ impl<'a> IncrementalParser<'a> {
         arena: &mut AstArena,
         edits: &[Edit],
     ) -> Result<IncrementalResult, ParseError> {
-        // Track all edits
         for edit in edits {
             self.dirty_tracker.mark_edit(edit);
         }
-
-        // Invalidate cache for all dirty regions
-        let invalidated = self.invalidate_cache_for_regions();
-
-        // Update input length
-        self.prev_input_len = input.len();
-
-        // Re-parse
-        let result = self.parse_incremental(input, arena)?;
-
-        Ok(IncrementalResult {
-            ast: result,
-            reused_cache_entries: self.cache.len() - invalidated,
-            invalidated_cache_entries: invalidated,
-        })
+        self.finish_parse(input, arena)
     }
 
-    /// Invalidate cache entries affected by an edit
-    fn invalidate_cache(&mut self, edit: &Edit) -> usize {
-        // Any cache entry at or after the edit offset is potentially affected
-        // Also, entries that span the edit boundary are affected
-        //
-        // CRITICAL: When the input length changes (insertion or deletion), the root
-        // atom's cache entry at position 0 must be invalidated because the root
-        // atom must consume ALL input. A cached result with end_pos < new_input_len
-        // will cause an Incomplete error.
-
-        let before_count = self.cache.len();
-        let root_atom = self.grammar.root as u16;
-        let input_len_changed = edit.old_length != edit.new_length;
-
-        // Retain only entries that are:
-        // 1. Completely before the edit, AND
-        // 2. NOT the root atom at position 0 if input length changed
-        self.cache.retain(|entry| {
-            let entry_end = entry.pos as usize + (entry.end_pos - entry.pos) as usize;
-            let is_before_edit = entry_end <= edit.offset;
-
-            // If input length changed, invalidate root atom at position 0
-            // because it must consume all input
-            let is_root_at_start = entry.pos == 0 && entry.atom_id == root_atom;
-            let root_invalidated = input_len_changed && is_root_at_start;
-
-            is_before_edit && !root_invalidated
-        });
-
-        before_count - self.cache.len()
-    }
-
-    /// Invalidate cache entries for all dirty regions
-    fn invalidate_cache_for_regions(&mut self) -> usize {
-        let before_count = self.cache.len();
-
-        // Collect all dirty regions
-        let regions: Vec<DirtyRegion> = self.dirty_tracker.regions().to_vec();
-
-        // Check if any edit changed the input length
-        // If so, we need to invalidate the root atom at position 0
-        let root_atom = self.grammar.root as u16;
-
-        // Retain entries that:
-        // 1. Don't overlap with any dirty region, AND
-        // 2. Are not the root atom at position 0 if input length changed
-        self.cache.retain(|entry| {
-            let entry_end = entry.end_pos as usize;
-            let entry_pos = entry.pos as usize;
-            let overlaps_dirty = regions
-                .iter()
-                .any(|region| entry_end > region.start && entry_pos < region.end);
-
-            // Root atom at position 0 is always invalidated when there are dirty regions
-            // because it must consume all input
-            let is_root_at_start = entry.pos == 0 && entry.atom_id == root_atom;
-            let root_invalidated = !regions.is_empty() && is_root_at_start;
-
-            !overlaps_dirty && !root_invalidated
-        });
-
-        before_count - self.cache.len()
-    }
-
-    /// Parse incrementally, reusing cached results where possible
-    fn parse_incremental(
+    /// Parse with the current dirty regions, then retain the cache
+    /// window that is provably unaffected by them as snapshots.
+    ///
+    /// Retention rule: an entry survives only when its result ended
+    /// at or before the earliest edit offset (its substring is
+    /// byte-identical in the new input), and - when the input length
+    /// changed - the root entry at position 0 is dropped, because the
+    /// root must consume the whole (new) input. Surviving pool-backed
+    /// node data is adopted into the snapshot arena; a fresh parse's
+    /// arena is a different one, so unadopted pool references would
+    /// dangle (the pre-snapshot implementation silently produced
+    /// wrong trees across parses).
+    fn finish_parse(
         &mut self,
         input: &str,
         arena: &mut AstArena,
-    ) -> Result<AstNode, ParseError> {
-        // Create parser with our preserved cache
-        let mut parser = super::parser::PortableParser::new_with_cache(
-            self.grammar,
-            input,
-            arena,
-            std::mem::take(&mut self.cache),
-        );
-
-        // Parse
-        let result = parser.parse();
-
-        // Extract and preserve cache for next incremental parse
-        self.cache = parser.into_cache();
-
-        result
+    ) -> Result<IncrementalResult, ParseError> {
+        let (result, before, after) = self.parse_and_snapshot(input, arena);
+        Ok(IncrementalResult {
+            ast: result?,
+            reused_cache_entries: after,
+            invalidated_cache_entries: before - after,
+        })
     }
 
     /// Get cache statistics
@@ -497,6 +474,7 @@ impl<'a> IncrementalParser<'a> {
     /// Clear all cached state
     pub fn clear(&mut self) {
         self.cache.clear();
+        self.snapshot_arena = AstArena::new();
         self.dirty_tracker.clear();
         self.prev_input_len = 0;
     }
@@ -679,5 +657,201 @@ mod tests {
         assert!(delete.affects_position(10));
         assert!(delete.affects_position(15));
         assert!(delete.affects_position(100));
+    }
+}
+
+#[cfg(test)]
+mod edit_sequence_tests {
+    use super::*;
+    use crate::portable::arena::AstArena;
+    use crate::portable::grammar::{Atom, Grammar};
+    use crate::portable::parser::PortableParser;
+
+    /// Line-based "key=value" grammar: repetition of
+    /// seq(key, "=", value, newline).
+    fn kv_grammar() -> Grammar {
+        let mut g = Grammar::new();
+        let key = g.add_atom(Atom::Re {
+            pattern: "[a-z][a-z0-9]*".to_string(),
+        });
+        let val = g.add_atom(Atom::Re {
+            pattern: "[0-9]+".to_string(),
+        });
+        let eq = g.add_atom(Atom::Str {
+            pattern: "=".to_string(),
+        });
+        let nl = g.add_atom(Atom::Str {
+            pattern: "\n".to_string(),
+        });
+        let pair = g.add_atom(Atom::Sequence {
+            atoms: vec![key, eq, val, nl],
+        });
+        let root = g.add_atom(Atom::Repetition {
+            atom: pair,
+            min: 0,
+            max: None,
+            tag: crate::portable::grammar::RepetitionTag::Repetition,
+        });
+        g.root = root;
+        g
+    }
+
+    fn doc(lines: usize) -> String {
+        (0..lines)
+            .map(|i| format!("key{}={}\n", i, i * 7))
+            .collect()
+    }
+
+    fn walk_strings(node: &AstNode, arena: &AstArena, input: &str, out: &mut Vec<String>) {
+        match node {
+            AstNode::InputRef { offset, length } => {
+                out.push(input[*offset as usize..*offset as usize + *length as usize].to_string())
+            }
+            AstNode::Array { pool_index, length } => {
+                for child in arena.get_array(*pool_index as usize, *length as usize) {
+                    walk_strings(&child, arena, input, out);
+                }
+            }
+            AstNode::StringRef { pool_index } => {
+                out.push(arena.get_string(*pool_index as usize).to_string())
+            }
+            _ => out.push(format!("{node:?}")),
+        }
+    }
+
+    /// Full parse flattened to a logical string list (arena indices
+    /// differ between parses; the logical tree must not).
+    fn full_parse(grammar: &Grammar, input: &str) -> Option<Vec<String>> {
+        let mut arena = AstArena::new();
+        let mut parser = PortableParser::new(grammar, input, &mut arena);
+        match parser.parse() {
+            Ok(tree) => {
+                let mut out = Vec::new();
+                walk_strings(&tree, &arena, input, &mut out);
+                Some(out)
+            }
+            Err(_) => None,
+        }
+    }
+
+    fn flatten(node: &AstNode, arena: &AstArena, input: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        walk_strings(node, arena, input, &mut out);
+        out
+    }
+
+    /// TODO.perf/4 gate: incremental re-parses after a deterministic
+    /// edit sequence must produce the same trees as full re-parses,
+    /// and edits late in the document must reuse the early cache
+    /// window (the whole point of the retention rule).
+    #[test]
+    fn incremental_matches_full_reparse_on_edit_sequences() {
+        let grammar = kv_grammar();
+        let mut input = doc(1200);
+
+        let mut inc = IncrementalParser::owned(grammar.clone());
+        let mut arena = AstArena::new();
+        let initial = inc.parse(&input, &mut arena).expect("initial parse");
+        let reference = full_parse(&grammar, &input).expect("reference parse");
+        assert_eq!(flatten(&initial, &arena, &input), reference);
+
+        // Deterministic pseudo-random edit sequence (LCG), biased to
+        // line boundaries so intermediate documents stay parseable.
+        let mut seed: u64 = 0x2545F4914F6CDD1D;
+        let mut next = move || {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (seed >> 33) as usize
+        };
+
+        for step in 0..30 {
+            let line = next() % input.lines().count().max(1);
+            let offset = input
+                .lines()
+                .take(line)
+                .map(|l| l.len() + 1)
+                .sum::<usize>()
+                .min(input.len());
+            let edit = match next() % 3 {
+                0 => {
+                    // insert a line before `offset`
+                    let text = format!("added{}={}\n", step, step);
+                    input.insert_str(offset.min(input.len()), &text);
+                    Edit::insert(offset, text.len())
+                }
+                1 => {
+                    // delete one full line if possible
+                    let rest = &input[offset.min(input.len())..];
+                    let len = rest.find('\n').map(|i| i + 1).unwrap_or(0);
+                    if len == 0 {
+                        continue;
+                    }
+                    input.replace_range(offset..offset + len, "");
+                    Edit::delete(offset, len)
+                }
+                _ => {
+                    // replace a line's value digits
+                    let rest = &input[offset.min(input.len())..];
+                    let len = rest.find('\n').unwrap_or(rest.len());
+                    if len == 0 {
+                        continue;
+                    }
+                    let mut replacement = format!("key{}={}", next() % 1000, next() % 100000);
+                    replacement.push('\n');
+                    let range = offset..offset + len;
+                    replacement.truncate(len);
+                    input.replace_range(range.clone(), &replacement);
+                    Edit::replace(offset, len, replacement.len())
+                }
+            };
+
+            // Acceptance must agree: the incremental parse fails
+            // exactly when a full re-parse would.
+            let reference = full_parse(&grammar, &input);
+            let mut arena = AstArena::new();
+            let result = inc.parse_with_edit(&input, &mut arena, edit);
+            match (reference, result) {
+                (Some(flat), Ok(r)) => assert_eq!(
+                    flatten(&r.ast, &arena, &input),
+                    flat,
+                    "tree mismatch at edit step {step} (line {line})"
+                ),
+                (None, Err(_)) => {}
+                (f, r) => panic!(
+                    "acceptance mismatch at step {step}: full_ok={} inc_ok={} err={r:?}",
+                    f.is_some(),
+                    r.is_ok()
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn late_edits_reuse_the_early_cache_window() {
+        let grammar = kv_grammar();
+        let input = doc(3000);
+        let mut inc = IncrementalParser::owned(grammar);
+        let mut arena = AstArena::new();
+        inc.parse(&input, &mut arena).expect("initial parse");
+
+        // One edit near the end: everything before it is reusable.
+        let last_line_start = input.rfind('\n').map(|i| i + 1).unwrap_or(0);
+        let last_len = input.len() - last_line_start;
+        let edited = format!("{}zed=1\n", &input[..last_line_start]);
+        let mut arena = AstArena::new();
+        let result = inc
+            .parse_with_edit(
+                &edited,
+                &mut arena,
+                Edit::replace(last_line_start, last_len, 7),
+            )
+            .expect("incremental parse");
+        assert!(
+            result.reused_cache_entries > 100,
+            "expected substantial reuse, got {} reused / {} invalidated",
+            result.reused_cache_entries,
+            result.invalidated_cache_entries
+        );
     }
 }

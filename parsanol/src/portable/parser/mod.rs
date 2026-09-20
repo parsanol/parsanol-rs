@@ -185,6 +185,11 @@ pub struct PortableParser<'a> {
     /// Per-atom dynamic dependence (empty when the grammar has no
     /// Dynamic atoms): memoization is skipped for these atoms.
     dynamic_dependent: Vec<bool>,
+
+    /// Stable arena backing snapshot-marked cache entries (incremental
+    /// reparsing, TODO.perf/4). Hits on snapshot entries adopt their
+    /// node data into the live arena.
+    snapshot_arena: Option<&'a AstArena>,
 }
 
 impl<'a> PortableParser<'a> {
@@ -208,6 +213,21 @@ impl<'a> PortableParser<'a> {
         arena: &'a mut AstArena,
         cache: DenseCache,
     ) -> Self {
+        Self::new_with_cache_and_snap(grammar, input, arena, cache, None)
+    }
+
+    /// Create a parser with a pre-existing cache whose snapshot-marked
+    /// entries are backed by `snapshot_arena` (incremental reparsing,
+    /// TODO.perf/4): hits on those entries adopt their node data into
+    /// the live arena.
+    #[inline]
+    pub fn new_with_cache_and_snap(
+        grammar: &'a Grammar,
+        input: &'a str,
+        arena: &'a mut AstArena,
+        cache: DenseCache,
+        snapshot_arena: Option<&'a AstArena>,
+    ) -> Self {
         let governor = ResourceGovernor::new()
             .with_max_input_size(DEFAULT_MAX_INPUT_SIZE)
             .with_max_recursion_depth(DEFAULT_MAX_RECURSION_DEPTH);
@@ -229,6 +249,7 @@ impl<'a> PortableParser<'a> {
             capture_state: CaptureState::new(),
             rollback_on_failure,
             dynamic_dependent: dynamic_dependence(grammar),
+            snapshot_arena,
         }
     }
 
@@ -260,6 +281,7 @@ impl<'a> PortableParser<'a> {
             capture_state: CaptureState::new(),
             rollback_on_failure: false,
             dynamic_dependent: dynamic_dependence(grammar),
+            snapshot_arena: None,
         }
     }
 
@@ -490,12 +512,25 @@ impl<'a> PortableParser<'a> {
         let cache_hit = self
             .cache
             .get(pos as u32, atom_id as u16, self.arena.generation())
-            .map(|e| (e.success, e.end_pos, e.to_node()));
+            .map(|e| (e.success, e.end_pos, e.to_node(), e.is_snapshot()));
 
-        if let Some((success, end_pos, cached_node)) = cache_hit {
+        if let Some((success, end_pos, cached_node, is_snapshot)) = cache_hit {
             return if success {
+                let value = if is_snapshot {
+                    match (self.snapshot_arena, &cached_node) {
+                        (
+                            Some(snap),
+                            AstNode::Array { .. }
+                            | AstNode::Hash { .. }
+                            | AstNode::StringRef { .. },
+                        ) => self.arena.adopt_node(snap, &cached_node),
+                        _ => cached_node,
+                    }
+                } else {
+                    cached_node
+                };
                 Ok(ParseResult {
-                    value: cached_node,
+                    value,
                     end_pos: end_pos as usize,
                     capture_state: None,
                 })
