@@ -378,6 +378,17 @@ impl<'a> IncrementalParser<'a> {
         let input_len_changed = self.prev_input_len != input.len();
         self.prev_input_len = input.len();
 
+        // Drop entries the edit invalidated BEFORE parsing: entries at
+        // or after the edit offset describe the OLD input (shifted
+        // positions), and replaying them mid-parse produces results
+        // beyond the new input's end. The surviving window is
+        // position-stable, so it replays correctly.
+        self.cache.retain(|entry| {
+            let entry_end = entry.end_pos as usize;
+            let is_root_at_start = entry.pos == 0 && entry.atom_id == root_atom;
+            entry_end <= cutoff && !(input_len_changed && is_root_at_start)
+        });
+
         let mut parser = super::parser::PortableParser::new_with_cache_and_snap(
             &self.grammar,
             input,
@@ -827,6 +838,60 @@ mod edit_sequence_tests {
                 ),
             }
         }
+    }
+
+    /// The Ruby serializer emits named rules (Entity/Named atoms); a
+    /// rule-referenced body exercises rule-boundary memo entries the
+    /// flat grammar above does not.
+    #[test]
+    fn rule_based_grammar_edit_matches_full_parse() {
+        let mut g = Grammar::new();
+        let key = g.add_atom(Atom::Re {
+            pattern: "[a-z][a-z0-9]*".to_string(),
+        });
+        let val = g.add_atom(Atom::Re {
+            pattern: "[0-9]+".to_string(),
+        });
+        let eq = g.add_atom(Atom::Str {
+            pattern: "=".to_string(),
+        });
+        let nl = g.add_atom(Atom::Str {
+            pattern: "\n".to_string(),
+        });
+        let pair_body = g.add_atom(Atom::Sequence {
+            atoms: vec![key, eq, val, nl],
+        });
+        let pair_rule = g.add_atom(Atom::Named {
+            name: "pair".to_string(),
+            atom: pair_body,
+        });
+        let root = g.add_atom(Atom::Repetition {
+            atom: pair_rule,
+            min: 0,
+            max: None,
+            tag: crate::portable::grammar::RepetitionTag::Repetition,
+        });
+        g.root = root;
+
+        let doc: String = (1..200).map(|i| format!("key{}={}\n", i, i * 3)).collect();
+        let mut inc = IncrementalParser::owned(g.clone());
+        let mut arena = AstArena::new();
+        inc.parse(&doc, &mut arena).expect("initial");
+
+        let target = "key50=150\n";
+        let offset = doc.find(target).expect("line");
+        let edited = doc.replacen(target, "zed=9\n", 1);
+        let mut arena = AstArena::new();
+        let result = inc.parse_with_edit(
+            &edited,
+            &mut arena,
+            Edit::replace(offset, target.len(), "zed=9\n".len()),
+        );
+        assert!(
+            result.is_ok(),
+            "rule-based incremental parse failed: {:?}",
+            result.err()
+        );
     }
 
     #[test]
