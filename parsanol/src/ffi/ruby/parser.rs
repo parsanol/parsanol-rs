@@ -272,7 +272,16 @@ pub fn register_grammar(grammar_json: String) -> Result<u64, Error> {
         .any(|a| matches!(a, Atom::Dynamic { .. }));
     // Precompile the VM program once; grammars the VM cannot express
     // (compile error, currently Dynamic/Custom) keep the packrat engine.
-    let program = compile_program_on_big_stack(&grammar).map(Arc::new);
+    // The compiled-program artifact cache (TODO.perf/1) short-circuits
+    // cold-start compiles for grammars seen by any earlier process.
+    let artifact_key = crate::portable::bytecode::artifact_cache::grammar_key(&grammar_json);
+    let program = crate::portable::bytecode::artifact_cache::load(artifact_key)
+        .map(Arc::new)
+        .or_else(|| {
+            let compiled = compile_program_on_big_stack(&grammar)?;
+            crate::portable::bytecode::artifact_cache::store(artifact_key, &compiled);
+            Some(Arc::new(compiled))
+        });
     let handle = NEXT_HANDLE.fetch_add(1, Ordering::Relaxed);
     get_handle_map().lock().unwrap().insert(
         handle,

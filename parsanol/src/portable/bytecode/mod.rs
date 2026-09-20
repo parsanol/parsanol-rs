@@ -25,6 +25,7 @@
 //! For grammars with heavy backtracking or nested repetitions,
 //! the packrat backend may be more appropriate.
 
+pub mod artifact_cache;
 pub mod backend;
 pub mod capture;
 pub mod compiler;

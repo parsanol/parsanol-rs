@@ -278,7 +278,7 @@ pub enum Opcode {
 }
 
 /// Capture kind for capture instructions
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[repr(u8)]
 pub enum CaptureKind {
     /// Simple capture - capture the matched text
@@ -308,7 +308,7 @@ pub enum CaptureKind {
 /// Instructions are designed to be compact (typically 8-16 bytes) and
 /// efficiently dispatchable. The VM uses a tagged union representation
 /// for different instruction variants.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Instruction {
     // ============================================================================
     // Matching Instructions

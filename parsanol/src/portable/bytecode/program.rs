@@ -435,6 +435,11 @@ impl Program {
         self.rule_addresses.insert(atom_idx, instr_idx);
     }
 
+    /// All rule addresses (atom index -> instruction index).
+    pub fn rule_addresses(&self) -> &HashMap<usize, usize> {
+        &self.rule_addresses
+    }
+
     /// Get the instruction index for a rule
     #[inline]
     pub fn get_rule_address(&self, atom_idx: usize) -> Option<usize> {
@@ -583,7 +588,208 @@ impl Program {
     }
 }
 
+impl Program {
+
+    //
+    // The type owns its wire format so the storage layer
+    // (artifact_cache) never needs field access. Layout:
+    // magic | version | key | length-prefixed sections. CharSet
+    // bitmaps pack to 32 bytes; instructions serialize as JSON (v1);
+    // the format is versioned so later revisions may swap codecs
+    // without touching callers.
+    // ====================================================================
+
+    /// ARTIFACT_MAGIC: b"PRSLPRG1".
+    pub const ARTIFACT_MAGIC: [u8; 8] = *b"PRSLPRG1";
+
+    fn push_u32(out: &mut Vec<u8>, v: u32) {
+        out.extend_from_slice(&v.to_le_bytes());
+    }
+
+    fn push_str(out: &mut Vec<u8>, s: &str) {
+        Self::push_u32(out, s.len() as u32);
+        out.extend_from_slice(s.as_bytes());
+    }
+
+    fn read_u32(buf: &[u8], pos: &mut usize) -> Option<u32> {
+        let end = *pos + 4;
+        if end > buf.len() {
+            return None;
+        }
+        let v = u32::from_le_bytes(buf[*pos..end].try_into().ok()?);
+        *pos = end;
+        Some(v)
+    }
+
+    fn read_u64(buf: &[u8], pos: &mut usize) -> Option<u64> {
+        let end = *pos + 8;
+        if end > buf.len() {
+            return None;
+        }
+        let v = u64::from_le_bytes(buf[*pos..end].try_into().ok()?);
+        *pos = end;
+        Some(v)
+    }
+
+    fn read_str(buf: &[u8], pos: &mut usize) -> Option<String> {
+        let len = Self::read_u32(buf, pos)? as usize;
+        let end = pos.checked_add(len)?;
+        if end > buf.len() {
+            return None;
+        }
+        let s = std::str::from_utf8(&buf[*pos..end]).ok()?.to_string();
+        *pos = end;
+        Some(s)
+    }
+
+    /// Encode the program with an integrity key (the grammar hash).
+    /// Paired with [`Program::from_artifact`].
+    pub fn to_artifact(&self, key: u64) -> Vec<u8> {
+        let mut out = Vec::with_capacity(4096);
+        out.extend_from_slice(&Self::ARTIFACT_MAGIC);
+        out.push(1); // format version
+        out.extend_from_slice(&key.to_le_bytes());
+
+        Self::push_u32(&mut out, self.strings.len() as u32);
+        for s in &self.strings {
+            Self::push_str(&mut out, s);
+        }
+
+        Self::push_u32(&mut out, self.char_sets.len() as u32);
+        for set in &self.char_sets {
+            let mut packed = [0u8; 32];
+            for (i, &on) in set.bitmap().iter().enumerate() {
+                if on {
+                    packed[i / 8] |= 1 << (i % 8);
+                }
+            }
+            out.extend_from_slice(&packed);
+        }
+
+        Self::push_u32(&mut out, self.dispatch_tables.len() as u32);
+        for table in &self.dispatch_tables {
+            for v in table {
+                out.extend_from_slice(&v.to_le_bytes());
+            }
+        }
+
+        Self::push_u32(&mut out, self.regexes.len() as u32);
+        for s in &self.regexes {
+            Self::push_str(&mut out, s);
+        }
+
+        Self::push_u32(&mut out, self.keys.len() as u32);
+        for s in &self.keys {
+            Self::push_str(&mut out, s);
+        }
+
+        Self::push_u32(&mut out, self.labels.len() as u32);
+        for s in &self.labels {
+            Self::push_str(&mut out, s);
+        }
+
+        let instrs = serde_json::to_vec(&self.instructions).expect("instructions serialize");
+        Self::push_u32(&mut out, instrs.len() as u32);
+        out.extend_from_slice(&instrs);
+
+        Self::push_u32(&mut out, self.entry_point as u32);
+
+        let mut addrs: Vec<(usize, usize)> =
+            self.rule_addresses.iter().map(|(a, i)| (*a, *i)).collect();
+        addrs.sort();
+        Self::push_u32(&mut out, addrs.len() as u32);
+        for (atom, instr) in addrs {
+            Self::push_u32(&mut out, atom as u32);
+            Self::push_u32(&mut out, instr as u32);
+        }
+        out
+    }
+
+    /// Decode an artifact produced by [`Program::to_artifact`],
+    /// returning the program and its embedded key. `None` on any
+    /// malformation — callers treat that as a cache miss.
+    pub fn from_artifact(bytes: &[u8]) -> Option<(Program, u64)> {
+        if bytes.len() < 8 + 1 + 8 || bytes[..8] != Self::ARTIFACT_MAGIC {
+            return None;
+        }
+        let mut pos = 8;
+        let version = bytes[pos];
+        pos += 1;
+        if version != 1 {
+            return None;
+        }
+        let key = Self::read_u64(bytes, &mut pos)?;
+
+        let mut program = Program::with_capacity(64, 16, 16);
+
+        for _ in 0..Self::read_u32(bytes, &mut pos)? {
+            program.add_string(&Self::read_str(bytes, &mut pos)?);
+        }
+        for _ in 0..Self::read_u32(bytes, &mut pos)? {
+            let mut packed = [0u8; 32];
+            let end = pos.checked_add(32)?;
+            if end > bytes.len() {
+                return None;
+            }
+            packed.copy_from_slice(&bytes[pos..end]);
+            pos = end;
+            let mut set = CharSet::new();
+            for i in 0..256 {
+                if packed[i / 8] & (1 << (i % 8)) != 0 {
+                    set.add(i as u8);
+                }
+            }
+            program.add_char_set(set);
+        }
+        for _ in 0..Self::read_u32(bytes, &mut pos)? {
+            let mut table = [0i32; 256];
+            for v in table.iter_mut() {
+                let end = pos.checked_add(4)?;
+                if end > bytes.len() {
+                    return None;
+                }
+                *v = i32::from_le_bytes(bytes[pos..end].try_into().ok()?);
+                pos = end;
+            }
+            program.add_dispatch_table(table);
+        }
+        for _ in 0..Self::read_u32(bytes, &mut pos)? {
+            program.add_regex(&Self::read_str(bytes, &mut pos)?);
+        }
+        for _ in 0..Self::read_u32(bytes, &mut pos)? {
+            program.add_key(&Self::read_str(bytes, &mut pos)?);
+        }
+        for _ in 0..Self::read_u32(bytes, &mut pos)? {
+            program.add_label(&Self::read_str(bytes, &mut pos)?);
+        }
+
+        let instr_len = Self::read_u32(bytes, &mut pos)? as usize;
+        let end = pos.checked_add(instr_len)?;
+        if end > bytes.len() {
+            return None;
+        }
+        let instrs: Vec<Instruction> = serde_json::from_slice(&bytes[pos..end]).ok()?;
+        pos = end;
+        program.add_instructions(&instrs);
+
+        program.set_entry_point(Self::read_u32(bytes, &mut pos)? as usize);
+
+        for _ in 0..Self::read_u32(bytes, &mut pos)? {
+            let atom = Self::read_u32(bytes, &mut pos)? as usize;
+            let instr = Self::read_u32(bytes, &mut pos)? as usize;
+            program.add_rule_address(atom, instr);
+        }
+
+        if pos != bytes.len() {
+            return None; // trailing bytes: not ours
+        }
+        Some((program, key))
+    }
+}
+
+
 #[cfg(test)]
+
 mod tests {
     use super::*;
 
