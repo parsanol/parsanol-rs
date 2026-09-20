@@ -216,3 +216,168 @@ fn dynamic_fragment_values_are_adopted_into_parent_arena() {
     // fragment's arena.
     touch(&tree, &arena);
 }
+
+mod capture_rollback_and_memo {
+    use crate::portable::arena::AstArena;
+    use crate::portable::dynamic::{register_dynamic_callback, DynamicCallback, DynamicContext};
+    use crate::portable::grammar::Atom;
+    use crate::portable::grammar::Grammar;
+    use crate::portable::parser::PortableParser;
+
+    /// A dispatch that converges only when `mode` is NOT set (the
+    /// capture written by a FAILED earlier branch must not leak).
+    struct ModeSensitive {
+        with_mode: &'static str,
+        without_mode: &'static str,
+    }
+
+    impl DynamicCallback for ModeSensitive {
+        fn resolve(&self, ctx: &DynamicContext) -> Option<Atom> {
+            let pattern = if ctx.captures.get("mode").is_some() {
+                self.with_mode
+            } else {
+                self.without_mode
+            };
+            Some(Atom::Str {
+                pattern: pattern.to_string(),
+            })
+        }
+        fn description(&self) -> &str {
+            "mode-sensitive dispatch"
+        }
+    }
+
+    fn mode_grammar(cb_id: u64) -> Grammar {
+        let mut grammar = Grammar::new();
+        let a = grammar.add_atom(Atom::Str {
+            pattern: "A".to_string(),
+        });
+        let bang = grammar.add_atom(Atom::Str {
+            pattern: "!".to_string(),
+        });
+        let cap = grammar.add_atom(Atom::Capture {
+            name: "mode".to_string(),
+            atom: a,
+        });
+        let branch1 = grammar.add_atom(Atom::Sequence {
+            atoms: vec![cap, bang],
+        });
+        let dyn_atom = grammar.add_atom(Atom::Dynamic { callback_id: cb_id });
+        let branch2 = grammar.add_atom(Atom::Sequence {
+            atoms: vec![a, dyn_atom],
+        });
+        let root = grammar.add_atom(Atom::Alternative {
+            atoms: vec![branch1, branch2],
+        });
+        grammar.root = root;
+        grammar
+    }
+
+    /// alt( seq(capture(:mode,"A"), "!"), seq(str("A"), dynamic) )
+    ///
+    /// Branch 1 captures :mode then fails on "!". Branch 2's dynamic
+    /// block must run with NO :mode — GH-76 follow-up / coradoc
+    /// open_block chaining (parsanol-ruby#76).
+    #[test]
+    fn failed_branch_captures_do_not_leak_into_later_dynamic() {
+        let cb_id = register_dynamic_callback(Box::new(ModeSensitive {
+            with_mode: "!",
+            without_mode: "B",
+        }));
+
+        let grammar = mode_grammar(cb_id);
+        let input = "AB";
+
+        let mut arena = AstArena::new();
+        let mut parser = PortableParser::new(&grammar, input, &mut arena);
+        let tree = parser
+            .parse()
+            .expect("branch 2 must parse with clean captures");
+
+        // The dynamic atom resolved to "B" (no leaked :mode).
+        let flat = flatten(&tree, &arena, input);
+        assert!(
+            flat.iter().any(|t| t == "B"),
+            "expected the without-mode branch, got {flat:?}"
+        );
+        assert!(
+            !flat.iter().any(|t| t == "!"),
+            "with-mode branch must not have matched"
+        );
+    }
+
+    /// Same grammar through the byte-code VM must agree (TODO.perf/5:
+    /// dynamic grammars run on the VM, memoization disabled).
+    #[test]
+    fn vm_matches_walker_on_capture_dependent_dynamic() {
+        let cb_id = register_dynamic_callback(Box::new(ModeSensitive {
+            with_mode: "!",
+            without_mode: "B",
+        }));
+
+        let grammar = mode_grammar(cb_id);
+        let input = "AB";
+
+        let mut walker_arena = AstArena::new();
+        let walker = {
+            let mut parser = PortableParser::new(&grammar, input, &mut walker_arena);
+            parser.parse_with_end_pos().expect("walker parse")
+        };
+
+        let program = crate::portable::bytecode::compiler::compile(grammar.clone())
+            .expect("VM compiles dynamic grammars");
+        assert!(program.has_invoke_dynamic());
+        let vm = {
+            let mut arena = AstArena::new();
+            let mut vm = crate::portable::bytecode::vm::BytecodeVM::new(
+                &program,
+                input,
+                &mut arena,
+                Default::default(),
+            );
+            vm.run().expect("vm parse")
+        };
+
+        assert_eq!(walker.end_pos, vm.end_pos, "end positions agree");
+        let wf = flatten(&walker.value, &walker_arena, input);
+        let vf = flatten(&vm.value, &walker_arena, input);
+        assert_eq!(wf, vf, "trees agree");
+        assert!(vf.iter().any(|t| t == "B"));
+    }
+
+    // -- helpers -----------------------------------------------------------
+
+    fn flatten(node: &crate::portable::ast::AstNode, arena: &AstArena, input: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        walk(node, arena, input, &mut out);
+        out
+    }
+
+    fn walk(
+        node: &crate::portable::ast::AstNode,
+        arena: &AstArena,
+        input: &str,
+        out: &mut Vec<String>,
+    ) {
+        use crate::portable::ast::AstNode;
+        match node {
+            AstNode::InputRef { offset, length } => {
+                out.push(input[*offset as usize..*offset as usize + *length as usize].to_string())
+            }
+            AstNode::Array { pool_index, length } => {
+                for child in arena.get_array(*pool_index as usize, *length as usize) {
+                    walk(&child, arena, input, out);
+                }
+            }
+            AstNode::Hash { pool_index, length } => {
+                for (_, v) in arena.get_hash_items(*pool_index as usize, *length as usize) {
+                    walk(&v, arena, input, out);
+                }
+            }
+            AstNode::StringRef { pool_index } => {
+                out.push(arena.get_string(*pool_index as usize).to_string())
+            }
+            _ => {}
+        }
+    }
+}

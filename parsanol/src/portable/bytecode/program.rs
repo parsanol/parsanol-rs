@@ -140,6 +140,14 @@ pub struct Program {
 
     /// Rule addresses: atom index -> instruction index
     rule_addresses: HashMap<usize, usize>,
+
+    /// Derived per-char-set run-scanning plans (TODO.perf/2). Not
+    /// serialized: rebuilt from `char_sets` at compile/decode time.
+    scan_plans: Vec<crate::portable::scan::ScanPlan>,
+
+    /// Whether the program contains InvokeDynamic (TODO.perf/5). Not
+    /// serialized: derived with the scan plans.
+    has_invoke_dynamic: bool,
 }
 
 impl Default for Program {
@@ -162,6 +170,8 @@ impl Program {
             labels: Vec::new(),
             entry_point: 0,
             rule_addresses: HashMap::new(),
+            scan_plans: Vec::new(),
+            has_invoke_dynamic: false,
         }
     }
 
@@ -178,6 +188,8 @@ impl Program {
             labels: Vec::new(),
             entry_point: 0,
             rule_addresses: HashMap::new(),
+            scan_plans: Vec::new(),
+            has_invoke_dynamic: false,
         }
     }
 
@@ -316,6 +328,37 @@ impl Program {
 
     /// Get the number of character sets in the table
     #[inline]
+    /// Derive non-serialized metadata: run-scanning plans for every
+    /// char set (TODO.perf/2) and the InvokeDynamic flag (TODO.perf/5).
+    /// Called once after the tables are final (compile end, artifact
+    /// decode).
+    pub fn derive_metadata(&mut self) {
+        self.scan_plans = self
+            .char_sets
+            .iter()
+            .map(|set| crate::portable::scan::ScanPlan::from_membership(|b| set.contains(b)))
+            .collect();
+        self.has_invoke_dynamic = self
+            .instructions
+            .iter()
+            .any(|i| matches!(i, Instruction::InvokeDynamic { .. }));
+    }
+
+    /// Whether any rule-call memoization must be disabled: the program
+    /// invokes host callbacks whose outcomes depend on capture state,
+    /// which the memo key ignores.
+    #[inline]
+    pub fn has_invoke_dynamic(&self) -> bool {
+        self.has_invoke_dynamic
+    }
+
+    /// Run-scanning plan for a char set, if plans were built.
+    #[inline]
+    pub fn scan_plan(&self, set_idx: u32) -> Option<&crate::portable::scan::ScanPlan> {
+        self.scan_plans.get(set_idx as usize)
+    }
+
+    /// Number of character sets in the program.
     pub fn char_set_count(&self) -> usize {
         self.char_sets.len()
     }
@@ -782,6 +825,7 @@ impl Program {
         if pos != bytes.len() {
             return None; // trailing bytes: not ours
         }
+        program.derive_metadata();
         Some((program, key))
     }
 }

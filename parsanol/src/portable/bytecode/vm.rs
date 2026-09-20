@@ -164,6 +164,11 @@ pub struct BytecodeVM<'a> {
 
     /// Set when the budget tripped.
     budget_exceeded: bool,
+
+    /// Rule-call memoization is unsound when the program invokes host
+    /// callbacks (TODO.perf/5): their outcomes depend on capture state,
+    /// which the memo key ignores.
+    memo_enabled: bool,
 }
 
 impl<'a> BytecodeVM<'a> {
@@ -196,6 +201,7 @@ impl<'a> BytecodeVM<'a> {
             backtrack_budget: None,
             budget_exceeded: false,
             memo: std::collections::HashMap::new(),
+            memo_enabled: !program.has_invoke_dynamic(),
         }
     }
 
@@ -339,11 +345,12 @@ impl<'a> BytecodeVM<'a> {
         }
     }
 
-    /// Record a memo outcome unless the entry pool is saturated.
+    /// Record a memo outcome unless memoization is disabled (dynamic
+    /// programs) or the entry pool is saturated.
     #[inline]
     fn memo_store(&mut self, rule_pc: usize, pos: usize, entry: MemoEntry) {
         const MEMO_MAX: usize = 2_000_000;
-        if self.memo.len() < MEMO_MAX {
+        if self.memo_enabled && self.memo.len() < MEMO_MAX {
             self.memo.insert((rule_pc, pos), entry);
         }
     }
@@ -538,17 +545,24 @@ impl<'a> BytecodeVM<'a> {
                 let pos = self.position;
 
                 // Packrat memoization: rule outcomes are context-free at
-                // a call boundary (Dynamic atoms are gated out of VM
-                // programs), so successes and failures alike reuse.
-                if let Some(entry) = self.memo.get(&(target, pos)) {
-                    if entry.success {
-                        let value = entry.value.clone().unwrap_or(AstNode::Nil);
-                        self.position = entry.end_pos;
-                        self.value_stack.push(value);
-                        Ok(ExecutionResult::Continue)
+                // a call boundary, so successes and failures alike reuse.
+                // Programs with host calls (InvokeDynamic) disable it:
+                // dynamic outcomes depend on capture state.
+                if self.memo_enabled {
+                    if let Some(entry) = self.memo.get(&(target, pos)) {
+                        if entry.success {
+                            let value = entry.value.clone().unwrap_or(AstNode::Nil);
+                            self.position = entry.end_pos;
+                            self.value_stack.push(value);
+                            Ok(ExecutionResult::Continue)
+                        } else {
+                            self.track_failure();
+                            Ok(ExecutionResult::Fail)
+                        }
                     } else {
-                        self.track_failure();
-                        Ok(ExecutionResult::Fail)
+                        self.backtrack_stack
+                            .push(self.return_frame(self.ip + 1, target));
+                        Ok(ExecutionResult::Jump(*offset))
                     }
                 } else {
                     self.backtrack_stack
@@ -743,18 +757,28 @@ impl<'a> BytecodeVM<'a> {
             }
 
             Instruction::Span { set_idx } => {
-                let set =
-                    self.program
-                        .get_char_set(*set_idx)
-                        .ok_or_else(|| ParseError::Internal {
-                            message: format!("Invalid charset index: {}", set_idx),
-                        })?;
-
-                // Match zero or more characters from the set
+                // Scan the member-run via the derived plan (TODO.perf/2):
+                // comparison-shaped plans vectorize; the fallback keeps
+                // the lead-byte-stepping semantics for sets with
+                // non-ASCII members.
                 let start = self.position;
-                while self.position < self.input.len() && set.contains(self.input[self.position]) {
-                    let char_len = utf8_char_len(self.input[self.position]);
-                    self.position += char_len;
+                let program = self.program;
+                match program.scan_plan(*set_idx) {
+                    Some(plan) => self.position = plan.scan_run(self.input, self.position),
+                    None => {
+                        let set =
+                            program
+                                .get_char_set(*set_idx)
+                                .ok_or_else(|| ParseError::Internal {
+                                    message: format!("Invalid charset index: {}", set_idx),
+                                })?;
+                        while self.position < self.input.len()
+                            && set.contains(self.input[self.position])
+                        {
+                            let char_len = utf8_char_len(self.input[self.position]);
+                            self.position += char_len;
+                        }
+                    }
                 }
 
                 self.push_span_value(start);
@@ -881,6 +905,12 @@ impl<'a> BytecodeVM<'a> {
                             }
                         }
                         self.position = result.end_pos;
+                        // The subtree was built in the fragment's
+                        // temporary arena: adopt pool-backed nodes into
+                        // the VM arena before the value joins the stack
+                        // (GH-76 cross-arena fix).
+                        let value = self.arena.adopt_node(&temp_arena, &result.value);
+                        self.value_stack.push(value);
                         Ok(ExecutionResult::Continue)
                     }
                     Err(_) => {

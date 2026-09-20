@@ -142,6 +142,10 @@ impl Compiler {
             self.program.optimize();
         }
 
+        // Derive non-serialized metadata (scan plans, dynamic flag)
+        // once, after the tables are frozen.
+        self.program.derive_metadata();
+
         Ok(self.program)
     }
 
@@ -908,11 +912,18 @@ impl Compiler {
     /// Compile a dynamic atom
     ///
     /// Invokes a callback at runtime to determine which atom to parse.
-    fn compile_dynamic(&mut self, _callback_id: u64) -> Result<usize, CompileError> {
-        Err(CompileError::UnsupportedFeature {
-            feature: "Dynamic atoms (phase 3; grammars using them stay on the packrat engine)"
-                .to_string(),
-        })
+    fn compile_dynamic(&mut self, callback_id: u64) -> Result<usize, CompileError> {
+        // TODO.perf/5: the VM executes Dynamic atoms by suspending to
+        // the callback at runtime (InvokeDynamic delegates to the
+        // packrat engine for the resolved fragment, under the shared
+        // recursion/budget guards). Rule-call memoization is disabled
+        // for programs containing this instruction (see
+        // Program::has_invoke_dynamic): dynamic outcomes are
+        // capture-dependent, which the memo key ignores.
+        let entry = self.program.instruction_count();
+        self.program
+            .add_instruction(Instruction::InvokeDynamic { callback_id });
+        Ok(entry)
     }
 
     /// Compile custom atom
