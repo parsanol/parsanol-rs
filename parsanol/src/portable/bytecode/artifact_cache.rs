@@ -36,7 +36,10 @@ pub fn grammar_key(grammar_json: &str) -> u64 {
 }
 
 fn cache_dir() -> Option<PathBuf> {
-    if matches!(std::env::var(ENV_DISABLE).as_deref(), Ok("0") | Ok("false") | Ok("off")) {
+    if matches!(
+        std::env::var(ENV_DISABLE).as_deref(),
+        Ok("0") | Ok("false") | Ok("off")
+    ) {
         return None;
     }
     if let Ok(dir) = std::env::var(ENV_DIR) {
@@ -129,7 +132,10 @@ mod tests {
         }
         assert_eq!(decoded.string_count(), program.string_count());
         assert_eq!(decoded.char_set_count(), program.char_set_count());
-        assert_eq!(decoded.dispatch_table_count(), program.dispatch_table_count());
+        assert_eq!(
+            decoded.dispatch_table_count(),
+            program.dispatch_table_count()
+        );
     }
 
     #[test]
