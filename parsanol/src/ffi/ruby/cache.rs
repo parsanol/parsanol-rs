@@ -75,6 +75,11 @@ impl<K: std::hash::Hash + Eq + Clone, V> LruCache<K, V> {
         self.map.contains_key(key)
     }
 
+    /// Check if the cache is empty.
+    pub fn is_empty(&self) -> bool {
+        self.map.is_empty()
+    }
+
     /// Clear all entries from the cache.
     pub fn clear(&mut self) {
         self.map.clear();
@@ -84,11 +89,6 @@ impl<K: std::hash::Hash + Eq + Clone, V> LruCache<K, V> {
     /// Get the current number of entries in the cache.
     pub fn len(&self) -> usize {
         self.map.len()
-    }
-
-    /// Check if the cache is empty.
-    pub fn is_empty(&self) -> bool {
-        self.map.is_empty()
     }
 
     /// Get the maximum capacity of the cache.

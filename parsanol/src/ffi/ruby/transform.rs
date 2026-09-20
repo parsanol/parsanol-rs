@@ -737,7 +737,7 @@ fn transform_ast_internal(
                             return fold_string_sequence(&transformed, ruby, *input_val);
                         }
                     } else if tag == ":repetition" {
-                        if all_slice_str && transformed.len() > 0 {
+                        if all_slice_str && !transformed.is_empty() {
                             return fold_string_repetition(&transformed, ruby, *input_val);
                         }
                     } else if transformed.len() == 1 {

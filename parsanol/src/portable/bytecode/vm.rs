@@ -881,7 +881,6 @@ impl<'a> BytecodeVM<'a> {
                             }
                         }
                         self.position = result.end_pos;
-                        drop(_guard);
                         Ok(ExecutionResult::Continue)
                     }
                     Err(_) => {

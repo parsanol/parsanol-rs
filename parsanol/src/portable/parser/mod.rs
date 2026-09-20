@@ -933,7 +933,6 @@ impl<'a> PortableParser<'a> {
         }
 
         let result = temp_parser.try_atom(temp_atom_id, pos);
-        drop(_guard);
         let result = result?;
 
         // Merge captures from temp parser
