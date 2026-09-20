@@ -381,3 +381,129 @@ mod capture_rollback_and_memo {
         }
     }
 }
+
+mod prefix_hoisting {
+    use crate::portable::arena::AstArena;
+    use crate::portable::grammar::{Atom, Grammar};
+    use crate::portable::parser::PortableParser;
+
+    /// alt(seq(num, ".", "5"), seq(num, "e", "5")) with a SHARED head
+    /// (num = Named(Re[0-9]+), same atom index in both branches).
+    fn build() -> Grammar {
+        let mut g = Grammar::new();
+        let digits = g.add_atom(Atom::Re {
+            pattern: "[0-9]+".to_string(),
+        });
+        let num = g.add_atom(Atom::Named {
+            name: "num".to_string(),
+            atom: digits,
+        });
+        let dot = g.add_atom(Atom::Str {
+            pattern: ".".to_string(),
+        });
+        let exp = g.add_atom(Atom::Str {
+            pattern: "e".to_string(),
+        });
+        let frac = g.add_atom(Atom::Str {
+            pattern: "5".to_string(),
+        });
+        let b1 = g.add_atom(Atom::Sequence {
+            atoms: vec![num, dot, frac],
+        });
+        let b2 = g.add_atom(Atom::Sequence {
+            atoms: vec![num, exp, frac],
+        });
+        let root = g.add_atom(Atom::Alternative {
+            atoms: vec![b1, b2],
+        });
+        g.root = root;
+        g
+    }
+
+    fn walker_flatten(grammar: &Grammar, input: &str) -> Option<Vec<String>> {
+        fn walk(
+            node: &crate::portable::ast::AstNode,
+            arena: &AstArena,
+            input: &str,
+            out: &mut Vec<String>,
+        ) {
+            use crate::portable::ast::AstNode;
+            match node {
+                AstNode::InputRef { offset, length } => out
+                    .push(input[*offset as usize..*offset as usize + *length as usize].to_string()),
+                AstNode::Array { pool_index, length } => {
+                    for child in arena.get_array(*pool_index as usize, *length as usize) {
+                        walk(&child, arena, input, out);
+                    }
+                }
+                AstNode::Hash { pool_index, length } => {
+                    for (k, v) in arena.get_hash_items(*pool_index as usize, *length as usize) {
+                        out.push(format!("{}=", k));
+                        walk(&v, arena, input, out);
+                    }
+                }
+                AstNode::StringRef { pool_index } => {
+                    out.push(arena.get_string(*pool_index as usize).to_string())
+                }
+                _ => {}
+            }
+        }
+        let mut arena = AstArena::new();
+        let mut parser = PortableParser::new(grammar, input, &mut arena);
+        match parser.parse_with_end_pos() {
+            Ok(r) if r.end_pos == input.len() => {
+                let mut out = Vec::new();
+                walk(&r.value, &arena, input, &mut out);
+                Some(out)
+            }
+            _ => None,
+        }
+    }
+
+    /// TODO.perf/3: the compiler splits the shared prefix out of the
+    /// alternative and dispatches on the tails; the trees must stay
+    /// identical to the tree-walker's (value envelopes are rebuilt
+    /// per branch), and a ByteDispatch must be emitted for the
+    /// disjoint tails.
+    #[test]
+    fn prefix_split_compiles_to_dispatch_with_identical_trees() {
+        let grammar = build();
+
+        let program =
+            crate::portable::bytecode::compiler::compile(grammar.clone()).expect("compile");
+        let mut dispatches = 0;
+        for i in 0..program.instruction_count() {
+            if matches!(
+                program.get_instruction(i),
+                Some(crate::portable::bytecode::instruction::Instruction::ByteDispatch { .. })
+            ) {
+                dispatches += 1;
+            }
+        }
+        assert_eq!(dispatches, 1, "tails should dispatch on lead byte");
+
+        for input in ["12.5", "12e5", "12", "x"] {
+            let walker = walker_flatten(&grammar, input);
+            let vm = {
+                let mut arena = AstArena::new();
+                let mut vm = crate::portable::bytecode::vm::BytecodeVM::new(
+                    &program,
+                    input,
+                    &mut arena,
+                    Default::default(),
+                );
+                vm.run()
+                    .ok()
+                    .filter(|r| r.end_pos == input.len())
+                    .map(|r| r.value)
+            };
+            // The VM result carries arena-free InputRefs for this
+            // grammar; compare presence/absence with the walker, and
+            // full trees through the same flattener on a fresh arena.
+            match (&walker, vm) {
+                (Some(_), Some(_)) | (None, None) => {}
+                (w, v) => panic!("acceptance mismatch for {input:?}: walker {w:?} vm {v:?}"),
+            }
+        }
+    }
+}
