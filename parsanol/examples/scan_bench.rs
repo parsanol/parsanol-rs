@@ -41,9 +41,53 @@ fn main() {
     let t_skip = t1.elapsed();
 
     println!(
-        "plan: {:?}  skip_while: {:?}  (sink {})",
+        "ident runs: plan {:?} skip_while {:?} (sink {})",
         t_plan,
         t_skip,
         sink % 2
+    );
+
+    // Long-run corpus (padding/dash blocks): where wide windows pay
+    // off most.
+    let mut long_input = Vec::with_capacity(4 << 20);
+    for i in 0..40_000 {
+        long_input.extend_from_slice(format!("{:width$}", i, width = 40).as_bytes());
+        long_input.extend_from_slice(&vec![b'-'; 80]);
+        long_input.push(b'\n');
+    }
+    let ws_plan = parsanol::portable::scan::ScanPlan::from_membership(|b| {
+        b == b'-' || b == b' ' || b.is_ascii_digit()
+    });
+    let t_long = {
+        let t = std::time::Instant::now();
+        let mut pos = 0;
+        let mut sink = 0usize;
+        while pos < long_input.len() {
+            let e = ws_plan.scan_run_bytewise(&long_input, pos);
+            sink += e.wrapping_sub(pos);
+            pos = e + 1;
+        }
+        std::hint::black_box(sink);
+        t.elapsed()
+    };
+    let pred = |b: u8| b == b'-' || b == b' ' || b.is_ascii_digit();
+    let t_long_scalar = {
+        let t = std::time::Instant::now();
+        let mut pos = 0;
+        let mut sink = 0usize;
+        while pos < long_input.len() {
+            let mut e = pos;
+            while e < long_input.len() && pred(long_input[e]) {
+                e += 1;
+            }
+            sink += e.wrapping_sub(pos);
+            pos = e + 1;
+        }
+        std::hint::black_box(sink);
+        t.elapsed()
+    };
+    println!(
+        "long runs: wide plan {:?} scalar {:?}",
+        t_long, t_long_scalar
     );
 }
