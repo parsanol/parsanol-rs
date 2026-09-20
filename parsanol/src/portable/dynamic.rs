@@ -35,7 +35,7 @@
 
 use super::capture_state::CaptureState;
 use super::grammar::Atom;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 // ============================================================================
 // Dynamic Context
@@ -184,7 +184,7 @@ static DYNAMIC_REGISTRY: OnceLock<Mutex<DynamicRegistry>> = OnceLock::new();
 
 /// Internal registry structure
 struct DynamicRegistry {
-    callbacks: hashbrown::HashMap<u64, Box<dyn DynamicCallback>>,
+    callbacks: hashbrown::HashMap<u64, Arc<dyn DynamicCallback>>,
     next_id: u64,
 }
 
@@ -226,13 +226,7 @@ fn get_registry() -> &'static Mutex<DynamicRegistry> {
 /// assert!(id > 0);
 /// ```
 pub fn register_dynamic_callback(callback: Box<dyn DynamicCallback>) -> u64 {
-    let registry = get_registry();
-    let mut guard = registry.lock().unwrap();
-
-    let id = guard.next_id;
-    guard.next_id += 1;
-    guard.callbacks.insert(id, callback);
-    id
+    register_dynamic_callback_inner(next_free_id(), Arc::from(callback))
 }
 
 /// Register a dynamic callback with a specific ID
@@ -250,9 +244,20 @@ pub fn register_dynamic_callback(callback: Box<dyn DynamicCallback>) -> u64 {
 ///
 /// Panics if the ID is already registered.
 pub fn register_dynamic_callback_with_id(id: u64, callback: Box<dyn DynamicCallback>) -> u64 {
-    let registry = get_registry();
-    let mut guard = registry.lock().unwrap();
+    register_dynamic_callback_inner(id, Arc::from(callback))
+}
 
+fn next_free_id() -> u64 {
+    let registry = get_registry();
+    let mut guard = registry.lock().unwrap_or_else(|e| e.into_inner());
+    let id = guard.next_id;
+    guard.next_id += 1;
+    id
+}
+
+fn register_dynamic_callback_inner(id: u64, callback: Arc<dyn DynamicCallback>) -> u64 {
+    let registry = get_registry();
+    let mut guard = registry.lock().unwrap_or_else(|e| e.into_inner());
     if guard.callbacks.contains_key(&id) {
         panic!(
             "Dynamic callback ID {} is already registered. Use a unique ID.",
@@ -300,17 +305,16 @@ pub fn with_dynamic_callback<T>(
     id: u64,
     f: impl FnOnce(&dyn DynamicCallback) -> Option<T>,
 ) -> Option<T> {
-    let registry = get_registry();
-    let guard = registry.lock().ok()?;
-    let found = guard.callbacks.get(&id);
-    if std::env::var("PARSANOL_DYN_TRACE").is_ok() {
-        eprintln!(
-            "DYN: with_dynamic_callback id={} found={}",
-            id,
-            found.is_some()
-        );
-    }
-    found.and_then(|cb| f(cb.as_ref()))
+    // Clone the callback handle and DROP the registry lock before
+    // invoking: callbacks re-enter the engine (fragment parses hit
+    // further Dynamic atoms), and lock-across-invoke deadlocked at
+    // zero CPU (GH-76 follow-up).
+    let cb = {
+        let registry = get_registry();
+        let guard = registry.lock().unwrap_or_else(|e| e.into_inner());
+        guard.callbacks.get(&id).cloned()?
+    };
+    f(cb.as_ref())
 }
 
 /// Get the description of a registered callback by ID.
