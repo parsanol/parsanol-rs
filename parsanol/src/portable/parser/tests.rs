@@ -174,3 +174,45 @@ fn test_parse_with_builder_collects_strings() {
     let strings = result.unwrap();
     assert_eq!(strings, vec!["hello"]);
 }
+
+#[test]
+fn dynamic_fragment_values_are_adopted_into_parent_arena() {
+    use crate::portable::ast::AstNode;
+    use crate::portable::parser_dsl::{dynamic, seq, str, GrammarBuilder};
+
+    fn touch(node: &AstNode, arena: &crate::portable::arena::AstArena) {
+        match node {
+            AstNode::StringRef { pool_index } => {
+                let _ = arena.get_string(*pool_index as usize);
+            }
+            AstNode::Array { pool_index, length } => {
+                for child in arena.get_array(*pool_index as usize, *length as usize) {
+                    touch(&child, arena);
+                }
+            }
+            AstNode::Hash { pool_index, length } => {
+                for (_, v) in arena.get_hash_items(*pool_index as usize, *length as usize) {
+                    touch(&v, arena);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // The dynamic atom resolves to a sequence whose subtree is built
+    // in the fragment's temporary arena. Pool-backed children must be
+    // adopted into the parent arena or extraction panics with an
+    // out-of-bounds pool index (GH-76).
+    let grammar = GrammarBuilder::new()
+        .rule("root", dynamic(seq([str("a"), str("b")])))
+        .build();
+    let input = "ab";
+
+    let mut arena = AstArena::new();
+    let mut parser = PortableParser::new(&grammar, input, &mut arena);
+    let tree = parser.parse().expect("parse");
+
+    // Panics (index out of bounds) if the tree dangles into the
+    // fragment's arena.
+    touch(&tree, &arena);
+}
