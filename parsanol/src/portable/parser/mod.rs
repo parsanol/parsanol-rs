@@ -944,8 +944,13 @@ impl<'a> PortableParser<'a> {
             }
         }
 
+        // The subtree was built in the fragment's arena; pool-backed
+        // nodes (arrays, hashes, interned strings) must be adopted
+        // into the parent arena or they dangle (GH-76).
+        let value = self.arena.adopt_node(&temp_arena, &result.value);
+
         Ok(ParseResult {
-            value: result.value,
+            value,
             end_pos: result.end_pos,
             capture_state: Some(self.capture_state.clone()),
         })

@@ -413,6 +413,42 @@ impl AstArena {
         result
     }
 
+    /// Copy a node (and everything it references) from another arena
+    /// into this one, returning an equivalent node that points into
+    /// this arena's pools. Fragment parses run against a temporary
+    /// arena; without adoption their pool references dangle against
+    /// the parent arena (GH-76).
+    pub fn adopt_node(&mut self, from: &AstArena, node: &AstNode) -> AstNode {
+        match node {
+            AstNode::StringRef { pool_index } => {
+                self.intern_string(from.get_string(*pool_index as usize))
+            }
+            AstNode::Array { pool_index, length } => {
+                let items: Vec<AstNode> = from
+                    .get_array(*pool_index as usize, *length as usize)
+                    .into_iter()
+                    .map(|n| self.adopt_node(from, &n))
+                    .collect();
+                let (p, l) = self.store_array(&items);
+                AstNode::Array { pool_index: p, length: l }
+            }
+            AstNode::Hash { pool_index, length } => {
+                let adopted: Vec<(String, AstNode)> = from
+                    .get_hash_items(*pool_index as usize, *length as usize)
+                    .into_iter()
+                    .map(|(k, v)| (k, self.adopt_node(from, &v)))
+                    .collect();
+                let refs: Vec<(&str, AstNode)> = adopted
+                    .iter()
+                    .map(|(k, v)| (k.as_str(), v.clone()))
+                    .collect();
+                let (p, l) = self.store_hash(&refs);
+                AstNode::Hash { pool_index: p, length: l }
+            }
+            other => other.clone(),
+        }
+    }
+
     /// Store a hash in the pool
     ///
     /// Returns the pool index and length.
