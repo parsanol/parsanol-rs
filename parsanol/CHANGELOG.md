@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Other
+
+- Remove unused bindings and redundant drops by @[object]
+- Drop the unused dynamic-root binding entirely by @[object]
+
 ### Fixed
 
 - Adopt fragment subtrees into the parent arena (GH-76) by @[object]
