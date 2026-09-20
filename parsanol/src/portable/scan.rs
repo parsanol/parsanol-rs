@@ -119,17 +119,81 @@ fn block_first_non_member<const N: usize>(r: [(u8, u8); N], block: &[u8]) -> Opt
     }
 }
 
+/// Whether both halves of a 32-byte window are entirely members —
+/// the wide fast path. aarch64: two NEON loads and ONE membership
+/// reduce per window; x86_64 AVX2: one 32-byte kernel.
+#[inline]
+fn window_all_members<const N: usize>(r: [(u8, u8); N], lo16: &[u8], hi16: &[u8]) -> bool {
+    debug_assert_eq!(lo16.len(), 16);
+    debug_assert_eq!(hi16.len(), 16);
+
+    #[cfg(target_arch = "aarch64")]
+    {
+        // SAFETY: NEON is baseline on aarch64; both windows are 16
+        // initialized bytes.
+        unsafe {
+            use std::arch::aarch64::*;
+            let a = vld1q_u8(lo16.as_ptr());
+            let b = vld1q_u8(hi16.as_ptr());
+            let mut acc = vdupq_n_u8(0);
+            for range in r.iter().take(N) {
+                let lo = vdupq_n_u8(range.0);
+                let hi = vdupq_n_u8(range.1);
+                acc = vorrq_u8(acc, vandq_u8(vcgeq_u8(a, lo), vcleq_u8(a, hi)));
+                acc = vorrq_u8(acc, vandq_u8(vcgeq_u8(b, lo), vcleq_u8(b, hi)));
+            }
+            vminvq_u8(acc) == 0xFF
+        }
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    {
+        if avx2_available() {
+            // SAFETY: guarded by the cached runtime detection; both
+            // windows are 16 initialized bytes forming one aligned
+            // 32-byte window.
+            unsafe { window32_all_members_avx2::<N>(r, lo16, hi16) }
+        } else {
+            block_first_non_member::<N>(r, lo16).is_none()
+                && block_first_non_member::<N>(r, hi16).is_none()
+        }
+    }
+
+    #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
+    {
+        lo16.iter().chain(hi16).all(|&b| member_of::<N>(r, b))
+    }
+}
+
 /// Byte-wise run scan over exactly N leading ranges. Long runs scan
-/// whole 16-byte blocks with the SIMD membership kernel; only the
-/// block that ends the run is searched byte-wise. Runs shorter than a
-/// block pay one scalar pass, same as before.
+/// 32-byte windows (two 16-byte halves in one membership reduce on
+/// aarch64; one AVX2 kernel on x86_64 when detected); only the window
+/// that ends the run is located block-wise, and runs shorter than a
+/// window keep the 16-byte block path. Short remainders stay scalar.
 #[inline(always)]
 fn scan_bytewise_ranges<const N: usize>(ranges: &[(u8, u8)], input: &[u8], from: usize) -> usize {
     assert!(ranges.len() >= N);
     let r: [(u8, u8); N] = ranges[..N].try_into().expect("exact range count");
     let bytes = &input[from.min(input.len())..];
-    let mut chunks = bytes.chunks_exact(16);
+
+    let mut windows = bytes.chunks_exact(32);
     let mut consumed = 0usize;
+    for window in windows.by_ref() {
+        let (lo16, hi16) = window.split_at(16);
+        if !window_all_members::<N>(r, lo16, hi16) {
+            // The run ends inside this window; locate the byte.
+            if let Some(i) = block_first_non_member::<N>(r, lo16) {
+                return from + consumed + i;
+            }
+            if let Some(i) = block_first_non_member::<N>(r, hi16) {
+                return from + consumed + 16 + i;
+            }
+            unreachable!("window flagged a non-member");
+        }
+        consumed += 32;
+    }
+
+    let mut chunks = windows.remainder().chunks_exact(16);
     for chunk in chunks.by_ref() {
         if let Some(i) = block_first_non_member::<N>(r, chunk) {
             return from + consumed + i;
@@ -143,6 +207,60 @@ fn scan_bytewise_ranges<const N: usize>(ranges: &[(u8, u8)], input: &[u8], from:
     {
         Some(i) => from + consumed + i,
         None => input.len(),
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+mod x86_wide {
+    use std::arch::x86_64::*;
+
+    /// One 32-byte membership kernel over the two adjacent windows.
+    ///
+    /// # Safety
+    /// AVX2 must be available and `lo16`/`hi16` must be 16 initialized
+    /// bytes each, adjacent or not (unaligned loads).
+    #[target_feature(enable = "avx2")]
+    pub unsafe fn window32_all_members_avx2<const N: usize>(
+        r: [(u8, u8); N],
+        lo16: &[u8],
+        hi16: &[u8],
+    ) -> bool {
+        // SAFETY: caller guarantees AVX2 and initialized windows.
+        unsafe {
+            let a = _mm256_loadu_si256(lo16.as_ptr().cast());
+            // The windows are adjacent slices of one 32-byte chunk, so
+            // a single load at lo16 covers both halves.
+            let _ = hi16;
+            let mut acc = _mm256_setzero_si256();
+            for range in r.iter().take(N) {
+                let lo = _mm256_set1_epi8(range.0 as i8);
+                let hi = _mm256_set1_epi8(range.1 as i8);
+                // Unsigned range test via saturating ops:
+                // lo <= b <= hi <=> max(b,lo)==b && min(b,hi)==b
+                let ge = _mm256_cmpeq_epi8(_mm256_max_epu8(a, lo), a);
+                let le = _mm256_cmpeq_epi8(_mm256_min_epu8(a, hi), a);
+                acc = _mm256_or_si256(acc, _mm256_and_si256(ge, le));
+            }
+            let mask = _mm256_movemask_epi8(acc) as u32;
+            mask == 0xFFFF_FFFF
+        }
+    }
+}
+
+/// Cached AVX2 detection (TODO.perf/6): detection is a CPUID walk,
+/// too expensive per scan; cache the answer per process.
+#[cfg(target_arch = "x86_64")]
+fn avx2_available() -> bool {
+    use std::sync::atomic::{AtomicU8, Ordering};
+    static STATE: AtomicU8 = AtomicU8::new(0);
+    match STATE.load(Ordering::Relaxed) {
+        1 => true,
+        2 => false,
+        _ => {
+            let has = std::arch::is_x86_feature_detected!("avx2");
+            STATE.store(if has { 1 } else { 2 }, Ordering::Relaxed);
+            has
+        }
     }
 }
 
