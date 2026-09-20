@@ -7,9 +7,9 @@ use super::dynamic::{
 };
 use super::parser::{
     cacheable_atom_count, clear_grammar_cache, grammar_cache_capacity, grammar_cache_size,
-    is_available, optimized_atom_count, parse, parse_batch, parse_fresh, parse_handle,
-    parse_handle_events, parse_handle_prefix, parse_with_builder, parse_with_stats,
-    register_grammar, release_grammar,
+    incremental_parse, incremental_release, incremental_session, incremental_stats, is_available,
+    optimized_atom_count, parse, parse_batch, parse_fresh, parse_handle, parse_handle_events,
+    parse_handle_prefix, parse_with_builder, parse_with_stats, register_grammar, release_grammar,
 };
 use crate::portable::dynamic::{
     clear_dynamic_callbacks, dynamic_callback_count, get_dynamic_callback_description,
@@ -111,6 +111,12 @@ pub fn init(ruby: &Ruby) -> Result<(), Error> {
     // Avoids the per-call JSON marshal + hash and copies of the input string.
     native_module.define_module_function("_register_grammar", function!(register_grammar, 1))?;
     native_module.define_module_function("_release_grammar", function!(release_grammar, 1))?;
+    native_module
+        .define_module_function("_incremental_session", function!(incremental_session, 1))?;
+    native_module
+        .define_module_function("_incremental_release", function!(incremental_release, 1))?;
+    native_module.define_module_function("_incremental_parse", function!(incremental_parse, 5))?;
+    native_module.define_module_function("_incremental_stats", function!(incremental_stats, 1))?;
     native_module.define_module_function("_parse_handle", function!(parse_handle, 2))?;
     native_module
         .define_module_function("_parse_handle_prefix", function!(parse_handle_prefix, 2))?;
