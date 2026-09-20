@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Incremental parsing sessions through the Ruby bridge (TODO.perf/4) by @[object]
+
+### Fixed
+
+- X86 kernel loop shape, private doc links, typos (CI) by @[object]
+- Drop edit-invalidated entries before the parse, not after by @[object]
+- Invalidated-count baseline moved to post-parse by @[object]
+
+### Other
+
+- Remove private-item link candidates from the scan module docs by @[object]
+- Cross-parse cache snapshots make edit-span reuse sound (TODO.perf/4) by @[object]
+- Avoid a blockquote-parsing line start in shared-prefix doc by @[object]
+- Shared-prefix split unblocks BYTE_DISPATCH (TODO.perf/3) by @[object]
+- SIMD class-run scanning; VM accepts Dynamic grammars; capture rollback (TODO.perf/2, TODO.perf/5) by @[object]
+
 ### Other
 
 - Remove unused bindings and redundant drops by @[object]
