@@ -33,6 +33,86 @@ use crate::portable::char_class::{utf8_char_len, CharacterPattern};
 use crate::portable::grammar::{Atom, Grammar, RepetitionTag};
 use crate::portable::regex_cache;
 
+/// Memoized scan plans keyed by class pattern (TODO.perf/2). Grammars
+/// use a handful of distinct classes; the map is capped and cleared
+/// rather than growing unboundedly across parses.
+fn scan_plan_for(
+    pattern: &str,
+    predicate: fn(u8) -> bool,
+) -> std::sync::Arc<crate::portable::scan::ScanPlan> {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    thread_local! {
+        static PLANS: std::cell::RefCell<HashMap<String, Arc<crate::portable::scan::ScanPlan>>> =
+            std::cell::RefCell::new(HashMap::new());
+    }
+    PLANS.with(|plans| {
+        let mut plans = plans.borrow_mut();
+        if let Some(plan) = plans.get(pattern) {
+            return plan.clone();
+        }
+        let plan = Arc::new(crate::portable::scan::ScanPlan::from_membership(predicate));
+        if plans.len() >= 512 {
+            plans.clear();
+        }
+        plans.insert(pattern.to_string(), plan.clone());
+        plan
+    })
+}
+
+/// Atoms whose subtree contains a Dynamic atom. Dynamic resolution
+/// depends on capture state (GH-76), which memoization does not key
+/// on — memoizing these atoms can replay a stale outcome (a different
+/// capture context at the same position can resolve differently).
+/// Empty when the grammar has no Dynamic atoms (TODO.perf/5).
+fn dynamic_dependence(grammar: &Grammar) -> Vec<bool> {
+    let has_dynamic = grammar
+        .atoms
+        .iter()
+        .any(|a| matches!(a, Atom::Dynamic { .. }));
+    if !has_dynamic {
+        return Vec::new();
+    }
+
+    let n = grammar.atoms.len();
+    let mut parents: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for (i, atom) in grammar.atoms.iter().enumerate() {
+        let mut children = Vec::new();
+        match atom {
+            Atom::Sequence { atoms } | Atom::Alternative { atoms } => children.extend(atoms),
+            Atom::Repetition { atom, .. }
+            | Atom::Named { atom, .. }
+            | Atom::Entity { atom }
+            | Atom::Lookahead { atom, .. }
+            | Atom::Ignore { atom }
+            | Atom::Capture { atom, .. }
+            | Atom::Scope { atom } => children.push(*atom),
+            _ => {}
+        }
+        for c in children {
+            if c < n {
+                parents[c].push(i);
+            }
+        }
+    }
+
+    let mut dep = vec![false; n];
+    let mut stack: Vec<usize> = grammar
+        .atoms
+        .iter()
+        .enumerate()
+        .filter_map(|(i, a)| matches!(a, Atom::Dynamic { .. }).then_some(i))
+        .collect();
+    while let Some(a) = stack.pop() {
+        if dep[a] {
+            continue;
+        }
+        dep[a] = true;
+        stack.extend(parents[a].iter().copied());
+    }
+    dep
+}
+
 /// Logging macros - no-op when logging feature is disabled
 #[cfg(not(feature = "logging"))]
 macro_rules! log_debug {
@@ -101,6 +181,10 @@ pub struct PortableParser<'a> {
     /// This is set when the cache is effectively empty (no memoization),
     /// allowing safe cleanup of garbage from failed parse branches.
     rollback_on_failure: bool,
+
+    /// Per-atom dynamic dependence (empty when the grammar has no
+    /// Dynamic atoms): memoization is skipped for these atoms.
+    dynamic_dependent: Vec<bool>,
 }
 
 impl<'a> PortableParser<'a> {
@@ -144,6 +228,7 @@ impl<'a> PortableParser<'a> {
             governor,
             capture_state: CaptureState::new(),
             rollback_on_failure,
+            dynamic_dependent: dynamic_dependence(grammar),
         }
     }
 
@@ -174,6 +259,7 @@ impl<'a> PortableParser<'a> {
             governor,
             capture_state: CaptureState::new(),
             rollback_on_failure: false,
+            dynamic_dependent: dynamic_dependence(grammar),
         }
     }
 
@@ -391,7 +477,12 @@ impl<'a> PortableParser<'a> {
         // Skip cache for atoms that don't benefit from memoization
         // (terminals, pass-through wrappers). This saves significant memory
         // since most atoms in a grammar are Re/Str terminals.
-        if self.grammar.is_no_cache(atom_id) {
+        //
+        // Dynamic-dependent atoms are context-dependent: their outcome
+        // varies with capture state, which the memo key ignores (GH-76).
+        if self.grammar.is_no_cache(atom_id)
+            || self.dynamic_dependent.get(atom_id).is_some_and(|&dep| dep)
+        {
             return self.parse_atom_uncached(atom_id, pos);
         }
 
@@ -596,11 +687,22 @@ impl<'a> PortableParser<'a> {
         let mut current_pos = pos;
         let mut items = Vec::with_capacity(atoms.len());
 
+        // A failed element discards the captures of every earlier
+        // element: the sequence never matched (GH-76 follow-up —
+        // capture writes must not leak across failed branches).
+        self.capture_state.push_scope();
         for &atom_id in atoms {
-            let result = self.try_atom(atom_id, current_pos)?;
+            let result = match self.try_atom(atom_id, current_pos) {
+                Ok(r) => r,
+                Err(e) => {
+                    self.capture_state.pop_scope();
+                    return Err(e);
+                }
+            };
             items.push(result.value);
             current_pos = result.end_pos;
         }
+        self.capture_state.commit_scope();
 
         // Tag the array with :sequence for proper transformation
         let (pool_idx, len) = self.arena.store_tagged_array(":sequence", &items);
@@ -630,18 +732,30 @@ impl<'a> PortableParser<'a> {
         if self.rollback_on_failure {
             for &atom_id in atoms {
                 let cp = self.arena.checkpoint();
+                self.capture_state.push_scope();
                 if let Ok(result) = self.try_atom(atom_id, pos) {
+                    self.capture_state.commit_scope();
                     return Ok(result);
                 }
+                self.capture_state.pop_scope();
                 self.arena.rollback(cp);
             }
             return Err(ParseError::Failed { position: pos });
         }
 
-        // Normal path: no rollback (cache protects against corruption)
+        // Normal path: no arena rollback (cache protects against
+        // corruption), but captures made in a failed branch are still
+        // discarded — they belong to a branch that never matched.
         for &atom_id in atoms {
-            if let Ok(result) = self.try_atom(atom_id, pos) {
-                return Ok(result);
+            self.capture_state.push_scope();
+            match self.try_atom(atom_id, pos) {
+                Ok(result) => {
+                    self.capture_state.commit_scope();
+                    return Ok(result);
+                }
+                Err(_) => {
+                    self.capture_state.pop_scope();
+                }
             }
         }
         Err(ParseError::Failed { position: pos })
@@ -661,7 +775,7 @@ impl<'a> PortableParser<'a> {
             if let Some(char_pattern) = CharacterPattern::from_pattern(pattern) {
                 let bulk_label = pattern.to_string();
                 return self
-                    .parse_repetition_bulk(char_pattern.predicate(), min, max, tag, pos)
+                    .parse_repetition_bulk(pattern, char_pattern.predicate(), min, max, tag, pos)
                     .map_err(|e| {
                         if matches!(e, ParseError::Failed { .. }) {
                             self.note_failure(pos, bulk_label.clone());
@@ -675,28 +789,50 @@ impl<'a> PortableParser<'a> {
         let mut count = 0;
         let mut items: Vec<AstNode> = Vec::with_capacity(min.clamp(8, 64));
 
+        // The whole repetition owns its captures: below-min failure
+        // discards them, and each optional iteration that fails to
+        // match discards only its own (the successful prefix keeps
+        // its captures — a partial run is a successful repetition).
+        self.capture_state.push_scope();
         if let Some(max_count) = max {
             while count < max_count {
+                self.capture_state.push_scope();
                 match self.try_atom(atom_id, current_pos) {
                     Ok(result) => {
+                        self.capture_state.commit_scope();
                         items.push(result.value);
                         current_pos = result.end_pos;
                         count += 1;
                     }
-                    Err(_) => break,
+                    Err(_) => {
+                        self.capture_state.pop_scope();
+                        break;
+                    }
                 }
             }
         } else {
-            while let Ok(result) = self.try_atom(atom_id, current_pos) {
-                items.push(result.value);
-                current_pos = result.end_pos;
-                count += 1;
+            loop {
+                self.capture_state.push_scope();
+                match self.try_atom(atom_id, current_pos) {
+                    Ok(result) => {
+                        self.capture_state.commit_scope();
+                        items.push(result.value);
+                        current_pos = result.end_pos;
+                        count += 1;
+                    }
+                    Err(_) => {
+                        self.capture_state.pop_scope();
+                        break;
+                    }
+                }
             }
         }
 
         if count < min {
+            self.capture_state.pop_scope();
             return Err(ParseError::Failed { position: pos });
         }
+        self.capture_state.commit_scope();
 
         // A PRESENT optional flattens to its value in every context
         // ([:maybe, v] -> v), so only the absent case needs the tag
@@ -729,15 +865,18 @@ impl<'a> PortableParser<'a> {
     #[inline]
     fn parse_repetition_bulk(
         &mut self,
+        pattern: &str,
         predicate: fn(u8) -> bool,
         min: usize,
         max: Option<usize>,
         tag: RepetitionTag,
         pos: usize,
     ) -> Result<ParseResult, ParseError> {
-        use simd::skip_while;
+        // One plan per distinct class pattern (TODO.perf/2): the
+        // comparison-shaped scan replaces the per-byte skip loop.
+        let plan = scan_plan_for(pattern, predicate);
 
-        let end_pos = skip_while(self.input_bytes, pos, predicate);
+        let end_pos = plan.scan_run_bytewise(self.input_bytes, pos);
         let count = end_pos - pos;
 
         if count < min {
@@ -804,7 +943,11 @@ impl<'a> PortableParser<'a> {
         positive: bool,
         pos: usize,
     ) -> Result<ParseResult, ParseError> {
+        // A lookahead inspects without consuming: captures made inside
+        // its body never persist, positive or negative.
+        self.capture_state.push_scope();
         let matches = self.try_atom(atom_id, pos).is_ok();
+        self.capture_state.pop_scope();
         if matches == positive {
             Ok(ParseResult {
                 value: AstNode::Nil,

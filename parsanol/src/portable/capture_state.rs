@@ -236,6 +236,18 @@ impl CaptureState {
         self.depth += 1;
     }
 
+    /// Close a scope, keeping every capture made in it: they become
+    /// part of the enclosing scope. Shadow journal entries stay in
+    /// place, so an outer rollback still restores pre-shadow values.
+    /// This is the success path of the backtracking discipline: a
+    /// failed alternative pops, a successful one commits.
+    #[inline]
+    pub fn commit_scope(&mut self) {
+        if self.scope_stack.pop().is_some() {
+            self.depth = self.depth.saturating_sub(1);
+        }
+    }
+
     /// Pop a scope, discarding captures made in that scope
     ///
     /// For shadowed captures, the original value is restored.
