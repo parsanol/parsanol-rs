@@ -589,7 +589,6 @@ impl Program {
 }
 
 impl Program {
-
     //
     // The type owns its wire format so the storage layer
     // (artifact_cache) never needs field access. Layout:
@@ -786,7 +785,6 @@ impl Program {
         Some((program, key))
     }
 }
-
 
 #[cfg(test)]
 

@@ -895,8 +895,7 @@ impl<'a> PortableParser<'a> {
         // loudly instead of hanging (GH-76 follow-up). Depth and call
         // budget live in `dynamic` so both engines share one policy;
         // the RAII guard decrements on every exit path.
-        let _guard = super::dynamic::enter_dynamic()
-            .ok_or(ParseError::Failed { position: pos })?;
+        let _guard = super::dynamic::enter_dynamic().ok_or(ParseError::Failed { position: pos })?;
 
         // Create context for callback
         let ctx = DynamicContext::new(self.input, pos, self.capture_state.clone());

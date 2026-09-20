@@ -430,7 +430,10 @@ impl AstArena {
                     .map(|n| self.adopt_node(from, &n))
                     .collect();
                 let (p, l) = self.store_array(&items);
-                AstNode::Array { pool_index: p, length: l }
+                AstNode::Array {
+                    pool_index: p,
+                    length: l,
+                }
             }
             AstNode::Hash { pool_index, length } => {
                 let adopted: Vec<(String, AstNode)> = from
@@ -443,7 +446,10 @@ impl AstArena {
                     .map(|(k, v)| (k.as_str(), v.clone()))
                     .collect();
                 let (p, l) = self.store_hash(&refs);
-                AstNode::Hash { pool_index: p, length: l }
+                AstNode::Hash {
+                    pool_index: p,
+                    length: l,
+                }
             }
             other => other.clone(),
         }

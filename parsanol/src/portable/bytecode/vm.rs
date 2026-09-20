@@ -813,7 +813,9 @@ impl<'a> BytecodeVM<'a> {
                 // recursion/budget guards (GH-76): divergent dispatch
                 // fails loudly instead of hanging or ballooning.
                 use crate::portable::arena::AstArena;
-                use crate::portable::dynamic::{enter_dynamic, with_dynamic_callback, DynamicContext};
+                use crate::portable::dynamic::{
+                    enter_dynamic, with_dynamic_callback, DynamicContext,
+                };
                 use crate::portable::grammar::Grammar;
                 use crate::portable::parser::PortableParser;
 
@@ -833,7 +835,7 @@ impl<'a> BytecodeVM<'a> {
                 // atom indices, the shape host bridges produce) wins
                 // over a bare atom, which is appended to a fresh
                 // grammar. Mirrors the packrat engine's parse_dynamic.
-                let (temp_grammar, temp_atom_id) =
+                let (temp_grammar, _temp_atom_id) =
                     match with_dynamic_callback(*callback_id, |cb| {
                         if let Some((fragment, root)) = cb.resolve_fragment(&ctx) {
                             return Some((fragment, root));
