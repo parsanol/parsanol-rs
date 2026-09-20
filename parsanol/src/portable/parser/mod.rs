@@ -889,6 +889,41 @@ impl<'a> PortableParser<'a> {
     fn parse_dynamic(&mut self, callback_id: u64, pos: usize) -> Result<ParseResult, ParseError> {
         use super::dynamic::{with_dynamic_callback, DynamicContext};
 
+        // Fragment recursion guard: a grammar whose dispatch never
+        // converges (e.g. captures that stay invisible to the block)
+        // recurses through nested fragment parses forever. Hard-fail
+        // loudly instead of hanging (GH-76 follow-up).
+        thread_local! {
+            static DYNAMIC_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+            static DYNAMIC_CALLS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+        }
+        // Two guards: nesting depth (mutually recursive fragments) and
+        // total invocations (backtracking re-invokes callbacks on every
+        // retry — shallow but unbounded loops OOM'd before this). Both
+        // fail loudly instead of hanging or ballooning (GH-76).
+        let depth_ok = DYNAMIC_DEPTH.with(|d| {
+            let v = d.get();
+            if v < 256 {
+                d.set(v + 1);
+                true
+            } else {
+                false
+            }
+        }) && DYNAMIC_CALLS.with(|c| {
+            let v = c.get();
+            if v < 10_000 {
+                c.set(v + 1);
+                true
+            } else {
+                false
+            }
+        });
+        if !depth_ok {
+            return Err(ParseError::Failed {
+                position: pos,
+            });
+        }
+
         // Create context for callback
         let ctx = DynamicContext::new(self.input, pos, self.capture_state.clone());
 
@@ -913,10 +948,20 @@ impl<'a> PortableParser<'a> {
 
         // Parse using the returned atom
         // Note: We create a temporary parser to avoid borrowing issues
+        // Seed the fragment parser with the parent's captures so
+        // capture reads inside the fragment see state set before the
+        // dynamic atom (GH-76 follow-up).
         let mut temp_arena = AstArena::for_input(self.input.len());
         let mut temp_parser = PortableParser::new(&temp_grammar, self.input, &mut temp_arena);
+        for name in self.capture_state.names() {
+            if let Some(value) = self.capture_state.get(name) {
+                temp_parser.capture_state.store(name, value);
+            }
+        }
 
-        let result = temp_parser.try_atom(temp_atom_id, pos)?;
+        let result = temp_parser.try_atom(temp_atom_id, pos);
+        DYNAMIC_DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
+        let result = result?;
 
         // Merge captures from temp parser
         for name in temp_parser.capture_state.names() {
