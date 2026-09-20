@@ -66,6 +66,13 @@ impl NodeTag {
 /// overhead) and avoids cloning on cache hits.
 ///
 /// Layout: pos(4) + end_pos(4) + data_a(4) + data_b(4) + atom_id(2) + node_tag(1) + success(1) + generation(4) = 24
+/// Top bit of `CacheEntry::generation`: the entry's node data lives
+/// in the owning parser's snapshot arena and survives across parses.
+pub const SNAPSHOT_BIT: u32 = 1 << 31;
+
+///
+/// Top bit of `generation` marks a snapshot entry: node data lives in
+/// the owning parser's snapshot arena and survives across parses.
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub struct CacheEntry {
@@ -84,7 +91,9 @@ pub struct CacheEntry {
     /// Whether the parse succeeded
     pub success: bool,
     /// Arena generation at time of cache entry creation
-    /// Used to invalidate entries when arena is rolled back
+    /// Used to invalidate entries when arena is rolled back. The top
+    /// bit marks a snapshot entry: node indices refer to the owner's
+    /// snapshot arena (stable across parses), not the live one.
     pub generation: u32,
 }
 
@@ -132,6 +141,22 @@ impl CacheEntry {
             success: true,
             generation,
         }
+    }
+
+    /// Whether this entry's node data refers to the snapshot arena
+    /// (valid across parses) rather than the live parse arena.
+    #[inline]
+    pub fn is_snapshot(&self) -> bool {
+        self.generation & SNAPSHOT_BIT != 0
+    }
+
+    /// Mark the entry as snapshot-backed and point its node data at
+    /// the snapshot arena.
+    #[inline]
+    pub fn make_snapshot(&mut self, data_a: u32, data_b: u32) {
+        self.node_data_a = data_a;
+        self.node_data_b = data_b;
+        self.generation |= SNAPSHOT_BIT;
     }
 
     /// Create a failed cache entry
@@ -274,8 +299,11 @@ impl DenseCache {
 
             let entry = &self.entries[idx as usize];
             if entry.pos == pos && entry.atom_id == atom_id {
-                // Check generation to ensure arena hasn't rolled back
-                if entry.generation != generation {
+                // Check generation to ensure arena hasn't rolled back.
+                // Snapshot entries are exempt: their node data lives
+                // in the stable snapshot arena, so live-arena
+                // rollbacks cannot have invalidated them.
+                if entry.generation != generation && !entry.is_snapshot() {
                     // Stale entry - arena was rolled back since this was cached
                     self.misses += 1;
                     return None;
@@ -398,6 +426,61 @@ impl DenseCache {
                 probe = (probe + 1) & (self.capacity - 1);
             }
             self.slots[probe] = idx as i32;
+        }
+    }
+
+    /// Retain only entries matching `keep`, converting the kept
+    /// entries' node data into snapshots via `adopt` (which copies a
+    /// live-arena node into the stable snapshot arena and returns the
+    /// equivalent snapshot-arena node). InputRef/Nil values are
+    /// already arena-free and pass through unchanged. This is the
+    /// cross-parse retention primitive of incremental reparsing
+    /// (TODO.perf/4): pool-backed nodes cannot survive a parse
+    /// otherwise, because the next parse's arena is a different one.
+    pub fn retain_snapshot_adopt<F, A>(&mut self, mut keep: F, mut adopt: A)
+    where
+        F: FnMut(&CacheEntry) -> bool,
+        A: FnMut(&AstNode) -> AstNode,
+    {
+        self.entries.retain(|e| keep(e));
+        for entry in self.entries.iter_mut() {
+            if entry.is_snapshot() {
+                continue;
+            }
+            let needs_adoption = matches!(
+                entry.to_node(),
+                AstNode::Array { .. } | AstNode::Hash { .. } | AstNode::StringRef { .. }
+            );
+            if needs_adoption {
+                let adopted = adopt(&entry.to_node());
+                let (a, b) = match adopted {
+                    AstNode::StringRef { pool_index } => (pool_index, 0),
+                    AstNode::Array { pool_index, length } => (pool_index, length),
+                    AstNode::Hash { pool_index, length } => (pool_index, length),
+                    _ => (entry.node_data_a, entry.node_data_b),
+                };
+                entry.make_snapshot(a, b);
+            }
+        }
+
+        // Rebuild hash table
+        self.slots.fill(-1);
+        for (idx, entry) in self.entries.iter().enumerate() {
+            let slot = Self::hash_static(entry.pos, entry.atom_id, self.capacity);
+            let mut probe = slot;
+            while self.slots[probe] >= 0 {
+                probe = (probe + 1) & (self.capacity - 1);
+            }
+            self.slots[probe] = idx as i32;
+        }
+    }
+
+    /// Drop every snapshot mark (used when the snapshot arena exceeds
+    /// its memory budget: the next parse runs cold rather than
+    /// growing without bound).
+    pub fn drop_snapshots(&mut self) {
+        for entry in self.entries.iter_mut() {
+            entry.generation &= !SNAPSHOT_BIT;
         }
     }
 
