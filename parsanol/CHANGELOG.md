@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Adopt fragment subtrees into the parent arena (GH-76) by @[object]
+- Apply the GH-76 dynamic guards and lock-drop to the VM path by @[object]
+- Break the dynamic-recursion deadlock and bound runaway fragments (GH-76) by @[object]
+
+### Other
+
+- Remove empty line after cfg attribute (clippy -Dwarnings) by @[object]
+- Rustfmt + drop unused VM binding (CI -Dwarnings) by @[object]
+- Persist compiled programs in an artifact cache (TODO.perf/1) by @[object]
+
 ### Added
 
 - Resolve_fragment for native Dynamic atoms (WIP, GH-85) by @[object]
