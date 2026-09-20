@@ -487,7 +487,7 @@ mod tests {
         let mut builder = GrammarBuilder::new();
 
         // First, add the primary rule (a simple number)
-        let _primary_idx = builder.add_atom(Atom::Re {
+        builder.add_atom(Atom::Re {
             pattern: "[0-9]+".to_string(),
         });
 
@@ -591,7 +591,7 @@ mod tests {
             .level(["*", "/"], 2, Assoc::Left);
 
         let infix = table.to_infix_builder(ref_("number"));
-        let _expr_idx = infix.build(&mut builder);
+        infix.build(&mut builder);
         assert!(builder.atom_count() > 4);
     }
 
@@ -609,7 +609,7 @@ mod tests {
             .op("*", 2, Assoc::Left)
             .op("/", 2, Assoc::Left);
 
-        let _expr_idx = infix.build(&mut builder);
+        infix.build(&mut builder);
         assert!(builder.atom_count() > 4);
     }
 }

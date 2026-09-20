@@ -654,8 +654,8 @@ mod tests {
         let mut arena = AstArena::new();
 
         // Intern some strings
-        let _node1 = arena.intern_string("hello");
-        let _node2 = arena.intern_string("world");
+        let node1 = arena.intern_string("hello");
+        let node2 = arena.intern_string("world");
 
         // Add to array pool
         let items = vec![arena.intern_string("a"), arena.intern_string("b")];
@@ -672,7 +672,7 @@ mod tests {
         let node2_again = arena.intern_string("world");
 
         // Should return same StringRef (strings were preserved)
-        match (_node1, node1_again) {
+        match (node1, node1_again) {
             (AstNode::StringRef { pool_index: i1 }, AstNode::StringRef { pool_index: i2 }) => {
                 assert_eq!(
                     i1, i2,
@@ -681,7 +681,7 @@ mod tests {
             }
             _ => panic!("Expected StringRef nodes"),
         }
-        match (_node2, node2_again) {
+        match (node2, node2_again) {
             (AstNode::StringRef { pool_index: i1 }, AstNode::StringRef { pool_index: i2 }) => {
                 assert_eq!(
                     i1, i2,
@@ -749,11 +749,9 @@ mod tests {
         let mut arena = AstArena::new();
 
         // Intern some strings
-        let _node1 = arena.intern_string("hello");
-        let _node2 = arena.intern_string("world");
-
-        // Store memory usage before (for debugging if needed)
-        let _memory_before = arena.memory_usage();
+        arena.intern_string("hello");
+        arena.intern_string("world");
+        arena.memory_usage();
 
         // Clear only strings
         arena.clear_strings();

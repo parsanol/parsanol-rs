@@ -49,7 +49,7 @@ impl RubyBuilder {
 
     /// Call a method on the Ruby callback object
     fn call_method(&self, method: &str, args: &[Value]) -> BuildResult<()> {
-        let _ruby = Ruby::get().map_err(|e| BuildError::Custom {
+        Ruby::get().map_err(|e| BuildError::Custom {
             message: format!("Ruby not available: {}", e),
         })?;
 
@@ -211,7 +211,7 @@ impl StreamingBuilder for RubyBuilder {
     }
 
     fn finish(&mut self) -> BuildResult<Value> {
-        let _ruby = Ruby::get().map_err(|e| BuildError::Custom {
+        Ruby::get().map_err(|e| BuildError::Custom {
             message: format!("Ruby not available: {}", e),
         })?;
 

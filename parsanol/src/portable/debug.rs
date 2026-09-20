@@ -306,17 +306,16 @@ impl ParseTrace {
         let mut output = String::new();
         for entry in &self.entries {
             let indent = "  ".repeat(entry.depth);
-            let _atom_name = grammar
+            let atom_name = grammar
                 .get_atom(entry.atom_id)
                 .map(|a| format!("{:?}", a))
                 .unwrap_or_else(|| "unknown".to_string());
-
             match &entry.action {
                 TraceAction::Enter => {
                     writeln!(
                         output,
-                        "{}-> Enter atom {} at {}",
-                        indent, entry.atom_id, entry.position
+                        "{}-> Enter atom {} ({}) at {}",
+                        indent, entry.atom_id, atom_name, entry.position
                     )
                     .unwrap();
                 }
