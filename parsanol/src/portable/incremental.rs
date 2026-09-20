@@ -358,8 +358,9 @@ impl<'a> IncrementalParser<'a> {
     }
 
     /// Parse against the retained cache, then convert the entries the
-    /// dirty regions did not touch into snapshots. Returns the tree
-    /// plus before/after entry counts for the efficiency stats.
+    /// dirty regions did not touch into snapshots. Returns the tree,
+    /// the retained count at parse start, and the post-parse entry
+    /// count for the efficiency stats.
     fn parse_and_snapshot(
         &mut self,
         input: &str,
@@ -386,6 +387,7 @@ impl<'a> IncrementalParser<'a> {
         );
         let result = parser.parse();
         self.cache = parser.into_cache();
+        let post_parse = self.cache.len();
 
         // Budget guard: a snapshot arena past the cap is dropped
         // wholesale; the next parse runs cold instead of growing
@@ -407,7 +409,7 @@ impl<'a> IncrementalParser<'a> {
         self.snapshot_arena = snap_arena;
         self.dirty_tracker.clear();
 
-        (result, before, self.cache.len())
+        (result, before, post_parse)
     }
 
     /// Re-parse after an edit
@@ -451,11 +453,11 @@ impl<'a> IncrementalParser<'a> {
         input: &str,
         arena: &mut AstArena,
     ) -> Result<IncrementalResult, ParseError> {
-        let (result, before, after) = self.parse_and_snapshot(input, arena);
+        let (result, _retained_before, post_parse) = self.parse_and_snapshot(input, arena);
         Ok(IncrementalResult {
             ast: result?,
-            reused_cache_entries: after,
-            invalidated_cache_entries: before - after,
+            reused_cache_entries: self.cache.len(),
+            invalidated_cache_entries: post_parse - self.cache.len(),
         })
     }
 
