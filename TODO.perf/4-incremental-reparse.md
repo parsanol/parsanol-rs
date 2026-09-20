@@ -1,11 +1,25 @@
-# 4. Incremental reparsing by edit span (P2)
+# 4. Incremental reparsing by edit span — SHIPPED
 
-Supersedes TODO.max-perf/7. Design: persist the previous parse's memo
-index keyed by content hash; on edit at [start, delta), invalidate
-only memo entries at/after the edit plus rule spans crossing it;
-expose `parse_incremental(handle, input, prev)` through the FFI. The
-VM's explicit state (instructions, registers, memo) makes this
-natural; the walker needs its DenseCache invalidated by span. Gate:
-incremental == full re-parse on SRL corpus with simulated edit
-sequences; keystroke re-parses < 5 ms on 600 KB documents. Status:
-backlog — blocked on a consumer that needs it (editor integrations).
+`portable/incremental.rs` keeps a persistent session: the memo window
+an edit provably did not touch (entries whose result ended at or
+before the earliest edit offset; the root entry at 0 additionally
+drops when the input length changed) survives to the next parse.
+
+Two soundness problems in the retained-cache design — exposed by the
+new differential gate — are fixed:
+
+- Pool-backed node data (arrays, hashes, interned strings) referenced
+  the previous parse's arena. Retained entries are now adopted into
+  a stable snapshot arena owned by the session (top bit of the
+  entry's generation marks them; hits adopt back into the live
+  arena) with a 32 MiB budget guard that drops the store wholesale.
+- Entries at or after the edit offset describe the old input and are
+  dropped BEFORE the parse (replaying them returned end positions
+  beyond the new input's length).
+
+Gates: a deterministic 30-edit sequence over a 1200-line document
+asserts incremental trees equal full re-parses (and acceptance equal
+on unparseable docs); a late-edit case asserts substantial cache
+reuse. A rule-based grammar regression covers rule-boundary entries.
+Exposed through the FFI as incremental sessions and from Ruby as
+`Parsanol::IncrementalSession`.
