@@ -1,10 +1,20 @@
-# 5. VM host-callable Dynamic contexts (P2)
+# 5. VM host-callable Dynamic contexts — SHIPPED
 
-The TODO.max-perf/4 remainder: the bytecode VM declines Dynamic
-grammars entirely (they parse on the walker). Design: a CALL_HOST
-opcode that suspends the VM, invokes the registered DynamicCallback
-(resolve_fragment), splices the returned fragment grammar's
-instructions, and resumes — capture state marshaled both ways.
-Gate: differential vs the walker on dynamic-heavy grammars, budget
-unchanged. Status: backlog — the walker handles dynamic grammars
-correctly today; this is a throughput, not correctness, item.
+Dynamic grammars run on the bytecode VM: compile_dynamic emits
+InvokeDynamic (it used to refuse, routing the whole grammar to the
+walker). At runtime the instruction delegates to the packrat engine
+for the resolved fragment — under the shared recursion/budget guards
+(GH-76) — with capture state seeded both ways and the fragment's
+value adopted into the VM arena.
+
+Memoization soundness: dynamic outcomes depend on capture state,
+which memo keys ignore. Programs containing InvokeDynamic disable
+rule-call memoization; the walker skips memo for dynamic-dependent
+atoms (reverse-reachability analysis).
+
+Capture rollback (the coradoc GH-76 follow-up, 69 native-only
+regressions): the walker stored captures with no rollback, so a
+FAILED alternative branch's captures leaked into later branches and
+re-keyed dynamic dispatch. Alternatives, sequences, repetitions and
+lookaheads now scope their capture regions — failure pops, success
+commits.
