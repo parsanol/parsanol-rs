@@ -834,25 +834,29 @@ impl<'a> BytecodeVM<'a> {
                 // Invoke callback: a fragment grammar (self-consistent
                 // atom indices, the shape host bridges produce) wins
                 // over a bare atom, which is appended to a fresh
-                // grammar. Mirrors the packrat engine's parse_dynamic.
-                let (temp_grammar, _temp_atom_id) =
-                    match with_dynamic_callback(*callback_id, |cb| {
-                        if let Some((fragment, root)) = cb.resolve_fragment(&ctx) {
-                            return Some((fragment, root));
-                        }
-                        cb.resolve(&ctx).map(|atom| {
-                            let mut g = Grammar::new();
-                            let id = g.add_atom(atom);
-                            g.root = id;
-                            (g, id)
-                        })
-                    }) {
-                        Some(r) => r,
-                        None => {
-                            self.track_failure();
-                            return Ok(ExecutionResult::Fail);
-                        }
-                    };
+                // grammar whose root is the new atom. Mirrors the
+                // packrat engine's parse_dynamic; parsing starts from
+                // the grammar's root, so the root id itself is not
+                // needed here.
+                let temp_grammar = match with_dynamic_callback(*callback_id, |cb| {
+                    if let Some((fragment, root)) = cb.resolve_fragment(&ctx) {
+                        let mut fragment = fragment;
+                        fragment.root = root;
+                        return Some(fragment);
+                    }
+                    cb.resolve(&ctx).map(|atom| {
+                        let mut g = Grammar::new();
+                        let id = g.add_atom(atom);
+                        g.root = id;
+                        g
+                    })
+                }) {
+                    Some(g) => g,
+                    None => {
+                        self.track_failure();
+                        return Ok(ExecutionResult::Fail);
+                    }
+                };
 
                 // Create temporary arena
                 let mut temp_arena = AstArena::for_input(self.input_str.len());
