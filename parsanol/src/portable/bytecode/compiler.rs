@@ -221,6 +221,150 @@ impl Compiler {
         Ok(entry)
     }
 
+    /// Detect the shared-prefix shape: every branch is a sequence of
+    /// >= 2 atoms whose head atom index is identical. Returns the
+    /// shared head and each branch's tail slice. Index identity is
+    /// the sharing test (the serializer shares rule atoms, so common
+    /// rule prefixes share their index; structural isomorphism across
+    /// distinct indices is not attempted).
+    fn shared_prefix_split(&self, atoms: &[usize]) -> Option<(usize, Vec<Vec<usize>>)> {
+        if atoms.len() < 2 {
+            return None;
+        }
+        let mut head: Option<usize> = None;
+        let mut tails: Vec<Vec<usize>> = Vec::with_capacity(atoms.len());
+        for &b in atoms {
+            match self.grammar.get_atom(b) {
+                Some(Atom::Sequence { atoms: children }) if children.len() >= 2 => {
+                    match head {
+                        None => head = Some(children[0]),
+                        Some(h) if h == children[0] => {}
+                        _ => return None,
+                    }
+                    tails.push(children[1..].to_vec());
+                }
+                _ => return None,
+            }
+        }
+        head.map(|h| (h, tails))
+    }
+
+    /// Compile `alt(seq(H, t1...), seq(H, t2...), ...)` as
+    /// `<H> <choice over tails>`: the shared prefix matches once, the
+    /// ordered choice (or a dispatch table, when the tails' lead sets
+    /// are provably disjoint) runs at the post-prefix position, and
+    /// every branch folds its prefix value together with its tail
+    /// values via BuildSeq — the same envelope the unsplit branch
+    /// sequence produced.
+    fn compile_prefix_split_alternative(
+        &mut self,
+        head: usize,
+        tails: &[Vec<usize>],
+    ) -> Result<usize, CompileError> {
+        let entry = self.program.instruction_count();
+        self.compile_atom(head)?;
+
+        // Dispatch over tails when provably disjoint; otherwise the
+        // ordinary interleaved Choice chain over the same bodies.
+        let tail_sets: Option<Vec<Vec<u8>>> = tails
+            .iter()
+            .map(|t| {
+                let mut visited = std::collections::HashSet::new();
+                self.provable_first_set_seq(t, &mut visited)
+                    .and_then(|(set, non_nullable)| non_nullable.then_some(set))
+            })
+            .collect();
+        let disjoint = tail_sets.as_ref().is_some_and(|sets| {
+            for (i, set) in sets.iter().enumerate() {
+                for other in sets.iter().skip(i + 1) {
+                    if set.iter().any(|b| other.contains(b)) {
+                        return false;
+                    }
+                }
+            }
+            true
+        });
+
+        if disjoint {
+            let dispatch_idx = self.program.instruction_count();
+            self.program
+                .add_instruction(Instruction::byte_dispatch(u32::MAX));
+
+            let mut branch_starts = Vec::with_capacity(tails.len());
+            let mut jump_idxs = Vec::with_capacity(tails.len().saturating_sub(1));
+            for (i, tail) in tails.iter().enumerate() {
+                branch_starts.push(self.program.instruction_count());
+                for &atom_idx in tail {
+                    self.compile_atom(atom_idx)?;
+                }
+                self.program
+                    .add_instruction(Instruction::build_seq((1 + tail.len()) as u32));
+                if i + 1 < tails.len() {
+                    let jump_idx = self.program.instruction_count();
+                    self.program
+                        .add_instruction(Instruction::jump(PLACEHOLDER_OFFSET));
+                    jump_idxs.push(jump_idx);
+                }
+            }
+            let end_idx = self.program.instruction_count();
+            for jump_idx in jump_idxs {
+                let offset = (end_idx as i32) - (jump_idx as i32 + 1);
+                self.program
+                    .set_instruction(jump_idx, Instruction::jump(offset));
+            }
+
+            let sets = tail_sets.expect("disjoint implies Some");
+            let mut table = [-1i32; 256];
+            for (branch, set) in sets.iter().enumerate() {
+                let offset = (branch_starts[branch] as i32) - (dispatch_idx as i32 + 1);
+                for &b in set {
+                    table[b as usize] = offset;
+                }
+            }
+            let table_idx = self.program.add_dispatch_table(table);
+            self.program
+                .set_instruction(dispatch_idx, Instruction::byte_dispatch(table_idx));
+            self.emitted_dispatch = true;
+        } else {
+            // Interleaved Choice chain over tails; every branch pops
+            // its Choice at its Commit, and a branch failure lands on
+            // the next tail at the post-prefix position.
+            let mut choice_idxs = Vec::with_capacity(tails.len() - 1);
+            let mut commit_idxs = Vec::with_capacity(tails.len() - 1);
+            for (i, tail) in tails.iter().enumerate() {
+                if i + 1 < tails.len() {
+                    let idx = self.program.instruction_count();
+                    self.program
+                        .add_instruction(Instruction::choice(PLACEHOLDER_OFFSET));
+                    choice_idxs.push(idx);
+                }
+                for &atom_idx in tail {
+                    self.compile_atom(atom_idx)?;
+                }
+                self.program
+                    .add_instruction(Instruction::build_seq((1 + tail.len()) as u32));
+                if i + 1 < tails.len() {
+                    let idx = self.program.instruction_count();
+                    self.program.add_instruction(Instruction::commit(0));
+                    commit_idxs.push(idx);
+                }
+            }
+            let after_all = self.program.instruction_count();
+            for &choice_idx in &choice_idxs {
+                let offset = (after_all as i32) - (choice_idx as i32 + 1);
+                self.program
+                    .set_instruction(choice_idx, Instruction::choice(offset));
+            }
+            for &commit_idx in &commit_idxs {
+                let offset = (after_all as i32) - (commit_idx as i32 + 1);
+                self.program
+                    .set_instruction(commit_idx, Instruction::commit(offset));
+            }
+        }
+
+        Ok(entry)
+    }
+
     /// Emit a call to a rule's (possibly not yet compiled) body and
     /// queue the body for trailing subroutine compilation.
     fn compile_reference(&mut self, atom_idx: usize) -> Result<usize, CompileError> {
@@ -421,25 +565,7 @@ impl Compiler {
                 }
             }
             Atom::Re { pattern } => self.regex_first_bytes(pattern).map(|cs| (cs, true)),
-            Atom::Sequence { atoms } => {
-                // Union of leading nullable children's sets, then the
-                // first provably non-nullable child's set. A nullable
-                // child CAN consume its lead byte, so its set must be
-                // part of the union for ordering to stay sound.
-                let mut union: Vec<u8> = Vec::new();
-                for &child in atoms {
-                    let (set, non_nullable) = self.provable_first_set(child, visited)?;
-                    for b in set {
-                        if !union.contains(&b) {
-                            union.push(b);
-                        }
-                    }
-                    if non_nullable {
-                        return Some((union, true));
-                    }
-                }
-                Some((union, false))
-            }
+            Atom::Sequence { atoms } => self.provable_first_set_seq(atoms, visited),
             Atom::Alternative { atoms } => {
                 let mut union: Vec<u8> = Vec::new();
                 let mut all_non_nullable = true;
@@ -467,6 +593,32 @@ impl Compiler {
         };
         visited.remove(&atom_idx);
         result
+    }
+
+    /// First-byte analysis over a sequence slice (used both for
+    /// Sequence atoms and for the tail of a shared-prefix split).
+    /// Union of leading nullable children's sets, then the first
+    /// provably non-nullable child's set. A nullable child CAN
+    /// consume its lead byte, so its set must be part of the union
+    /// for ordering to stay sound.
+    fn provable_first_set_seq(
+        &self,
+        atoms: &[usize],
+        visited: &mut std::collections::HashSet<usize>,
+    ) -> Option<(Vec<u8>, bool)> {
+        let mut union: Vec<u8> = Vec::new();
+        for &child in atoms {
+            let (set, non_nullable) = self.provable_first_set(child, visited)?;
+            for b in set {
+                if !union.contains(&b) {
+                    union.push(b);
+                }
+            }
+            if non_nullable {
+                return Some((union, true));
+            }
+        }
+        Some((union, false))
     }
 
     /// Lead bytes of a regex we can prove: a single character class
@@ -567,6 +719,19 @@ impl Compiler {
 
         if atoms.len() == 1 {
             return self.compile_atom(atoms[0]);
+        }
+
+        // Shared-prefix split (TODO.perf/3): when every branch is a
+        // sequence starting with the same atom, match that prefix once
+        // and choose among the tails. Deterministic PEG prefixes make
+        // this acceptance-equivalent, and each branch rebuilds its
+        // original value envelope (prefix value + tail values), so
+        // trees are identical to the unsplit compilation. This is
+        // also what unblocks lead-byte dispatch for such alternatives:
+        // the shared prefix's bytes polluted every branch's union,
+        // which measured as 35 of 63 alternatives blocked in EXPRESS.
+        if let Some((head, tails)) = self.shared_prefix_split(atoms) {
+            return self.compile_prefix_split_alternative(head, &tails);
         }
 
         // Lead-byte dispatch: when every branch's first byte set is
