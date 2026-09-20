@@ -19,7 +19,7 @@ new differential gate — are fixed:
 
 Gates: a deterministic 30-edit sequence over a 1200-line document
 asserts incremental trees equal full re-parses (and acceptance equal
-on unparseable docs); a late-edit case asserts substantial cache
+on unparsable docs); a late-edit case asserts substantial cache
 reuse. A rule-based grammar regression covers rule-boundary entries.
 Exposed through the FFI as incremental sessions and from Ruby as
 `Parsanol::IncrementalSession`.
