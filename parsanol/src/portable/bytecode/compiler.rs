@@ -222,7 +222,7 @@ impl Compiler {
     }
 
     /// Detect the shared-prefix shape: every branch is a sequence of
-    /// >= 2 atoms whose head atom index is identical. Returns the
+    /// at least two atoms whose head atom index is identical. Returns the
     /// shared head and each branch's tail slice. Index identity is
     /// the sharing test (the serializer shares rule atoms, so common
     /// rule prefixes share their index; structural isomorphism across
