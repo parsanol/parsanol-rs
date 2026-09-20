@@ -564,6 +564,114 @@ fn parse_with_grammar(
 }
 
 // ============================================================================
+// INCREMENTAL SESSIONS (TODO.perf/4)
+// ============================================================================
+
+struct IncrementalSession {
+    parser: crate::portable::incremental::IncrementalParser<'static>,
+}
+
+fn get_sessions() -> &'static std::sync::Mutex<std::collections::HashMap<u64, IncrementalSession>> {
+    static SESSIONS: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<u64, IncrementalSession>>,
+    > = std::sync::OnceLock::new();
+    SESSIONS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+static NEXT_SESSION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// Create an incremental parsing session for a grammar. Returns the
+/// session handle used by `incremental_parse` / `incremental_release`.
+/// The first `incremental_parse` call is a full parse; subsequent
+/// calls pass the edit span (offset, old_length, new_length) and
+/// re-parse only what the edit invalidated.
+pub fn incremental_session(grammar_json: String) -> Result<u64, Error> {
+    let ruby = Ruby::get().unwrap();
+    let grammar: Grammar = load_grammar(&grammar_json)
+        .map_err(|e| Error::new(ruby.exception_arg_error(), e.to_string()))?;
+    let handle = NEXT_SESSION.fetch_add(1, Ordering::Relaxed);
+    get_sessions().lock().unwrap().insert(
+        handle,
+        IncrementalSession {
+            parser: crate::portable::incremental::IncrementalParser::owned(grammar),
+        },
+    );
+    Ok(handle)
+}
+
+/// Release an incremental session.
+pub fn incremental_release(handle: u64) -> bool {
+    get_sessions().lock().unwrap().remove(&handle).is_some()
+}
+
+/// Parse within an incremental session. A negative `edit_offset` runs
+/// a full (re)parse; otherwise (offset, old_length, new_length)
+/// describes the edit that produced this input since the previous
+/// call. Returns the parslet-shaped tree, identical to a full parse
+/// per the differential gate.
+pub fn incremental_parse(
+    handle: u64,
+    input: RString,
+    edit_offset: i64,
+    old_length: i64,
+    new_length: i64,
+) -> Result<Value, Error> {
+    let ruby = Ruby::get().unwrap();
+    let session = get_sessions().lock().unwrap().remove(&handle);
+    let Some(mut session) = session else {
+        return Err(Error::new(
+            ruby.exception_arg_error(),
+            format!("unknown incremental session: {}", handle),
+        ));
+    };
+
+    // SAFETY: same discipline as parse_handle - the borrowed &str
+    // lives for this call only and incremental grammars cannot
+    // re-enter Ruby (Dynamic atoms are not part of this API).
+    let input_str: &str = unsafe { input.as_str()? };
+
+    let mut arena = AstArena::for_input(input_str.len());
+    let outcome = if edit_offset < 0 {
+        session.parser.parse(input_str, &mut arena)
+    } else {
+        let edit = crate::portable::incremental::Edit::replace(
+            edit_offset.max(0) as usize,
+            old_length.max(0) as usize,
+            new_length.max(0) as usize,
+        );
+        session
+            .parser
+            .parse_with_edit(input_str, &mut arena, edit)
+            .map(|r| r.ast)
+    };
+    // Return the session (its cache) regardless of the parse outcome.
+    get_sessions().lock().unwrap().insert(
+        handle,
+        IncrementalSession {
+            parser: session.parser,
+        },
+    );
+
+    let ast = outcome.map_err(|e| Error::new(ruby.exception_runtime_error(), format!("{}", e)))?;
+    let collapsed = crate::ffi::shared::collapse_ast(&ast, &mut arena);
+    transform_ast(&collapsed, &arena, input_str, &ruby)
+}
+
+/// Cache statistics of an incremental session: [hits, misses].
+pub fn incremental_stats(handle: u64) -> Result<(i64, i64), Error> {
+    let sessions = get_sessions().lock().unwrap();
+    let Some(session) = sessions.get(&handle) else {
+        let ruby = Ruby::get().unwrap();
+        return Err(Error::new(
+            ruby.exception_arg_error(),
+            format!("unknown incremental session: {}", handle),
+        ));
+    };
+    let (hits, misses, _) = session.parser.cache_stats();
+    Ok((hits as i64, misses as i64))
+}
+
+// ============================================================================
 // HIGH-LEVEL API
 // ============================================================================
 
