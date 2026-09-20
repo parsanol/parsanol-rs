@@ -286,21 +286,74 @@ pub fn unregister_dynamic_callback(id: u64) -> bool {
 ///
 /// The result of the callback, or `None` if not registered.
 pub fn invoke_dynamic_callback(id: u64, ctx: &DynamicContext) -> Option<Atom> {
-    let registry = get_registry();
-    let guard = registry.lock().unwrap();
-    guard.callbacks.get(&id).and_then(|cb| cb.resolve(ctx))
+    with_dynamic_callback(id, |cb| cb.resolve(ctx))
 }
 
-/// Get a callback's description
-///
-/// # Returns
-///
-/// The description string, or `None` if not registered.
-/// Fetch a registered callback by id (used by engines that need the
-/// full callback surface, e.g. fragment resolution).
-/// Run a closure with the registered callback, under the registry
-/// lock. Engines use this to access the full callback surface
-/// (resolve / resolve_fragment) without cloning.
+/// Maximum dynamic nesting depth (mutually recursive fragments).
+pub const MAX_DYNAMIC_DEPTH: u32 = 256;
+/// Maximum dynamic invocations per top-level parse (backtracking
+/// re-invokes callbacks on every retry, so a shallow-but-divergent
+/// dispatch still needs a total budget).
+pub const MAX_DYNAMIC_CALLS: u32 = 10_000;
+
+thread_local! {
+    static DYNAMIC_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    static DYNAMIC_CALLS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// RAII token for one dynamic-invocation level; dropping it leaves
+/// the level and, at the outermost level, resets the call budget.
+pub(crate) struct DynamicGuard;
+
+impl Drop for DynamicGuard {
+    fn drop(&mut self) {
+        DYNAMIC_DEPTH.with(|d| {
+            let next = d.get().saturating_sub(1);
+            d.set(next);
+            if next == 0 {
+                DYNAMIC_CALLS.with(|c| c.set(0));
+            }
+        });
+    }
+}
+
+/// Enter one dynamic-invocation level, enforcing the recursion and
+/// budget guards (GH-76): a grammar whose dispatch never converges
+/// must fail loudly, not hang or balloon memory. `None` means a
+/// guard tripped — treat it as a parse failure at the call site.
+pub(crate) fn enter_dynamic() -> Option<DynamicGuard> {
+    let depth_ok = DYNAMIC_DEPTH.with(|d| {
+        let v = d.get();
+        if v < MAX_DYNAMIC_DEPTH {
+            d.set(v + 1);
+            true
+        } else {
+            false
+        }
+    });
+    if !depth_ok {
+        return None;
+    }
+    let budget_ok = DYNAMIC_CALLS.with(|c| {
+        let v = c.get();
+        if v < MAX_DYNAMIC_CALLS {
+            c.set(v + 1);
+            true
+        } else {
+            false
+        }
+    });
+    if budget_ok {
+        Some(DynamicGuard)
+    } else {
+        DYNAMIC_DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
+        None
+    }
+}
+
+/// Run a closure with the registered callback. Engines use this to
+/// access the full callback surface (resolve / resolve_fragment)
+/// without cloning.
 pub fn with_dynamic_callback<T>(
     id: u64,
     f: impl FnOnce(&dyn DynamicCallback) -> Option<T>,

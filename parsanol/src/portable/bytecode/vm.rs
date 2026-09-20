@@ -809,36 +809,62 @@ impl<'a> BytecodeVM<'a> {
             // Dynamic Atom Instructions
             // ========================================================================
             Instruction::InvokeDynamic { callback_id } => {
-                // Dynamic atoms use Packrat fallback
+                // Dynamic atoms use Packrat fallback, under the shared
+                // recursion/budget guards (GH-76): divergent dispatch
+                // fails loudly instead of hanging or ballooning.
                 use crate::portable::arena::AstArena;
-                use crate::portable::dynamic::{invoke_dynamic_callback, DynamicContext};
+                use crate::portable::dynamic::{enter_dynamic, with_dynamic_callback, DynamicContext};
                 use crate::portable::grammar::Grammar;
                 use crate::portable::parser::PortableParser;
 
-                // Create context for callback
-                let ctx =
-                    DynamicContext::new(self.input_str, self.position, self.capture_state.clone());
-
-                // Invoke callback to get the atom
-                let atom = match invoke_dynamic_callback(*callback_id, &ctx) {
-                    Some(a) => a,
+                let _guard = match enter_dynamic() {
+                    Some(g) => g,
                     None => {
                         self.track_failure();
                         return Ok(ExecutionResult::Fail);
                     }
                 };
 
-                // Create temporary grammar and add the atom
-                let mut temp_grammar = Grammar::new();
-                let temp_atom_id = temp_grammar.add_atom(atom);
-                temp_grammar.root = temp_atom_id;
+                // Create context for callback
+                let ctx =
+                    DynamicContext::new(self.input_str, self.position, self.capture_state.clone());
+
+                // Invoke callback: a fragment grammar (self-consistent
+                // atom indices, the shape host bridges produce) wins
+                // over a bare atom, which is appended to a fresh
+                // grammar. Mirrors the packrat engine's parse_dynamic.
+                let (temp_grammar, temp_atom_id) =
+                    match with_dynamic_callback(*callback_id, |cb| {
+                        if let Some((fragment, root)) = cb.resolve_fragment(&ctx) {
+                            return Some((fragment, root));
+                        }
+                        cb.resolve(&ctx).map(|atom| {
+                            let mut g = Grammar::new();
+                            let id = g.add_atom(atom);
+                            g.root = id;
+                            (g, id)
+                        })
+                    }) {
+                        Some(r) => r,
+                        None => {
+                            self.track_failure();
+                            return Ok(ExecutionResult::Fail);
+                        }
+                    };
 
                 // Create temporary arena
                 let mut temp_arena = AstArena::for_input(self.input_str.len());
 
-                // Use Packrat parser for dynamic atom
+                // Use Packrat parser for dynamic atom, seeded with the
+                // VM's captures so capture reads inside the fragment
+                // observe state set before the dynamic atom (GH-76).
                 let mut temp_parser =
                     PortableParser::new(&temp_grammar, self.input_str, &mut temp_arena);
+                for name in self.capture_state.names() {
+                    if let Some(value) = self.capture_state.get(name) {
+                        temp_parser.capture_state_mut().store(name, value);
+                    }
+                }
                 match temp_parser.parse_from_pos(self.position) {
                     Ok(result) => {
                         // Merge captures from temp parser
@@ -849,6 +875,7 @@ impl<'a> BytecodeVM<'a> {
                             }
                         }
                         self.position = result.end_pos;
+                        drop(_guard);
                         Ok(ExecutionResult::Continue)
                     }
                     Err(_) => {
