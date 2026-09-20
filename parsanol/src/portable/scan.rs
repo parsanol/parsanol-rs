@@ -95,9 +95,9 @@ fn block_first_non_member<const N: usize>(r: [(u8, u8); N], block: &[u8]) -> Opt
         unsafe {
             let bytes = _mm_loadu_si128(block.as_ptr().cast());
             let mut acc = _mm_setzero_si128();
-            for i in 0..N {
-                let lo = _mm_set1_epi8(r[i].0 as i8);
-                let hi = _mm_set1_epi8(r[i].1 as i8);
+            for range in r.iter().take(N) {
+                let lo = _mm_set1_epi8(range.0 as i8);
+                let hi = _mm_set1_epi8(range.1 as i8);
                 // Unsigned range test via saturating ops:
                 // lo <= b <= hi  <=>  max(b,lo)==b && min(b,hi)==b
                 let ge = _mm_cmpeq_epi8(_mm_max_epu8(bytes, lo), bytes);
