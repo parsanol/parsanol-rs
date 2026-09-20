@@ -5,10 +5,10 @@
 //! loop of identifier/whitespace/digit tokens. Plans decompose class
 //! membership into a bounded number of closed ranges (a stray single
 //! byte is a degenerate range); long runs scan 16-byte blocks with a
-//! baseline-vector membership kernel (NEON/SSE2, see
-//! [`block_first_non_member`]) and only the block that ends the run
-//! is searched byte-wise. Anything that does not decompose into at
-//! most [`MAX_RANGES`] ranges falls back to a 256-entry table.
+//! baseline-vector membership kernel (NEON on aarch64, SSE2 on
+//! x86_64, scalar elsewhere) and only the block that ends the run is
+//! searched byte-wise. Anything that does not decompose into at most
+//! eight ranges falls back to a 256-entry table.
 //!
 //! Both entry points preserve their engine's existing stepping
 //! semantics:
