@@ -934,6 +934,6 @@ mod tests {
         let warnings = GrammarAnalyzer::new(&grammar).analyze();
         assert!(warnings
             .iter()
-            .all(|w| w.message.contains("alternatives") == false));
+            .all(|w| !w.message.contains("alternatives")));
     }
 }
