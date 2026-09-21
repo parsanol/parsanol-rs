@@ -1,18 +1,24 @@
-# 7. Dense rule-call memo for the bytecode VM
+# 7. Dense rule-call memo for the VM — measured negative, not shipped
 
-The VM's rule-call memoization is a `HashMap<(usize, usize), MemoEntry>`
-keyed by (rule pc, position): a tuple hash plus hashbrown probing per
-memoized call. The tree-walker's DenseCache — open addressing over a
-preallocated slotted array with a tiny FNV mix — is the shape that
-lets the walker still beat the VM on giant inputs (EXPRESS: 0.9s vs
-1.3s, which is why the backtrack budget routes giants to the walker).
+Hypothesis: the VM's `HashMap<(usize, usize), MemoEntry>` rule-call
+memo costs a tuple hash plus hashbrown overhead per memoized call,
+and a DenseCache-style open-addressed table (inline keys, linear
+probing) would close part of the gap that makes giant grammars route
+to the tree-walker.
 
-This item replaces the HashMap with a dense linear-probing table of
-the same design: slots preallocated from a size heuristic
-(input_len + rule count), entries {rule_pc, pos, success, end_pos,
-value: Option<AstNode>} stored inline, hit path with no allocation
-and no tuple hashing. Disabled-memo programs (InvokeDynamic) skip the
-table exactly as they skip the map today.
+Measured (same-conditions A/B on benches/large-input.rs, interleaved
+runs under load):
 
-Gate: benches/large-input.rs A/B (VM path), full differential suite,
-tree parity on the KV/EXPRESS-shaped grammars.
+- Preallocated dense table (one slot per input byte): 1.8x REGRESSION
+  on 64 KB inputs — a fresh VM is built per parse, so the table's
+  slot-array memset faults hundreds of KiB of cold pages before the
+  first instruction executes.
+- Grown dense table (start 1K slots, double + rehash): still 0.87–0.98x
+  on 64 KB and 0.32x on 2 KB — growth rehashing costs more than
+  hashbrown's allocation path at these scales.
+
+Conclusion: hashbrown's group-probe HashMap is already competitive at
+VM memo sizes; the walker-vs-VM gap on giant inputs lives elsewhere
+(candidate levers if it ever matters again: memo value cloning
+(Option<AstNode> deep copies), backtrack-frame traffic, not the map).
+Reverted; the HashMap memo stays.

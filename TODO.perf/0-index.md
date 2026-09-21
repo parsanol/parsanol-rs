@@ -12,8 +12,9 @@ decomposition of everything left on parsanol performance:
 | 4 | Incremental reparsing by edit span | TODO.max-perf/7 | SHIPPED (this round) |
 | 5 | VM host-callable Dynamic contexts | TODO.max-perf/4 remainder | SHIPPED (this round) |
 | 6 | Wide scan kernels (32-byte blocks) | follow-up of 2 | this round |
-| 7 | Dense rule-call memo for the VM | follow-up of the phase-2 wiring | this round |
-| 8 | Incremental latency benchmark | follow-up of 4 | this round |
+| 7 | Dense rule-call memo for the VM | follow-up of the phase-2 wiring | measured negative; reverted (see item) |
+| 8 | Incremental latency benchmark | follow-up of 4 | SHIPPED (this round) |
+| 9 | Prefix-tree reuse | the measured ceiling of 4/8 | specced, unscheduled |
 
 Done items stay done: lead-byte dispatch, parser hot path, the
 bytecode VM phases 1-4, the handle API, pure-Ruby posture, and
