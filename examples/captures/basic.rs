@@ -12,7 +12,6 @@ use parsanol::portable::{
     parser_dsl::{capture, dynamic, re, seq, str, GrammarBuilder},
     AstArena, Atom, Grammar, PortableParser,
 };
-use std::collections::HashMap;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Capture Atoms Example");
@@ -77,7 +76,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  Capture names: {:?}", result.capture_names());
 
     // Get all captures as HashMap
-    let all_captures: HashMap<&str, &str> = result.captures(input);
+    let all_captures = result.captures(input);
     println!("  All captures:");
     for (name, value) in &all_captures {
         println!("    {} = {:?}", name, value);

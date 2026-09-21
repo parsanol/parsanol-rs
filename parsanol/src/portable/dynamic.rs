@@ -86,8 +86,8 @@ impl DynamicContext {
 
     /// Get the text of a captured value
     #[inline]
-    pub fn get_capture_text(&self, name: &str) -> Option<&str> {
-        self.captures.get(name).map(|v| v.get_text(&self.input))
+    pub fn get_capture_text<'s>(&'s self, name: &str) -> Option<std::borrow::Cow<'s, str>> {
+        self.captures.get(name).map(|v| v.get_text(self.input()))
     }
 
     /// Check if a capture exists
@@ -351,6 +351,190 @@ pub(crate) fn enter_dynamic() -> Option<DynamicGuard> {
     }
 }
 
+// ============================================================================
+// Capture-write channel (parsanol-ruby#80)
+// ============================================================================
+
+thread_local! {
+    static CAPTURE_WRITES: std::cell::RefCell<Vec<(String, String)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Record capture writes made by a host callback block (the bridge
+/// reads back the block's mutated context hash and posts the diff
+/// here). Engines drain the writes into their capture state right
+/// after the callback resolves — inside whatever capture scope
+/// encloses the dynamic atom, so backtracking discards them exactly
+/// like capture-atom writes when the enclosing branch fails.
+pub fn note_capture_writes(writes: Vec<(String, String)>) {
+    if writes.is_empty() {
+        return;
+    }
+    CAPTURE_WRITES.with(|w| w.borrow_mut().extend(writes));
+}
+
+/// Drain pending capture writes into a capture state, converting each
+/// to a literal-text value. Called by both engines after callback
+/// resolution.
+pub fn drain_capture_writes_into(captures: &mut CaptureState) {
+    CAPTURE_WRITES.with(|w| {
+        let mut pending = w.borrow_mut();
+        for (name, text) in pending.drain(..) {
+            captures.store(&name, super::capture_state::CaptureValue::text(text));
+        }
+    });
+}
+
+// ============================================================================
+// Dispatch cache (parsanol-ruby#80, item 2)
+// ============================================================================
+
+/// A resolved fragment, cached for reuse when the same callback is
+/// invoked again at the same position with the same captures (and the
+/// same input). Blocks see exactly (input, pos, captures), so a
+/// deterministic block's fragment — and its capture writes — are a
+/// pure function of that key.
+pub struct CachedFragment {
+    /// The resolved fragment grammar.
+    pub grammar: std::sync::Arc<super::grammar::Grammar>,
+    /// The fragment's root atom.
+    pub root: usize,
+    /// Capture writes the block performed; replayed on cache hits so
+    /// side effects match the uncached path exactly.
+    pub writes: Vec<(String, String)>,
+}
+
+thread_local! {
+    static DISPATCH_CACHE: std::cell::RefCell<
+        std::collections::HashMap<(u64, usize, u64), CachedFragment>,
+    > = std::cell::RefCell::new(std::collections::HashMap::new());
+    static INPUT_HASH: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+const DISPATCH_CACHE_CAP: usize = 4096;
+
+/// Begin a parse: fixes the input identity for the dispatch cache
+/// (blocks can dispatch on any byte of the input, so its hash is part
+/// of every key) and clears both the cache and pending capture
+/// writes.
+pub fn begin_parse(input: &str) {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in input.as_bytes() {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01B3);
+    }
+    INPUT_HASH.with(|c| c.set(h));
+    DISPATCH_CACHE.with(|c| c.borrow_mut().clear());
+    clear_capture_writes();
+}
+
+fn capture_signature(captures: &CaptureState, input: &str) -> u64 {
+    let mut h: u64 = 0x9e37_79b9_7f4a_7c15;
+    let mut names: Vec<&String> = captures.names().collect();
+    names.sort();
+    for name in names {
+        if let Some(value) = captures.get(name) {
+            h ^= name.len() as u64;
+            h = h.wrapping_mul(0x1000_0000_01B3);
+            for b in name.as_bytes() {
+                h ^= *b as u64;
+                h = h.wrapping_mul(0x1000_0000_01B3);
+            }
+            let text = value.get_text(input);
+            h ^= text.len() as u64;
+            h = h.wrapping_mul(0x1000_0000_01B3);
+            for b in text.as_bytes() {
+                h ^= *b as u64;
+                h = h.wrapping_mul(0x1000_0000_01B3);
+            }
+        }
+    }
+    h
+}
+
+/// A dispatch-cache hit: the fragment grammar, its root atom, and
+/// the capture writes to replay.
+pub type FragmentHit = (
+    std::sync::Arc<super::grammar::Grammar>,
+    usize,
+    Vec<(String, String)>,
+);
+
+/// Look up a cached fragment for this (callback, position, captures,
+/// input). Hit => the engine replays the grammar and the recorded
+/// capture writes without re-entering the host.
+pub fn cached_fragment(
+    callback_id: u64,
+    pos: usize,
+    captures: &CaptureState,
+    input: &str,
+) -> Option<FragmentHit> {
+    let input_hash = INPUT_HASH.with(|c| c.get());
+    let key = (
+        callback_id,
+        pos,
+        capture_signature(captures, input) ^ input_hash,
+    );
+    DISPATCH_CACHE.with(|c| {
+        c.borrow()
+            .get(&key)
+            .map(|f| (std::sync::Arc::clone(&f.grammar), f.root, f.writes.clone()))
+    })
+}
+
+/// Store a resolved fragment for the key. `writes` are the pending
+/// capture writes the block produced; they are drained and replayed
+/// together with the fragment on later hits.
+pub fn store_dispatch_fragment(
+    callback_id: u64,
+    pos: usize,
+    captures: &CaptureState,
+    input: &str,
+    grammar: super::grammar::Grammar,
+    root: usize,
+    writes: Vec<(String, String)>,
+) {
+    let input_hash = INPUT_HASH.with(|c| c.get());
+    let key = (
+        callback_id,
+        pos,
+        capture_signature(captures, input) ^ input_hash,
+    );
+    DISPATCH_CACHE.with(|c| {
+        let mut cache = c.borrow_mut();
+        if cache.len() >= DISPATCH_CACHE_CAP {
+            cache.clear();
+        }
+        cache.insert(
+            key,
+            CachedFragment {
+                grammar: std::sync::Arc::new(grammar),
+                root,
+                writes,
+            },
+        );
+    });
+}
+
+/// Snapshot the pending capture writes (used by the engine to record
+/// what a freshly resolved block wrote, for replay on cache hits).
+pub fn take_pending_writes() -> Vec<(String, String)> {
+    CAPTURE_WRITES.with(|w| std::mem::take(&mut *w.borrow_mut()))
+}
+
+/// Whether a dynamic dispatch is currently on the stack: nested
+/// fragment parsers are NOT parse entry points and must not reset
+/// per-parse state (dispatch cache, pending writes, input hash).
+pub fn in_dynamic_dispatch() -> bool {
+    DYNAMIC_DEPTH.with(|d| d.get() > 0)
+}
+
+/// Clear any pending writes (parse entry points call this so writes
+/// can never leak across parses).
+pub fn clear_capture_writes() {
+    CAPTURE_WRITES.with(|w| w.borrow_mut().clear());
+}
+
 /// Run a closure with the registered callback. Engines use this to
 /// access the full callback surface (resolve / resolve_fragment)
 /// without cloning.
@@ -467,7 +651,7 @@ impl DynamicCallback for CaptureSwitchCallback {
         let capture_text = ctx.get_capture_text(&self.capture_name)?;
 
         for (value, atom) in &self.cases {
-            if capture_text == value {
+            if capture_text.as_ref() == value.as_str() {
                 return Some(atom.clone());
             }
         }
@@ -502,7 +686,7 @@ mod tests {
         assert!(!ctx.is_at_end());
 
         assert!(ctx.has_capture("name"));
-        assert_eq!(ctx.get_capture_text("name"), Some("hello"));
+        assert_eq!(ctx.get_capture_text("name").as_deref(), Some("hello"));
     }
 
     #[test]

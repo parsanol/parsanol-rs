@@ -196,6 +196,9 @@ impl<'a> PortableParser<'a> {
     /// Create a new parser with default security limits
     #[inline]
     pub fn new(grammar: &'a Grammar, input: &'a str, arena: &'a mut AstArena) -> Self {
+        if !super::dynamic::in_dynamic_dispatch() {
+            super::dynamic::begin_parse(input);
+        }
         Self::with_limits(
             grammar,
             input,
@@ -1084,6 +1087,21 @@ impl<'a> PortableParser<'a> {
         if std::env::var("PARSANOL_DYN_TRACE").is_ok() {
             eprintln!("DYN: parse_dynamic id={} pos={}", callback_id, pos);
         }
+        // Dispatch cache (parsanol-ruby#80): a deterministic block's
+        // fragment is a pure function of (input, pos, captures) — the
+        // exact key below. A hit skips the host round-trip (block
+        // call, atom JSON, grammar rebuild) and replays the recorded
+        // capture writes.
+        if let Some((fragment, root, writes)) =
+            super::dynamic::cached_fragment(callback_id, pos, &self.capture_state, self.input)
+        {
+            for (name, text) in writes {
+                self.capture_state
+                    .store(&name, super::capture_state::CaptureValue::text(text));
+            }
+            return self.parse_fragment(&fragment, root, pos);
+        }
+
         let grammar = self.grammar;
         let (temp_grammar, temp_atom_id) = with_dynamic_callback(callback_id, |cb| {
             if let Some((fragment, root)) = cb.resolve_fragment(&ctx) {
@@ -1097,21 +1115,49 @@ impl<'a> PortableParser<'a> {
         })
         .ok_or(ParseError::Failed { position: pos })?;
 
-        // Parse using the returned atom
-        // Note: We create a temporary parser to avoid borrowing issues
-        // Seed the fragment parser with the parent's captures so
-        // capture reads inside the fragment see state set before the
-        // dynamic atom (GH-76 follow-up).
+        // Writes the block made to its context (parsanol-ruby#80)
+        // land in the enclosing capture scope: a failed enclosing
+        // branch discards them with everything else the branch
+        // captured, and later blocks read them through the seeded
+        // state below. They are recorded with the cached fragment so
+        // hits replay them.
+        let writes = super::dynamic::take_pending_writes();
+        for (name, text) in &writes {
+            self.capture_state
+                .store(name, super::capture_state::CaptureValue::text(text.clone()));
+        }
+        super::dynamic::store_dispatch_fragment(
+            callback_id,
+            pos,
+            &self.capture_state,
+            self.input,
+            temp_grammar.clone(),
+            temp_atom_id,
+            writes,
+        );
+
+        self.parse_fragment(&temp_grammar, temp_atom_id, pos)
+    }
+
+    /// Parse a resolved fragment at `pos` against a temporary parser
+    /// seeded with the parent's captures, merging results and adopting
+    /// the subtree into the parent arena (GH-76). Shared by the
+    /// resolved path and dispatch-cache hits.
+    fn parse_fragment(
+        &mut self,
+        temp_grammar: &super::grammar::Grammar,
+        temp_atom_id: usize,
+        pos: usize,
+    ) -> Result<ParseResult, ParseError> {
         let mut temp_arena = AstArena::for_input(self.input.len());
-        let mut temp_parser = PortableParser::new(&temp_grammar, self.input, &mut temp_arena);
+        let mut temp_parser = PortableParser::new(temp_grammar, self.input, &mut temp_arena);
         for name in self.capture_state.names() {
             if let Some(value) = self.capture_state.get(name) {
                 temp_parser.capture_state.store(name, value);
             }
         }
 
-        let result = temp_parser.try_atom(temp_atom_id, pos);
-        let result = result?;
+        let result = temp_parser.try_atom(temp_atom_id, pos)?;
 
         // Merge captures from temp parser
         for name in temp_parser.capture_state.names() {

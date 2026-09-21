@@ -335,20 +335,20 @@ fn test_capture_state_shadowing() {
 
     // Outer capture
     state.store("x", CaptureValue::new(0, 5));
-    assert_eq!(state.get("x").unwrap().offset, 0);
+    assert_eq!(state.get("x").unwrap().span(), Some((0, 5)));
 
     // Push scope
     state.push_scope();
 
     // Shadow
     state.store("x", CaptureValue::new(10, 3));
-    assert_eq!(state.get("x").unwrap().offset, 10);
+    assert_eq!(state.get("x").unwrap().span(), Some((10, 3)));
 
     // Pop scope
     state.pop_scope();
 
     // Original restored
-    assert_eq!(state.get("x").unwrap().offset, 0);
+    assert_eq!(state.get("x").unwrap().span(), Some((0, 5)));
 }
 
 #[test]

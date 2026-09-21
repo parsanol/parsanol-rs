@@ -608,7 +608,9 @@ pub fn incremental_release(handle: u64) -> bool {
 /// a full (re)parse; otherwise (offset, old_length, new_length)
 /// describes the edit that produced this input since the previous
 /// call. Returns the parslet-shaped tree, identical to a full parse
-/// per the differential gate.
+/// per the differential gate. Dynamic grammars are eligible: the
+/// walker's dynamic-dependent memo filter keeps retention sound, and
+/// the input is copied per call so host re-entry is safe.
 pub fn incremental_parse(
     handle: u64,
     input: RString,
@@ -625,10 +627,12 @@ pub fn incremental_parse(
         ));
     };
 
-    // SAFETY: same discipline as parse_handle - the borrowed &str
-    // lives for this call only and incremental grammars cannot
-    // re-enter Ruby (Dynamic atoms are not part of this API).
-    let input_str: &str = unsafe { input.as_str()? };
+    // Own the input: dynamic grammars ARE eligible for sessions
+    // (parsanol-ruby#80) and their blocks re-enter Ruby, so the
+    // borrow-zero-copy discipline of parse_handle does not apply
+    // here. One copy per call is the price of that eligibility.
+    let input_str: String = input.to_string()?;
+    let input_str: &str = &input_str;
 
     let mut arena = AstArena::for_input(input_str.len());
     let outcome = if edit_offset < 0 {

@@ -507,3 +507,197 @@ mod prefix_hoisting {
         }
     }
 }
+
+mod capture_writes {
+    use crate::portable::arena::AstArena;
+    use crate::portable::capture_state::CaptureState;
+    use crate::portable::dynamic::{
+        drain_capture_writes_into, note_capture_writes, register_dynamic_callback, DynamicCallback,
+        DynamicContext,
+    };
+    use crate::portable::grammar::{Atom, Grammar};
+    use crate::portable::parser::PortableParser;
+
+    /// A block that WRITES continuation state, mirroring the coradoc
+    /// pattern (parsanol-ruby#80): caps[:cont] = caps[:cont] >> rule.
+    struct ChainingCallback;
+
+    impl DynamicCallback for ChainingCallback {
+        fn resolve(&self, ctx: &DynamicContext) -> Option<Atom> {
+            // Write side effect: append to the continuation.
+            let cont = ctx
+                .get_capture_text("cont")
+                .map(|c| c.into_owned())
+                .unwrap_or_default();
+            let next = format!("{cont}+");
+            note_capture_writes(vec![("cont".to_string(), next)]);
+
+            // Dispatch: with cont "a+" match "B", else match "A".
+            let pattern = if cont.is_empty() { "A" } else { "B" };
+            Some(Atom::Str {
+                pattern: pattern.to_string(),
+            })
+        }
+        fn description(&self) -> &str {
+            "chaining dispatcher"
+        }
+    }
+
+    /// seq(dynamic1, dynamic2): block 1 writes :cont; block 2 must
+    /// read the write and dispatch on it.
+    #[test]
+    fn block_writes_are_visible_to_later_blocks() {
+        let cb_id = register_dynamic_callback(Box::new(ChainingCallback));
+        let mut g = Grammar::new();
+        let d1 = g.add_atom(Atom::Dynamic { callback_id: cb_id });
+        let d2 = g.add_atom(Atom::Dynamic { callback_id: cb_id });
+        let root = g.add_atom(Atom::Sequence {
+            atoms: vec![d1, d2],
+        });
+        g.root = root;
+
+        let mut arena = AstArena::new();
+        let mut parser = PortableParser::new(&g, "AB", &mut arena);
+        parser
+            .parse()
+            .unwrap_or_else(|e| panic!("chained dispatch should parse: {e:?}"));
+    }
+
+    /// A write made inside a FAILED branch must not leak: branch 1's
+    /// dynamic block writes :cont then the branch fails; branch 2's
+    /// block must see no :cont.
+    #[test]
+    fn failed_branch_writes_are_discarded() {
+        use crate::portable::dynamic::clear_capture_writes;
+        clear_capture_writes();
+
+        let cb_id = register_dynamic_callback(Box::new(ChainingCallback));
+        let mut g = Grammar::new();
+        // Branch 1: dynamic (writes :cont, matches "A") then "!" (fails).
+        let d1 = g.add_atom(Atom::Dynamic { callback_id: cb_id });
+        let bang = g.add_atom(Atom::Str {
+            pattern: "!".to_string(),
+        });
+        let b1 = g.add_atom(Atom::Sequence {
+            atoms: vec![d1, bang],
+        });
+        // Branch 2: dynamic with a clean capture set: matches "A"
+        // (cont empty), then "B".
+        let d2 = g.add_atom(Atom::Dynamic { callback_id: cb_id });
+        let bee = g.add_atom(Atom::Str {
+            pattern: "B".to_string(),
+        });
+        let b2 = g.add_atom(Atom::Sequence {
+            atoms: vec![d2, bee],
+        });
+        let root = g.add_atom(Atom::Alternative {
+            atoms: vec![b1, b2],
+        });
+        g.root = root;
+
+        // If the write leaked, d2 would dispatch to "B" and the parse
+        // of "AB" would fail; with the rollback discipline it passes.
+        let mut arena = AstArena::new();
+        let mut parser = PortableParser::new(&g, "AB", &mut arena);
+        parser
+            .parse()
+            .unwrap_or_else(|e| panic!("failed-branch write leaked: {e:?}"));
+    }
+
+    /// The write channel converts to literal-text capture values that
+    /// read back exactly, independent of the input.
+    #[test]
+    fn writes_read_back_as_text_values() {
+        note_capture_writes(vec![("k".to_string(), "literal".to_string())]);
+        let mut caps = CaptureState::new();
+        drain_capture_writes_into(&mut caps);
+        let input = "completely unrelated input";
+        assert_eq!(
+            caps.get("k").map(|v| v.get_text(input).into_owned()),
+            Some("literal".to_string())
+        );
+    }
+}
+
+mod dispatch_cache {
+    use crate::portable::arena::AstArena;
+    use crate::portable::dynamic::{
+        begin_parse, register_dynamic_callback, DynamicCallback, DynamicContext,
+    };
+    use crate::portable::grammar::{Atom, Grammar};
+    use crate::portable::parser::PortableParser;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static CALLS: AtomicUsize = AtomicUsize::new(0);
+
+    struct CountingCallback;
+
+    impl DynamicCallback for CountingCallback {
+        fn resolve(&self, ctx: &DynamicContext) -> Option<Atom> {
+            CALLS.fetch_add(1, Ordering::SeqCst);
+            let pattern = if ctx.get_capture_text("m").is_some() {
+                "B"
+            } else {
+                "A"
+            };
+            Some(Atom::Str {
+                pattern: pattern.to_string(),
+            })
+        }
+        fn description(&self) -> &str {
+            "counting dispatcher"
+        }
+    }
+
+    /// The same (callback, position, captures) must resolve ONCE per
+    /// parse: backtracking re-invocations hit the dispatch cache
+    /// (parsanol-ruby#80 item 2), and a capture-state change at the
+    /// same position still re-resolves.
+    #[test]
+    fn identical_dispatches_resolve_once_per_parse() {
+        let cb_id = register_dynamic_callback(Box::new(CountingCallback));
+
+        // Grammar: seq(dynamic, dynamic) — same position? No: two
+        // dynamic atoms at DIFFERENT positions. Use a repetition-free
+        // shape: alt(seq(d, "!"), seq(d, "B")) — d at pos 0 twice.
+        let mut g = Grammar::new();
+        let d = g.add_atom(Atom::Dynamic { callback_id: cb_id });
+        let bang = g.add_atom(Atom::Str {
+            pattern: "!".to_string(),
+        });
+        let bee = g.add_atom(Atom::Str {
+            pattern: "B".to_string(),
+        });
+        let b1 = g.add_atom(Atom::Sequence {
+            atoms: vec![d, bang],
+        });
+        let b2 = g.add_atom(Atom::Sequence {
+            atoms: vec![d, bee],
+        });
+        let root = g.add_atom(Atom::Alternative {
+            atoms: vec![b1, b2],
+        });
+        g.root = root;
+
+        let mut arena = AstArena::new();
+        let mut parser = PortableParser::new(&g, "AB", &mut arena);
+        parser.parse().expect("branch 2 parses");
+
+        // Without the cache the alternative's second branch would
+        // re-invoke the callback for position 0; with it, one
+        // resolution per parse — unless capture state differed (it
+        // did not: both branches start at 0 with no captures).
+        let calls = CALLS.load(Ordering::SeqCst);
+        assert_eq!(
+            calls, 1,
+            "same (cb, pos, captures) must resolve once per parse"
+        );
+
+        // A new parse starts clean: the cache is per-parse.
+        begin_parse("AB");
+        let mut arena = AstArena::new();
+        let mut parser = PortableParser::new(&g, "AB", &mut arena);
+        parser.parse().expect("second parse");
+        assert_eq!(CALLS.load(Ordering::SeqCst), calls + 1);
+    }
+}
