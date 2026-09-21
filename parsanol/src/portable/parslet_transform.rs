@@ -433,52 +433,22 @@ fn flatten_sequence(items: &[AstNode], arena: &mut AstArena, input: &str) -> Ast
         };
     }
 
-    // PARSLET SEQUENCES ARE FLAT: splice nested arrays (repetition
-    // results) and drop nils before any classification
-    // (parsanol-ruby#83). The old second pass counted array items'
-    // keys but then dropped the arrays entirely, so a sequence like
-    // [line_repetition_array, empty_maybe] collapsed to the empty
-    // maybe's "" — losing every captured line. An empty-maybe's ""
-    // behaves like parslet's nil here and is dropped when sibling
-    // named captures exist.
+    // Ruby CanFlatten#flatten_sequence is a left fold of merge_fold.
+    // Critically, Hash+Array hoists (`[hash] + array`) rather than
+    // splicing the array first — that distinction is what keeps
+    // `item >> (sep >> item).repeat` as a list when `sep` is a named
+    // capture (EXPRESS `op_comma`, `op_delim`). Splicing first turns
+    // those into Hash+Hash pairs that last-wins-merge and drop every
+    // element but the last (the multi-parameter/attribute bug).
+    //
+    // Array+"" / Array+Nil keep the array (#83): an empty-maybe's ""
+    // behaves like parslet's nil and is dropped when a structured
+    // sibling is present.
     if items
         .iter()
         .any(|i| matches!(i, AstNode::Array { .. } | AstNode::Nil))
     {
-        let mut flat: Vec<AstNode> = Vec::with_capacity(items.len());
-        let mut spliced = false;
-        for item in items {
-            match item {
-                AstNode::Array { pool_index, length } => {
-                    spliced = true;
-                    flat.extend(
-                        arena
-                            .get_array(*pool_index as usize, *length as usize)
-                            .iter()
-                            .cloned(),
-                    );
-                }
-                AstNode::Nil => {
-                    spliced = true;
-                }
-                other => flat.push(other.clone()),
-            }
-        }
-        if spliced {
-            let has_hash = flat.iter().any(|i| matches!(i, AstNode::Hash { .. }));
-            if has_hash {
-                flat.retain(|i| match i {
-                    AstNode::StringRef { pool_index } => {
-                        !arena.get_string(*pool_index as usize).is_empty()
-                    }
-                    _ => true,
-                });
-            }
-            if flat.is_empty() {
-                return arena.intern_string("");
-            }
-            return flatten_sequence(&flat, arena, input);
-        }
+        return fold_sequence_ruby(items, arena, input);
     }
 
     // DON'T unwrap single items - let the caller handle this
@@ -529,120 +499,27 @@ fn flatten_sequence(items: &[AstNode], arena: &mut AstArena, input: &str) -> Ast
     // Check for repetition pattern: any key appearing more than once
     let has_repetition = key_counts.values().any(|&count| count > 1);
 
-    // Check if items have single keys or multiple keys
-    // - Single key items with repeated outer key = true repetition (keep array)
-    // - Multiple key items with repeated outer key = duplicate labels in sequence (merge)
-    let max_keys_per_item = items
-        .iter()
-        .map(|item| item.hash_len().unwrap_or(0) as usize)
-        .max()
-        .unwrap_or(0);
-
-    // DUPLICATE LABELS IN SEQUENCE: multiple keys per item with repeated outer key
-    // Example: [{group: {char: 'a'}}, {group: {digit: '5'}}]
-    // Ruby semantics: merge with last value wins for the outer key
-    // This is different from true repetition where each item has exactly one key
-    let has_duplicate_labels = has_repetition && max_keys_per_item > 1;
-
     if has_repetition {
-        if has_duplicate_labels {
-            // DUPLICATE LABELS PATTERN: items have multiple keys with repeated outer key
-            // This is a SEQUENCE with duplicate .as() labels
-            // Ruby semantics: merge and keep last value for the outer key
-
-            // Collect first item with its keys, then merge subsequent items
-            if items.is_empty() {
-                let (pool_idx, len) = arena.store_array(items);
-                return AstNode::Array {
-                    pool_index: pool_idx,
-                    length: len,
-                };
-            }
-
-            // Start with first item's key-value pairs
-            let first_pairs: Vec<(String, AstNode)> = match &items[0] {
-                AstNode::Hash { pool_index, length } => arena
-                    .get_hash_items(*pool_index as usize, *length as usize)
-                    .iter()
-                    .map(|(k, v)| (k.clone(), v.clone()))
-                    .collect(),
-                _ => vec![],
-            };
-
-            // Track which key is the duplicate (appears in multiple items)
-            let duplicate_key = key_counts
-                .iter()
-                .find(|(_, &count)| count > 1)
-                .map(|(k, _)| k.clone());
-
-            // Merge subsequent items, with last value winning for duplicate key
-            let mut merged: Vec<(String, AstNode)> = first_pairs;
-            for item in items.iter().skip(1) {
-                if let AstNode::Hash { pool_index, length } = item {
-                    let pairs = arena.get_hash_items(*pool_index as usize, *length as usize);
-                    for (k, v) in pairs {
-                        if let Some(ref dup_key) = duplicate_key {
-                            if k.as_str() == dup_key.as_str() {
-                                // Replace the value for the duplicate key
-                                if let Some(pos) = merged
-                                    .iter()
-                                    .position(|(key, _)| key.as_str() == k.as_str())
-                                {
-                                    merged[pos] = (k.clone(), v.clone());
-                                } else {
-                                    merged.push((k.clone(), v.clone()));
-                                }
-                                continue;
-                            }
-                        }
-                        // Add non-duplicate keys
-                        if !merged.iter().any(|(key, _)| key.as_str() == k.as_str()) {
-                            merged.push((k.clone(), v.clone()));
-                        }
-                    }
+        // TRUE REPETITION: repeated keys across sibling hashes.
+        // Keep as array. (Named-separator list forms never reach here —
+        // they take the fold_sequence_ruby path above because the
+        // repetition child is still an Array.)
+        // Example: [{letter: 'a'}, {letter: 'b'}] or [{schemaDecl: ...}, ...]
+        let mut flat_items: Vec<AstNode> = Vec::new();
+        for item in items {
+            match item {
+                AstNode::Array { pool_index, length } => {
+                    let nested = arena.get_array(*pool_index as usize, *length as usize);
+                    flat_items.extend(nested.iter().cloned());
                 }
+                _ => flat_items.push(item.clone()),
             }
-
-            // If we have a duplicate key, wrap in a hash; otherwise return array
-            if let Some(ref dup_key) = duplicate_key {
-                // Get the last value for the duplicate key and wrap it
-                if let Some((_, last_value)) = merged.iter().find(|(k, _)| k == dup_key) {
-                    let (pool_idx, len) =
-                        arena.store_hash(&[(dup_key.as_str(), last_value.clone())]);
-                    return AstNode::Hash {
-                        pool_index: pool_idx,
-                        length: len,
-                    };
-                }
-            }
-
-            // Fallback: return array
-            let (pool_idx, len) = arena.store_array(items);
-            return AstNode::Array {
-                pool_index: pool_idx,
-                length: len,
-            };
-        } else {
-            // TRUE REPETITION: each item has exactly one key
-            // Keep as array of hashes
-            // Example: [{letter: 'a'}, {letter: 'b'}] or [{schemaDecl: ...}, {schemaDecl: ...}]
-            // Flatten nested arrays from repetition results into the parent level
-            let mut flat_items: Vec<AstNode> = Vec::new();
-            for item in items {
-                match item {
-                    AstNode::Array { pool_index, length } => {
-                        let nested = arena.get_array(*pool_index as usize, *length as usize);
-                        flat_items.extend(nested.iter().cloned());
-                    }
-                    _ => flat_items.push(item.clone()),
-                }
-            }
-            let (pool_idx, len) = arena.store_array(&flat_items);
-            return AstNode::Array {
-                pool_index: pool_idx,
-                length: len,
-            };
         }
+        let (pool_idx, len) = arena.store_array(&flat_items);
+        return AstNode::Array {
+            pool_index: pool_idx,
+            length: len,
+        };
     }
 
     // SEQUENCE PATTERN: proceed with existing merge logic
@@ -781,6 +658,206 @@ fn flatten_sequence(items: &[AstNode], arena: &mut AstArena, input: &str) -> Ast
             pool_index: pool_idx,
             length: len,
         }
+    }
+}
+
+/// Left-fold a sequence with Ruby CanFlatten#merge_fold semantics.
+///
+/// Preserves the Hash↔Array distinction that splicing would destroy:
+/// `item >> (sep >> item).repeat` stays a list even when `sep` is named.
+fn fold_sequence_ruby(items: &[AstNode], arena: &mut AstArena, input: &str) -> AstNode {
+    let mut acc: Option<AstNode> = None;
+    for item in items {
+        // Drop bare nils and empty arrays (absent optionals / failed
+        // maybes / zero-occurrence repetitions — Ruby can_flatten
+        // skips both and merges siblings). Treated as Nil above.
+        if matches!(item, AstNode::Nil) {
+            continue;
+        }
+        if let AstNode::Array {
+            pool_index,
+            length,
+        } = item
+        {
+            if *length == 0 {
+                continue;
+            }
+            // Inflate a (start, start) view so the merge_fold below
+            // can match on it; cheaper than cloning the array values
+            // into a new AstNode just to check.
+            let _ = *pool_index;
+        }
+        acc = Some(match acc {
+            None => item.clone(),
+            Some(left) => merge_fold_ruby(left, item.clone(), arena, input),
+        });
+    }
+    match acc {
+        Some(node) => node,
+        None => arena.intern_string(""),
+    }
+}
+
+/// Ruby `CanFlatten#merge_fold` — equal types merge, unequal hoist.
+fn merge_fold_ruby(left: AstNode, right: AstNode, arena: &mut AstArena, input: &str) -> AstNode {
+    match (&left, &right) {
+        // Hash + Hash → last-wins merge (duplicate .as labels in a pure sequence).
+        (
+            AstNode::Hash {
+                pool_index: lp,
+                length: ll,
+            },
+            AstNode::Hash {
+                pool_index: rp,
+                length: rl,
+            },
+        ) => {
+            let mut merged: Vec<(String, AstNode)> = arena
+                .get_hash_items(*lp as usize, *ll as usize)
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+            for (k, v) in arena.get_hash_items(*rp as usize, *rl as usize) {
+                if let Some(pos) = merged.iter().position(|(key, _)| key == &k) {
+                    merged[pos] = (k, v);
+                } else {
+                    merged.push((k, v));
+                }
+            }
+            let refs: Vec<(&str, AstNode)> = merged
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.clone()))
+                .collect();
+            let (pool_idx, len) = arena.store_hash(&refs);
+            AstNode::Hash {
+                pool_index: pool_idx,
+                length: len,
+            }
+        }
+
+        // Array + Array → concat.
+        (
+            AstNode::Array {
+                pool_index: lp,
+                length: ll,
+            },
+            AstNode::Array {
+                pool_index: rp,
+                length: rl,
+            },
+        ) => {
+            let mut out = arena
+                .get_array(*lp as usize, *ll as usize)
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>();
+            out.extend(
+                arena
+                    .get_array(*rp as usize, *rl as usize)
+                    .iter()
+                    .cloned(),
+            );
+            let (pool_idx, len) = arena.store_array(&out);
+            AstNode::Array {
+                pool_index: pool_idx,
+                length: len,
+            }
+        }
+
+        // Hash + Array → [hash] + array  (list pattern: first item + repetition).
+        (
+            AstNode::Hash { .. },
+            AstNode::Array {
+                pool_index,
+                length,
+            },
+        ) => {
+            let mut out = vec![left];
+            out.extend(
+                arena
+                    .get_array(*pool_index as usize, *length as usize)
+                    .iter()
+                    .cloned(),
+            );
+            let (pool_idx, len) = arena.store_array(&out);
+            AstNode::Array {
+                pool_index: pool_idx,
+                length: len,
+            }
+        }
+
+        // Array + Hash → array + [hash].
+        (
+            AstNode::Array {
+                pool_index,
+                length,
+            },
+            AstNode::Hash { .. },
+        ) => {
+            let mut out = arena
+                .get_array(*pool_index as usize, *length as usize)
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>();
+            out.push(right);
+            let (pool_idx, len) = arena.store_array(&out);
+            AstNode::Array {
+                pool_index: pool_idx,
+                length: len,
+            }
+        }
+
+        // Structured + stringlike → keep structured (unnamed tokens discarded
+        // when named captures / arrays are present). Covers #83 empty-maybe "".
+        (AstNode::Hash { .. } | AstNode::Array { .. }, other) if is_stringlike(other, arena) => {
+            left
+        }
+        (other, AstNode::Hash { .. } | AstNode::Array { .. }) if is_stringlike(other, arena) => {
+            right
+        }
+
+        // Both stringlike → concatenate.
+        (l, r) if is_stringlike(l, arena) && is_stringlike(r, arena) => {
+            let (ls, lo) = stringlike_text(l, arena, input);
+            let (rs, _) = stringlike_text(r, arena, input);
+            let joined = format!("{ls}{rs}");
+            match lo {
+                Some(off) => arena.intern_string_with_offset(&joined, off),
+                None => arena.intern_string(&joined),
+            }
+        }
+
+        // Fallback: prefer structured side, else right.
+        (AstNode::Hash { .. } | AstNode::Array { .. }, _) => left,
+        (_, AstNode::Hash { .. } | AstNode::Array { .. }) => right,
+        _ => right,
+    }
+}
+
+fn is_stringlike(node: &AstNode, arena: &AstArena) -> bool {
+    match node {
+        AstNode::InputRef { .. } => true,
+        AstNode::StringRef { pool_index } => {
+            let s = arena.get_string(*pool_index as usize);
+            !s.starts_with(':') // tags are metadata, not content
+        }
+        _ => false,
+    }
+}
+
+fn stringlike_text(node: &AstNode, arena: &AstArena, input: &str) -> (String, Option<u32>) {
+    match node {
+        AstNode::InputRef { offset, length } => {
+            let start = *offset as usize;
+            let end = start + *length as usize;
+            let s = input.get(start..end).unwrap_or("").to_string();
+            (s, Some(*offset))
+        }
+        AstNode::StringRef { pool_index } => {
+            let (s, _, _, _) = arena.get_string_parts(*pool_index as usize);
+            (s.to_string(), None)
+        }
+        _ => (String::new(), None),
     }
 }
 
@@ -1040,6 +1117,114 @@ mod tests {
             other => panic!("expected hash, got {:?}", other),
         };
         assert_eq!(text, "--IP1:");
+    }
+
+    #[test]
+    fn test_named_separator_repetition_pattern() {
+        // Same shape as test_separator_repetition_pattern but the
+        // separator is a named capture — exactly the EXPRESS
+        // `op_comma` / `op_delim` / `op_colon` pattern that the
+        // previous flatten_sequence dropped when the inner .as made
+        // sibling hashes multi-key. The fold-based path keeps the
+        // Hash+Array hoist.
+        let grammar = GrammarBuilder::new()
+            .rule(
+                "list",
+                seq(vec![
+                    dynamic(ref_("item")),
+                    dynamic(seq(vec![dynamic(ref_("sep")), dynamic(ref_("item"))]).many()),
+                ]),
+            )
+            .rule("item", re("[a-z]+").label("name"))
+            .rule("sep", str(",").label("sep"))
+            .build();
+
+        let (result, arena) = parse_and_transform("a,b,c", &grammar);
+
+        match result {
+            AstNode::Array { pool_index, length } => {
+                let items = arena.get_array(pool_index as usize, length as usize);
+                assert_eq!(
+                    items.len(),
+                    3,
+                    "should have 3 items in array, got {}: {:?}",
+                    items.len(),
+                    items
+                );
+                if let AstNode::Hash { pool_index: h_p, length: h_l } = &items[0] {
+                    let pairs = arena.get_hash_items(*h_p as usize, *h_l as usize);
+                    assert_eq!(pairs.len(), 1, "item 0 should have 1 key, got {:?}", pairs.iter().map(|(k,_)|k).collect::<Vec<_>>());
+                    assert_eq!(pairs[0].0, "name");
+                } else {
+                    panic!("expected name hash for item 0, got {:?}", items[0]);
+                }
+                for (i, item) in items.iter().enumerate().skip(1) {
+                    if let AstNode::Hash { pool_index: h_p, length: h_l } = item {
+                        let pairs = arena.get_hash_items(*h_p as usize, *h_l as usize);
+                        let keys: std::collections::HashSet<_> =
+                            pairs.iter().map(|(k, _)| k.as_str()).collect();
+                        assert!(
+                            keys.contains("name") && keys.contains("sep"),
+                            "item {i} should have sep+name keys, got {:?}",
+                            pairs.iter().map(|(k, _)| k).collect::<Vec<_>>()
+                        );
+                    } else {
+                        panic!("expected sep+name hash, got {:?}", item);
+                    }
+                }
+            }
+            AstNode::Hash { pool_index, length } => {
+                let pairs = arena.get_hash_items(pool_index as usize, length as usize);
+                panic!(
+                    "Expected array, got hash with {} keys: {:?}",
+                    pairs.len(),
+                    pairs.iter().map(|(k, _)| k).collect::<Vec<_>>()
+                );
+            }
+            other => panic!("Expected array, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_named_separator_multi_attribute() {
+        // EXACT EXPRESS shape from grammar/parser.rb:314 — the multi-
+        // parameter / multi-attribute bug. Each list item is either
+        // {id} (first) or {comma, id} (rest), hoisted into an Array
+        // by the fold — every id survives, not just the last.
+        let grammar = GrammarBuilder::new()
+            .rule(
+                "list",
+                seq(vec![
+                    dynamic(ref_("id")),
+                    dynamic(seq(vec![dynamic(ref_("comma")), dynamic(ref_("id"))]).many()),
+                ]),
+            )
+            .rule("id", re("[a-z]+").label("id"))
+            .rule("comma", str(",").label("comma"))
+            .build();
+
+        let (result, arena) = parse_and_transform("a,b,c,d", &grammar);
+
+        match result {
+            AstNode::Array { pool_index, length } => {
+                let items = arena.get_array(pool_index as usize, length as usize);
+                assert_eq!(items.len(), 4, "should have 4 items, got {}", items.len());
+                for (i, item) in items.iter().enumerate() {
+                    if let AstNode::Hash { pool_index: h_p, length: h_l } = item {
+                        let pairs = arena.get_hash_items(*h_p as usize, *h_l as usize);
+                        let keys: std::collections::HashSet<_> =
+                            pairs.iter().map(|(k, _)| k.as_str()).collect();
+                        assert!(keys.contains("id"), "item {i} missing id");
+                        if i > 0 {
+                            assert!(keys.contains("comma"), "item {i} missing comma");
+                        }
+                    } else {
+                        panic!("expected id hash, got {:?}", item);
+                    }
+                }
+            }
+            other => panic!("Expected array, got {:?}", other),
+        }
     }
 
     #[test]
