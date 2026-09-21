@@ -4,11 +4,12 @@
 //! A run of members ("scan while byte is in the class") is the hot
 //! loop of identifier/whitespace/digit tokens. Plans decompose class
 //! membership into a bounded number of closed ranges (a stray single
-//! byte is a degenerate range); long runs scan 16-byte blocks with a
-//! baseline-vector membership kernel (NEON on aarch64, SSE2 on
-//! x86_64, scalar elsewhere) and only the block that ends the run is
-//! searched byte-wise. Anything that does not decompose into at most
-//! eight ranges falls back to a 256-entry table.
+//! byte is a degenerate range); long runs scan 32-byte windows with a
+//! vector membership kernel (paired NEON loads on aarch64, AVX2 with
+//! runtime detection then SSE2 on x86_64, scalar elsewhere) and only
+//! the block that ends the run is searched byte-wise. Anything that
+//! does not decompose into at most eight ranges falls back to a
+//! 256-entry table.
 //!
 //! Both entry points preserve their engine's existing stepping
 //! semantics:
