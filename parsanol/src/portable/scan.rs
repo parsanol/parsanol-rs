@@ -152,7 +152,7 @@ fn window_all_members<const N: usize>(r: [(u8, u8); N], lo16: &[u8], hi16: &[u8]
             // SAFETY: guarded by the cached runtime detection; both
             // windows are 16 initialized bytes forming one aligned
             // 32-byte window.
-            unsafe { window32_all_members_avx2::<N>(r, lo16, hi16) }
+            unsafe { x86_wide::window32_all_members_avx2::<N>(r, lo16, hi16) }
         } else {
             block_first_non_member::<N>(r, lo16).is_none()
                 && block_first_non_member::<N>(r, hi16).is_none()
