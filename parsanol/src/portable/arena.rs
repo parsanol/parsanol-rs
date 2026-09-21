@@ -500,6 +500,56 @@ impl AstArena {
         result
     }
 
+    /// Hash items with interned key pool indexes instead of copied
+    /// strings. Keys are interned, so equal content implies equal
+    /// index: callers compare keys by `u32` equality and only hit
+    /// `get_string` when the text itself is needed. The transform's
+    /// sequence merge runs this per node, so skipping the per-key
+    /// String allocation is the normalize hot path.
+    #[inline]
+    pub fn get_hash_pairs_indexed(&self, pool_index: usize, len: usize) -> Vec<(u32, AstNode)> {
+        let mut result = Vec::with_capacity(len);
+        for i in 0..len {
+            let entry = &self.hash_pool[pool_index + i];
+            result.push((entry.key_pool_index, entry.value.clone()));
+        }
+        result
+    }
+
+    /// Store a hash whose keys are already interned pool indexes.
+    #[inline]
+    pub fn store_hash_indexed(&mut self, pairs: &[(u32, AstNode)]) -> (u32, u32) {
+        let start = self.hash_pool.len() as u32;
+        for (key_pool_index, value) in pairs {
+            self.hash_pool.push(HashPoolEntry {
+                key_pool_index: *key_pool_index,
+                value: value.clone(),
+            });
+        }
+        (start, pairs.len() as u32)
+    }
+
+    /// Look up (or intern) a key and return its pool index — the
+    /// indexed-key counterpart of `find_interned_string` for callers
+    /// that join interned and literal keys.
+    #[inline]
+    pub fn intern_key(&mut self, key: &str) -> u32 {
+        if let Some(idx) = self.find_interned_string(key) {
+            return idx as u32;
+        }
+        let offset = self.string_data.len() as u32;
+        let length = key.len() as u32;
+        self.string_data.extend_from_slice(key.as_bytes());
+        self.string_pool.push(StringPoolEntry {
+            offset,
+            length,
+            input_offset: 0,
+        });
+        let idx = (self.string_pool.len() - 1) as u32;
+        self.string_hash.insert(self.hash_string(key), idx as usize);
+        idx
+    }
+
     /// Find an interned string in the pool
     ///
     /// Uses hash-based O(1) lookup for all pool sizes since we maintain
