@@ -742,11 +742,7 @@ fn merge_fold_ruby(left: AstNode, right: AstNode, arena: &mut AstArena, input: &
                 length: rl,
             },
         ) => {
-            let mut out = arena
-                .get_array(*lp as usize, *ll as usize)
-                .iter()
-                .cloned()
-                .collect::<Vec<_>>();
+            let mut out = arena.get_array(*lp as usize, *ll as usize).to_vec();
             out.extend(arena.get_array(*rp as usize, *rl as usize).iter().cloned());
             let (pool_idx, len) = arena.store_array(&out);
             AstNode::Array {
@@ -773,11 +769,7 @@ fn merge_fold_ruby(left: AstNode, right: AstNode, arena: &mut AstArena, input: &
 
         // Array + Hash → array + [hash].
         (AstNode::Array { pool_index, length }, AstNode::Hash { .. }) => {
-            let mut out = arena
-                .get_array(*pool_index as usize, *length as usize)
-                .iter()
-                .cloned()
-                .collect::<Vec<_>>();
+            let mut out = arena.get_array(*pool_index as usize, *length as usize).to_vec();
             out.push(right);
             let (pool_idx, len) = arena.store_array(&out);
             AstNode::Array {

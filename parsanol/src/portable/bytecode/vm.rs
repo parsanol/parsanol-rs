@@ -1290,6 +1290,7 @@ pub fn parse_with_vm_diag(
 
 /// Outcome of a budget-capped VM parse.
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)] // Parsed carries the parse result by value on a short-lived path
 pub enum VmCappedOutcome {
     /// The parse ran to completion (or a real failure) within budget.
     Parsed {
