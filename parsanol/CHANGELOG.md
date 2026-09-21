@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Other
 
+- Release v0.8.6 ([#116](https://github.com/parsanol/parsanol-rs/pull/116)) by @[object]
+
+### Other
+
 - Update Cargo.toml dependencies by @[object]
 
 ### Added

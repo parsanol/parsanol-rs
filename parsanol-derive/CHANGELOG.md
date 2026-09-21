@@ -9,4 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Other
 
+- Release v0.8.6 ([#116](https://github.com/parsanol/parsanol-rs/pull/116)) by @[object]
+- Bump the production-dependencies group across 1 directory with 2 updates ([#117](https://github.com/parsanol/parsanol-rs/pull/117)) by @[object]
+
+### Other
+
 - Bump the production-dependencies group across 1 directory with 2 updates ([#117](https://github.com/parsanol/parsanol-rs/pull/117)) by @[object]
