@@ -127,9 +127,7 @@ impl RubyDynamicCallback {
                 // Contract (GH-80): [atom, post_call_captures]. Unwrap
                 // before resolving; the bare-atom shape stays valid.
                 let atom = if value.is_kind_of(ruby.class_array()) {
-                    let len: usize = value
-                        .funcall("size", ())
-                        .unwrap_or(0);
+                    let len: usize = value.funcall("size", ()).unwrap_or(0);
                     if len == 2 {
                         value.funcall("first", ()).unwrap_or(value)
                     } else {
