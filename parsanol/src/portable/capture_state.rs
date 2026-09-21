@@ -145,7 +145,7 @@ enum CaptureEntry {
 ///
 /// // Store a capture
 /// state.store("name", CaptureValue::new(0, 5));
-/// assert_eq!(state.get("name").unwrap().length, 5);
+/// assert_eq!(state.get("name").unwrap().span().map(|s| s.1), Some(5));
 ///
 /// // Push a scope (isolates inner captures)
 /// state.push_scope();
