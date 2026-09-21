@@ -169,6 +169,10 @@ pub struct BytecodeVM<'a> {
     /// callbacks (TODO.perf/5): their outcomes depend on capture state,
     /// which the memo key ignores.
     memo_enabled: bool,
+
+    /// Per-opcode execution counts (parsanol-rs#100 item 2): None
+    /// until `enable_profiling`.
+    opcode_counts: Option<Box<[u64]>>,
 }
 
 impl<'a> BytecodeVM<'a> {
@@ -205,12 +209,26 @@ impl<'a> BytecodeVM<'a> {
             budget_exceeded: false,
             memo: std::collections::HashMap::new(),
             memo_enabled: !program.has_invoke_dynamic(),
+            opcode_counts: None,
         }
     }
 
     /// Number of backtracks performed during the run.
     pub fn backtrack_count(&self) -> u64 {
         self.backtracks
+    }
+
+    /// Start counting executed instructions per opcode discriminant
+    /// (parsanol-rs#100): one counter per opcode value. Off by
+    /// default; a single counted branch on the dispatch loop.
+    pub fn enable_profiling(&mut self) {
+        self.opcode_counts = Some(vec![0u64; 256].into_boxed_slice());
+    }
+
+    /// Per-opcode execution counts, indexed by the instruction's
+    /// opcode discriminant (see `Instruction::opcode`).
+    pub fn opcode_counts(&self) -> Option<&[u64]> {
+        self.opcode_counts.as_deref()
     }
 
     /// Whether any terminal failure was tracked during the run.
@@ -359,6 +377,9 @@ impl<'a> BytecodeVM<'a> {
     }
 
     fn execute_instruction(&mut self, instr: &Instruction) -> Result<ExecutionResult, ParseError> {
+        if let Some(counts) = &mut self.opcode_counts {
+            counts[instr.opcode() as usize] += 1;
+        }
         match instr {
             // ========================================================================
             // Matching Instructions

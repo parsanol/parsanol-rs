@@ -701,3 +701,73 @@ mod dispatch_cache {
         assert_eq!(CALLS.load(Ordering::SeqCst), calls + 1);
     }
 }
+
+mod profiling {
+    use crate::portable::arena::AstArena;
+    use crate::portable::grammar::{Atom, Grammar, RepetitionTag};
+    use crate::portable::parser::PortableParser;
+
+    /// parsanol-rs#100 item 2: per-atom dispatch counts identify the
+    /// grammar's hot atoms without a debugger.
+    #[test]
+    fn dispatch_counts_rank_hot_atoms() {
+        let mut g = Grammar::new();
+        let a = g.add_atom(Atom::Str {
+            pattern: "a".to_string(),
+        });
+        let rep = g.add_atom(Atom::Repetition {
+            atom: a,
+            min: 0,
+            max: None,
+            tag: RepetitionTag::Repetition,
+        });
+        g.root = rep;
+
+        let mut arena = AstArena::new();
+        let mut parser = PortableParser::new(&g, "aaaa", &mut arena);
+        assert!(parser.profile_summary().is_empty());
+        parser.enable_profiling();
+        parser.parse().expect("parse");
+
+        let counts = parser.dispatch_counts().expect("counts");
+        // 'a' is attempted at 0..=4 (the fifth fails): hotter than the
+        // repetition's two attempts.
+        assert!(counts[a] > counts[rep]);
+        let summary = parser.profile_summary();
+        assert_eq!(summary[0].0, a, "hottest atom first");
+    }
+
+    /// parsanol-rs#100 item 4: parse() returns the raw tagged tree —
+    /// a stable, documented shape — without parslet normalization.
+    #[test]
+    fn parse_returns_the_raw_tagged_tree() {
+        let mut g = Grammar::new();
+        let a = g.add_atom(Atom::Str {
+            pattern: "a".to_string(),
+        });
+        let named = g.add_atom(Atom::Named {
+            name: "x".to_string(),
+            atom: a,
+        });
+        g.root = named;
+
+        let mut arena = AstArena::new();
+        let mut parser = PortableParser::new(&g, "a", &mut arena);
+        let tree = parser.parse().expect("parse");
+
+        use crate::portable::ast::AstNode;
+        let AstNode::Hash { pool_index, length } = tree else {
+            panic!("named capture is a hash envelope");
+        };
+        let items = arena.get_hash_items(pool_index as usize, length as usize);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].0, "x");
+        assert!(matches!(
+            items[0].1,
+            AstNode::InputRef {
+                offset: 0,
+                length: 1
+            }
+        ));
+    }
+}
