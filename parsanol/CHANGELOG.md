@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Qualify the AVX2 kernel through its module (x86 build) by @[object]
+
+### Other
+
+- Scan module header describes the wide-window kernels by @[object]
+- Runnable latency gate + two retention fixes (TODO.perf/8) by @[object]
+- 32-byte window kernels (TODO.perf/6) by @[object]
+
 ### Added
 
 - Incremental parsing sessions through the Ruby bridge (TODO.perf/4) by @[object]
