@@ -16,7 +16,6 @@
 mod config;
 mod context;
 mod governor;
-mod simd;
 
 #[cfg(test)]
 mod tests;
@@ -190,6 +189,10 @@ pub struct PortableParser<'a> {
     /// reparsing, TODO.perf/4). Hits on snapshot entries adopt their
     /// node data into the live arena.
     snapshot_arena: Option<&'a AstArena>,
+
+    /// Per-atom dispatch counts (parsanol-rs#100 item 2): None until
+    /// `enable_profiling`, then one counter per atom.
+    dispatch_counts: Option<Box<[u64]>>,
 }
 
 impl<'a> PortableParser<'a> {
@@ -253,6 +256,7 @@ impl<'a> PortableParser<'a> {
             rollback_on_failure,
             dynamic_dependent: dynamic_dependence(grammar),
             snapshot_arena,
+            dispatch_counts: None,
         }
     }
 
@@ -285,6 +289,7 @@ impl<'a> PortableParser<'a> {
             rollback_on_failure: false,
             dynamic_dependent: dynamic_dependence(grammar),
             snapshot_arena: None,
+            dispatch_counts: None,
         }
     }
 
@@ -334,6 +339,35 @@ impl<'a> PortableParser<'a> {
     #[inline]
     pub fn capture_state_mut(&mut self) -> &mut CaptureState {
         &mut self.capture_state
+    }
+
+    /// Start counting dispatches per atom (parsanol-rs#100): one
+    /// counter per grammar atom, incremented every time the atom is
+    /// attempted at any position. Off by default; enabling allocates
+    /// one zeroed u64 per atom and adds a single counted branch to
+    /// the dispatch path.
+    pub fn enable_profiling(&mut self) {
+        let n = self.grammar.atom_count();
+        self.dispatch_counts = Some(vec![0u64; n].into_boxed_slice());
+    }
+
+    /// Per-atom dispatch counts, indexed by atom id, when profiling
+    /// is enabled.
+    pub fn dispatch_counts(&self) -> Option<&[u64]> {
+        self.dispatch_counts.as_deref()
+    }
+
+    /// Atom ids sorted by dispatch count, hottest first ( profiling
+    /// must be enabled; empty otherwise).
+    pub fn profile_summary(&self) -> Vec<(usize, u64)> {
+        match &self.dispatch_counts {
+            None => Vec::new(),
+            Some(counts) => {
+                let mut summary: Vec<(usize, u64)> = counts.iter().copied().enumerate().collect();
+                summary.sort_by_key(|&(_, c)| std::cmp::Reverse(c));
+                summary
+            }
+        }
     }
 
     /// Parse from a specific position (for dynamic atom support)
@@ -394,6 +428,31 @@ impl<'a> PortableParser<'a> {
 
     /// Parse the input
     #[inline]
+    /// Parse, returning the RAW tagged tree (parsanol-rs#100 item 4).
+    ///
+    /// # The raw tree shape (supported, stable API)
+    ///
+    /// The returned `AstNode` graph is the engine's own value model,
+    /// readable against the arena this parser was built with:
+    ///
+    /// - `InputRef { offset, length }` — a matched input span; the
+    ///   text is `&input[offset..offset + length]`. Zero-copy.
+    /// - `Array { pool_index, length }` — a tagged envelope whose
+    ///   first element is the tag `":sequence"` or `":repetition"`
+    ///   (an interned `StringRef`), followed by the children, one per
+    ///   matched child atom (sequences) or iteration (repetitions).
+    ///   Fetch items with `arena.get_array(pool_index, length)`.
+    /// - `Hash { pool_index, length }` — a named capture: one pair,
+    ///   the key is the capture name. `arena.get_hash_items`.
+    /// - `StringRef { pool_index }` — engine-generated literals
+    ///   (e.g. an empty sequence flattening to `""`).
+    /// - `Nil` — an ignored atom's contribution.
+    ///
+    /// Consumers that walk this shape directly skip the parslet
+    /// normalization (`to_parslet_compatible`), which measures
+    /// 12–14% of some pipelines. The parslet-compatible view remains
+    /// available wherever the engine applies it (the Ruby bridge,
+    /// `parse_with_builder`).
     pub fn parse(&mut self) -> Result<AstNode, ParseError> {
         self.check_input_size()?;
         self.start_timeout_timer();
@@ -497,6 +556,9 @@ impl<'a> PortableParser<'a> {
     /// have many alternatives (like EXPRESS with 2273 atoms).
     #[inline]
     pub fn try_atom(&mut self, atom_id: usize, pos: usize) -> Result<ParseResult, ParseError> {
+        if let Some(counts) = &mut self.dispatch_counts {
+            counts[atom_id] += 1;
+        }
         self.check_resources()?;
 
         // Skip cache for atoms that don't benefit from memoization
