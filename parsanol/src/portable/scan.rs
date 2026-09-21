@@ -540,7 +540,10 @@ mod property_vs_scalar {
             }
             let member = |b: u8| members.iter().any(|(lo, hi)| b >= *lo && b <= *hi);
             let plan = ScanPlan::from_members(
-                &(0u16..256).filter(|b| member(*b as u8)).map(|b| b as u8).collect::<Vec<u8>>(),
+                &(0u16..256)
+                    .filter(|b| member(*b as u8))
+                    .map(|b| b as u8)
+                    .collect::<Vec<u8>>(),
             );
 
             let len = 1 + next() as usize % 100;
@@ -567,4 +570,3 @@ mod property_vs_scalar {
         }
     }
 }
-
