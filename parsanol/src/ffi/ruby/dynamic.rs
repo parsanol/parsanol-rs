@@ -124,8 +124,22 @@ impl RubyDynamicCallback {
                 if trace {
                     eprintln!("DYN-BRIDGE: invoked ok");
                 }
+                // Contract (GH-80): [atom, post_call_captures]. Unwrap
+                // before resolving; the bare-atom shape stays valid.
+                let atom = if value.is_kind_of(ruby.class_array()) {
+                    let len: usize = value
+                        .funcall("size", ())
+                        .unwrap_or(0);
+                    if len == 2 {
+                        value.funcall("first", ()).unwrap_or(value)
+                    } else {
+                        value
+                    }
+                } else {
+                    value
+                };
                 self.readback_capture_writes(&ruby, &value, &seeded);
-                Some(value)
+                Some(atom)
             }
             Ok(_) => {
                 if trace {
