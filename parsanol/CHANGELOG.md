@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Tree parity ([#83](https://github.com/parsanol/parsanol-rs/pull/83)), EOF scan ([#106](https://github.com/parsanol/parsanol-rs/pull/106)), dispatch-cache memory ([#84](https://github.com/parsanol/parsanol-rs/pull/84)) ([#107](https://github.com/parsanol/parsanol-rs/pull/107)) by @[object]
+
 ### Other
 
 - Merge pull request #103 from parsanol/release-plz-2026-09-21T04-34-13Z by @[object]
