@@ -146,8 +146,109 @@ impl<'a> GrammarAnalyzer<'a> {
         self.detect_infinite_loops(&mut warnings);
         self.detect_unreachable_alternatives(&mut warnings);
         self.detect_excessive_backtracking(&mut warnings);
+        self.detect_overlapping_choice_prefixes(&mut warnings);
 
         warnings
+    }
+
+    /// Terminal-starter key: what input class an atom can begin with.
+    /// Str keys by literal, Re by pattern; recursion stops at Refs
+    /// (too deep) and is depth-capped.
+    fn first_terminals(
+        &mut self,
+        atom_id: usize,
+        out: &mut std::collections::HashSet<String>,
+        depth: usize,
+        seen: &mut std::collections::HashSet<usize>,
+    ) {
+        if depth > 16 || !seen.insert(atom_id) {
+            return;
+        }
+        let suffix = |s: &str| format!("re:{s}");
+        if let Some(atom) = self.grammar.get_atom(atom_id) {
+            match atom {
+                Atom::Str { pattern } => {
+                    // Character-level: "id" and "id2" share the 'i'
+                    // starter, which is what makes the choice re-attempt.
+                    if let Some(c) = pattern.chars().next() {
+                        out.insert(format!("char:{c}"));
+                    }
+                }
+                Atom::Re { pattern } => {
+                    out.insert(suffix(pattern));
+                }
+                Atom::Sequence { atoms } => {
+                    for &a in atoms {
+                        self.first_terminals(a, out, depth + 1, seen);
+                        if !self.is_nullable(a) {
+                            break;
+                        }
+                    }
+                }
+                Atom::Alternative { atoms } => {
+                    for &a in atoms {
+                        self.first_terminals(a, out, depth + 1, seen);
+                    }
+                }
+                Atom::Repetition { atom, .. }
+                | Atom::Named { atom, .. }
+                | Atom::Entity { atom }
+                | Atom::Ignore { atom }
+                | Atom::Lookahead { atom, .. }
+                | Atom::Capture { atom, .. }
+                | Atom::Scope { atom } => {
+                    self.first_terminals(*atom, out, depth + 1, seen);
+                }
+                _ => {}
+            }
+        }
+        seen.remove(&atom_id);
+    }
+
+    /// Backtracking-hotspot approximation (#100 item 5): an ordered
+    /// choice whose alternatives share first terminals attempts every
+    /// sharing branch at each matching position — the shape the
+    /// bytecode VM's backtracking budget measures on backtracking-heavy
+    /// grammars (e.g. expression-alternative chains).
+    fn detect_overlapping_choice_prefixes(&mut self, warnings: &mut Vec<GrammarWarning>) {
+        for (atom_id, atom) in self.grammar.atoms.iter().enumerate() {
+            let Atom::Alternative { atoms } = atom else {
+                continue;
+            };
+            if atoms.len() < 2 {
+                continue;
+            }
+            let mut branch_firsts: Vec<std::collections::HashSet<String>> =
+                Vec::with_capacity(atoms.len());
+            for &branch in atoms {
+                let mut set = std::collections::HashSet::new();
+                self.first_terminals(branch, &mut set, 0, &mut std::collections::HashSet::new());
+                branch_firsts.push(set);
+            }
+            // For each terminal, how many branches attempt it first?
+            let mut attempts: std::collections::HashMap<&String, usize> =
+                std::collections::HashMap::new();
+            for set in &branch_firsts {
+                for key in set {
+                    *attempts.entry(key).or_insert(0) += 1;
+                }
+            }
+            if let Some((key, count)) = attempts.iter().max_by_key(|(_, c)| **c) {
+                if *count >= 2 {
+                    warnings.push(
+                        GrammarWarning::new(
+                            WarningKind::ExcessiveBacktracking,
+                            atom_id,
+                            format!(
+                                "ordered choice attempts {count} of {} alternatives at positions matching {key:?} (overlapping first sets): left-factor or reorder branches",
+                                atoms.len()
+                            ),
+                        )
+                        .with_related(atoms.clone()),
+                    );
+                }
+            }
+        }
     }
 
     /// Detect left recursion (direct and indirect)
@@ -792,5 +893,45 @@ mod tests {
         assert!(reachable.contains(&1));
         assert!(reachable.contains(&3));
         assert!(!reachable.contains(&2));
+    }
+
+    #[test]
+    fn test_detect_overlapping_choice_prefixes() {
+        // expression-alternative chain: two branches starting with the
+        // same first terminal class
+        let mut grammar = Grammar::new();
+        let a = grammar.add_atom(Atom::Str {
+            pattern: "id".to_string(),
+        });
+        let b = grammar.add_atom(Atom::Str {
+            pattern: "id2".to_string(),
+        });
+        let c = grammar.add_atom(Atom::Str {
+            pattern: "num".to_string(),
+        });
+        let alt = grammar.add_atom(Atom::Alternative {
+            atoms: vec![a, b, c],
+        });
+        grammar.root = alt;
+
+        let warnings = GrammarAnalyzer::new(&grammar).analyze();
+        let hit = warnings.iter().any(|w| {
+            w.kind == WarningKind::ExcessiveBacktracking
+                && w.message.contains("attempts 2 of 3 alternatives")
+        });
+        assert!(hit, "expected overlapping-choice-prefix warning");
+
+        // Disjoint branches must not warn.
+        let mut grammar = Grammar::new();
+        let x = grammar.add_atom(Atom::Str {
+            pattern: "x".to_string(),
+        });
+        let y = grammar.add_atom(Atom::Str {
+            pattern: "y".to_string(),
+        });
+        let alt = grammar.add_atom(Atom::Alternative { atoms: vec![x, y] });
+        grammar.root = alt;
+        let warnings = GrammarAnalyzer::new(&grammar).analyze();
+        assert!(warnings.iter().all(|w| !w.message.contains("alternatives")));
     }
 }

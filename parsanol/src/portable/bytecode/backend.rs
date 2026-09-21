@@ -33,6 +33,7 @@ pub use crate::portable::backend::{Backend, GrammarAnalysis};
 use crate::portable::arena::AstArena;
 use crate::portable::ast::{ParseError, ParseResult};
 use crate::portable::bytecode::compiler::Compiler;
+use crate::portable::bytecode::program::Program;
 use crate::portable::bytecode::vm::{BytecodeVM, VMConfig};
 use crate::portable::grammar::Grammar;
 use crate::portable::parser::PortableParser;
@@ -43,6 +44,9 @@ pub struct Parser {
     backend: Backend,
     vm_config: VMConfig,
     analysis: Option<GrammarAnalysis>,
+    /// Compile-once program (#90): when set, the bytecode backend uses
+    /// it instead of recompiling per parse.
+    program: Option<Program>,
 }
 
 impl Parser {
@@ -54,6 +58,62 @@ impl Parser {
             backend,
             vm_config: VMConfig::default(),
             analysis: None,
+            program: None,
+        }
+    }
+
+    /// Attach a precompiled program (#90): the bytecode backend uses
+    /// it as-is, amortizing compilation across parses. The grammar
+    /// passed to `Parser::new` must be the one the program came from.
+    #[inline]
+    pub fn with_program(mut self, program: Program) -> Self {
+        self.program = Some(program);
+        self
+    }
+
+    /// Compile (or return the memoized) program for the bytecode
+    /// backend, so callers can keep one `Program` alive compile-once.
+    pub fn compile_program(&mut self) -> Result<&Program, ParseError> {
+        if self.program.is_none() {
+            self.program = Some(Compiler::new(self.grammar.clone()).compile().map_err(|e| {
+                ParseError::Internal {
+                    message: format!("Compilation error: {}", e),
+                }
+            })?);
+        }
+        Ok(self.program.as_ref().expect("program compiled"))
+    }
+
+    /// Parse into a caller-owned arena (#90): pool-backed results
+    /// (StringRef/Array/Hash indexes) stay consumable by arena-based
+    /// utilities, matching `PortableParser`'s ownership model.
+    pub fn parse_into(
+        &mut self,
+        arena: &mut AstArena,
+        input: &str,
+    ) -> Result<ParseResult, ParseError> {
+        let effective_backend = match self.backend {
+            Backend::Auto => self.analysis().recommended_backend(),
+            other => other,
+        };
+
+        match effective_backend {
+            Backend::Packrat => {
+                let mut parser = PortableParser::new(&self.grammar, input, arena);
+                parser.parse_with_end_pos()
+            }
+            Backend::Bytecode => {
+                let vm_config = self.vm_config.clone();
+                let program = self.compile_program()?;
+                let mut vm = BytecodeVM::new(program, input, arena, vm_config);
+                let result = vm.run()?;
+                Ok(ParseResult {
+                    value: result.value,
+                    end_pos: result.end_pos,
+                    capture_state: None,
+                })
+            }
+            Backend::Auto => unreachable!(),
         }
     }
 
@@ -98,45 +158,8 @@ impl Parser {
 
     /// Parse input and return the result
     pub fn parse(&mut self, input: &str) -> Result<ParseResult, ParseError> {
-        let effective_backend = match self.backend {
-            Backend::Auto => self.analysis().recommended_backend(),
-            other => other,
-        };
-
-        match effective_backend {
-            Backend::Packrat => self.parse_packrat(input),
-            Backend::Bytecode => self.parse_bytecode(input),
-            Backend::Auto => unreachable!(),
-        }
-    }
-
-    /// Parse using packrat backend
-    fn parse_packrat(&mut self, input: &str) -> Result<ParseResult, ParseError> {
         let mut arena = AstArena::for_input(input.len());
-        let mut parser = PortableParser::new(&self.grammar, input, &mut arena);
-        parser.parse_with_end_pos()
-    }
-
-    /// Parse using bytecode backend
-    fn parse_bytecode(&mut self, input: &str) -> Result<ParseResult, ParseError> {
-        // Compile grammar to program
-        let program =
-            Compiler::new(self.grammar.clone())
-                .compile()
-                .map_err(|e| ParseError::Internal {
-                    message: format!("Compilation error: {}", e),
-                })?;
-
-        // Execute program
-        let mut arena = AstArena::for_input(input.len());
-        let mut vm = BytecodeVM::new(&program, input, &mut arena, self.vm_config.clone());
-        let result = vm.run()?;
-
-        Ok(ParseResult {
-            value: result.value,
-            end_pos: result.end_pos,
-            capture_state: None,
-        })
+        self.parse_into(&mut arena, input)
     }
 
     /// Get the effective backend (resolves Auto)
