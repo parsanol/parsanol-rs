@@ -1101,12 +1101,8 @@ impl<'a> PortableParser<'a> {
             super::parslet_transform::to_parslet_compatible(&result.value, self.arena, self.input);
         let node_value = super::transform::ast_to_value(&shaped, self.arena, self.input);
         let fingerprint = super::capture_state::value_fingerprint(&node_value);
-        self.capture_state.store_with_node(
-            name,
-            capture_value,
-            node_value,
-            fingerprint,
-        );
+        self.capture_state
+            .store_with_node(name, capture_value, node_value, fingerprint);
 
         // Return result with capture state
         Ok(ParseResult {
