@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Capture writes across the bridge, dispatch caching, dynamic incremental sessions (parsanol-ruby#80) by @[object]
+
+### Fixed
+
+- Unwrap the [atom, captures] pair before fragment resolution by @[object]
+
+### Other
+
+- Capture-state example uses the span accessor (doc-test) by @[object]
+- Rustfmt by @[object]
+
 ### Fixed
 
 - Qualify the AVX2 kernel through its module (x86 build) by @[object]
