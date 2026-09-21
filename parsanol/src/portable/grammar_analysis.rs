@@ -932,8 +932,6 @@ mod tests {
         let alt = grammar.add_atom(Atom::Alternative { atoms: vec![x, y] });
         grammar.root = alt;
         let warnings = GrammarAnalyzer::new(&grammar).analyze();
-        assert!(warnings
-            .iter()
-            .all(|w| !w.message.contains("alternatives")));
+        assert!(warnings.iter().all(|w| !w.message.contains("alternatives")));
     }
 }
