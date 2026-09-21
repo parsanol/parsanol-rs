@@ -1165,16 +1165,10 @@ impl<'a> PortableParser<'a> {
             return self.parse_fragment(&fragment, root, pos);
         }
 
-        // Create context for callback. Capture subtrees (materialized
-        // at capture time, self-contained) ride along so the block
-        // reads the parsed TREE (Capture#apply parity).
-        let node_values = self.capture_state.node_values();
-        let ctx = DynamicContext::with_node_values(
-            self.input,
-            pos,
-            self.capture_state.clone(),
-            node_values,
-        );
+        // Create context for callback. Capture subtrees ride inside
+        // the capture state so the block reads the parsed TREE
+        // (Capture#apply parity).
+        let ctx = DynamicContext::new(self.input, pos, self.capture_state.clone());
 
         // Invoke callback: a fragment grammar (self-consistent atom
         // indices, the shape host bridges produce) wins over a single
