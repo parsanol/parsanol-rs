@@ -40,7 +40,9 @@ pub const MAX_SCOPE_DEPTH: usize = 1000;
 /// structure so the dispatch cache can key on it soundly.
 #[derive(Debug, Clone)]
 pub struct NodeCapture {
+    /// The parsed subtree as a self-contained portable value.
     pub value: Value,
+    /// Content fingerprint of `value` (dispatch-cache signature input).
     pub fingerprint: u64,
 }
 
