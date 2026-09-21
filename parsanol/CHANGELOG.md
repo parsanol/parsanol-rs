@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Compile-once program, parse_into arena ownership; hotspot warning re-land ([#115](https://github.com/parsanol/parsanol-rs/pull/115)) by @[object]
+
 ### Other
 
 - Selective rule memoization for dynamic programs (#100, #90) ([#113](https://github.com/parsanol/parsanol-rs/pull/113)) by @[object]
