@@ -216,8 +216,44 @@ fn build_ruby_context(ctx: &DynamicContext, ruby: &Ruby) -> Option<Value> {
             let _ = captures_hash.aset(ruby.to_symbol(name.as_str()), text.as_ref());
         }
     }
+    // Capture-atom captures expose their parsed subtree (capture
+    // semantics: blocks read the TREE, mirroring Capture#apply).
+    // Text stays the fallback for captures without a subtree.
+    for (name, value) in ctx.captures.node_values() {
+        let _ = captures_hash.aset(
+            ruby.to_symbol(name.as_str()),
+            portable_to_ruby(&value, ruby),
+        );
+    }
     let _ = hash.aset(ruby.to_symbol("captures"), captures_hash);
     Some(hash.into_value_with(ruby))
+}
+
+/// Convert a portable transform Value into a Ruby value (symbol-keyed
+/// hashes, matching the flattened-tree shape the Ruby engine stores).
+fn portable_to_ruby(value: &crate::portable::transform::Value, ruby: &Ruby) -> Value {
+    use crate::portable::transform::Value as PV;
+    match value {
+        PV::Nil => None::<i8>.into_value_with(ruby),
+        PV::Bool(b) => b.into_value_with(ruby),
+        PV::Int(i) => i.into_value_with(ruby),
+        PV::Float(f) => f.into_value_with(ruby),
+        PV::String(s) => ruby.str_new(s).into_value_with(ruby),
+        PV::Array(items) => {
+            let ary = ruby.ary_new_capa(items.len());
+            for item in items {
+                let _ = ary.push(portable_to_ruby(item, ruby));
+            }
+            ary.into_value_with(ruby)
+        }
+        PV::Hash(map) => {
+            let hash = ruby.hash_new();
+            for (k, v) in map {
+                let _ = hash.aset(ruby.to_symbol(k.as_str()), portable_to_ruby(v, ruby));
+            }
+            hash.into_value_with(ruby)
+        }
+    }
 }
 
 /// Register a Ruby callback with the global dynamic callback registry

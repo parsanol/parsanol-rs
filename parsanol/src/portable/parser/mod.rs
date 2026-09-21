@@ -1090,9 +1090,19 @@ impl<'a> PortableParser<'a> {
     ) -> Result<ParseResult, ParseError> {
         let result = self.try_atom(atom_id, pos)?;
 
-        // Store the capture
+        // Store the capture: the span keeps text access cheap; the
+        // parsed subtree travels with it because capture semantics
+        // expose the TREE to dynamic blocks (Capture#apply parity,
+        // coradoc block_style_exact verbatim cast). The subtree is
+        // materialized to a self-contained portable value here so it
+        // survives fragment-parser crossings without arena ties.
         let capture_value = super::capture_state::CaptureValue::new(pos, result.end_pos - pos);
-        self.capture_state.store(name, capture_value);
+        let shaped =
+            super::parslet_transform::to_parslet_compatible(&result.value, self.arena, self.input);
+        let node_value = super::transform::ast_to_value(&shaped, self.arena, self.input);
+        let fingerprint = super::capture_state::value_fingerprint(&node_value);
+        self.capture_state
+            .store_with_node(name, capture_value, node_value, fingerprint);
 
         // Return result with capture state
         Ok(ParseResult {
@@ -1140,17 +1150,11 @@ impl<'a> PortableParser<'a> {
         // the RAII guard decrements on every exit path.
         let _guard = super::dynamic::enter_dynamic().ok_or(ParseError::Failed { position: pos })?;
 
-        // Create context for callback
-        let ctx = DynamicContext::new(self.input, pos, self.capture_state.clone());
-
-        // Invoke callback: a fragment grammar (self-consistent atom
-        // indices, the shape host bridges produce) wins over a single
-        // index-free atom, which is appended to a grammar clone.
         // Dispatch cache (parsanol-ruby#80): a deterministic block's
         // fragment is a pure function of (input, pos, captures) — the
         // exact key below. A hit skips the host round-trip (block
         // call, atom JSON, grammar rebuild) and replays the recorded
-        // capture writes.
+        // capture writes — no context materialization at all.
         if let Some((fragment, root, writes)) =
             super::dynamic::cached_fragment(callback_id, pos, &self.capture_state, self.input)
         {
@@ -1161,6 +1165,14 @@ impl<'a> PortableParser<'a> {
             return self.parse_fragment(&fragment, root, pos);
         }
 
+        // Create context for callback. Capture subtrees ride inside
+        // the capture state so the block reads the parsed TREE
+        // (Capture#apply parity).
+        let ctx = DynamicContext::new(self.input, pos, self.capture_state.clone());
+
+        // Invoke callback: a fragment grammar (self-consistent atom
+        // indices, the shape host bridges produce) wins over a single
+        // index-free atom, which is appended to a grammar clone.
         let grammar = self.grammar;
         let mut resolved_fragment = false;
         let (temp_grammar, temp_atom_id) = with_dynamic_callback(callback_id, |cb| {
@@ -1225,6 +1237,17 @@ impl<'a> PortableParser<'a> {
             if let Some(value) = self.capture_state.get(name) {
                 temp_parser.capture_state.store(name, value);
             }
+            // Capture subtrees cross the fragment boundary too: nested
+            // dynamic dispatches inside the fragment read the same
+            // parsed trees the parent's blocks would (capture parity).
+            if let Some(nc) = self.capture_state.get_node(name) {
+                temp_parser.capture_state.store_with_node(
+                    name,
+                    self.capture_state.get(name).expect("text companion"),
+                    nc.value,
+                    nc.fingerprint,
+                );
+            }
         }
 
         let result = temp_parser.try_atom(temp_atom_id, pos)?;
@@ -1233,6 +1256,14 @@ impl<'a> PortableParser<'a> {
         for name in temp_parser.capture_state.names() {
             if let Some(value) = temp_parser.capture_state.get(name) {
                 self.capture_state.store(name, value);
+            }
+            if let Some(nc) = temp_parser.capture_state.get_node(name) {
+                self.capture_state.store_with_node(
+                    name,
+                    temp_parser.capture_state.get(name).expect("text companion"),
+                    nc.value,
+                    nc.fingerprint,
+                );
             }
         }
 

@@ -51,7 +51,10 @@ pub struct DynamicContext {
     pub input: String,
     /// Current byte position in the input
     pub pos: usize,
-    /// Current capture state (may be empty if no captures)
+    /// Current capture state (may be empty if no captures). Capture
+    /// atoms store their parsed subtrees here (see
+    /// `CaptureState::node_values`), so dynamic blocks read the TREE
+    /// (capture parity), and the subtrees travel with the state.
     pub captures: CaptureState,
 }
 
@@ -448,6 +451,24 @@ fn capture_signature(captures: &CaptureState, input: &str) -> u64 {
                 h = h.wrapping_mul(0x1000_0000_01B3);
             }
         }
+    }
+    // Capture subtrees participate in the signature: a block that
+    // reads a tree (capture semantics) can resolve differently for
+    // the same texts but different subtrees.
+    let mut node_sigs: Vec<(String, u64)> = captures
+        .node_fingerprints()
+        .map(|(name, fp)| (name.clone(), fp))
+        .collect();
+    node_sigs.sort();
+    for (name, fp) in node_sigs {
+        h ^= name.len() as u64;
+        h = h.wrapping_mul(0x1000_0000_01B3);
+        for b in name.as_bytes() {
+            h ^= *b as u64;
+            h = h.wrapping_mul(0x1000_0000_01B3);
+        }
+        h ^= fp;
+        h = h.wrapping_mul(0x1000_0000_01B3);
     }
     h
 }
