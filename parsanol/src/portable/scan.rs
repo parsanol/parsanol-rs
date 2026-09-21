@@ -130,21 +130,16 @@ fn window_all_members<const N: usize>(r: [(u8, u8); N], lo16: &[u8], hi16: &[u8]
 
     #[cfg(target_arch = "aarch64")]
     {
-        // SAFETY: NEON is baseline on aarch64; both windows are 16
-        // initialized bytes.
-        unsafe {
-            use std::arch::aarch64::*;
-            let a = vld1q_u8(lo16.as_ptr());
-            let b = vld1q_u8(hi16.as_ptr());
-            let mut acc = vdupq_n_u8(0);
-            for range in r.iter().take(N) {
-                let lo = vdupq_n_u8(range.0);
-                let hi = vdupq_n_u8(range.1);
-                acc = vorrq_u8(acc, vandq_u8(vcgeq_u8(a, lo), vcleq_u8(a, hi)));
-                acc = vorrq_u8(acc, vandq_u8(vcgeq_u8(b, lo), vcleq_u8(b, hi)));
-            }
-            vminvq_u8(acc) == 0xFF
-        }
+        // Composed from the proven block kernel rather than a fused
+        // two-load reduce: the fused single-accumulator form
+        // miscompiled on this toolchain (parsanol-rs#106 — windows
+        // reported all-member with non-members present, failing
+        // parses at EOF on capture-heavy grammars). The block kernel
+        // is the same vector compares; combining two of its results
+        // costs one extra horizontal reduce, and the split shape is
+        // verified against a scalar reference by the property test.
+        block_first_non_member::<N>(r, lo16).is_none()
+            && block_first_non_member::<N>(r, hi16).is_none()
     }
 
     #[cfg(target_arch = "x86_64")]
@@ -288,6 +283,7 @@ fn scan_utf8_ranges<const N: usize>(ranges: &[(u8, u8)], input: &[u8], from: usi
 macro_rules! dispatch_ranges {
     ($n:expr, $ranges:expr, $f:ident, $input:expr, $from:expr) => {
         match $n {
+            0 => $input.len().min($from),
             1 => $f::<1>(&$ranges[..1], $input, $from),
             2 => $f::<2>(&$ranges[..2], $input, $from),
             3 => $f::<3>(&$ranges[..3], $input, $from),
@@ -514,3 +510,61 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod property_vs_scalar {
+    use super::*;
+
+    /// Differential vs a scalar reference over randomized plans and
+    /// corpora, from every start position: the window kernels are
+    /// the parsanol-rs#106 regression surface — hand-picked cases
+    /// missed the fused-form miscompile that failed parses at EOF.
+    #[test]
+    fn scan_matches_scalar_reference_from_every_offset() {
+        let mut seed: u64 = 0x2026_0921_1060_6106;
+        let mut next = move || {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (seed >> 33) as u64
+        };
+
+        for case in 0..3000usize {
+            let n_ranges = 1 + (next() as usize % 8);
+            let lo0 = next() as u8;
+            let mut members = Vec::new();
+            for i in 0..n_ranges {
+                let lo = lo0.wrapping_add(i as u8 * 7);
+                let width = 1 + (next() as u8 % 9);
+                members.push((lo, lo.wrapping_add(width)));
+            }
+            let member = |b: u8| members.iter().any(|(lo, hi)| b >= *lo && b <= *hi);
+            let plan = ScanPlan::from_members(
+                &(0u16..256).filter(|b| member(*b as u8)).map(|b| b as u8).collect::<Vec<u8>>(),
+            );
+
+            let len = 1 + next() as usize % 100;
+            let corpus: Vec<u8> = (0..len)
+                .map(|_| match next() % 4 {
+                    0 => members[next() as usize % members.len()].0,
+                    1 => members[next() as usize % members.len()].1,
+                    _ => (next() as usize % 256) as u8,
+                })
+                .collect();
+
+            for from in 0..=corpus.len() {
+                let mut want = from;
+                while want < corpus.len() && member(corpus[want]) {
+                    want += 1;
+                }
+                let got = plan.scan_run_bytewise(&corpus, from);
+                assert_eq!(
+                    got, want,
+                    "case {case} from {from}: corpus {:?} members {:?}",
+                    corpus, members
+                );
+            }
+        }
+    }
+}
+
