@@ -57,7 +57,7 @@ pub struct DynamicContext {
     /// portable values (capture semantics: blocks read the TREE, not
     /// the raw span). Empty on dispatch-cache hits — the block is not
     /// invoked at all — and for captures without a subtree.
-    pub node_values: Vec<(String, crate::portable::transform::Value)>,
+    pub(crate) node_values: Vec<(String, crate::portable::transform::Value)>,
 }
 
 impl DynamicContext {
@@ -116,6 +116,13 @@ impl DynamicContext {
     #[inline]
     pub fn has_capture(&self, name: &str) -> bool {
         self.captures.contains(name)
+    }
+
+    /// The parsed subtrees carried for capture-atom captures, in
+    /// (name, value) pairs.
+    #[inline]
+    pub fn node_values(&self) -> &[(String, crate::portable::transform::Value)] {
+        &self.node_values
     }
 
     /// Get the remaining input from the current position
