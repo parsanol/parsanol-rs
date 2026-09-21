@@ -52,7 +52,7 @@ fn main() {
     let mut long_input = Vec::with_capacity(4 << 20);
     for i in 0..40_000 {
         long_input.extend_from_slice(format!("{:width$}", i, width = 40).as_bytes());
-        long_input.extend_from_slice(&vec![b'-'; 80]);
+        long_input.extend_from_slice(&[b'-'; 80]);
         long_input.push(b'\n');
     }
     let ws_plan = parsanol::portable::scan::ScanPlan::from_membership(|b| {

@@ -344,8 +344,13 @@ impl<'a> IncrementalParser<'a> {
 
     /// Parse input for the first time
     pub fn parse(&mut self, input: &str, arena: &mut AstArena) -> Result<AstNode, ParseError> {
-        // Clear previous state
-        self.cache.clear();
+        // Clear previous state. The cache is sized for the document,
+        // not the 4 KiB default: retention needs the EARLY memo window
+        // to survive the whole parse, and the recycling cache discards
+        // whatever exceeds capacity (a 4 KiB window holds only the
+        // document's tail, so nothing before an edit would ever be
+        // retained).
+        self.cache = DenseCache::for_input(input.len(), self.grammar.atom_count());
         self.snapshot_arena = AstArena::new();
         self.dirty_tracker.clear();
         self.prev_input_len = 0;
@@ -408,16 +413,35 @@ impl<'a> IncrementalParser<'a> {
             self.cache.drop_snapshots();
         }
 
-        let mut snap_arena = std::mem::take(&mut self.snapshot_arena);
+        // Retain only arena-free entries (terminal InputRefs, scalars,
+        // failures): adopting pool-backed values into a snapshot arena
+        // measured SLOWER than the full re-parse it was meant to avoid
+        // (a deep copy of the whole tree per parse); terminals are the
+        // expensive byte-matching work, and re-walking structure
+        // against terminal hits is cheap. The snapshot MARK stays: it
+        // exempts retained entries from the generation check.
         self.cache.retain_snapshot_adopt(
             |entry| {
                 let entry_end = entry.end_pos as usize;
                 let is_root_at_start = entry.pos == 0 && entry.atom_id == root_atom;
-                entry_end <= cutoff && !(input_len_changed && is_root_at_start)
+                // Failures are never retained: their validity depends
+                // on bytes after the failure position, which an edit
+                // can change (an unknowable lookahead distance).
+                let arena_free_success = entry.success
+                    && matches!(
+                        entry.to_node(),
+                        crate::portable::ast::AstNode::InputRef { .. }
+                            | crate::portable::ast::AstNode::Nil
+                    );
+                arena_free_success
+                    && entry_end <= cutoff
+                    && !(input_len_changed && is_root_at_start)
             },
-            |node| snap_arena.adopt_node(arena, node),
+            // Never reached: survivors are arena-free by the
+            // predicate, and only pool-backed values adopt.
+            |node| node.clone(),
         );
-        self.snapshot_arena = snap_arena;
+        let _ = arena;
         self.dirty_tracker.clear();
 
         (result, before, post_parse)
