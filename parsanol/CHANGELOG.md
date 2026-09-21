@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Other
+
+- Selective rule memoization for dynamic programs (#100, #90) ([#113](https://github.com/parsanol/parsanol-rs/pull/113)) by @[object]
+
 ### Fixed
 
 - Capture atoms expose parsed trees to dynamic blocks (coradoc nested-block parity) ([#110](https://github.com/parsanol/parsanol-rs/pull/110)) by @[object]
