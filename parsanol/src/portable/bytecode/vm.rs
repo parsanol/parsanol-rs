@@ -366,12 +366,14 @@ impl<'a> BytecodeVM<'a> {
         }
     }
 
-    /// Record a memo outcome unless memoization is disabled (dynamic
-    /// programs) or the entry pool is saturated.
+    /// Record a memo outcome unless the entry pool is saturated.
+    /// Callers only reach this with `memo_rule` set, which happens
+    /// only for eligible rules (all rules in dynamic-free programs,
+    /// dynamic-free subtrees otherwise).
     #[inline]
     fn memo_store(&mut self, rule_pc: usize, pos: usize, entry: MemoEntry) {
         const MEMO_MAX: usize = 2_000_000;
-        if self.memo_enabled && self.memo.len() < MEMO_MAX {
+        if self.memo.len() < MEMO_MAX {
             self.memo.insert((rule_pc, pos), entry);
         }
     }
@@ -568,11 +570,14 @@ impl<'a> BytecodeVM<'a> {
                 let target = (self.ip as i32 + 1 + offset) as usize;
                 let pos = self.position;
 
-                // Packrat memoization: rule outcomes are context-free at
-                // a call boundary, so successes and failures alike reuse.
-                // Programs with host calls (InvokeDynamic) disable it:
-                // dynamic outcomes depend on capture state.
-                if self.memo_enabled {
+                // Selective memoization (#100.1/#90.3): rule outcomes
+                // are context-free at a call boundary for dynamic-free
+                // rules. Programs with host calls memoize only the
+                // dynamic-free transitive rule subtrees — the memo
+                // key ignores capture state, and replaying a tainted
+                // rule would skip host side effects.
+                let can_memo = self.memo_enabled || self.program.is_rule_memoizable(target);
+                if can_memo {
                     if let Some(entry) = self.memo.get(&(target, pos)) {
                         if entry.success {
                             let value = entry.value.clone().unwrap_or(AstNode::Nil);
@@ -590,7 +595,7 @@ impl<'a> BytecodeVM<'a> {
                     }
                 } else {
                     self.backtrack_stack
-                        .push(self.return_frame(self.ip + 1, target));
+                        .push(self.frame_snapshot(self.ip + 1, FrameKind::Return));
                     Ok(ExecutionResult::Jump(*offset))
                 }
             }
