@@ -76,13 +76,20 @@ fn materialize(root: &crate::portable::ast::AstNode, arena: &AstArena, input: &s
 fn assert_agree(grammar_json: &str, input: &str) {
     let grammar = Grammar::from_json(grammar_json).expect("grammar compiles");
     let program = compile_bytecode(grammar.clone()).expect("VM compiles grammar");
+    assert_agree_compiled(&grammar, &program, input);
+}
 
+fn assert_agree_compiled(
+    grammar: &Grammar,
+    program: &crate::portable::bytecode::Program,
+    input: &str,
+) {
     let mut packrat_arena = AstArena::new();
-    let mut packrat_parser = PortableParser::new(&grammar, input, &mut packrat_arena);
+    let mut packrat_parser = PortableParser::new(grammar, input, &mut packrat_arena);
     let packrat = packrat_parser.parse_with_end_pos();
 
     let mut vm_arena = AstArena::new();
-    let vm = parse_with_vm(&program, input, &mut vm_arena);
+    let vm = parse_with_vm(program, input, &mut vm_arena);
 
     match (&packrat, &vm) {
         (Ok(p), Ok(v)) => {
@@ -391,5 +398,123 @@ fn differential_custom_atom() {
             (Err(_), Err(_)) => {}
             (p, v) => panic!("mismatch for {input:?}: packrat={p:?} vm={v:?}"),
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Selective memoization (#100.1/#90.3): rules that transitively contain
+// host calls or capture state must not be memoized; dynamic-free rules
+// must be. Trees must agree with the packrat engine either way.
+// ---------------------------------------------------------------------------
+
+fn selective_memo_grammar() -> (Grammar, u64) {
+    use crate::portable::dynamic::{register_dynamic_callback, DynamicCallback, DynamicContext};
+    use crate::portable::grammar::RepetitionTag::Maybe;
+
+    // The block dispatches on a capture set by the enclosing rule:
+    // captures -> dynamic -> outcomes, so `ditem` must stay unmemoized.
+    struct SuffixDispatch;
+    impl DynamicCallback for SuffixDispatch {
+        fn resolve(&self, ctx: &DynamicContext) -> Option<Atom> {
+            if ctx.get_capture_text("m").is_some() {
+                Some(Atom::Str {
+                    pattern: "-B".to_string(),
+                })
+            } else {
+                Some(Atom::Str {
+                    pattern: "-A".to_string(),
+                })
+            }
+        }
+        fn description(&self) -> &str {
+            "suffix dispatch"
+        }
+    }
+    let cb_id = register_dynamic_callback(Box::new(SuffixDispatch));
+
+    let mut g = Grammar::new();
+    let word_body = g.add_atom(Atom::Re {
+        pattern: "[a-z]+".to_string(),
+    });
+    let word = g.add_atom(Atom::Named {
+        name: "word".to_string(),
+        atom: word_body,
+    });
+    let wref = g.add_atom(Atom::Entity { atom: word });
+
+    let letter = g.add_atom(Atom::Re {
+        pattern: "[a-z]".to_string(),
+    });
+    let mcap = g.add_atom(Atom::Capture {
+        name: "m".to_string(),
+        atom: letter,
+    });
+    let dyna = g.add_atom(Atom::Dynamic { callback_id: cb_id });
+    let ditem_body = g.add_atom(Atom::Sequence {
+        atoms: vec![mcap, dyna],
+    });
+    let ditem = g.add_atom(Atom::Named {
+        name: "ditem".to_string(),
+        atom: ditem_body,
+    });
+    let dref = g.add_atom(Atom::Entity { atom: ditem });
+
+    let opt = g.add_atom(Atom::Repetition {
+        atom: dref,
+        min: 0,
+        max: Some(1),
+        tag: Maybe,
+    });
+    let pair_body = g.add_atom(Atom::Sequence {
+        atoms: vec![wref, opt],
+    });
+    let pair = g.add_atom(Atom::Named {
+        name: "pair".to_string(),
+        atom: pair_body,
+    });
+    let pref = g.add_atom(Atom::Entity { atom: pair });
+    let root = g.add_atom(Atom::Repetition {
+        atom: pref,
+        min: 1,
+        max: None,
+        tag: crate::portable::grammar::RepetitionTag::Repetition,
+    });
+    g.root = root;
+    (g, cb_id)
+}
+
+#[test]
+fn selective_memo_eligibility_analysis() {
+    let (g, _cb) = selective_memo_grammar();
+    let program = compile_bytecode(g).expect("VM compiles grammar");
+    assert!(program.has_invoke_dynamic());
+    // Rule entries: pair, word, ditem (refs call the named rules
+    // directly). Memoizable: only `word` — dynamic-free and
+    // capture-free. `pair`/`ditem` are tainted, `pair` transitively
+    // through its call to `ditem`.
+    let eligible = program
+        .memoizable_rule_count()
+        .expect("dynamic program derives an eligibility map");
+    assert_eq!(eligible, 1, "only the word rule may be memoizable");
+}
+
+#[test]
+fn differential_selective_memo() {
+    let (grammar, _cb) = selective_memo_grammar();
+    let program = compile_bytecode(grammar.clone()).expect("VM compiles grammar");
+    assert!(program.has_invoke_dynamic());
+
+    for input in [
+        "abc-A",
+        "a-B",
+        "abc-Bxyz-Aq",
+        "abc",
+        "abc-Ax",
+        "abc-A-B",
+        "abc-Bxyz",
+        "a-Aa-Aa-A",
+        "",
+    ] {
+        assert_agree_compiled(&grammar, &program, input);
     }
 }

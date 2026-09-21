@@ -148,6 +148,11 @@ pub struct Program {
     /// Whether the program contains InvokeDynamic (TODO.perf/5). Not
     /// serialized: derived with the scan plans.
     has_invoke_dynamic: bool,
+
+    /// Rule entry pc -> memoizable (selective memoization, #100.1).
+    /// `None` when the program has no InvokeDynamic (all rules are
+    /// memoizable). Not serialized: derived with the scan plans.
+    rule_memoizable: Option<HashMap<usize, bool>>,
 }
 
 impl Default for Program {
@@ -172,6 +177,7 @@ impl Program {
             rule_addresses: HashMap::new(),
             scan_plans: Vec::new(),
             has_invoke_dynamic: false,
+            rule_memoizable: None,
         }
     }
 
@@ -190,6 +196,7 @@ impl Program {
             rule_addresses: HashMap::new(),
             scan_plans: Vec::new(),
             has_invoke_dynamic: false,
+            rule_memoizable: None,
         }
     }
 
@@ -329,9 +336,9 @@ impl Program {
     /// Get the number of character sets in the table
     #[inline]
     /// Derive non-serialized metadata: run-scanning plans for every
-    /// char set (TODO.perf/2) and the InvokeDynamic flag (TODO.perf/5).
-    /// Called once after the tables are final (compile end, artifact
-    /// decode).
+    /// char set (TODO.perf/2), the InvokeDynamic flag and per-rule
+    /// memo eligibility (TODO.perf/5, #100.1). Called once after the
+    /// tables are final (compile end, artifact decode).
     pub fn derive_metadata(&mut self) {
         self.scan_plans = self
             .char_sets
@@ -342,6 +349,217 @@ impl Program {
             .instructions
             .iter()
             .any(|i| matches!(i, Instruction::InvokeDynamic { .. }));
+        self.rule_memoizable = if self.has_invoke_dynamic {
+            Some(self.compute_rule_memoizable())
+        } else {
+            None
+        };
+    }
+
+    /// Per-rule memo eligibility (selective memoization, #100.1/#90.3):
+    /// a rule is memoizable iff neither its own body nor — transitively —
+    /// any rule it calls can reach a host or capture-state instruction.
+    /// Those make outcomes depend on capture state (the memo key ignores
+    /// it) and carry side effects a memo replay would skip.
+    ///
+    /// Dataflow: `flow[pc]` = a tainted instruction is reachable from
+    /// `pc` following control flow, where a Call contributes only its
+    /// fall-through continuation (the callee's taint travels the rule
+    /// call graph instead). Computed to fixpoint; over-tainting is
+    /// safe (fewer memoized rules), under-tainting would not be.
+    fn compute_rule_memoizable(&self) -> HashMap<usize, bool> {
+        let n = self.instructions.len();
+        fn host_or_capture(instr: &Instruction) -> bool {
+            matches!(
+                instr,
+                Instruction::InvokeDynamic { .. }
+                    | Instruction::Custom { .. }
+                    | Instruction::OpenCapture { .. }
+                    | Instruction::CloseCapture { .. }
+                    | Instruction::FullCapture { .. }
+                    | Instruction::RecordCapture { .. }
+                    | Instruction::PushScope
+                    | Instruction::PopScope
+            )
+        }
+
+        // Control-flow successors. Call: fall-through only (the callee
+        // is a separate rule context). InvokeDynamic/Custom/Throw/
+        // ThrowRec/Return/End: no successors. Filtered to valid range.
+        let successors = |pc: usize| -> Vec<usize> {
+            let Some(instr) = self.instructions.get(pc) else {
+                return Vec::new();
+            };
+            let next = pc + 1;
+            let jump = |offset: i32| pc as i64 + 1 + offset as i64;
+            let in_range = |t: i64| -> Option<usize> {
+                (t >= 0 && t < self.instructions.len() as i64).then_some(t as usize)
+            };
+            match instr {
+                Instruction::Jump { offset } => in_range(jump(*offset)).into_iter().collect(),
+                Instruction::Choice { offset }
+                | Instruction::PredChoice { offset }
+                | Instruction::TestChar { offset, .. }
+                | Instruction::TestSet { offset, .. }
+                | Instruction::TestAny { offset, .. } => {
+                    let mut v = Vec::with_capacity(2);
+                    if next < n {
+                        v.push(next);
+                    }
+                    if let Some(t) = in_range(jump(*offset)) {
+                        v.push(t);
+                    }
+                    v
+                }
+                Instruction::Commit { offset }
+                | Instruction::PartialCommit { offset }
+                | Instruction::BackCommit { offset } => {
+                    in_range(jump(*offset)).into_iter().collect()
+                }
+                Instruction::ByteDispatch { table_idx } => {
+                    let mut v = Vec::new();
+                    if next < n {
+                        v.push(next);
+                    }
+                    if let Some(table) = self.dispatch_tables.get(*table_idx as usize) {
+                        for &off in table.iter() {
+                            if off != 0 {
+                                if let Some(t) = in_range(jump(off)) {
+                                    v.push(t);
+                                }
+                            }
+                        }
+                    }
+                    v
+                }
+                Instruction::Call { .. }
+                | Instruction::InvokeDynamic { .. }
+                | Instruction::Custom { .. }
+                | Instruction::Throw { .. }
+                | Instruction::End => {
+                    if next < n {
+                        vec![next]
+                    } else {
+                        Vec::new()
+                    }
+                }
+                // Return exits the rule: no fall-through into whatever
+                // code follows in the layout.
+                Instruction::Return => Vec::new(),
+                // ThrowRec jumps to a recovery rule: a separate rule
+                // context, so only the recovery target matters for
+                // taint — treat as terminal here and let the recovery
+                // rule's own entry carry it.
+                Instruction::ThrowRec { .. } => Vec::new(),
+                _ => {
+                    if next < n {
+                        vec![next]
+                    } else {
+                        Vec::new()
+                    }
+                }
+            }
+        };
+
+        // taints_flow[pc]: a tainted instruction is reachable from pc.
+
+        let mut taints_flow: Vec<bool> = Vec::with_capacity(n);
+        for pc in 0..n {
+            taints_flow.push(self.instructions.get(pc).is_some_and(host_or_capture));
+        }
+        // Reverse-order sweeps converge fast (jumps may loop: repeat
+        // until stable).
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for pc in (0..n).rev() {
+                if taints_flow[pc] {
+                    continue;
+                }
+                if successors(pc).into_iter().any(|s| taints_flow[s]) {
+                    taints_flow[pc] = true;
+                    changed = true;
+                }
+            }
+        }
+
+        // Rule graph taint: reachability per entry (Call contributes
+        // only its continuation) + call edges, to fixpoint.
+        let mut entries: Vec<usize> = self.rule_addresses.values().copied().collect();
+        entries.push(self.entry_point);
+        entries.sort_unstable();
+        entries.dedup();
+
+        let mut reach: Vec<Vec<bool>> = Vec::with_capacity(entries.len());
+        let mut call_edges: Vec<Vec<usize>> = vec![Vec::new(); entries.len()];
+        for (i, &entry) in entries.iter().enumerate() {
+            let mut seen = vec![false; n];
+            let mut stack = vec![entry];
+            while let Some(pc) = stack.pop() {
+                if seen[pc] {
+                    continue;
+                }
+                seen[pc] = true;
+                // A Call contributes only its continuation here; the
+                // callee's taint travels the rule call graph below.
+                if let Some(Instruction::Call { offset }) = self.instructions.get(pc) {
+                    let t = pc as i64 + 1 + *offset as i64;
+                    if t >= 0 && (t as usize) < n {
+                        if let Ok(j) = entries.binary_search(&(t as usize)) {
+                            call_edges[i].push(j);
+                        }
+                    }
+                }
+                for s in successors(pc) {
+                    stack.push(s);
+                }
+            }
+            reach.push(seen);
+        }
+
+        let mut tainted: Vec<bool> = (0..entries.len())
+            .map(|i| (0..n).any(|pc| reach[i][pc] && taints_flow[pc]))
+            .collect();
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for i in 0..entries.len() {
+                if !tainted[i] && call_edges[i].iter().any(|&j| tainted[j]) {
+                    tainted[i] = true;
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+
+        entries
+            .into_iter()
+            .zip(tainted)
+            .map(|(pc, t)| (pc, !t))
+            .collect()
+    }
+
+    /// Whether a rule call may be memoized. With no InvokeDynamic in
+    /// the program every rule qualifies (context-free outcomes); with
+    /// dynamics, only the dynamic-free transitive subtrees do.
+    #[inline]
+    pub fn is_rule_memoizable(&self, rule_pc: usize) -> bool {
+        match &self.rule_memoizable {
+            None => true,
+            Some(map) => map.get(&rule_pc).copied().unwrap_or(false),
+        }
+    }
+
+    /// Number of memoizable rules, or `None` when the program has no
+    /// InvokeDynamic (all rules memoizable). Diagnostics hook for the
+    /// selective memoization analysis (#100.1).
+    #[doc(hidden)]
+    pub fn memoizable_rule_count(&self) -> Option<usize> {
+        self.rule_memoizable
+            .as_ref()
+            .map(|map| map.values().filter(|t| **t).count())
     }
 
     /// Whether any rule-call memoization must be disabled: the program
