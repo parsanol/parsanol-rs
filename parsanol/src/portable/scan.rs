@@ -526,7 +526,7 @@ mod property_vs_scalar {
             seed = seed
                 .wrapping_mul(6364136223846793005)
                 .wrapping_add(1442695040888963407);
-            (seed >> 33)
+            seed >> 33
         };
 
         for case in 0..3000usize {
