@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Other
+
+- Merge pull request #103 from parsanol/release-plz-2026-09-21T04-34-13Z by @[object]
+- Drop the memchr dependency (unused since simd.rs removal) by @[object]
+- Per-atom/per-opcode dispatch counters; raw-tree API docs; dead simd module removed (parsanol-rs#100) by @[object]
+
 ### Added
 
 - Capture writes across the bridge, dispatch caching, dynamic incremental sessions (parsanol-ruby#80) by @[object]
