@@ -433,6 +433,54 @@ fn flatten_sequence(items: &[AstNode], arena: &mut AstArena, input: &str) -> Ast
         };
     }
 
+    // PARSLET SEQUENCES ARE FLAT: splice nested arrays (repetition
+    // results) and drop nils before any classification
+    // (parsanol-ruby#83). The old second pass counted array items'
+    // keys but then dropped the arrays entirely, so a sequence like
+    // [line_repetition_array, empty_maybe] collapsed to the empty
+    // maybe's "" — losing every captured line. An empty-maybe's ""
+    // behaves like parslet's nil here and is dropped when sibling
+    // named captures exist.
+    if items
+        .iter()
+        .any(|i| matches!(i, AstNode::Array { .. } | AstNode::Nil))
+    {
+        let mut flat: Vec<AstNode> = Vec::with_capacity(items.len());
+        let mut spliced = false;
+        for item in items {
+            match item {
+                AstNode::Array { pool_index, length } => {
+                    spliced = true;
+                    flat.extend(
+                        arena
+                            .get_array(*pool_index as usize, *length as usize)
+                            .iter()
+                            .cloned(),
+                    );
+                }
+                AstNode::Nil => {
+                    spliced = true;
+                }
+                other => flat.push(other.clone()),
+            }
+        }
+        if spliced {
+            let has_hash = flat.iter().any(|i| matches!(i, AstNode::Hash { .. }));
+            if has_hash {
+                flat.retain(|i| match i {
+                    AstNode::StringRef { pool_index } => {
+                        !arena.get_string(*pool_index as usize).is_empty()
+                    }
+                    _ => true,
+                });
+            }
+            if flat.is_empty() {
+                return arena.intern_string("");
+            }
+            return flatten_sequence(&flat, arena, input);
+        }
+    }
+
     // DON'T unwrap single items - let the caller handle this
     // This preserves repetition results like [{:x => 1}]
     // The caller (transform_single_key_hash or parent sequence) will decide

@@ -493,13 +493,14 @@ pub fn store_dispatch_fragment(
     grammar: super::grammar::Grammar,
     root: usize,
     writes: Vec<(String, String)>,
-) {
+) -> std::sync::Arc<super::grammar::Grammar> {
     let input_hash = INPUT_HASH.with(|c| c.get());
     let key = (
         callback_id,
         pos,
         capture_signature(captures, input) ^ input_hash,
     );
+    let arc = std::sync::Arc::new(grammar);
     DISPATCH_CACHE.with(|c| {
         let mut cache = c.borrow_mut();
         if cache.len() >= DISPATCH_CACHE_CAP {
@@ -508,12 +509,13 @@ pub fn store_dispatch_fragment(
         cache.insert(
             key,
             CachedFragment {
-                grammar: std::sync::Arc::new(grammar),
+                grammar: std::sync::Arc::clone(&arc),
                 root,
                 writes,
             },
         );
     });
+    arc
 }
 
 /// Snapshot the pending capture writes (used by the engine to record

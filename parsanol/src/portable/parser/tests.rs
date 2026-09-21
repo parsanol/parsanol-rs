@@ -633,16 +633,26 @@ mod dispatch_cache {
     struct CountingCallback;
 
     impl DynamicCallback for CountingCallback {
-        fn resolve(&self, ctx: &DynamicContext) -> Option<Atom> {
+        // Fragment resolution (the host-bridge shape) is what the
+        // dispatch cache stores: resolve-path results hold a full
+        // grammar clone per entry and are deliberately not cached
+        // (parsanol-ruby#84 memory bound).
+        fn resolve(&self, _ctx: &DynamicContext) -> Option<Atom> {
+            None
+        }
+        fn resolve_fragment(&self, ctx: &DynamicContext) -> Option<(Grammar, usize)> {
             CALLS.fetch_add(1, Ordering::SeqCst);
             let pattern = if ctx.get_capture_text("m").is_some() {
                 "B"
             } else {
                 "A"
             };
-            Some(Atom::Str {
+            let mut g = Grammar::new();
+            let a = g.add_atom(Atom::Str {
                 pattern: pattern.to_string(),
-            })
+            });
+            g.root = a;
+            Some((g, a))
         }
         fn description(&self) -> &str {
             "counting dispatcher"
