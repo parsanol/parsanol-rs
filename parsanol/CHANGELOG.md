@@ -17,6 +17,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Other
 
+- Release v0.8.0 by @[object]
+- Capture-state example uses the span accessor (doc-test) by @[object]
+- Rustfmt by @[object]
+
+### Added
+
+- Capture writes across the bridge, dispatch caching, dynamic incremental sessions (parsanol-ruby#80) by @[object]
+
+### Fixed
+
+- Unwrap the [atom, captures] pair before fragment resolution by @[object]
+
+### Other
+
 - Capture-state example uses the span accessor (doc-test) by @[object]
 - Rustfmt by @[object]
 
