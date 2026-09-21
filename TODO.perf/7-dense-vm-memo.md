@@ -1,5 +1,12 @@
 # 7. Dense rule-call memo for the VM — measured negative, not shipped
 
+> **2026-09-21 status:** the memo's VALUE problem was solved from the
+> other direction — selective rule memoization (#113, shipped in
+> 0.8.4) makes the HashMap memo net-positive for dynamic-free rule
+> subtrees in mixed grammars. The dense-table idea below stays
+> negative as measured; the hashbrown memo it benchmarks is now the
+> production path.
+
 Hypothesis: the VM's `HashMap<(usize, usize), MemoEntry>` rule-call
 memo costs a tuple hash plus hashbrown overhead per memoized call,
 and a DenseCache-style open-addressed table (inline keys, linear
