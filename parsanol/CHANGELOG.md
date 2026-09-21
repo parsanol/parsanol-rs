@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Capture atoms expose parsed trees to dynamic blocks (coradoc nested-block parity) ([#110](https://github.com/parsanol/parsanol-rs/pull/110)) by @[object]
+- List-pattern repetition collapses correctly with named separators by @[object]
+
+### Fixed
+
 - Tree parity ([#83](https://github.com/parsanol/parsanol-rs/pull/83)), EOF scan ([#106](https://github.com/parsanol/parsanol-rs/pull/106)), dispatch-cache memory ([#84](https://github.com/parsanol/parsanol-rs/pull/84)) ([#107](https://github.com/parsanol/parsanol-rs/pull/107)) by @[object]
 
 ### Other
