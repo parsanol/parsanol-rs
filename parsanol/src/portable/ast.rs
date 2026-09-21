@@ -177,8 +177,9 @@ impl ParseResult {
         }
     }
 
-    /// Get a capture's text value from the input string
-    pub fn get_capture<'a>(&self, name: &str, input: &'a str) -> Option<&'a str> {
+    /// Get a capture's text value (a borrow of the input for spans,
+    /// the stored literal for bridge-written text).
+    pub fn get_capture<'a>(&self, name: &str, input: &'a str) -> Option<std::borrow::Cow<'a, str>> {
         self.capture_state
             .as_ref()
             .and_then(|cs| cs.get(name))
@@ -186,7 +187,7 @@ impl ParseResult {
     }
 
     /// Get all captures as a HashMap from the input string
-    pub fn captures<'a>(&'a self, input: &'a str) -> HashMap<&'a str, &'a str> {
+    pub fn captures<'a>(&'a self, input: &'a str) -> HashMap<&'a str, std::borrow::Cow<'a, str>> {
         let mut result = HashMap::new();
         if let Some(cs) = &self.capture_state {
             for name in cs.names() {

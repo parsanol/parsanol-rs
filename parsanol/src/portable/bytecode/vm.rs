@@ -180,6 +180,9 @@ impl<'a> BytecodeVM<'a> {
         arena: &'a mut AstArena,
         config: VMConfig,
     ) -> Self {
+        if !crate::portable::dynamic::in_dynamic_dispatch() {
+            crate::portable::dynamic::begin_parse(input);
+        }
         Self {
             program,
             input: input.as_bytes(),
@@ -855,32 +858,80 @@ impl<'a> BytecodeVM<'a> {
                 let ctx =
                     DynamicContext::new(self.input_str, self.position, self.capture_state.clone());
 
-                // Invoke callback: a fragment grammar (self-consistent
-                // atom indices, the shape host bridges produce) wins
-                // over a bare atom, which is appended to a fresh
-                // grammar whose root is the new atom. Mirrors the
-                // packrat engine's parse_dynamic; parsing starts from
-                // the grammar's root, so the root id itself is not
-                // needed here.
-                let temp_grammar = match with_dynamic_callback(*callback_id, |cb| {
-                    if let Some((fragment, root)) = cb.resolve_fragment(&ctx) {
-                        let mut fragment = fragment;
-                        fragment.root = root;
-                        return Some(fragment);
-                    }
-                    cb.resolve(&ctx).map(|atom| {
-                        let mut g = Grammar::new();
-                        let id = g.add_atom(atom);
-                        g.root = id;
-                        g
-                    })
-                }) {
-                    Some(g) => g,
-                    None => {
-                        self.track_failure();
-                        return Ok(ExecutionResult::Fail);
-                    }
-                };
+                // Dispatch cache (parsanol-ruby#80): a deterministic
+                // block's fragment is a pure function of (input, pos,
+                // captures) — the same policy as the packrat engine. A
+                // hit skips the host round-trip and replays the
+                // recorded capture writes.
+                let temp_grammar: std::sync::Arc<Grammar> =
+                    match crate::portable::dynamic::cached_fragment(
+                        *callback_id,
+                        self.position,
+                        &self.capture_state,
+                        self.input_str,
+                    ) {
+                        Some((g, _root, writes)) => {
+                            for (name, text) in writes {
+                                self.capture_state.store(
+                                    &name,
+                                    crate::portable::capture_state::CaptureValue::text(text),
+                                );
+                            }
+                            g
+                        }
+                        None => {
+                            // Writes the block made to its context
+                            // (parsanol-ruby#80) land before the
+                            // fragment parses, mirroring the packrat
+                            // engine.
+                            crate::portable::dynamic::drain_capture_writes_into(
+                                &mut self.capture_state,
+                            );
+                            // Invoke callback: a fragment grammar (self-consistent
+                            // atom indices, the shape host bridges produce) wins
+                            // over a bare atom, which is appended to a fresh
+                            // grammar whose root is the new atom.
+                            let resolved = match with_dynamic_callback(*callback_id, |cb| {
+                                if let Some((fragment, root)) = cb.resolve_fragment(&ctx) {
+                                    let mut fragment = fragment;
+                                    fragment.root = root;
+                                    return Some(fragment);
+                                }
+                                cb.resolve(&ctx).map(|atom| {
+                                    let mut g = Grammar::new();
+                                    let id = g.add_atom(atom);
+                                    g.root = id;
+                                    g
+                                })
+                            }) {
+                                Some(g) => g,
+                                None => {
+                                    self.track_failure();
+                                    return Ok(ExecutionResult::Fail);
+                                }
+                            };
+                            let writes = crate::portable::dynamic::take_pending_writes();
+                            for (name, text) in &writes {
+                                self.capture_state.store(
+                                    name,
+                                    crate::portable::capture_state::CaptureValue::text(
+                                        text.clone(),
+                                    ),
+                                );
+                            }
+                            let root = resolved.root;
+                            crate::portable::dynamic::store_dispatch_fragment(
+                                *callback_id,
+                                self.position,
+                                &self.capture_state,
+                                self.input_str,
+                                resolved.clone(),
+                                root,
+                                writes,
+                            );
+                            std::sync::Arc::new(resolved)
+                        }
+                    };
 
                 // Create temporary arena
                 let mut temp_arena = AstArena::for_input(self.input_str.len());

@@ -262,7 +262,7 @@ impl DynamicCallback for CaptureAwareCallback {
         // Check if we have a "type" capture - use get_capture_text for string
         if let Some(type_name) = ctx.get_capture_text("type") {
             println!("    -> Found type capture: {:?}", type_name);
-            match type_name {
+            match type_name.as_ref() {
                 "int" => Some(Atom::Re {
                     pattern: r"\d+".into(),
                 }),

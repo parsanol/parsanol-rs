@@ -946,3 +946,64 @@ mod edit_sequence_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod dynamic_session_tests {
+    use super::*;
+    use crate::portable::arena::AstArena;
+    use crate::portable::dynamic::{register_dynamic_callback, DynamicCallback, DynamicContext};
+    use crate::portable::grammar::{Atom, Grammar};
+
+    struct PassthroughCallback;
+
+    impl DynamicCallback for PassthroughCallback {
+        fn resolve(&self, _ctx: &DynamicContext) -> Option<Atom> {
+            Some(Atom::Str {
+                pattern: "k=1\n".to_string(),
+            })
+        }
+        fn description(&self) -> &str {
+            "passthrough"
+        }
+    }
+
+    /// Dynamic grammars are eligible for incremental sessions
+    /// (parsanol-ruby#80 item 3): the walker's dynamic-dependent memo
+    /// filter keeps retention sound, and a dynamic line's edit
+    /// re-parses to the same tree as a full parse.
+    #[test]
+    fn dynamic_grammar_session_edit_matches_full_parse() {
+        let cb_id = register_dynamic_callback(Box::new(PassthroughCallback));
+        let mut g = Grammar::new();
+        let dyn_line = g.add_atom(Atom::Dynamic { callback_id: cb_id });
+        let rep = g.add_atom(Atom::Repetition {
+            atom: dyn_line,
+            min: 0,
+            max: None,
+            tag: crate::portable::grammar::RepetitionTag::Repetition,
+        });
+        g.root = rep;
+
+        let doc = "k=1\nk=1\nk=1\n";
+        let edited = "k=1\nk=1\n";
+
+        let mut inc = IncrementalParser::owned(g.clone());
+        let mut arena = AstArena::new();
+        inc.parse(doc, &mut arena).expect("initial dynamic parse");
+
+        let mut arena = AstArena::new();
+        let result = inc
+            .parse_with_edit(edited, &mut arena, Edit::delete(8, 4))
+            .expect("dynamic incremental parse");
+
+        // Tree parity with a full parse of the edited input.
+        let mut arena2 = AstArena::new();
+        let mut full = crate::portable::parser::PortableParser::new(&g, edited, &mut arena2);
+        let full_tree = full.parse().expect("full parse");
+        assert_eq!(
+            format!("{:?}", result.ast),
+            format!("{full_tree:?}"),
+            "arena-free comparison: both trees are InputRef/Array shapes"
+        );
+    }
+}

@@ -105,6 +105,18 @@ impl RubyDynamicCallback {
             }
         };
 
+        // The seeded captures travel inside ruby_ctx; remember them so
+        // the post-call readback can diff out the block's writes.
+        let seeded: Vec<(String, String)> = ctx
+            .captures
+            .names()
+            .filter_map(|n| {
+                ctx.captures
+                    .get(n)
+                    .map(|v| (n.clone(), v.get_text(ctx.input()).into_owned()))
+            })
+            .collect();
+
         let result: Result<Value, Error> =
             dynamic_mod.funcall("invoke_from_rust", (self.callback_id, ruby_ctx));
         match result {
@@ -112,6 +124,7 @@ impl RubyDynamicCallback {
                 if trace {
                     eprintln!("DYN-BRIDGE: invoked ok");
                 }
+                self.readback_capture_writes(&ruby, &value, &seeded);
                 Some(value)
             }
             Ok(_) => {
@@ -130,6 +143,54 @@ impl RubyDynamicCallback {
     }
 }
 
+impl RubyDynamicCallback {
+    /// Read back the captures hash the block may have mutated
+    /// (parsanol-ruby#80) and post the diff to the engine's write
+    /// channel. Contract: `invoke_from_rust` returns
+    /// [result, captures_after]; the bare-value shape is tolerated
+    /// with no writeback.
+    fn readback_capture_writes(&self, ruby: &Ruby, value: &Value, seeded: &[(String, String)]) {
+        let pair: Result<(Value, Value), Error> = TryConvert::try_convert(*value);
+        let Ok((_, caps_after)) = pair else {
+            return;
+        };
+        let Ok(hash): Result<magnus::RHash, Error> = TryConvert::try_convert(caps_after) else {
+            return;
+        };
+        let mut writes: Vec<(String, String)> = Vec::new();
+        let Ok(pairs): Result<magnus::RArray, Error> = hash.funcall("to_a", ()) else {
+            return;
+        };
+        for entry in pairs.into_iter() {
+            let Ok(pair): Result<magnus::RArray, Error> = TryConvert::try_convert(entry) else {
+                continue;
+            };
+            let mut it = pair.into_iter();
+            let (k, v) = match (it.next(), it.next()) {
+                (Some(k), Some(v)) => (k, v),
+                _ => continue,
+            };
+            let Ok(name): Result<String, Error> = TryConvert::try_convert(k) else {
+                continue;
+            };
+            let Ok(text): Result<String, Error> = TryConvert::try_convert(v) else {
+                continue;
+            };
+            let unchanged = seeded.iter().any(|(sn, st)| *sn == name && *st == text);
+            if !unchanged {
+                writes.push((name, text));
+            }
+        }
+        if !writes.is_empty() {
+            if std::env::var("PARSANOL_DYN_TRACE").is_ok() {
+                eprintln!("DYN-BRIDGE: capture writes {writes:?}");
+            }
+            crate::portable::dynamic::note_capture_writes(writes);
+        }
+        let _ = ruby;
+    }
+}
+
 /// Build a Ruby context hash from a DynamicContext
 fn build_ruby_context(ctx: &DynamicContext, ruby: &Ruby) -> Option<Value> {
     let hash = ruby.hash_new();
@@ -140,7 +201,7 @@ fn build_ruby_context(ctx: &DynamicContext, ruby: &Ruby) -> Option<Value> {
     for name in ctx.captures.names() {
         if let Some(value) = ctx.captures.get(name) {
             let text = value.get_text(ctx.input());
-            let _ = captures_hash.aset(ruby.to_symbol(name.as_str()), text);
+            let _ = captures_hash.aset(ruby.to_symbol(name.as_str()), text.as_ref());
         }
     }
     let _ = hash.aset(ruby.to_symbol("captures"), captures_hash);

@@ -34,41 +34,70 @@ pub const MAX_SCOPE_DEPTH: usize = 1000;
 ///
 /// Stores only the offset and length of captured text.
 /// The actual text is retrieved by slicing the input string.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CaptureValue {
-    /// Byte offset into the input string
-    pub offset: usize,
-    /// Length in bytes
-    pub length: usize,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CaptureValue {
+    /// A span into the input string — the common case, produced by
+    /// capture atoms.
+    Span {
+        /// Byte offset into the input string
+        offset: usize,
+        /// Length in bytes
+        length: usize,
+    },
+    /// Literal text written by a dynamic block across the bridge
+    /// (parsanol-ruby#80): continuation state a block composes, not
+    /// tied to any input span.
+    Text(Box<str>),
 }
 
 impl CaptureValue {
-    /// Create a new capture value
+    /// Create a span capture value
     #[inline]
     pub fn new(offset: usize, length: usize) -> Self {
-        Self { offset, length }
+        Self::Span { offset, length }
     }
 
-    /// Get the captured text from the input string
-    ///
-    /// # Safety
-    ///
-    /// The caller must ensure that `offset + length <= input.len()`.
+    /// Create a literal-text capture value
     #[inline]
-    pub fn get_text<'a>(&self, input: &'a str) -> &'a str {
-        &input[self.offset..self.offset + self.length]
+    pub fn text(s: impl Into<Box<str>>) -> Self {
+        Self::Text(s.into())
     }
 
-    /// Get the end position (offset + length)
+    /// The captured text: a borrow of the input for spans, the stored
+    /// literal otherwise.
+    #[inline]
+    pub fn get_text<'a>(&self, input: &'a str) -> std::borrow::Cow<'a, str> {
+        match self {
+            Self::Span { offset, length } => input[*offset..*offset + *length].into(),
+            Self::Text(t) => std::borrow::Cow::Owned(t.to_string()),
+        }
+    }
+
+    /// The span, when this value is input-backed.
+    #[inline]
+    pub fn span(&self) -> Option<(usize, usize)> {
+        match self {
+            Self::Span { offset, length } => Some((*offset, *length)),
+            Self::Text(_) => None,
+        }
+    }
+
+    /// Get the end position (offset + length); zero for text values.
     #[inline]
     pub fn end(&self) -> usize {
-        self.offset + self.length
+        match self {
+            Self::Span { offset, length } => offset + length,
+            Self::Text(_) => 0,
+        }
     }
 
     /// Check if this capture is empty
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.length == 0
+        match self {
+            Self::Span { length, .. } => *length == 0,
+            Self::Text(t) => t.is_empty(),
+        }
     }
 }
 
@@ -173,7 +202,7 @@ impl CaptureState {
     /// `true` if this was a new capture, `false` if it shadowed an existing one.
     #[inline]
     pub fn store(&mut self, name: &str, value: CaptureValue) -> bool {
-        if let Some(&old_value) = self.captures.get(name) {
+        if let Some(old_value) = self.captures.get(name).cloned() {
             // Shadowing an existing capture
             self.captures.insert(name.to_string(), value);
             self.capture_order
@@ -190,7 +219,7 @@ impl CaptureState {
     /// Get a capture by name
     #[inline]
     pub fn get(&self, name: &str) -> Option<CaptureValue> {
-        self.captures.get(name).copied()
+        self.captures.get(name).cloned()
     }
 
     /// Check if a capture exists
@@ -353,7 +382,9 @@ impl CaptureState {
                     CaptureEntry::New(name) => name,
                     CaptureEntry::Shadow(name, _) => name,
                 };
-                self.captures.get(name).map(|&value| (name.clone(), value))
+                self.captures
+                    .get(name)
+                    .map(|value| (name.clone(), value.clone()))
             })
             .collect()
     }
@@ -363,15 +394,15 @@ impl CaptureState {
     /// This is useful for combining results from parallel parsing.
     /// Captures from `other` will overwrite existing captures with the same name.
     pub fn merge(&mut self, other: &CaptureState) {
-        for (name, &value) in other.iter() {
-            if let Some(&old_value) = self.captures.get(name) {
+        for (name, value) in other.iter() {
+            if let Some(old_value) = self.captures.get(name).cloned() {
                 // Shadowing existing capture
-                self.captures.insert(name.clone(), value);
+                self.captures.insert(name.clone(), value.clone());
                 self.capture_order
                     .push(CaptureEntry::Shadow(name.clone(), old_value));
             } else {
                 // New capture
-                self.captures.insert(name.clone(), value);
+                self.captures.insert(name.clone(), value.clone());
                 self.capture_order.push(CaptureEntry::New(name.clone()));
             }
         }
@@ -434,8 +465,8 @@ mod tests {
     #[test]
     fn test_capture_value() {
         let value = CaptureValue::new(7, 5); // "World" in "Hello, World!"
-        assert_eq!(value.offset, 7);
-        assert_eq!(value.length, 5);
+        assert_eq!(value.span(), Some((7, 5)));
+        assert!(value.span().is_some());
         assert_eq!(value.end(), 12);
         assert!(!value.is_empty());
 
@@ -465,8 +496,8 @@ mod tests {
 
         // Get capture
         let value = state.get("name").unwrap();
-        assert_eq!(value.offset, 5);
-        assert_eq!(value.length, 3);
+        assert_eq!(value.span(), Some((5, 3)));
+        assert!(value.span().is_some());
 
         // Non-existent capture
         assert!(state.get("missing").is_none());
@@ -541,18 +572,18 @@ mod tests {
 
         // Outer "x"
         state.store("x", CaptureValue::new(0, 5));
-        assert_eq!(state.get("x").unwrap().offset, 0);
+        assert_eq!(state.get("x").unwrap().span().map(|s| s.0), Some(0));
 
         state.push_scope();
 
         // Shadow "x"
         state.store("x", CaptureValue::new(10, 3));
-        assert_eq!(state.get("x").unwrap().offset, 10);
+        assert_eq!(state.get("x").unwrap().span().map(|s| s.0), Some(10));
 
         state.pop_scope();
 
         // Original "x" restored
-        assert_eq!(state.get("x").unwrap().offset, 0);
+        assert_eq!(state.get("x").unwrap().span().map(|s| s.0), Some(0));
     }
 
     #[test]
@@ -647,7 +678,7 @@ mod tests {
         state1.merge(&state2);
 
         assert_eq!(state1.len(), 3);
-        assert_eq!(state1.get("b").unwrap().offset, 10); // Overwritten
+        assert_eq!(state1.get("b").unwrap().span().map(|s| s.0), Some(10)); // Overwritten
         assert!(state1.contains("c"));
     }
 
@@ -675,7 +706,7 @@ mod tests {
             // Can access via current_capture
             let value = current_capture("test");
             assert!(value.is_some());
-            assert_eq!(value.unwrap().length, 5);
+            assert_eq!(value.unwrap().span().map(|s| s.1), Some(5));
 
             // Can clone the whole state
             let cloned = current_captures();
