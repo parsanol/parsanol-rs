@@ -40,7 +40,6 @@ serde_json = { workspace = true }
 regex = { workspace = true }
 hashbrown = { workspace = true }
 ahash = { workspace = true }
-memchr = { workspace = true }
 
 # Optional dependencies
 log = { version = "0.4", optional = true }
