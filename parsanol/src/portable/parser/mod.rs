@@ -1146,9 +1146,6 @@ impl<'a> PortableParser<'a> {
         // Invoke callback: a fragment grammar (self-consistent atom
         // indices, the shape host bridges produce) wins over a single
         // index-free atom, which is appended to a grammar clone.
-        if std::env::var("PARSANOL_DYN_TRACE").is_ok() {
-            eprintln!("DYN: parse_dynamic id={} pos={}", callback_id, pos);
-        }
         // Dispatch cache (parsanol-ruby#80): a deterministic block's
         // fragment is a pure function of (input, pos, captures) — the
         // exact key below. A hit skips the host round-trip (block
@@ -1165,8 +1162,10 @@ impl<'a> PortableParser<'a> {
         }
 
         let grammar = self.grammar;
+        let mut resolved_fragment = false;
         let (temp_grammar, temp_atom_id) = with_dynamic_callback(callback_id, |cb| {
             if let Some((fragment, root)) = cb.resolve_fragment(&ctx) {
+                resolved_fragment = true;
                 return Some((fragment, root));
             }
             cb.resolve(&ctx).map(|atom| {
@@ -1188,17 +1187,26 @@ impl<'a> PortableParser<'a> {
             self.capture_state
                 .store(name, super::capture_state::CaptureValue::text(text.clone()));
         }
-        super::dynamic::store_dispatch_fragment(
-            callback_id,
-            pos,
-            &self.capture_state,
-            self.input,
-            temp_grammar.clone(),
-            temp_atom_id,
-            writes,
-        );
 
-        self.parse_fragment(&temp_grammar, temp_atom_id, pos)
+        // Cache ONLY self-consistent fragments (small host-atom
+        // subtrees). The resolve path builds `grammar.clone() + atom`
+        // — a full copy of the registered grammar PER DISPATCH
+        // POSITION; caching those retained megabytes per distinct
+        // document (parsanol-ruby#84).
+        if resolved_fragment {
+            let stored = super::dynamic::store_dispatch_fragment(
+                callback_id,
+                pos,
+                &self.capture_state,
+                self.input,
+                temp_grammar,
+                temp_atom_id,
+                writes,
+            );
+            self.parse_fragment(&stored, temp_atom_id, pos)
+        } else {
+            self.parse_fragment(&temp_grammar, temp_atom_id, pos)
+        }
     }
 
     /// Parse a resolved fragment at `pos` against a temporary parser
