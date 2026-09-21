@@ -670,11 +670,7 @@ fn fold_sequence_ruby(items: &[AstNode], arena: &mut AstArena, input: &str) -> A
         if matches!(item, AstNode::Nil) {
             continue;
         }
-        if let AstNode::Array {
-            pool_index,
-            length,
-        } = item
-        {
+        if let AstNode::Array { pool_index, length } = item {
             if *length == 0 {
                 continue;
             }
@@ -740,12 +736,7 @@ fn merge_fold_ruby(left: AstNode, right: AstNode, arena: &mut AstArena, input: &
                 .iter()
                 .cloned()
                 .collect::<Vec<_>>();
-            out.extend(
-                arena
-                    .get_array(*rp as usize, *rl as usize)
-                    .iter()
-                    .cloned(),
-            );
+            out.extend(arena.get_array(*rp as usize, *rl as usize).iter().cloned());
             let (pool_idx, len) = arena.store_array(&out);
             AstNode::Array {
                 pool_index: pool_idx,
@@ -754,13 +745,7 @@ fn merge_fold_ruby(left: AstNode, right: AstNode, arena: &mut AstArena, input: &
         }
 
         // Hash + Array → [hash] + array  (list pattern: first item + repetition).
-        (
-            AstNode::Hash { .. },
-            AstNode::Array {
-                pool_index,
-                length,
-            },
-        ) => {
+        (AstNode::Hash { .. }, AstNode::Array { pool_index, length }) => {
             let mut out = vec![left];
             out.extend(
                 arena
@@ -776,13 +761,7 @@ fn merge_fold_ruby(left: AstNode, right: AstNode, arena: &mut AstArena, input: &
         }
 
         // Array + Hash → array + [hash].
-        (
-            AstNode::Array {
-                pool_index,
-                length,
-            },
-            AstNode::Hash { .. },
-        ) => {
+        (AstNode::Array { pool_index, length }, AstNode::Hash { .. }) => {
             let mut out = arena
                 .get_array(*pool_index as usize, *length as usize)
                 .iter()
@@ -1140,15 +1119,28 @@ mod tests {
                     items.len(),
                     items
                 );
-                if let AstNode::Hash { pool_index: h_p, length: h_l } = &items[0] {
+                if let AstNode::Hash {
+                    pool_index: h_p,
+                    length: h_l,
+                } = &items[0]
+                {
                     let pairs = arena.get_hash_items(*h_p as usize, *h_l as usize);
-                    assert_eq!(pairs.len(), 1, "item 0 should have 1 key, got {:?}", pairs.iter().map(|(k,_)|k).collect::<Vec<_>>());
+                    assert_eq!(
+                        pairs.len(),
+                        1,
+                        "item 0 should have 1 key, got {:?}",
+                        pairs.iter().map(|(k, _)| k).collect::<Vec<_>>()
+                    );
                     assert_eq!(pairs[0].0, "name");
                 } else {
                     panic!("expected name hash for item 0, got {:?}", items[0]);
                 }
                 for (i, item) in items.iter().enumerate().skip(1) {
-                    if let AstNode::Hash { pool_index: h_p, length: h_l } = item {
+                    if let AstNode::Hash {
+                        pool_index: h_p,
+                        length: h_l,
+                    } = item
+                    {
                         let pairs = arena.get_hash_items(*h_p as usize, *h_l as usize);
                         let keys: std::collections::HashSet<_> =
                             pairs.iter().map(|(k, _)| k.as_str()).collect();
@@ -1199,7 +1191,11 @@ mod tests {
                 let items = arena.get_array(pool_index as usize, length as usize);
                 assert_eq!(items.len(), 4, "should have 4 items, got {}", items.len());
                 for (i, item) in items.iter().enumerate() {
-                    if let AstNode::Hash { pool_index: h_p, length: h_l } = item {
+                    if let AstNode::Hash {
+                        pool_index: h_p,
+                        length: h_l,
+                    } = item
+                    {
                         let pairs = arena.get_hash_items(*h_p as usize, *h_l as usize);
                         let keys: std::collections::HashSet<_> =
                             pairs.iter().map(|(k, _)| k.as_str()).collect();
