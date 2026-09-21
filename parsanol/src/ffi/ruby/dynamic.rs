@@ -220,7 +220,10 @@ fn build_ruby_context(ctx: &DynamicContext, ruby: &Ruby) -> Option<Value> {
     // semantics: blocks read the TREE, mirroring Capture#apply).
     // Text stays the fallback for captures without a subtree.
     for (name, value) in ctx.captures.node_values() {
-        let _ = captures_hash.aset(ruby.to_symbol(name.as_str()), portable_to_ruby(&value, ruby));
+        let _ = captures_hash.aset(
+            ruby.to_symbol(name.as_str()),
+            portable_to_ruby(&value, ruby),
+        );
     }
     let _ = hash.aset(ruby.to_symbol("captures"), captures_hash);
     Some(hash.into_value_with(ruby))
