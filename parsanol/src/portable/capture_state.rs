@@ -27,8 +27,76 @@
 use ahash::AHashMap;
 use std::cell::RefCell;
 
+use super::transform::Value;
+
 /// Maximum allowed scope depth to prevent stack overflow
 pub const MAX_SCOPE_DEPTH: usize = 1000;
+
+/// A parsed subtree stored alongside a capture (parsanol capture
+/// semantics: `x.capture(:name)` exposes the FLATTENED SUBTREE to
+/// dynamic blocks, not the raw input text). The value is a
+/// self-contained portable tree — no arena references — so it crosses
+/// fragment-parser boundaries intact. `fingerprint` hashes the value
+/// structure so the dispatch cache can key on it soundly.
+#[derive(Debug, Clone)]
+pub struct NodeCapture {
+    pub value: Value,
+    pub fingerprint: u64,
+}
+
+/// Structural fingerprint of a captured value: content-hashed.
+pub fn value_fingerprint(value: &Value) -> u64 {
+    let mut h: u64 = 0x9e37_79b9_7f4a_7c15;
+    fingerprint_into(value, &mut h);
+    h
+}
+
+fn fingerprint_into(value: &Value, h: &mut u64) {
+    fn mix(h: &mut u64, byte: u64) {
+        *h ^= byte;
+        *h = h.wrapping_mul(0x1000_0000_01B3);
+    }
+    match value {
+        Value::Nil => mix(h, 0),
+        Value::Bool(b) => mix(h, u64::from(*b) + 1),
+        Value::Int(i) => {
+            mix(h, 3);
+            mix(h, *i as u64);
+        }
+        Value::Float(f) => {
+            mix(h, 4);
+            mix(h, f.to_bits());
+        }
+        Value::String(s) => {
+            mix(h, 5);
+            mix(h, s.len() as u64);
+            for b in s.as_bytes() {
+                mix(h, u64::from(*b));
+            }
+        }
+        Value::Array(items) => {
+            mix(h, 6);
+            mix(h, items.len() as u64);
+            for item in items {
+                fingerprint_into(item, h);
+            }
+        }
+        Value::Hash(map) => {
+            mix(h, 7);
+            mix(h, map.len() as u64);
+            let mut pairs: Vec<(&String, &Value)> = map.iter().collect();
+            pairs.sort_by(|a, b| a.0.cmp(b.0));
+            for (k, v) in pairs {
+                mix(h, 8);
+                mix(h, k.len() as u64);
+                for b in k.as_bytes() {
+                    mix(h, u64::from(*b));
+                }
+                fingerprint_into(v, h);
+            }
+        }
+    }
+}
 
 /// A zero-copy capture value
 ///
@@ -119,8 +187,9 @@ pub struct CaptureSnapshot {
 enum CaptureEntry {
     /// New capture added in current scope
     New(String),
-    /// Shadow of existing capture, with the old value
-    Shadow(String, CaptureValue),
+    /// Shadow of existing capture, with the old value (and old node,
+    /// when the shadowed capture carried one)
+    Shadow(String, CaptureValue, Option<NodeCapture>),
 }
 
 /// Capture state with generational scope management
@@ -160,6 +229,9 @@ enum CaptureEntry {
 pub struct CaptureState {
     /// Named captures (name -> value)
     captures: AHashMap<String, CaptureValue>,
+    /// Parsed subtrees for captures stored via `store_with_node`
+    /// (the `Atom::Capture` path). Keyed by the same names.
+    nodes: AHashMap<String, NodeCapture>,
     /// Ordered list of capture entries (for efficient scope pop with shadowing)
     capture_order: Vec<CaptureEntry>,
     /// Scope stack - each entry is the capture count at scope entry
@@ -186,6 +258,7 @@ impl CaptureState {
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             captures: AHashMap::with_capacity(capacity),
+            nodes: AHashMap::with_capacity(capacity),
             capture_order: Vec::with_capacity(capacity),
             scope_stack: Vec::with_capacity(16),
             depth: 0,
@@ -204,16 +277,67 @@ impl CaptureState {
     pub fn store(&mut self, name: &str, value: CaptureValue) -> bool {
         if let Some(old_value) = self.captures.get(name).cloned() {
             // Shadowing an existing capture
+            let old_node = self.nodes.remove(name);
             self.captures.insert(name.to_string(), value);
             self.capture_order
-                .push(CaptureEntry::Shadow(name.to_string(), old_value));
+                .push(CaptureEntry::Shadow(name.to_string(), old_value, old_node));
             false
         } else {
             // New capture
+            self.nodes.remove(name);
             self.captures.insert(name.to_string(), value);
             self.capture_order.push(CaptureEntry::New(name.to_string()));
             true
         }
+    }
+
+    /// Store a named capture together with its parsed subtree
+    /// (`Atom::Capture` semantics: dynamic blocks read the tree).
+    #[inline]
+    pub fn store_with_node(
+        &mut self,
+        name: &str,
+        value: CaptureValue,
+        node_value: Value,
+        fingerprint: u64,
+    ) -> bool {
+        let old_node = self.nodes.insert(
+            name.to_string(),
+            NodeCapture {
+                value: node_value,
+                fingerprint,
+            },
+        );
+        if let Some(old_value) = self.captures.get(name).cloned() {
+            self.captures.insert(name.to_string(), value);
+            self.capture_order
+                .push(CaptureEntry::Shadow(name.to_string(), old_value, old_node));
+            false
+        } else {
+            self.captures.insert(name.to_string(), value);
+            self.capture_order.push(CaptureEntry::New(name.to_string()));
+            true
+        }
+    }
+
+    /// Get the parsed subtree stored for a capture, if any
+    #[inline]
+    pub fn get_node(&self, name: &str) -> Option<NodeCapture> {
+        self.nodes.get(name).cloned()
+    }
+
+    /// Iterate over capture names that carry parsed subtrees with their
+    /// fingerprints (dispatch-cache signature inputs).
+    pub fn node_fingerprints(&self) -> impl Iterator<Item = (&String, u64)> {
+        self.nodes.iter().map(|(name, nc)| (name, nc.fingerprint))
+    }
+
+    /// Snapshot of every capture subtree as (name, value) pairs
+    pub fn node_values(&self) -> Vec<(String, Value)> {
+        self.nodes
+            .iter()
+            .map(|(name, nc)| (name.clone(), nc.value.clone()))
+            .collect()
     }
 
     /// Get a capture by name
@@ -300,10 +424,19 @@ impl CaptureState {
                 match entry {
                     CaptureEntry::New(name) => {
                         self.captures.remove(&name);
+                        self.nodes.remove(&name);
                     }
-                    CaptureEntry::Shadow(name, old_value) => {
+                    CaptureEntry::Shadow(name, old_value, old_node) => {
                         // Restore the shadowed value
-                        self.captures.insert(name, old_value);
+                        self.captures.insert(name.clone(), old_value);
+                        match old_node {
+                            Some(node) => {
+                                self.nodes.insert(name, node);
+                            }
+                            None => {
+                                self.nodes.remove(&name);
+                            }
+                        }
                     }
                 }
             }
@@ -340,9 +473,18 @@ impl CaptureState {
                 match entry {
                     CaptureEntry::New(name) => {
                         self.captures.remove(&name);
+                        self.nodes.remove(&name);
                     }
-                    CaptureEntry::Shadow(name, old_value) => {
-                        self.captures.insert(name, old_value);
+                    CaptureEntry::Shadow(name, old_value, old_node) => {
+                        self.captures.insert(name.clone(), old_value);
+                        match old_node {
+                            Some(node) => {
+                                self.nodes.insert(name, node);
+                            }
+                            None => {
+                                self.nodes.remove(&name);
+                            }
+                        }
                     }
                 }
             }
@@ -355,6 +497,7 @@ impl CaptureState {
     #[inline]
     pub fn clear(&mut self) {
         self.captures.clear();
+        self.nodes.clear();
         self.capture_order.clear();
         self.scope_stack.clear();
         self.depth = 0;
@@ -364,7 +507,7 @@ impl CaptureState {
     pub fn names(&self) -> impl Iterator<Item = &String> {
         self.capture_order.iter().map(|entry| match entry {
             CaptureEntry::New(name) => name,
-            CaptureEntry::Shadow(name, _) => name,
+            CaptureEntry::Shadow(name, ..) => name,
         })
     }
 
@@ -380,7 +523,7 @@ impl CaptureState {
             .filter_map(|entry| {
                 let name = match entry {
                     CaptureEntry::New(name) => name,
-                    CaptureEntry::Shadow(name, _) => name,
+                    CaptureEntry::Shadow(name, ..) => name,
                 };
                 self.captures
                     .get(name)
@@ -395,11 +538,15 @@ impl CaptureState {
     /// Captures from `other` will overwrite existing captures with the same name.
     pub fn merge(&mut self, other: &CaptureState) {
         for (name, value) in other.iter() {
+            let old_node = match other.nodes.get(name) {
+                Some(nc) => self.nodes.insert(name.clone(), nc.clone()),
+                None => self.nodes.remove(name),
+            };
             if let Some(old_value) = self.captures.get(name).cloned() {
                 // Shadowing existing capture
                 self.captures.insert(name.clone(), value.clone());
                 self.capture_order
-                    .push(CaptureEntry::Shadow(name.clone(), old_value));
+                    .push(CaptureEntry::Shadow(name.clone(), old_value, old_node));
             } else {
                 // New capture
                 self.captures.insert(name.clone(), value.clone());

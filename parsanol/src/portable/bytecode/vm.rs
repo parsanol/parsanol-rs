@@ -875,9 +875,16 @@ impl<'a> BytecodeVM<'a> {
                     }
                 };
 
-                // Create context for callback
-                let ctx =
-                    DynamicContext::new(self.input_str, self.position, self.capture_state.clone());
+                // Create context for callback. Capture subtrees
+                // (materialized at capture time) ride along so the
+                // block reads the parsed TREE (capture parity).
+                let node_values = self.capture_state.node_values();
+                let ctx = DynamicContext::with_node_values(
+                    self.input_str,
+                    self.position,
+                    self.capture_state.clone(),
+                    node_values,
+                );
 
                 // Dispatch cache (parsanol-ruby#80): a deterministic
                 // block's fragment is a pure function of (input, pos,

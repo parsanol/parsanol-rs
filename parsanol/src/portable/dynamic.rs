@@ -53,6 +53,11 @@ pub struct DynamicContext {
     pub pos: usize,
     /// Current capture state (may be empty if no captures)
     pub captures: CaptureState,
+    /// Parsed subtrees for capture-atom captures, materialized as
+    /// portable values (capture semantics: blocks read the TREE, not
+    /// the raw span). Empty on dispatch-cache hits — the block is not
+    /// invoked at all — and for captures without a subtree.
+    pub node_values: Vec<(String, crate::portable::transform::Value)>,
 }
 
 impl DynamicContext {
@@ -63,6 +68,23 @@ impl DynamicContext {
             input: input.to_string(),
             pos,
             captures,
+            node_values: Vec::new(),
+        }
+    }
+
+    /// Create a dynamic context carrying materialized capture subtrees
+    #[inline]
+    pub fn with_node_values(
+        input: &str,
+        pos: usize,
+        captures: CaptureState,
+        node_values: Vec<(String, crate::portable::transform::Value)>,
+    ) -> Self {
+        Self {
+            input: input.to_string(),
+            pos,
+            captures,
+            node_values,
         }
     }
 
@@ -448,6 +470,24 @@ fn capture_signature(captures: &CaptureState, input: &str) -> u64 {
                 h = h.wrapping_mul(0x1000_0000_01B3);
             }
         }
+    }
+    // Capture subtrees participate in the signature: a block that
+    // reads a tree (capture semantics) can resolve differently for
+    // the same texts but different subtrees.
+    let mut node_sigs: Vec<(String, u64)> = captures
+        .node_fingerprints()
+        .map(|(name, fp)| (name.clone(), fp))
+        .collect();
+    node_sigs.sort();
+    for (name, fp) in node_sigs {
+        h ^= name.len() as u64;
+        h = h.wrapping_mul(0x1000_0000_01B3);
+        for b in name.as_bytes() {
+            h ^= *b as u64;
+            h = h.wrapping_mul(0x1000_0000_01B3);
+        }
+        h ^= fp;
+        h = h.wrapping_mul(0x1000_0000_01B3);
     }
     h
 }
