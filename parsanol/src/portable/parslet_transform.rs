@@ -472,14 +472,14 @@ fn flatten_sequence(items: &[AstNode], arena: &mut AstArena, input: &str) -> Ast
     // FIRST PASS: Detect repetition patterns
     // If any key appears more than once across all hashes, this is a repetition
     // pattern and we should keep items as an array instead of merging.
-    let mut key_counts: HashMap<String, usize> = HashMap::new();
+    let mut key_counts: HashMap<u32, usize> = HashMap::new();
 
-    fn count_keys_in_item(item: &AstNode, arena: &AstArena, counts: &mut HashMap<String, usize>) {
+    fn count_keys_in_item(item: &AstNode, arena: &AstArena, counts: &mut HashMap<u32, usize>) {
         match item {
             AstNode::Hash { pool_index, length } => {
-                let pairs = arena.get_hash_items(*pool_index as usize, *length as usize);
+                let pairs = arena.get_hash_pairs_indexed(*pool_index as usize, *length as usize);
                 for (k, _) in pairs {
-                    *counts.entry(k.to_string()).or_insert(0) += 1;
+                    *counts.entry(k).or_insert(0) += 1;
                 }
             }
             AstNode::Array { pool_index, length } => {
@@ -523,9 +523,10 @@ fn flatten_sequence(items: &[AstNode], arena: &mut AstArena, input: &str) -> Ast
     }
 
     // SEQUENCE PATTERN: proceed with existing merge logic
-    // Second pass: collect all data without mutating arena
-    // Use owned Strings for keys to avoid lifetime issues
-    let mut merged_hash: Vec<(String, AstNode)> = Vec::new();
+    // Second pass: collect all data without mutating arena. Keys are
+    // interned pool indexes: equality is u32 equality and the final
+    // store skips re-interning.
+    let mut merged_hash: Vec<(u32, AstNode)> = Vec::new();
     let mut string_parts: Vec<String> = Vec::new();
     let mut first_input_offset: Option<u32> = None;
     let mut hash_count = 0;
@@ -534,13 +535,13 @@ fn flatten_sequence(items: &[AstNode], arena: &mut AstArena, input: &str) -> Ast
     for item in items {
         match item {
             AstNode::Hash { pool_index, length } => {
-                let pairs = arena.get_hash_items(*pool_index as usize, *length as usize);
+                let pairs = arena.get_hash_pairs_indexed(*pool_index as usize, *length as usize);
                 for (k, v) in pairs {
                     // Check if key already exists (will be overwritten)
                     if let Some(pos) = merged_hash.iter().position(|(key, _)| *key == k) {
-                        merged_hash[pos] = (k.clone(), v);
+                        merged_hash[pos] = (k, v);
                     } else {
-                        merged_hash.push((k.clone(), v));
+                        merged_hash.push((k, v));
                     }
                 }
                 hash_count += 1;
@@ -614,12 +615,7 @@ fn flatten_sequence(items: &[AstNode], arena: &mut AstArena, input: &str) -> Ast
     // PARSLET SEQUENCE SEMANTICS:
     // If there are named captures (hashes), return ONLY the merged hash
     if !merged_hash.is_empty() {
-        // Convert to borrowed slices for store_hash
-        let hash_refs: Vec<(&str, AstNode)> = merged_hash
-            .iter()
-            .map(|(k, v)| (k.as_str(), v.clone()))
-            .collect();
-        let (pool_idx, len) = arena.store_hash(&hash_refs);
+        let (pool_idx, len) = arena.store_hash_indexed(&merged_hash);
         return AstNode::Hash {
             pool_index: pool_idx,
             length: len,
@@ -712,23 +708,16 @@ fn merge_fold_ruby(left: AstNode, right: AstNode, arena: &mut AstArena, input: &
                 length: rl,
             },
         ) => {
-            let mut merged: Vec<(String, AstNode)> = arena
-                .get_hash_items(*lp as usize, *ll as usize)
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect();
-            for (k, v) in arena.get_hash_items(*rp as usize, *rl as usize) {
-                if let Some(pos) = merged.iter().position(|(key, _)| key == &k) {
+            let mut merged: Vec<(u32, AstNode)> =
+                arena.get_hash_pairs_indexed(*lp as usize, *ll as usize);
+            for (k, v) in arena.get_hash_pairs_indexed(*rp as usize, *rl as usize) {
+                if let Some(pos) = merged.iter().position(|(key, _)| *key == k) {
                     merged[pos] = (k, v);
                 } else {
                     merged.push((k, v));
                 }
             }
-            let refs: Vec<(&str, AstNode)> = merged
-                .iter()
-                .map(|(k, v)| (k.as_str(), v.clone()))
-                .collect();
-            let (pool_idx, len) = arena.store_hash(&refs);
+            let (pool_idx, len) = arena.store_hash_indexed(&merged);
             AstNode::Hash {
                 pool_index: pool_idx,
                 length: len,
@@ -864,11 +853,11 @@ fn stringlike_text(node: &AstNode, arena: &AstArena, input: &str) -> (String, Op
 /// Get the single key from a hash node, if it has exactly one key
 ///
 /// Returns an owned String to avoid lifetime issues with the arena's internal storage.
-fn get_single_key(node: &AstNode, arena: &AstArena) -> Option<String> {
+fn get_single_key(node: &AstNode, arena: &AstArena) -> Option<u32> {
     if let AstNode::Hash { pool_index, length } = node {
-        let pairs = arena.get_hash_items(*pool_index as usize, *length as usize);
+        let pairs = arena.get_hash_pairs_indexed(*pool_index as usize, *length as usize);
         if pairs.len() == 1 {
-            return Some(pairs[0].0.clone());
+            return Some(pairs[0].0);
         }
     }
     None
