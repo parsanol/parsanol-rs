@@ -414,7 +414,7 @@ thread_local! {
     static INPUT_HASH: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
-const DISPATCH_CACHE_CAP: usize = 4096;
+const DISPATCH_CACHE_CAP: usize = 512;
 
 /// Begin a parse: fixes the input identity for the dispatch cache
 /// (blocks can dispatch on any byte of the input, so its hash is part

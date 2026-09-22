@@ -80,16 +80,26 @@ static GRAMMAR_CACHE: std::sync::OnceLock<Mutex<GrammarCache>> = std::sync::Once
 
 /// Programs compiled for grammars in the LRU cache, keyed by the same
 /// structure hash, so one-shot paths (parse_fresh) skip recompilation.
-static PROGRAM_CACHE: std::sync::OnceLock<Mutex<HashMap<u64, Arc<Program>>>> =
+/// Bounded LRU: capture-derived dynamic fragments mint a fresh structure
+/// hash on every parse (parsanol-ruby#93), so an unbounded map retained
+/// multi-megabyte programs across parses and ballooned RSS to 2+ GB.
+static PROGRAM_CACHE: std::sync::OnceLock<Mutex<LruCache<u64, Arc<Program>>>> =
     std::sync::OnceLock::new();
 
-fn get_program_cache() -> &'static Mutex<HashMap<u64, Arc<Program>>> {
-    PROGRAM_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+/// Programs are large (EXPRESS compiles to ~10k instructions); keep the
+/// resident set small while still covering a working set of fragments.
+const DEFAULT_PROGRAM_CACHE_SIZE: usize = 32;
+
+fn get_program_cache() -> &'static Mutex<LruCache<u64, Arc<Program>>> {
+    PROGRAM_CACHE.get_or_init(|| Mutex::new(LruCache::new(DEFAULT_PROGRAM_CACHE_SIZE)))
 }
 
 /// Grammars whose one-shot (parse_fresh) parses tripped the VM budget.
+/// Cleared when it grows past the cap; entries are one u64 each.
 static VM_STICKY_OFF: std::sync::OnceLock<Mutex<std::collections::HashSet<u64>>> =
     std::sync::OnceLock::new();
+
+const VM_STICKY_OFF_CAP: usize = 4096;
 
 fn vm_sticky_off(hash: u64) -> bool {
     VM_STICKY_OFF
@@ -100,11 +110,14 @@ fn vm_sticky_off(hash: u64) -> bool {
 }
 
 fn mark_vm_sticky_off(hash: u64) {
-    VM_STICKY_OFF
+    let mut set = VM_STICKY_OFF
         .get_or_init(|| Mutex::new(std::collections::HashSet::new()))
         .lock()
-        .unwrap()
-        .insert(hash);
+        .unwrap();
+    if set.len() >= VM_STICKY_OFF_CAP {
+        set.clear();
+    }
+    set.insert(hash);
 }
 
 fn cached_program(hash: u64, grammar: &Grammar) -> Option<Arc<Program>> {
