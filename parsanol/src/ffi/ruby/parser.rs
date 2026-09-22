@@ -122,7 +122,7 @@ fn mark_vm_sticky_off(hash: u64) {
 
 fn cached_program(hash: u64, grammar: &Grammar) -> Option<Arc<Program>> {
     {
-        let guard = get_program_cache().lock().unwrap();
+        let mut guard = get_program_cache().lock().unwrap();
         if let Some(program) = guard.get(&hash) {
             return Some(program.clone());
         }
