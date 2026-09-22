@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Binary-safe parsanol_c_parse_len — explicit-length input by @[object]
+
 ### Other
 
 - Update Cargo.toml dependencies by @[object]
