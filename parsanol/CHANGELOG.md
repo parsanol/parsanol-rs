@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- LruCache::get needs &mut (promotes to front) — ruby-feature build by @[object]
+
+### Other
+
+- Bound the compiled-program cache — dynamic fragments minted fresh hashes per parse (#93, #84) by @[object]
+
 ### Added
 
 - Binary-safe parsanol_c_parse_len — explicit-length input by @[object]
