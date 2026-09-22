@@ -578,6 +578,57 @@ pub unsafe extern "C" fn parsanol_c_parse(
     out: *mut u64,
     cap: usize,
 ) -> isize {
+    let input_str = if input.is_null() {
+        ""
+    } else {
+        match CStr::from_ptr(input).to_str() {
+            Ok(s) => s,
+            Err(_) => {
+                c_set_error("input is not valid UTF-8");
+                return 0;
+            }
+        }
+    };
+
+    c_parse_input(handle, input_str, out, cap)
+}
+
+/// Binary-safe variant of [`parsanol_c_parse`]: reads exactly `len` bytes,
+/// so inputs may contain interior NULs.
+///
+/// `input` must be valid for reads of `len` bytes (no terminator needed,
+/// but one right after the region is fine).
+///
+/// # Safety
+///
+/// - `handle` must come from `parsanol_c_register` and not be released
+/// - `input` must be valid for reads of `len` bytes
+/// - `out` must be valid for writes of `cap` u64 cells
+#[no_mangle]
+pub unsafe extern "C" fn parsanol_c_parse_len(
+    handle: u64,
+    input: *const c_char,
+    len: usize,
+    out: *mut u64,
+    cap: usize,
+) -> isize {
+    let input_str = if input.is_null() || len == 0 {
+        ""
+    } else {
+        match std::str::from_utf8(std::slice::from_raw_parts(input.cast::<u8>(), len)) {
+            Ok(s) => s,
+            Err(_) => {
+                c_set_error("input is not valid UTF-8");
+                return 0;
+            }
+        }
+    };
+
+    c_parse_input(handle, input_str, out, cap)
+}
+
+/// Shared parse tail of `parsanol_c_parse`/`parsanol_c_parse_len`.
+unsafe fn c_parse_input(handle: u64, input_str: &str, out: *mut u64, cap: usize) -> isize {
     use flatten_ast_to_u64;
 
     let grammar = {
@@ -592,18 +643,6 @@ pub unsafe extern "C" fn parsanol_c_parse(
             Some(g) => g.clone(),
             None => {
                 c_set_error("unknown grammar handle");
-                return 0;
-            }
-        }
-    };
-
-    let input_str = if input.is_null() {
-        ""
-    } else {
-        match CStr::from_ptr(input).to_str() {
-            Ok(s) => s,
-            Err(_) => {
-                c_set_error("input is not valid UTF-8");
                 return 0;
             }
         }
@@ -688,6 +727,34 @@ mod tests {
         assert_eq!(result, PARSANOL_ERROR_PARSE_FAILED);
 
         unsafe { parsanol_grammar_free(grammar) };
+    }
+
+    #[test]
+    fn test_c_parse_len_handles_interior_nul() {
+        let json =
+            CString::new(r#"{"root": 0, "atoms": [{"Str": {"pattern": "a\u0000b"}}]}"#).unwrap();
+        let handle = unsafe { parsanol_c_register(json.as_ptr()) };
+        assert_ne!(handle, 0);
+
+        // "a\0b" with an explicit terminator: the length API must see all
+        // three bytes, while the NUL-terminated API truncates at "a".
+        let mut buf: [u8; 4] = *b"a\0b\0";
+        let input = buf.as_mut_ptr().cast::<c_char>();
+
+        let mut out = [0u64; 64];
+        let n = unsafe { parsanol_c_parse_len(handle, input, 3, out.as_mut_ptr(), out.len()) };
+        assert!(
+            n > 0,
+            "len-parse of interior-NUL input failed: {:?}",
+            unsafe { CStr::from_ptr(parsanol_c_last_error()) }
+                .to_str()
+                .unwrap()
+        );
+
+        let n_old = unsafe { parsanol_c_parse(handle, input, out.as_mut_ptr(), out.len()) };
+        assert_eq!(n_old, 0, "NUL-terminated parse should see only \"a\"");
+
+        parsanol_c_release(handle);
     }
 
     #[test]
