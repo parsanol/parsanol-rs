@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Other
+
+- Magnus 0.9 from crates.io — the git patch is no longer needed by @[object]
+
 ### Fixed
 
 - LruCache::get needs &mut (promotes to front) — ruby-feature build by @[object]
