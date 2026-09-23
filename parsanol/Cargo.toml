@@ -256,3 +256,6 @@ harness = false
 name = "event-stream"
 path = "../benches/event-stream.rs"
 harness = false
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = ["-O3", "--enable-simd"]

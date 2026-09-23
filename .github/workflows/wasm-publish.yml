@@ -1,0 +1,64 @@
+name: WASM Publish
+
+on:
+  workflow_dispatch:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    name: Build and publish @parsanol/wasm to npm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install wasm-pack
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Build wasm-pack
+        run: wasm-pack build parsanol --target web --scope parsanol --out-dir pkg --release --features wasm
+
+      - name: Prepare npm package
+        run: |
+          cd parsanol/pkg
+          # Augment the generated package.json
+          node -e "
+            const pkg = require('./package.json');
+            pkg.name = '@parsanol/wasm';
+            pkg.description = 'Parsanol PEG parser — WebAssembly bindings';
+            pkg.version = process.env.PARSANOL_VERSION || pkg.version;
+            pkg.repository = { type: 'git', url: 'https://github.com/parsanol/parsanol-rs' };
+            pkg.keywords = ['parser', 'peg', 'wasm', 'rust'];
+            pkg.license = 'MIT';
+            pkg.files = ['parsanol_wasm_bg.wasm', 'parsanol_wasm.js', 'parsanol_wasm.d.ts'];
+            delete pkg.main;
+            pkg.module = 'parsanol_wasm.js';
+            pkg.types = 'parsanol_wasm.d.ts';
+            pkg.exports = { '.': { types: './parsanol_wasm.d.ts', default: './parsanol_wasm.js' } };
+            require('fs').writeFileSync('package.json', JSON.stringify(pkg, null, 2));
+          "
+
+      - name: Publish to npm
+        run: cd parsanol/pkg && npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
