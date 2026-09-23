@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Other
 
+- Release v0.8.9 by @[object]
+
+### Other
+
 - Magnus 0.9 from crates.io — the git patch is no longer needed by @[object]
 
 ### Fixed
