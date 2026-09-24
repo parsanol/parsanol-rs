@@ -587,6 +587,10 @@ impl<'a> IncrementalParser<'a> {
         if self.output_arena.memory_usage() > OUTPUT_ARENA_BUDGET {
             self.output_arena = AstArena::new();
             self.cache.clear();
+            // Stale tree nodes reference the reset arena — the splice
+            // must not graft from them.
+            self.last_root = None;
+            self.body_chain.clear();
         }
 
         let before = self.cache.len();
