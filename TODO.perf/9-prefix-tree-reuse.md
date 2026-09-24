@@ -61,3 +61,21 @@ which the retained-arena API now makes possible (same-arena subtree
 reuse is O(1); the adoption copy that motivated the item-4 ceiling
 is gone). The retained API ships as the foundation and stays
 NON-default until the splice lands.
+
+## Splice v1 shipped (2026-09-24, later): correctness complete, perf pending
+
+`try_splice` runs inside the retained family for repetition-spine
+documents: chain-walk the previous body-item boundaries to the last
+intact item before the edit, parse ONLY the suffix iterations, rebuild
+the root from grafted prefix items + new suffix items (re-wrapping the
+Named hash). Fallback to the full retained parse on any mismatch; the
+64 MiB arena reset also drops the graft state (stale-node fix).
+
+Honest status: the splice is CORRECT (all gates pass through it) but
+not yet a measured WIN — at 911 KiB the per-edit overhead (multiple
+O(entries) retention scans, the 911 KiB set_input clone, the graft
+copy) still exceeds the saved traversal, measuring 0.59x vs the
+snapshot tier. The next lever is fusing the three per-parse cache
+scans (pre-drop retain, chain collect, post-retain) into one pass and
+dropping the per-parse input clone. Until then the splice stays
+NON-default behind `parse_*_retained`.
