@@ -70,6 +70,12 @@ impl NodeTag {
 /// in the owning parser's snapshot arena and survives across parses.
 pub const SNAPSHOT_BIT: u32 = 1 << 31;
 
+/// Bit 30 of `generation`: the entry was computed under consume_all
+/// semantics (root incomplete-consumption threading). A consume_all
+/// result must never replay for a non-consume_all lookup of the same
+/// (pos, atom) — the acceptance differs by definition.
+pub const CONSUME_ALL_BIT: u32 = 1 << 30;
+
 ///
 /// Top bit of `generation` marks a snapshot entry: node data lives in
 /// the owning parser's snapshot arena and survives across parses.
@@ -148,6 +154,20 @@ impl CacheEntry {
     #[inline]
     pub fn is_snapshot(&self) -> bool {
         self.generation & SNAPSHOT_BIT != 0
+    }
+
+    /// Whether this entry was computed under consume_all semantics.
+    #[inline]
+    pub fn is_consume_all(&self) -> bool {
+        self.generation & CONSUME_ALL_BIT != 0
+    }
+
+    /// Tag the entry as computed under consume_all semantics.
+    #[inline]
+    pub fn set_consume_all(&mut self, consume_all: bool) {
+        if consume_all {
+            self.generation |= CONSUME_ALL_BIT;
+        }
     }
 
     /// Mark the entry as snapshot-backed and point its node data at
@@ -286,7 +306,22 @@ impl DenseCache {
     /// Get a cached entry
     #[inline]
     pub fn get(&mut self, pos: u32, atom_id: u16, generation: u32) -> Option<&CacheEntry> {
-        let mut slot = self.hash(pos, atom_id);
+        self.get_ca(pos, atom_id, generation, false)
+    }
+
+    /// Get a cached entry for a consume_all-mode lookup: entries are
+    /// keyed by (pos, atom, consume_all), so a consume_all result never
+    /// replays for a plain lookup and vice versa.
+    #[inline]
+    pub fn get_ca(
+        &mut self,
+        pos: u32,
+        atom_id: u16,
+        generation: u32,
+        consume_all: bool,
+    ) -> Option<&CacheEntry> {
+        let key_atom = atom_id ^ if consume_all { 0x8000u16 } else { 0 };
+        let mut slot = self.hash(pos, key_atom);
 
         loop {
             let idx = self.slots[slot];
@@ -298,7 +333,8 @@ impl DenseCache {
             }
 
             let entry = &self.entries[idx as usize];
-            if entry.pos == pos && entry.atom_id == atom_id {
+            if entry.pos == pos && entry.atom_id == atom_id && entry.is_consume_all() == consume_all
+            {
                 // Check generation to ensure arena hasn't rolled back.
                 // Snapshot entries are exempt: their node data lives
                 // in the stable snapshot arena, so live-arena

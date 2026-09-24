@@ -260,3 +260,27 @@ fn retained_sessions_reuse_containers_and_stay_bounded() {
         "persistent output arena exceeded the session budget"
     );
 }
+
+#[test]
+fn root_alternative_retries_branches_that_leave_input() {
+    // The TODO.perf/6 item-3 repro: the first alternative matches a
+    // strict prefix of the input. The root consume_all check must
+    // retry the later branch instead of erroring Incomplete.
+    use parsanol::portable::parser_dsl::{choice, dynamic, seq, str};
+
+    let grammar = GrammarBuilder::new()
+        .rule(
+            "document",
+            choice([
+                dynamic(str("ab")),
+                dynamic(seq([dynamic(str("ab")), dynamic(str("c"))])),
+            ]),
+        )
+        .build();
+
+    let mut arena = AstArena::for_input(3);
+    let tree = parsanol::portable::parser::PortableParser::new(&grammar, "abc", &mut arena)
+        .parse()
+        .expect("root alternative must backtrack into the longer branch");
+    let _ = tree;
+}
