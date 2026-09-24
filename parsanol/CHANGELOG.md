@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Npm publish workflow for @parsanol/wasm by @[object]
+
+### Other
+
+- Cargo fmt by @[object]
+- Record fresh dispatch profile — JIT revisit condition not met (TODO.perf/3) by @[object]
+- Incremental retained-tree foundation; two cache-retention bug fixes (TODO.perf/9) by @[object]
+
 ### Other
 
 - Release v0.8.9 by @[object]
