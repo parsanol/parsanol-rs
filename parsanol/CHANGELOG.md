@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Prefix-tree splice v1 for repetition-spine documents (TODO.perf/9) by @[object]
+
+### Fixed
+
+- Keep try_atom's 2-arg public signature (semver); try_atom_impl is the consume_all variant by @[object]
+- Clear splice graft state when the session arena resets by @[object]
+
+### Other
+
+- Thread consume_all through the native walker (root incomplete-consumption) by @[object]
+
+### Added
+
 - Npm publish workflow for @parsanol/wasm by @[object]
 
 ### Other
