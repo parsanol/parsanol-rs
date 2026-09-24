@@ -120,10 +120,40 @@ fn assert_same_outcome(
     reference: Result<&AstNode, String>,
 ) {
     match (retained, reference) {
-        (Ok(rt), Ok(rr)) => assert!(
-            trees_equal(session_arena, rt, ref_arena, rr),
-            "edit {step} (offset {offset}, op {op}): retained tree diverged from full reparse"
-        ),
+        (Ok(rt), Ok(rr)) => {
+            if !trees_equal(session_arena, rt, ref_arena, rr) {
+                eprintln!("SPLICE TREE: {:?}", rt);
+                eprintln!("REFER TREE: {:?}", rr);
+                for (label, arena, node) in [
+                    ("splice", session_arena, rt),
+                    ("refer", ref_arena, rr),
+                ] {
+                    match node {
+                        AstNode::Array { pool_index, length } => {
+                            let items = arena.get_array(*pool_index as usize, *length as usize);
+                            eprintln!("{label} root ARRAY: {} items, first={:?} last={:?}", items.len(), items.first(), items.last());
+                        }
+                        AstNode::Hash { pool_index, length } => {
+                            let pairs = arena.get_hash_items(*pool_index as usize, *length as usize);
+                            eprintln!("{label} root HASH: {} pairs", pairs.len());
+                            for (k, v) in &pairs {
+                                if let AstNode::Array { pool_index: ap, length: al } = v {
+                                    let inner = arena.get_array(*ap as usize, *al as usize);
+                                    eprintln!("  {label} {k}: {} items", inner.len());
+                                    for (idx, it) in inner.iter().take(2).enumerate() {
+                                        eprintln!("    {label} item[{idx}] = {:?} -> {:?}", it, it.clone());
+                                    }
+                                } else {
+                                    eprintln!("  {label} {k}: non-array {:?}", v);
+                                }
+                            }
+                        }
+                        other => eprintln!("{label} root other: {:?}", other),
+                    }
+                }
+                panic!("diverged");
+            }
+        }
         (Err(re), Err(rf)) => assert_eq!(
             format!("{re:?}"),
             format!("{rf:?}"),
@@ -283,4 +313,36 @@ fn root_alternative_retries_branches_that_leave_input() {
         .parse()
         .expect("root alternative must backtrack into the longer branch");
     let _ = tree;
+}
+
+#[test]
+fn splice_path_engages_on_repetition_spine_documents() {
+    let grammar = kv_grammar();
+    let mut session = IncrementalParser::new(&grammar);
+
+    let mut input = kv_corpus(60);
+    session.parse_retained(&input).expect("initial parse");
+
+    let mut rng: u64 = 0x5EED_5EED_5EED_0001;
+    for _step in 0..10 {
+        rng ^= rng << 13;
+        rng ^= rng >> 7;
+        rng ^= rng << 17;
+        // Edit the last pair's value digit: the cutoff sits near the
+        // document end, so the whole prefix is graftable and the
+        // splice path engages.
+        let offset = input.len() - 2;
+        let digit = char::from(b'0' + ((rng >> 8) % 10) as u8);
+        let mut next = input.clone();
+        next.replace_range(offset..offset + 1, &digit.to_string());
+        input = next;
+        session
+            .parse_with_edit_retained(&input, Edit::replace(offset, 1, 1))
+            .expect("retained reparse");
+    }
+
+    assert!(
+        session.spliced_parses() > 0,
+        "the splice path never engaged"
+    );
 }

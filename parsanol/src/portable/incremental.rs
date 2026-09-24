@@ -64,7 +64,7 @@ use super::{
     arena::AstArena,
     ast::{AstNode, ParseError},
     cache::DenseCache,
-    grammar::Grammar,
+    grammar::{Atom, Grammar, RepetitionTag},
 };
 
 /// Represents a change to the input
@@ -319,6 +319,13 @@ pub struct IncrementalParser<'a> {
     /// Dirty region tracker
     dirty_tracker: DirtyRegionTracker,
 
+    /// The previous retained parse's root node (splice graft source)
+    /// and its repetition-body item boundaries (pos, end) in input
+    /// coordinates, collected during the last retention pass.
+    last_root: Option<AstNode>,
+    body_chain: Vec<(u32, u32)>,
+    spliced_parses: usize,
+
     /// Previous input length (for position translation)
     prev_input_len: usize,
 }
@@ -338,6 +345,9 @@ impl<'a> IncrementalParser<'a> {
             snapshot_arena: AstArena::new(),
             output_arena: AstArena::new(),
             dirty_tracker: DirtyRegionTracker::new(),
+            last_root: None,
+            body_chain: Vec::new(),
+            spliced_parses: 0,
             prev_input_len: 0,
         }
     }
@@ -352,6 +362,9 @@ impl<'a> IncrementalParser<'a> {
             snapshot_arena: AstArena::new(),
             output_arena: AstArena::new(),
             dirty_tracker: DirtyRegionTracker::new(),
+            last_root: None,
+            body_chain: Vec::new(),
+            spliced_parses: 0,
             prev_input_len: 0,
         }
     }
@@ -597,15 +610,209 @@ impl<'a> IncrementalParser<'a> {
             entry_end < cutoff && !(input_len_changed && is_root_at_start)
         });
 
+        // Splice eligibility (v1): a repetition-spine document — root
+        // Repetition, optionally behind one Named — with no Dynamic
+        // atoms, one dirty region, and a previous tree to graft from.
+        let splice = if fresh {
+            None
+        } else {
+            let single_edit = self.dirty_tracker.regions().len() == 1;
+            let has_dynamic = self
+                .grammar
+                .atoms
+                .iter()
+                .any(|a| matches!(a, Atom::Dynamic { .. }));
+            let rep = match self.grammar.get_atom(root_atom as usize) {
+                Some(Atom::Repetition { atom, max, tag, .. }) => Some((*atom, *max, *tag, None)),
+                Some(Atom::Named { atom, name, .. }) => match self.grammar.get_atom(*atom) {
+                    Some(Atom::Repetition { atom, max, tag, .. }) => {
+                        Some((*atom, *max, *tag, Some(name.clone())))
+                    }
+                    _ => None,
+                },
+                _ => None,
+            };
+            let prev_root = self.last_root.clone();
+            match (single_edit, has_dynamic, rep, prev_root) {
+                (true, false, Some((body, max, tag, name)), Some(root)) => {
+                    Some((body, max, tag, name, root))
+                }
+                _ => None,
+            }
+        };
+
         self.output_arena.set_input(input.to_owned());
+
+        // Graft source: the previous root's items (same persistent arena
+        // — resolving them is a Vec copy of small nodes).
+        let graft: Option<(Vec<AstNode>, usize)> =
+            splice.as_ref().and_then(|(_, _, _, _, root)| {
+                // The root node is the Named wrapper's hash {name: [items]}
+                // (or a bare tagged Array when the repetition is unnamed);
+                // the graft source is the inner item array.
+                let array = match root {
+                    AstNode::Array { .. } => root.clone(),
+                    AstNode::Hash { pool_index, length } => {
+                        let items = self
+                            .output_arena
+                            .get_hash_items(*pool_index as usize, *length as usize);
+                        items.first().map(|(_, v)| v.clone())?
+                    }
+                    _ => return None,
+                };
+                match array {
+                    AstNode::Array { pool_index, length } => Some((
+                        self.output_arena
+                            .get_array(pool_index as usize, length as usize),
+                        length as usize,
+                    )),
+                    _ => None,
+                }
+            });
+
+        // The previous parse's body-item boundaries (pos, end), collected
+        // during the last retention pass.
+        let chain = std::mem::take(&mut self.body_chain);
+        let splice_plan = splice.as_ref().and_then(|(_, max, _tag, _, _)| {
+            // Chain-walk the consecutive item boundaries from 0 that end
+            // before the edit: the reusable prefix is exactly k items.
+            let mut p = 0usize;
+            let mut k = 0usize;
+            for (pos, end) in &chain {
+                let (pos, end) = (*pos as usize, *end as usize);
+                if end >= cutoff {
+                    break;
+                }
+                if pos == p {
+                    p = end;
+                    k += 1;
+                } else if pos > p {
+                    break;
+                }
+            }
+            (k > 0).then_some((p, k, *max))
+        });
+
+        if std::env::var("SPLICE_DEBUG").is_ok() {
+            eprintln!(
+                "PLAN dbg: plan={:?} graft_len={:?}",
+                splice_plan.as_ref().map(|(p, k, _)| (p, k)),
+                graft.as_ref().map(|(_, l)| l),
+            );
+        }
         let mut parser = super::parser::PortableParser::new_with_cache_in_place(
             &self.grammar,
             input,
             &mut self.output_arena,
             std::mem::take(&mut self.cache),
         );
-        let result = parser.parse();
-        self.cache = parser.into_cache();
+
+        // The splice: parse ONLY the suffix iterations of the body atom
+        // from the last intact item boundary; rebuild the root by
+        // grafting the k untouched prefix items (same-arena nodes, O(1)
+        // each) in front of the new ones. Any mismatch — chain broken,
+        // suffix not consuming to EOF, budget — falls back to the full
+        // parse below with the same parser (its memo entries from the
+        // suffix attempts only help).
+        if std::env::var("SPLICE_DEBUG").is_ok() {
+            eprintln!(
+                "SPLICE dbg: regions={} has_dyn={} rep={} root={} chain={} cutoff={} name={:?}",
+                self.dirty_tracker.regions().len(),
+                self.grammar
+                    .atoms
+                    .iter()
+                    .any(|a| matches!(a, Atom::Dynamic { .. })),
+                splice.as_ref().map(|s| s.0).is_some(),
+                self.last_root.is_some(),
+                chain.len(),
+                cutoff,
+                splice.as_ref().map(|s| s.3.clone()),
+            );
+        }
+        let mut spliced: Option<(&str, Vec<AstNode>)> = None;
+        let mut root_name: Option<String> = None;
+        if let (
+            Some((body, _, tag, name, _)),
+            Some((splice_pos, k, max)),
+            Some((prev_items, prev_len)),
+        ) = (splice.as_ref(), splice_plan.as_ref(), graft.as_ref())
+        {
+            if *k <= *prev_len {
+                root_name = name.clone();
+                let tag_str = match tag {
+                    RepetitionTag::Maybe => ":maybe",
+                    RepetitionTag::Repetition => ":repetition",
+                };
+                let mut suffix: Vec<AstNode> = Vec::new();
+                let mut s_pos = *splice_pos;
+                loop {
+                    if let Some(mx) = max {
+                        if k + suffix.len() >= *mx {
+                            break;
+                        }
+                    }
+                    match parser.try_atom(*body, s_pos, false) {
+                        Ok(r) => {
+                            let zero_width = r.end_pos == s_pos;
+                            suffix.push(r.value.clone());
+                            s_pos = r.end_pos;
+                            // Same no-progress rule as the repetition
+                            // guard: count one empty match, stop.
+                            if zero_width {
+                                break;
+                            }
+                        }
+                        Err(_) => break,
+                    }
+                }
+                if std::env::var("SPLICE_DEBUG").is_ok() {
+                    eprintln!(
+                        "SPLICE loop end: s_pos={} len={} suffix={} k={}",
+                        s_pos,
+                        input.len(),
+                        suffix.len(),
+                        k
+                    );
+                }
+                if s_pos == input.len() {
+                    // prev_items[0] is the array's tag; items live at
+                    // slots 1..=k. store_tagged_array re-prepends the tag.
+                    let mut items: Vec<AstNode> =
+                        prev_items.iter().take(k + 1).skip(1).cloned().collect();
+                    items.extend(suffix);
+                    spliced = Some((tag_str, items));
+                }
+            }
+        }
+
+        let result = match spliced {
+            Some((tag_str, items)) => {
+                // Consume the parser FIRST so the arena borrow ends,
+                // then rebuild the root from grafted + new items.
+                self.cache = parser.into_cache();
+                self.spliced_parses += 1;
+                let (pool_idx, len) = self.output_arena.store_tagged_array(tag_str, &items);
+                let array = AstNode::Array {
+                    pool_index: pool_idx,
+                    length: len,
+                };
+                match root_name.as_deref() {
+                    Some(name) => {
+                        let (hp, hl) = self.output_arena.store_hash(&[(name, array)]);
+                        Ok(AstNode::Hash {
+                            pool_index: hp,
+                            length: hl,
+                        })
+                    }
+                    None => Ok(array),
+                }
+            }
+            None => {
+                let r = parser.parse();
+                self.cache = parser.into_cache();
+                r
+            }
+        };
         let post_parse = self.cache.len();
 
         // Retention keeps every success fully before the edit cutoff:
@@ -614,6 +821,19 @@ impl<'a> IncrementalParser<'a> {
         // snapshot, which exempts them from arena-generation checks).
         // Failures stay never-retained, exactly like the snapshot
         // tier.
+        // Collect the repetition-body item boundaries for the NEXT
+        // splice chain walk (one pass, alongside retention).
+        if let Some((body, _, _, _, _)) = splice.as_ref() {
+            let body = *body as u16;
+            let mut next_chain: Vec<(u32, u32)> = self
+                .cache
+                .entries()
+                .filter(|e| e.success && e.atom_id == body)
+                .map(|e| (e.pos, e.end_pos))
+                .collect();
+            next_chain.sort_unstable();
+            self.body_chain = next_chain;
+        }
         self.cache.retain_snapshot_adopt(
             |entry| {
                 let entry_end = entry.end_pos as usize;
@@ -624,6 +844,9 @@ impl<'a> IncrementalParser<'a> {
         );
         self.dirty_tracker.clear();
 
+        if let Ok(ast) = &result {
+            self.last_root = Some(ast.clone());
+        }
         (result, before, post_parse)
     }
 
@@ -635,6 +858,12 @@ impl<'a> IncrementalParser<'a> {
             reused_cache_entries: self.cache.len(),
             invalidated_cache_entries: post_parse - self.cache.len(),
         })
+    }
+
+    /// Number of retained parses rebuilt via the splice path.
+    #[inline]
+    pub fn spliced_parses(&self) -> usize {
+        self.spliced_parses
     }
 
     /// Get cache statistics
@@ -654,6 +883,9 @@ impl<'a> IncrementalParser<'a> {
         self.cache.clear();
         self.snapshot_arena = AstArena::new();
         self.output_arena = AstArena::new();
+        self.last_root = None;
+        self.body_chain.clear();
+        self.spliced_parses = 0;
         self.dirty_tracker.clear();
         self.prev_input_len = 0;
     }
