@@ -29,3 +29,20 @@ stays unscheduled: the measured bottleneck on real corpora is
 packrat backtracking, not opcode dispatch, and the prefix split
 removed the dispatch blocker the JIT was meant to solve. Revisit only
 with a fresh profile that shows dispatch dominating again.
+
+## Revisit check 2026-09-24: condition NOT met, stays deferred
+
+Ran the mandated fresh profile (`examples/prof_dispatch.rs`, rs#100
+counters, 911 KiB KV corpus):
+
+- walker: 360,004 atom dispatches (0.4/byte), each atom dispatched
+  exactly once per pair — zero repeated work;
+- bytecode VM: 600,006 instructions (0.66/byte), backtracks=1.
+
+Dispatch is executed once per grammar position and is O(document);
+backtracking — the measured bottleneck — is absent on this shape and
+remains the target of the incremental work (TODO.perf/8/9). A cranelift
+backend accelerates dispatch, which is not the bottleneck; the revisit
+condition ("a fresh profile that shows dispatch dominating") is not
+met. Stays deferred. The probe example ships so the next revisit is a
+one-command rerun.
