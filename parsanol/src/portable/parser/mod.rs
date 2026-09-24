@@ -409,7 +409,7 @@ impl<'a> PortableParser<'a> {
 
     /// Parse from a specific position (for dynamic atom support)
     pub fn parse_from_pos(&mut self, pos: usize) -> Result<ParseResult, ParseError> {
-        let result = self.try_atom(self.grammar.root, pos, false)?;
+        let result = self.try_atom_impl(self.grammar.root, pos, false)?;
         Ok(ParseResult {
             value: result.value,
             end_pos: result.end_pos,
@@ -500,7 +500,7 @@ impl<'a> PortableParser<'a> {
             self.grammar.root
         );
 
-        match self.try_atom(self.grammar.root, 0, true) {
+        match self.try_atom_impl(self.grammar.root, 0, true) {
             Ok(result) => {
                 if result.end_pos == self.input.len() {
                     log_debug!("Parse successful");
@@ -531,7 +531,7 @@ impl<'a> PortableParser<'a> {
     pub fn parse_with_end_pos(&mut self) -> Result<ParseResult, ParseError> {
         self.check_input_size()?;
         self.start_timeout_timer();
-        self.try_atom(self.grammar.root, 0, false)
+        self.try_atom_impl(self.grammar.root, 0, false)
     }
 
     /// Parse with custom config
@@ -592,7 +592,14 @@ impl<'a> PortableParser<'a> {
     /// crucial for PEG parsing performance, especially with grammars that
     /// have many alternatives (like EXPRESS with 2273 atoms).
     #[inline]
-    pub fn try_atom(
+    pub fn try_atom(&mut self, atom_id: usize, pos: usize) -> Result<ParseResult, ParseError> {
+        self.try_atom_impl(atom_id, pos, false)
+    }
+
+    /// consume_all-threading variant (crate-internal): mirrors the
+    /// interpreter's Base#apply — every successful application must
+    /// consume the whole input, else it is a failure.
+    pub(crate) fn try_atom_impl(
         &mut self,
         atom_id: usize,
         pos: usize,
@@ -723,7 +730,7 @@ impl<'a> PortableParser<'a> {
                 Atom::Named { name, atom } => self.parse_named(name, *atom, pos, consume_all),
                 Atom::Entity { atom } => {
                     self.enter_recursive()?;
-                    let result = self.try_atom(*atom, pos, consume_all);
+                    let result = self.try_atom_impl(*atom, pos, consume_all);
                     self.exit_recursive();
                     result
                 }
@@ -736,7 +743,7 @@ impl<'a> PortableParser<'a> {
                     capture_state: None,
                 }),
                 Atom::Ignore { atom } => {
-                    let result = self.try_atom(*atom, pos, consume_all)?;
+                    let result = self.try_atom_impl(*atom, pos, consume_all)?;
                     Ok(ParseResult {
                         value: AstNode::Nil,
                         end_pos: result.end_pos,
@@ -871,7 +878,8 @@ impl<'a> PortableParser<'a> {
         self.capture_state.push_scope();
         let last = atoms.len().saturating_sub(1);
         for (idx, &atom_id) in atoms.iter().enumerate() {
-            let result = match self.try_atom(atom_id, current_pos, consume_all && idx == last) {
+            let result = match self.try_atom_impl(atom_id, current_pos, consume_all && idx == last)
+            {
                 Ok(r) => r,
                 Err(e) => {
                     self.capture_state.pop_scope();
@@ -913,7 +921,7 @@ impl<'a> PortableParser<'a> {
             for &atom_id in atoms {
                 let cp = self.arena.checkpoint();
                 self.capture_state.push_scope();
-                if let Ok(result) = self.try_atom(atom_id, pos, consume_all) {
+                if let Ok(result) = self.try_atom_impl(atom_id, pos, consume_all) {
                     self.capture_state.commit_scope();
                     return Ok(result);
                 }
@@ -928,7 +936,7 @@ impl<'a> PortableParser<'a> {
         // discarded — they belong to a branch that never matched.
         for &atom_id in atoms {
             self.capture_state.push_scope();
-            match self.try_atom(atom_id, pos, consume_all) {
+            match self.try_atom_impl(atom_id, pos, consume_all) {
                 Ok(result) => {
                     self.capture_state.commit_scope();
                     return Ok(result);
@@ -987,7 +995,7 @@ impl<'a> PortableParser<'a> {
         if let Some(max_count) = max {
             while count < max_count {
                 self.capture_state.push_scope();
-                match self.try_atom(atom_id, current_pos, false) {
+                match self.try_atom_impl(atom_id, current_pos, false) {
                     Ok(result) => {
                         self.capture_state.commit_scope();
                         items.push(result.value);
@@ -1003,7 +1011,7 @@ impl<'a> PortableParser<'a> {
         } else {
             loop {
                 self.capture_state.push_scope();
-                match self.try_atom(atom_id, current_pos, false) {
+                match self.try_atom_impl(atom_id, current_pos, false) {
                     Ok(result) => {
                         self.capture_state.commit_scope();
                         items.push(result.value);
@@ -1127,7 +1135,7 @@ impl<'a> PortableParser<'a> {
         pos: usize,
         consume_all: bool,
     ) -> Result<ParseResult, ParseError> {
-        let result = self.try_atom(atom_id, pos, consume_all)?;
+        let result = self.try_atom_impl(atom_id, pos, consume_all)?;
         let (pool_idx, len) = self.arena.store_hash(&[(name, result.value)]);
         Ok(ParseResult {
             value: AstNode::Hash {
@@ -1150,7 +1158,7 @@ impl<'a> PortableParser<'a> {
         // A lookahead inspects without consuming: captures made inside
         // its body never persist, positive or negative.
         self.capture_state.push_scope();
-        let matches = self.try_atom(atom_id, pos, consume_all).is_ok();
+        let matches = self.try_atom_impl(atom_id, pos, consume_all).is_ok();
         self.capture_state.pop_scope();
         if matches == positive {
             Ok(ParseResult {
@@ -1193,7 +1201,7 @@ impl<'a> PortableParser<'a> {
         pos: usize,
         consume_all: bool,
     ) -> Result<ParseResult, ParseError> {
-        let result = self.try_atom(atom_id, pos, consume_all)?;
+        let result = self.try_atom_impl(atom_id, pos, consume_all)?;
 
         // Store the capture: the span keeps text access cheap; the
         // parsed subtree travels with it because capture semantics
@@ -1232,7 +1240,7 @@ impl<'a> PortableParser<'a> {
         self.capture_state.push_scope();
 
         // Parse the inner atom
-        let result = self.try_atom(atom_id, pos, consume_all);
+        let result = self.try_atom_impl(atom_id, pos, consume_all);
 
         // Pop the scope (discards inner captures)
         self.capture_state.pop_scope();
@@ -1360,7 +1368,7 @@ impl<'a> PortableParser<'a> {
             }
         }
 
-        let result = temp_parser.try_atom(temp_atom_id, pos, false)?;
+        let result = temp_parser.try_atom_impl(temp_atom_id, pos, false)?;
 
         // Merge captures from temp parser
         for name in temp_parser.capture_state.names() {
@@ -1429,7 +1437,7 @@ impl<'a> PortableParser<'a> {
     ) -> Result<ParseResult, super::error::RichError> {
         use super::error::{offset_to_line_col, ErrorBuilder, RichError, Span};
 
-        match self.try_atom(atom_id, pos, false) {
+        match self.try_atom_impl(atom_id, pos, false) {
             Ok(result) => Ok(result),
             Err(ParseError::Failed { position }) => {
                 let (line, col) = offset_to_line_col(self.input, position);
