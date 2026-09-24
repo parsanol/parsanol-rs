@@ -53,3 +53,6 @@ PRODUCTION-READINESS.md
 .skip-precommit
 
 .cargo
+
+# wasm-pack output for the npm package
+/wasm/
