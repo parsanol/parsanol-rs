@@ -35,6 +35,29 @@ jobs:
           node-version: '22'
           registry-url: 'https://registry.npmjs.org'
 
+      # wasm-pack requires a cdylib, but the crate stays rlib-only in
+      # the tree: the ruby side's cdylib twin crate (ext/parsanol_cdylib)
+      # owns the libparsanol.* artifact naming, and a permanent cdylib on
+      # the main crate would shadow it in shared target dirs. Enable it
+      # just-in-time for this build only.
+      - name: Enable cdylib for wasm-pack
+        run: |
+          cd parsanol
+          python3 - << 'PY'
+          import re
+          with open("Cargo.toml") as f:
+              text = f.read()
+          if "cdylib" not in text:
+              text = text.replace(
+                  'crate-type = ["rlib"]',
+                  'crate-type = ["rlib", "cdylib"]',
+              )
+          if "cdylib" not in text:
+              raise SystemExit("could not patch crate-type in parsanol/Cargo.toml")
+          with open("Cargo.toml", "w") as f:
+              f.write(text)
+          PY
+
       - name: Build wasm-pack
         run: wasm-pack build parsanol --target web --scope parsanol --out-dir pkg --release --features wasm
 
