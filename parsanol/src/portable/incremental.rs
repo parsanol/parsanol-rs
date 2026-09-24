@@ -446,9 +446,7 @@ impl<'a> IncrementalParser<'a> {
                         crate::portable::ast::AstNode::InputRef { .. }
                             | crate::portable::ast::AstNode::Nil
                     );
-                arena_free_success
-                    && entry_end < cutoff
-                    && !(input_len_changed && is_root_at_start)
+                arena_free_success && entry_end < cutoff && !(input_len_changed && is_root_at_start)
             },
             // Never reached: survivors are arena-free by the
             // predicate, and only pool-backed values adopt.
@@ -620,9 +618,7 @@ impl<'a> IncrementalParser<'a> {
             |entry| {
                 let entry_end = entry.end_pos as usize;
                 let is_root_at_start = entry.pos == 0 && entry.atom_id == root_atom;
-                entry.success
-                    && entry_end < cutoff
-                    && !(input_len_changed && is_root_at_start)
+                entry.success && entry_end < cutoff && !(input_len_changed && is_root_at_start)
             },
             |node| node.clone(),
         );
@@ -1164,6 +1160,3 @@ mod dynamic_session_tests {
         );
     }
 }
-
-
-

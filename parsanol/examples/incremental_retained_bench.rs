@@ -57,18 +57,12 @@ fn flatten(node: &AstNode, arena: &AstArena, input: &str, out: &mut Vec<String>)
         AstNode::InputRef { offset, length } => {
             out.push(input[*offset as usize..*offset as usize + *length as usize].to_string())
         }
-        AstNode::Array {
-            pool_index,
-            length,
-        } => {
+        AstNode::Array { pool_index, length } => {
             for child in arena.get_array(*pool_index as usize, *length as usize) {
                 flatten(&child, arena, input, out);
             }
         }
-        AstNode::Hash {
-            pool_index,
-            length,
-        } => {
+        AstNode::Hash { pool_index, length } => {
             for (_, v) in arena.get_hash_items(*pool_index as usize, *length as usize) {
                 flatten(&v, arena, input, out);
             }
@@ -129,7 +123,10 @@ fn run_tier(retained: bool, document: &str, grammar: &Grammar) -> Vec<std::time:
             let reference = full_flatten(grammar, &input);
             let mut got = Vec::new();
             flatten(&result.ast, session.retained_arena(), &input, &mut got);
-            assert_eq!(got, reference, "retained tier tree mismatch at keystroke {k}");
+            assert_eq!(
+                got, reference,
+                "retained tier tree mismatch at keystroke {k}"
+            );
             latencies.push(dt);
         } else {
             let mut arena = AstArena::new();
@@ -140,14 +137,23 @@ fn run_tier(retained: bool, document: &str, grammar: &Grammar) -> Vec<std::time:
             let reference = full_flatten(grammar, &input);
             let mut got = Vec::new();
             flatten(&result.ast, &arena, &input, &mut got);
-            assert_eq!(got, reference, "snapshot tier tree mismatch at keystroke {k}");
+            assert_eq!(
+                got, reference,
+                "snapshot tier tree mismatch at keystroke {k}"
+            );
             latencies.push(dt);
         }
     }
     latencies
 }
 
-fn stats(latencies: &[std::time::Duration]) -> (std::time::Duration, std::time::Duration, std::time::Duration) {
+fn stats(
+    latencies: &[std::time::Duration],
+) -> (
+    std::time::Duration,
+    std::time::Duration,
+    std::time::Duration,
+) {
     let mut sorted = latencies.to_vec();
     sorted.sort();
     let mean = sorted.iter().sum::<std::time::Duration>() / sorted.len() as u32;
@@ -159,7 +165,10 @@ fn stats(latencies: &[std::time::Duration]) -> (std::time::Duration, std::time::
 fn main() {
     let grammar = kv_grammar();
     let document: String = (0..60_000).map(|i| format!("key{i}={}\n", i * 7)).collect();
-    println!("document: {:.0} KiB, 100 keystrokes", document.len() as f64 / 1024.0);
+    println!(
+        "document: {:.0} KiB, 100 keystrokes",
+        document.len() as f64 / 1024.0
+    );
 
     // Warm both paths, then measure twice; report the second run to
     // reduce first-touch noise.

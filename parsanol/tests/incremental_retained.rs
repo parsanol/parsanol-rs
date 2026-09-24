@@ -11,25 +11,15 @@ use parsanol::portable::{AstArena, AstNode, Grammar};
 /// Deep structural equality of two trees that live in DIFFERENT
 /// arenas: pool indices are resolved through their own arena, and
 /// only resolved content is compared.
-fn trees_equal(
-    a_arena: &AstArena,
-    a_node: &AstNode,
-    b_arena: &AstArena,
-    b_node: &AstNode,
-) -> bool {
+fn trees_equal(a_arena: &AstArena, a_node: &AstNode, b_arena: &AstArena, b_node: &AstNode) -> bool {
     match (a_node, b_node) {
         (AstNode::Nil, AstNode::Nil) => true,
         (AstNode::Bool(x), AstNode::Bool(y)) => x == y,
         (AstNode::Int(x), AstNode::Int(y)) => x == y,
         (AstNode::Float(x), AstNode::Float(y)) => x == y,
-        (
-            AstNode::StringRef {
-                pool_index: x,
-            },
-            AstNode::StringRef {
-                pool_index: y,
-            },
-        ) => a_arena.get_string(*x as usize) == b_arena.get_string(*y as usize),
+        (AstNode::StringRef { pool_index: x }, AstNode::StringRef { pool_index: y }) => {
+            a_arena.get_string(*x as usize) == b_arena.get_string(*y as usize)
+        }
         (
             AstNode::InputRef {
                 offset: xo,
@@ -71,9 +61,9 @@ fn trees_equal(
             xl == yl && {
                 let xs = a_arena.get_hash_items(*xp as usize, *xl as usize);
                 let ys = b_arena.get_hash_items(*yp as usize, *yl as usize);
-                xs.iter().zip(ys.iter()).all(|((xk, xv), (yk, yv))| {
-                    xk == yk && trees_equal(a_arena, xv, b_arena, yv)
-                })
+                xs.iter()
+                    .zip(ys.iter())
+                    .all(|((xk, xv), (yk, yv))| xk == yk && trees_equal(a_arena, xv, b_arena, yv))
             }
         }
         _ => false,
@@ -205,7 +195,10 @@ fn retained_matches_full_reparse_across_edit_session() {
             offset,
             op,
             session.retained_arena(),
-            retained.as_ref().map(|r| &r.ast).map_err(|e| format!("{e:?}")),
+            retained
+                .as_ref()
+                .map(|r| &r.ast)
+                .map_err(|e| format!("{e:?}")),
             &ref_arena,
             reference.as_ref().map_err(|e| format!("{e:?}")),
         );
