@@ -325,12 +325,25 @@ impl DenseCache {
     /// disable memoization for the rest of a large parse (the dominant cost in
     /// parsanol-ruby#52); a reset keeps memory bounded while entries near the
     /// current position — the ones backtracking re-visits — stay warm.
+    ///
+    /// Snapshot-marked entries survive the recycle: they are the
+    /// cross-parse retention of the incremental tiers (TODO.perf/4/9).
+    /// Wiping them turned every edit parse after the first into a cold
+    /// full parse (0 hits across a 100-keystroke session). When nothing
+    /// but snapshots remains, grow the slot table instead of recycling
+    /// in a loop.
     #[inline]
     pub fn insert(&mut self, entry: CacheEntry) {
         if self.entries.len() >= self.max_entries {
-            self.drops += self.entries.len() as u64;
-            self.slots.fill(-1);
-            self.entries.clear();
+            let before = self.entries.len();
+            self.entries.retain(|e| e.is_snapshot());
+            let dropped = before - self.entries.len();
+            if dropped > 0 {
+                self.drops += dropped as u64;
+                self.rebuild_slots();
+            } else {
+                self.resize();
+            }
         }
 
         // Check if we need to resize
@@ -349,6 +362,19 @@ impl DenseCache {
         let idx = self.entries.len() as i32;
         self.entries.push(entry);
         self.slots[slot] = idx;
+    }
+
+    /// Rebuild the slot table from `entries`.
+    fn rebuild_slots(&mut self) {
+        self.slots.fill(-1);
+        for (idx, entry) in self.entries.iter().enumerate() {
+            let slot = Self::hash_static(entry.pos, entry.atom_id, self.capacity);
+            let mut probe = slot;
+            while self.slots[probe] >= 0 {
+                probe = (probe + 1) & (self.capacity - 1);
+            }
+            self.slots[probe] = idx as i32;
+        }
     }
 
     /// Clear the cache

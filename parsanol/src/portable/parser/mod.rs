@@ -190,6 +190,12 @@ pub struct PortableParser<'a> {
     /// node data into the live arena.
     snapshot_arena: Option<&'a AstArena>,
 
+    /// Snapshot-marked cache entries whose node data already lives in
+    /// the live arena itself (the session-owned persistent arena of
+    /// `IncrementalParser::parse_*_retained`, TODO.perf/9). Hits skip
+    /// adoption: pool indices are valid as-is.
+    snapshots_in_live: bool,
+
     /// Per-atom dispatch counts (parsanol-rs#100 item 2): None until
     /// `enable_profiling`, then one counter per atom.
     dispatch_counts: Option<Box<[u64]>>,
@@ -234,6 +240,35 @@ impl<'a> PortableParser<'a> {
         cache: DenseCache,
         snapshot_arena: Option<&'a AstArena>,
     ) -> Self {
+        Self::with_cache_impl(grammar, input, arena, cache, snapshot_arena, false)
+    }
+
+    /// Create a parser whose snapshot-marked cache entries reference
+    /// node data in `arena` ITSELF — the session-owned persistent
+    /// output arena of `IncrementalParser::parse_*_retained`
+    /// (TODO.perf/9). Hits on those entries replay the cached node
+    /// as-is: the indices stayed valid across parses, so the
+    /// adoption copy (and the reason TODO.perf/4 retention kept only
+    /// arena-free terminals) disappears.
+    #[inline]
+    pub fn new_with_cache_in_place(
+        grammar: &'a Grammar,
+        input: &'a str,
+        arena: &'a mut AstArena,
+        cache: DenseCache,
+    ) -> Self {
+        Self::with_cache_impl(grammar, input, arena, cache, None, true)
+    }
+
+    #[inline]
+    fn with_cache_impl(
+        grammar: &'a Grammar,
+        input: &'a str,
+        arena: &'a mut AstArena,
+        cache: DenseCache,
+        snapshot_arena: Option<&'a AstArena>,
+        snapshots_in_live: bool,
+    ) -> Self {
         let governor = ResourceGovernor::new()
             .with_max_input_size(DEFAULT_MAX_INPUT_SIZE)
             .with_max_recursion_depth(DEFAULT_MAX_RECURSION_DEPTH);
@@ -256,6 +291,7 @@ impl<'a> PortableParser<'a> {
             rollback_on_failure,
             dynamic_dependent: dynamic_dependence(grammar),
             snapshot_arena,
+            snapshots_in_live,
             dispatch_counts: None,
         }
     }
@@ -289,6 +325,7 @@ impl<'a> PortableParser<'a> {
             rollback_on_failure: false,
             dynamic_dependent: dynamic_dependence(grammar),
             snapshot_arena: None,
+            snapshots_in_live: false,
             dispatch_counts: None,
         }
     }
@@ -582,14 +619,20 @@ impl<'a> PortableParser<'a> {
         if let Some((success, end_pos, cached_node, is_snapshot)) = cache_hit {
             return if success {
                 let value = if is_snapshot {
-                    match (self.snapshot_arena, &cached_node) {
-                        (
-                            Some(snap),
-                            AstNode::Array { .. }
-                            | AstNode::Hash { .. }
-                            | AstNode::StringRef { .. },
-                        ) => self.arena.adopt_node(snap, &cached_node),
-                        _ => cached_node,
+                    if self.snapshots_in_live {
+                        // Retained data lives in this parse's arena
+                        // (session-owned persistent output arena).
+                        cached_node
+                    } else {
+                        match (self.snapshot_arena, &cached_node) {
+                            (
+                                Some(snap),
+                                AstNode::Array { .. }
+                                | AstNode::Hash { .. }
+                                | AstNode::StringRef { .. },
+                            ) => self.arena.adopt_node(snap, &cached_node),
+                            _ => cached_node,
+                        }
                     }
                 } else {
                     cached_node

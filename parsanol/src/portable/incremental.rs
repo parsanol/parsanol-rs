@@ -309,12 +309,24 @@ pub struct IncrementalParser<'a> {
     /// node data that must survive across parses (TODO.perf/4).
     snapshot_arena: AstArena,
 
+    /// Session-owned persistent output arena for the `*_retained`
+    /// parse family (TODO.perf/9): node data from every retained
+    /// parse stays valid, so retention keeps full container entries
+    /// with no adoption copy and the previous parse TREE persists
+    /// alongside the memo window.
+    output_arena: AstArena,
+
     /// Dirty region tracker
     dirty_tracker: DirtyRegionTracker,
 
     /// Previous input length (for position translation)
     prev_input_len: usize,
 }
+
+/// A persistent output arena past this budget is reset wholesale
+/// between retained parses (retention dropped, next parse runs cold)
+/// instead of growing without bound across an edit session.
+const OUTPUT_ARENA_BUDGET: usize = 64 * 1024 * 1024;
 
 impl<'a> IncrementalParser<'a> {
     /// Create a new incremental parser
@@ -324,6 +336,7 @@ impl<'a> IncrementalParser<'a> {
             grammar: std::borrow::Cow::Borrowed(grammar),
             cache: DenseCache::new(4096),
             snapshot_arena: AstArena::new(),
+            output_arena: AstArena::new(),
             dirty_tracker: DirtyRegionTracker::new(),
             prev_input_len: 0,
         }
@@ -337,6 +350,7 @@ impl<'a> IncrementalParser<'a> {
             grammar: std::borrow::Cow::Owned(grammar),
             cache: DenseCache::new(4096),
             snapshot_arena: AstArena::new(),
+            output_arena: AstArena::new(),
             dirty_tracker: DirtyRegionTracker::new(),
             prev_input_len: 0,
         }
@@ -372,13 +386,7 @@ impl<'a> IncrementalParser<'a> {
         arena: &mut AstArena,
     ) -> (Result<AstNode, ParseError>, usize, usize) {
         let before = self.cache.len();
-        let cutoff = self
-            .dirty_tracker
-            .regions()
-            .iter()
-            .map(|r| r.start)
-            .min()
-            .unwrap_or(usize::MAX);
+        let cutoff = earliest_dirty_offset(&self.dirty_tracker);
         let root_atom = self.grammar.root as u16;
         let input_len_changed = self.prev_input_len != input.len();
         self.prev_input_len = input.len();
@@ -386,12 +394,17 @@ impl<'a> IncrementalParser<'a> {
         // Drop entries the edit invalidated BEFORE parsing: entries at
         // or after the edit offset describe the OLD input (shifted
         // positions), and replaying them mid-parse produces results
-        // beyond the new input's end. The surviving window is
-        // position-stable, so it replays correctly.
+        // beyond the new input's end. STRICT inequality: an entry
+        // ending exactly at the edit offset depended on the byte at
+        // that offset as its match boundary (maximal runs stop there),
+        // and the edit can make the run extend differently.
+        //
+        // The surviving window is position-stable, so it replays
+        // correctly.
         self.cache.retain(|entry| {
             let entry_end = entry.end_pos as usize;
             let is_root_at_start = entry.pos == 0 && entry.atom_id == root_atom;
-            entry_end <= cutoff && !(input_len_changed && is_root_at_start)
+            entry_end < cutoff && !(input_len_changed && is_root_at_start)
         });
 
         let mut parser = super::parser::PortableParser::new_with_cache_and_snap(
@@ -434,14 +447,13 @@ impl<'a> IncrementalParser<'a> {
                             | crate::portable::ast::AstNode::Nil
                     );
                 arena_free_success
-                    && entry_end <= cutoff
+                    && entry_end < cutoff
                     && !(input_len_changed && is_root_at_start)
             },
             // Never reached: survivors are arena-free by the
             // predicate, and only pool-backed values adopt.
             |node| node.clone(),
         );
-        let _ = arena;
         self.dirty_tracker.clear();
 
         (result, before, post_parse)
@@ -496,6 +508,139 @@ impl<'a> IncrementalParser<'a> {
         })
     }
 
+    // ========================================================================
+    // Retained-tree parse family (TODO.perf/9)
+    //
+    // The `*_retained` parses own their output arena: node data from
+    // every retained parse stays valid until the NEXT retained parse
+    // or `clear`, so retention keeps FULL container entries (Array /
+    // Hash / StringRef) with an identity "adoption" — no cross-arena
+    // copy. This removes the adoption-cost ceiling that capped the
+    // snapshot tier at terminal entries (TODO.perf/4/8) and persists
+    // the previous parse tree alongside the memo window, which the
+    // prefix-splice design builds on.
+    // ========================================================================
+
+    /// Parse input for the first time into the session-owned arena.
+    ///
+    /// The returned [`AstNode`] indexes [`Self::retained_arena`] and
+    /// remains valid until the next `parse*_retained` call or
+    /// [`Self::clear`]. Unlike [`Self::parse`], the tree is NOT
+    /// rebuilt into a caller-provided arena — that is what lets the
+    /// memo retain whole subtrees across edits.
+    pub fn parse_retained(&mut self, input: &str) -> Result<AstNode, ParseError> {
+        let (result, _, _) = self.retained_parse(input, false);
+        result
+    }
+
+    /// Re-parse after an edit, into the session-owned arena.
+    pub fn parse_with_edit_retained(
+        &mut self,
+        input: &str,
+        edit: Edit,
+    ) -> Result<IncrementalResult, ParseError> {
+        self.dirty_tracker.mark_edit(&edit);
+        self.finish_retained(input)
+    }
+
+    /// Re-parse after multiple edits, into the session-owned arena.
+    pub fn parse_with_edits_retained(
+        &mut self,
+        input: &str,
+        edits: &[Edit],
+    ) -> Result<IncrementalResult, ParseError> {
+        for edit in edits {
+            self.dirty_tracker.mark_edit(edit);
+        }
+        self.finish_retained(input)
+    }
+
+    /// The arena the retained parse family builds into. Nodes from the
+    /// most recent `parse*_retained` call index this arena.
+    #[inline]
+    pub fn retained_arena(&self) -> &AstArena {
+        &self.output_arena
+    }
+
+    /// The shared engine of the retained family: cold-start reset when
+    /// `fresh`, otherwise parse against the retained cache window.
+    fn retained_parse(
+        &mut self,
+        input: &str,
+        fresh: bool,
+    ) -> (Result<AstNode, ParseError>, usize, usize) {
+        // Budget guard first: a persistent output arena past the cap
+        // is reset wholesale (retention with it) instead of growing
+        // without bound across an edit session. Resetting BEFORE the
+        // parse keeps the about-to-be-built tree valid.
+        if self.output_arena.memory_usage() > OUTPUT_ARENA_BUDGET {
+            self.output_arena = AstArena::new();
+            self.cache.clear();
+        }
+
+        let before = self.cache.len();
+        let cutoff = if fresh {
+            // First (or cold) parse: no edit invalidated anything.
+            self.cache = DenseCache::for_input(input.len(), self.grammar.atom_count());
+            self.dirty_tracker.clear();
+            self.prev_input_len = 0;
+            usize::MAX
+        } else {
+            earliest_dirty_offset(&self.dirty_tracker)
+        };
+        let root_atom = self.grammar.root as u16;
+        let input_len_changed = self.prev_input_len != input.len();
+        self.prev_input_len = input.len();
+
+        // Same pre-parse invalidation as the snapshot tier.
+        self.cache.retain(|entry| {
+            let entry_end = entry.end_pos as usize;
+            let is_root_at_start = entry.pos == 0 && entry.atom_id == root_atom;
+            entry_end < cutoff && !(input_len_changed && is_root_at_start)
+        });
+
+        self.output_arena.set_input(input.to_owned());
+        let mut parser = super::parser::PortableParser::new_with_cache_in_place(
+            &self.grammar,
+            input,
+            &mut self.output_arena,
+            std::mem::take(&mut self.cache),
+        );
+        let result = parser.parse();
+        self.cache = parser.into_cache();
+        let post_parse = self.cache.len();
+
+        // Retention keeps every success fully before the edit cutoff:
+        // the arena is persistent, so pool-backed container entries
+        // need no adoption (an identity "adopt" just marks them
+        // snapshot, which exempts them from arena-generation checks).
+        // Failures stay never-retained, exactly like the snapshot
+        // tier.
+        self.cache.retain_snapshot_adopt(
+            |entry| {
+                let entry_end = entry.end_pos as usize;
+                let is_root_at_start = entry.pos == 0 && entry.atom_id == root_atom;
+                entry.success
+                    && entry_end < cutoff
+                    && !(input_len_changed && is_root_at_start)
+            },
+            |node| node.clone(),
+        );
+        self.dirty_tracker.clear();
+
+        (result, before, post_parse)
+    }
+
+    /// Retained variant of [`Self::finish_parse`].
+    fn finish_retained(&mut self, input: &str) -> Result<IncrementalResult, ParseError> {
+        let (result, _retained_before, post_parse) = self.retained_parse(input, false);
+        Ok(IncrementalResult {
+            ast: result?,
+            reused_cache_entries: self.cache.len(),
+            invalidated_cache_entries: post_parse - self.cache.len(),
+        })
+    }
+
     /// Get cache statistics
     #[inline]
     pub fn cache_stats(&self) -> (u64, u64, f64) {
@@ -512,9 +657,21 @@ impl<'a> IncrementalParser<'a> {
     pub fn clear(&mut self) {
         self.cache.clear();
         self.snapshot_arena = AstArena::new();
+        self.output_arena = AstArena::new();
         self.dirty_tracker.clear();
         self.prev_input_len = 0;
     }
+}
+
+/// Earliest dirty-region start, or `usize::MAX` when nothing is
+/// dirty: the retention cutoff every retained entry must end before.
+fn earliest_dirty_offset(tracker: &DirtyRegionTracker) -> usize {
+    tracker
+        .regions()
+        .iter()
+        .map(|r| r.start)
+        .min()
+        .unwrap_or(usize::MAX)
 }
 
 /// Result of an incremental parse
@@ -1007,3 +1164,6 @@ mod dynamic_session_tests {
         );
     }
 }
+
+
+
