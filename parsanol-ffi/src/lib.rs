@@ -11,7 +11,8 @@
 // Force the dependency into the link even under aggressive stripping.
 #[allow(unused_imports)]
 use parsanol::ffi::c::{
-    parsanol_c_last_error, parsanol_c_parse, parsanol_c_register, parsanol_c_release,
+    parsanol_c_last_error, parsanol_c_parse, parsanol_c_parse_len, parsanol_c_register,
+    parsanol_c_release,
 };
 
 #[cfg(test)]
@@ -47,6 +48,21 @@ mod tests {
         let bad = CString::new("zz").unwrap();
         let failed = unsafe { parsanol_c_parse(handle, bad.as_ptr(), buf.as_mut_ptr(), buf.len()) };
         assert_eq!(failed, 0);
+
+        // Binary-safe entry point must be exported too (compile-time
+        // link check): the same parse through the explicit-length call.
+        let written_len = unsafe {
+            parsanol_c_parse_len(
+                handle,
+                input.as_ptr(),
+                input.as_bytes().len(),
+                buf.as_mut_ptr(),
+                buf.len(),
+            )
+        };
+        assert_eq!(written_len, written, "len-parse failed: last_error={:?}", unsafe {
+            CStr::from_ptr(parsanol_c_last_error()).to_string_lossy()
+        });
 
         parsanol_c_release(handle);
     }
