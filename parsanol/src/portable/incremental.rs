@@ -755,7 +755,7 @@ impl<'a> IncrementalParser<'a> {
                             break;
                         }
                     }
-                    match parser.try_atom(*body, s_pos, false) {
+                    match parser.try_atom_impl(*body, s_pos, false) {
                         Ok(r) => {
                             let zero_width = r.end_pos == s_pos;
                             suffix.push(r.value.clone());
