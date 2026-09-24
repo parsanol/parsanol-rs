@@ -60,9 +60,12 @@ mod tests {
                 buf.len(),
             )
         };
-        assert_eq!(written_len, written, "len-parse failed: last_error={:?}", unsafe {
-            CStr::from_ptr(parsanol_c_last_error()).to_string_lossy()
-        });
+        assert_eq!(
+            written_len,
+            written,
+            "len-parse failed: last_error={:?}",
+            unsafe { CStr::from_ptr(parsanol_c_last_error()).to_string_lossy() }
+        );
 
         parsanol_c_release(handle);
     }
