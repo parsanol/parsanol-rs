@@ -12,13 +12,31 @@ use std::time::Instant;
 
 fn kv_grammar() -> Grammar {
     let mut g = Grammar::new();
-    let key = g.add_atom(Atom::Re { pattern: "[a-z][a-z0-9]*".to_string() });
-    let val = g.add_atom(Atom::Re { pattern: "[0-9]+".to_string() });
-    let eq = g.add_atom(Atom::Str { pattern: "=".to_string() });
-    let nl = g.add_atom(Atom::Str { pattern: "\n".to_string() });
-    let body = g.add_atom(Atom::Sequence { atoms: vec![key, eq, val, nl] });
-    let named = g.add_atom(Atom::Named { name: "pair".to_string(), atom: body });
-    let root = g.add_atom(Atom::Repetition { atom: named, min: 0, max: None, tag: RepetitionTag::Repetition });
+    let key = g.add_atom(Atom::Re {
+        pattern: "[a-z][a-z0-9]*".to_string(),
+    });
+    let val = g.add_atom(Atom::Re {
+        pattern: "[0-9]+".to_string(),
+    });
+    let eq = g.add_atom(Atom::Str {
+        pattern: "=".to_string(),
+    });
+    let nl = g.add_atom(Atom::Str {
+        pattern: "\n".to_string(),
+    });
+    let body = g.add_atom(Atom::Sequence {
+        atoms: vec![key, eq, val, nl],
+    });
+    let named = g.add_atom(Atom::Named {
+        name: "pair".to_string(),
+        atom: body,
+    });
+    let root = g.add_atom(Atom::Repetition {
+        atom: named,
+        min: 0,
+        max: None,
+        tag: RepetitionTag::Repetition,
+    });
     g.root = root;
     g
 }
@@ -43,7 +61,10 @@ fn main() {
             dt.as_nanos() as f64 / total.max(1) as f64
         );
         for (atom, c) in counts.iter().rev().take(6) {
-            println!("  atom {atom}: {c} ({:.0}%)", 100.0 * *c as f64 / total as f64);
+            println!(
+                "  atom {atom}: {c} ({:.0}%)",
+                100.0 * *c as f64 / total as f64
+            );
         }
     }
 
@@ -62,11 +83,18 @@ fn main() {
             dt.as_nanos() as f64 / total.max(1) as f64,
             vm.backtrack_count()
         );
-        let mut ranked: Vec<(usize, u64)> =
-            counts.iter().enumerate().map(|(i, c)| (i, *c)).filter(|(_, c)| *c > 0).collect();
+        let mut ranked: Vec<(usize, u64)> = counts
+            .iter()
+            .enumerate()
+            .map(|(i, c)| (i, *c))
+            .filter(|(_, c)| *c > 0)
+            .collect();
         ranked.sort_by_key(|(_, c)| std::cmp::Reverse(*c));
         for (op, c) in ranked.iter().take(6) {
-            println!("  opcode {op}: {c} ({:.0}%)", 100.0 * *c as f64 / total as f64);
+            println!(
+                "  opcode {op}: {c} ({:.0}%)",
+                100.0 * *c as f64 / total as f64
+            );
         }
     }
 }
