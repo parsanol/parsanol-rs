@@ -61,7 +61,10 @@ impl fmt::Display for PgError {
                 "PG artifact checksum mismatch: stored {stored:?}, computed {computed:?}"
             ),
             PgError::FloatInCanonicalJson => {
-                write!(f, "PG artifact contains a float, which has no canonical form")
+                write!(
+                    f,
+                    "PG artifact contains a float, which has no canonical form"
+                )
             }
             PgError::Io(err) => write!(f, "PG artifact could not be read: {err}"),
         }
