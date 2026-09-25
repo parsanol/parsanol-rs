@@ -4,6 +4,7 @@
 //! When compiled with the `wasm` feature, this exposes a `WasmParser` class
 //! that can be used from JavaScript.
 
+use crate::pg::PgArtifact;
 use crate::portable::{AstArena, AstNode, Grammar, PortableParser};
 use js_sys::{Array, JsString, Object, Reflect};
 use wasm_bindgen::prelude::*;
@@ -33,6 +34,28 @@ impl WasmParser {
     pub fn new(grammar_json: &str) -> Result<WasmParser, JsValue> {
         let grammar: Grammar = Grammar::from_json(grammar_json)
             .map_err(|e| JsValue::from_str(&format!("Invalid grammar JSON: {}", e)))?;
+
+        Ok(WasmParser {
+            grammar,
+            arena: AstArena::new(),
+        })
+    }
+
+    /// Create a new parser from a PG artifact envelope and entry name.
+    ///
+    /// The artifact's canonical checksum is verified before any parsing;
+    /// a mismatched or corrupt artifact is rejected (PN 2).
+    ///
+    /// # Arguments
+    /// * `artifact_json` - JSON text of the PG artifact envelope
+    /// * `entry` - entry point name declared in the artifact
+    #[wasm_bindgen(js_name = fromArtifact)]
+    pub fn from_artifact(artifact_json: &str, entry: &str) -> Result<WasmParser, JsValue> {
+        let artifact =
+            PgArtifact::from_json(artifact_json).map_err(|e| JsValue::from_str(&e.to_string()))?;
+        let grammar = artifact
+            .grammar(entry)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
 
         Ok(WasmParser {
             grammar,
