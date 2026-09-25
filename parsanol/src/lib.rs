@@ -73,7 +73,11 @@ pub mod ffi;
 // Portable core - available for both Ruby and future WASM
 pub mod portable;
 
+// PG artifact envelopes (compiled by the Ruby-side Parsanol::PG compiler)
+pub mod pg;
+
 /// Re-export commonly used types for convenience
+pub use pg::{PgArtifact, PgError};
 pub use portable::{
     // Debug tools
     debug::{GrammarVisualizer, ParseTrace, SourceFormatter, TreePrinter},
