@@ -3,8 +3,8 @@
 //! (`Parsanol::PG`). If Rust can verify its checksum, extract the grammar
 //! and parse with it, Ruby and Rust agree on the artifact contract.
 
-use parsanol::portable::{AstArena, PortableParser};
 use parsanol::pg::{canonical_json, PgError};
+use parsanol::portable::{AstArena, PortableParser};
 use parsanol::PgArtifact;
 
 const FIXTURE: &str = include_str!("fixtures/pg/demo.json");
@@ -18,7 +18,10 @@ fn loads_and_verifies_the_ruby_compiled_fixture() {
     assert_eq!(artifact.shape(), Some("parsanol-tree/v2"));
     assert_eq!(artifact.entry_names(), vec!["identifier"]);
     assert_eq!(artifact.entry_root("identifier").unwrap(), "iso_identifier");
-    assert!(artifact.source().unwrap().starts_with("grammar Demo version"));
+    assert!(artifact
+        .source()
+        .unwrap()
+        .starts_with("grammar Demo version"));
     assert!(artifact.checksum().unwrap().starts_with("sha256:"));
 }
 
@@ -48,7 +51,10 @@ fn extracts_and_parses_the_entry_grammar() {
 
     let mut negative = AstArena::for_input("nonsense".len());
     let mut parser = PortableParser::new(&grammar, "nonsense", &mut negative);
-    assert!(parser.parse().is_err(), "raw input must not parse as a pubid");
+    assert!(
+        parser.parse().is_err(),
+        "raw input must not parse as a pubid"
+    );
 }
 
 #[test]
@@ -66,10 +72,7 @@ fn canonical_json_round_trips_the_ruby_reference_bytes() {
     // key-sorted payload; canonical_json must reproduce it byte for byte,
     // including lowercase \u00xx control escapes and raw UTF-8.
     let value: serde_json::Value = serde_json::from_str(CANONICAL_SAMPLE).unwrap();
-    assert_eq!(
-        canonical_json(&value).unwrap(),
-        CANONICAL_SAMPLE.trim_end_matches('\n')
-    );
+    assert_eq!(canonical_json(&value).unwrap(), CANONICAL_SAMPLE.trim_end());
 }
 
 #[test]
