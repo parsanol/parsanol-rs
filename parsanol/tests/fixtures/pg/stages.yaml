@@ -1,0 +1,3 @@
+CD: { abbr: CD, code: draft20 }
+DIS: { abbr: DIS, code: draft40 }
+IS: { abbr: IS, code: published }
