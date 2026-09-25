@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Other
+
+- Fix formatting and Windows CRLF in the PG artifact test by @[object]
+- Add pg module: PG artifact envelopes (load, verify, extract) by @[object]
+
 ### Added
 
 - Prefix-tree splice v1 for repetition-spine documents (TODO.perf/9) by @[object]
