@@ -70,7 +70,12 @@ impl PgArtifact {
                 let before = &input[..offset.min(input.len())];
                 let line = before.matches('\n').count() + 1;
                 let column = offset - before.rfind('\n').map(|i| i + 1).unwrap_or(0) + 1;
-                PgError::ParseWire { offset, line, column, expected }
+                let ranked = parser
+                    .failure_ranks()
+                    .iter()
+                    .map(|(p, labels)| (*p, labels.clone()))
+                    .collect();
+                PgError::ParseWire { offset, line, column, expected, ranked }
             }
             None => PgError::ParseFailed(err.to_string()),
         })?;

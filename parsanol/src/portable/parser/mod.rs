@@ -136,6 +136,9 @@ macro_rules! log_debug {
 /// The parser itself is just a coordinator - it doesn't manage resources directly,
 /// it delegates to the appropriate component. This follows the Single Responsibility
 /// Principle and makes the code more testable and maintainable.
+/// C4: maximum number of ranked failure positions retained.
+pub const MAX_RANKED_FAILURES: usize = 8;
+
 pub struct PortableParser<'a> {
     // ========================================================================
     // Grammar and Input (immutable)
@@ -154,6 +157,9 @@ pub struct PortableParser<'a> {
     deepest_failure_pos: usize,
     has_failure: bool,
     expected_labels: Vec<String>,
+    /// C4: ranked failures — up to MAX_RANKED_FAILURES distinct
+    /// (position, labels) pairs, deepest first.
+    ranked_failures: Vec<(usize, Vec<String>)>,
 
     // ========================================================================
     // Output (mutable)
@@ -282,6 +288,7 @@ impl<'a> PortableParser<'a> {
             input,
             input_bytes: input.as_bytes(),
             deepest_failure_pos: 0,
+            ranked_failures: Vec::new(),
             has_failure: false,
             expected_labels: Vec::new(),
             arena,
@@ -316,6 +323,7 @@ impl<'a> PortableParser<'a> {
             input,
             input_bytes: input.as_bytes(),
             deepest_failure_pos: 0,
+            ranked_failures: Vec::new(),
             has_failure: false,
             expected_labels: Vec::new(),
             arena,
@@ -771,6 +779,12 @@ impl<'a> PortableParser<'a> {
     /// Ruby engine's reporter collects the expected set.
     /// The structured failure wire (F7): the deepest position any
     /// terminal failed at, with the expected-set collected there.
+    /// C4: all distinct failure positions (deepest first), each with its
+    /// expected-set — ranked multi-error reporting.
+    pub fn failure_ranks(&self) -> &[(usize, Vec<String>)] {
+        &self.ranked_failures
+    }
+
     pub fn failure_wire(&self) -> Option<(usize, Vec<String>)> {
         if self.has_failure {
             Some((self.deepest_failure_pos, self.expected_labels.clone()))
@@ -784,9 +798,23 @@ impl<'a> PortableParser<'a> {
             self.has_failure = true;
             self.deepest_failure_pos = pos;
             self.expected_labels.clear();
-            self.expected_labels.push(label);
+            self.expected_labels.push(label.clone());
         } else if pos == self.deepest_failure_pos && !self.expected_labels.contains(&label) {
-            self.expected_labels.push(label);
+            self.expected_labels.push(label.clone());
+        }
+        // C4: keep every distinct position for ranked multi-error
+        // reporting; the deepest entry mirrors failure_wire.
+        match self.ranked_failures.iter_mut().find(|(p, _)| *p == pos) {
+            Some((_, labels)) => {
+                if !labels.contains(&label) {
+                    labels.push(label);
+                }
+            }
+            None => {
+                self.ranked_failures.push((pos, vec![label]));
+                self.ranked_failures.sort_by(|a, b| b.0.cmp(&a.0));
+                self.ranked_failures.truncate(MAX_RANKED_FAILURES);
+            }
         }
     }
 

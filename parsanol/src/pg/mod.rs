@@ -84,6 +84,8 @@ pub enum PgError {
         column: usize,
         /// The labels expected at that position.
         expected: Vec<String>,
+        /// C4: ranked (position, expected) pairs, deepest first.
+        ranked: Vec<(usize, Vec<String>)>,
     },
     /// A reject test unexpectedly parsed.
     UnexpectedParse(String),
@@ -132,7 +134,7 @@ impl fmt::Display for PgError {
                 write!(f, "unsupported artifact shape {shape:?} (engine supports {SUPPORTED_SHAPE:?})")
             }
             PgError::ParseFailed(detail) => write!(f, "{detail}"),
-            PgError::ParseWire { offset, line, column, expected } => write!(
+            PgError::ParseWire { offset, line, column, expected, .. } => write!(
                 f,
                 "Parse failed at offset {offset} (line {line}, column {column}): expected {}",
                 expected.join(", ")
