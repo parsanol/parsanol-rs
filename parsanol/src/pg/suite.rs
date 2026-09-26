@@ -61,7 +61,9 @@ impl PgArtifact {
     /// parsanol-shape tree as JSON.
     pub fn parse_shape(&self, entry: &str, input: &str) -> Result<Value, PgError> {
         let grammar: Grammar = self.grammar(entry)?;
-        let mut arena = AstArena::for_input(input.len());
+        // The shaped tree can dwarf the input (large grammars bind few
+        // characters per node); size the arena for the tree, not the text.
+        let mut arena = AstArena::for_input(input.len().max(1 << 16));
         let mut parser = PortableParser::new(&grammar, input, &mut arena);
         let raw = parser
             .parse()
@@ -88,8 +90,20 @@ impl PgArtifact {
     }
 
     /// Run an external test list (artifact-shaped test hashes).
+    /// The compiler-baked default entry (declaration order, not the
+    /// sorted view JSON engines see).
+    pub fn default_entry(&self) -> Option<&str> {
+        self.envelope.get("default_entry").and_then(Value::as_str)
+    }
+
+    /// Evaluate artifact-shaped tests (accept/reject/example); returns
+    /// Ruby-word-compatible failure descriptions. Empty means green.
     pub fn run_test_list(&self, tests: &[Value]) -> Vec<String> {
-        let entries = self.entry_names();
+        let fallback = self
+            .default_entry()
+            .or_else(|| self.entry_names().first().copied())
+            .unwrap_or_default()
+            .to_string();
         tests
             .iter()
             .filter_map(|test| {
@@ -102,11 +116,7 @@ impl PgArtifact {
                     .get("input")
                     .and_then(Value::as_str)
                     .unwrap_or_default();
-                let entry = object
-                    .get("entry")
-                    .and_then(Value::as_str)
-                    .or_else(|| entries.first().copied())
-                    .unwrap_or_default();
+                let entry = object.get("entry").and_then(Value::as_str).unwrap_or(&fallback);
                 let outcome = (|| -> Result<(), PgError> {
                     let bound = self.parse_and_bind(entry, input)?;
                     if kind == "reject" {

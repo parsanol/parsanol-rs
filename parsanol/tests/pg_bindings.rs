@@ -191,3 +191,64 @@ fn schema_from_artifact_matches_contract() {
     assert!(ts.contains("export interface Identifier {"));
     assert!(ts.contains("  publisherName: string;"));
 }
+
+#[test]
+fn unsupported_shapes_are_refused_at_load() {
+    let envelope: Value = serde_json::json!({
+        "version": "0.0.0",
+        "shape": "parsanol-tree/v1",
+        "entries": {}
+    });
+    let mut envelope = envelope.as_object().unwrap().clone();
+    let checksum = parsanol::pg::checksum_hex(&Value::Object(envelope.clone())).unwrap();
+    envelope.insert("checksum".to_string(), Value::String(checksum));
+    let err = PgArtifact::from_json(&serde_json::to_string(&envelope).unwrap()).unwrap_err();
+    assert!(matches!(err, parsanol::PgError::UnsupportedShape(_)));
+}
+
+/// C13: every baked flavor artifact in pubid-grammar/artifacts runs its
+/// embedded suite green on the Rust VM.
+#[test]
+fn every_baked_artifact_runs_green_on_the_rust_vm() {
+    let dir = std::env::var("PG_ARTIFACT_DIR").unwrap_or_else(|_| {
+        // Host layout: parsanol-rs sits beside pubid/pubid-grammar.
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        for ancestor in manifest.ancestors().skip(1) {
+            let candidate = ancestor
+                .join("pubid")
+                .join("pubid-grammar")
+                .join("artifacts");
+            if candidate.is_dir() {
+                return candidate.to_string_lossy().to_string();
+            }
+        }
+        panic!("artifacts dir not found (set PG_ARTIFACT_DIR)")
+    });
+    let mut checked = 0;
+    for entry in std::fs::read_dir(&dir).expect("artifacts dir").flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).unwrap();
+        let artifact = PgArtifact::from_json(&text)
+            .unwrap_or_else(|err| panic!("{} rejected: {err}", path.display()));
+        eprintln!("[sweep] {} ...", path.display());
+        for test in artifact.tests() {
+            eprintln!(
+                "[sweep]   entry={:?} kind={:?} input={:?}",
+                test.get("entry").and_then(Value::as_str),
+                test.get("kind").and_then(Value::as_str),
+                test.get("input").and_then(Value::as_str)
+            );
+        }
+        let failures = artifact.run_tests();
+        assert!(
+            failures.is_empty(),
+            "{} embedded suite failures: {failures:?}",
+            path.display()
+        );
+        checked += 1;
+    }
+    assert!(checked >= 40, "expected the full flavor set, ran {checked}");
+}

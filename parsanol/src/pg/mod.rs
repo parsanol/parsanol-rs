@@ -66,6 +66,8 @@ pub enum PgError {
     },
     /// A value could not be cast to the binding's declared type.
     Cast(String, String),
+    /// The artifact declares a shape contract this engine does not support.
+    UnsupportedShape(String),
     /// The portable engine failed to parse the input.
     ParseFailed(String),
     /// A reject test unexpectedly parsed.
@@ -105,6 +107,9 @@ impl fmt::Display for PgError {
             PgError::Cast(kind, value) => {
                 write!(f, "cannot cast {value:?} to {kind}")
             }
+            PgError::UnsupportedShape(shape) => {
+                write!(f, "unsupported artifact shape {shape:?} (engine supports {SUPPORTED_SHAPE:?})")
+            }
             PgError::ParseFailed(detail) => write!(f, "{detail}"),
             PgError::UnexpectedParse(_input) => {
                 write!(f, "expected the input to be rejected")
@@ -123,6 +128,10 @@ impl fmt::Display for PgError {
 
 impl std::error::Error for PgError {}
 
+/// The parsanol-shape contract this engine supports (F8). A mismatching
+/// artifact is refused loudly at load, never parsed with wrong semantics.
+pub const SUPPORTED_SHAPE: &str = "parsanol-tree/v2";
+
 /// A verified PG artifact envelope.
 ///
 /// The checksum is verified at load time; a `PgArtifact` value never
@@ -136,6 +145,13 @@ impl PgArtifact {
     /// Parse and verify an envelope from its JSON text.
     pub fn from_json(text: &str) -> Result<Self, PgError> {
         let envelope: Value = serde_json::from_str(text).map_err(PgError::Json)?;
+        let shape = envelope
+            .get("shape")
+            .and_then(Value::as_str)
+            .ok_or(PgError::InvalidEnvelope("shape"))?;
+        if shape != SUPPORTED_SHAPE {
+            return Err(PgError::UnsupportedShape(shape.to_string()));
+        }
         verify_checksum(&envelope)?;
         Ok(Self { envelope })
     }

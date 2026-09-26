@@ -998,9 +998,13 @@ impl<'a> PortableParser<'a> {
                 match self.try_atom_impl(atom_id, current_pos, false) {
                     Ok(result) => {
                         self.capture_state.commit_scope();
+                        let progressed = result.end_pos != current_pos;
                         items.push(result.value);
                         current_pos = result.end_pos;
                         count += 1;
+                        if !progressed {
+                            break;
+                        }
                     }
                     Err(_) => {
                         self.capture_state.pop_scope();
@@ -1014,9 +1018,18 @@ impl<'a> PortableParser<'a> {
                 match self.try_atom_impl(atom_id, current_pos, false) {
                     Ok(result) => {
                         self.capture_state.commit_scope();
+                        // A body match that consumes nothing can never
+                        // make progress: stop instead of allocating
+                        // forever. Invalid grammars (empty-matchable
+                        // unbounded bodies) are rejected at compile time;
+                        // this is the engine's last line of defense.
+                        let progressed = result.end_pos != current_pos;
                         items.push(result.value);
                         current_pos = result.end_pos;
                         count += 1;
+                        if !progressed {
+                            break;
+                        }
                     }
                     Err(_) => {
                         self.capture_state.pop_scope();
