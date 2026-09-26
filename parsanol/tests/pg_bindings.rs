@@ -302,3 +302,29 @@ fn c_abi_parse_and_error_wire() {
     assert_eq!(offset, 0);
     assert!(!expected.is_empty());
 }
+
+/// F6 derive: all engines must derive the same string.
+#[test]
+fn derive_string_parity_with_ruby() {
+    let dir = std::env::var("PG_ARTIFACT_DIR").unwrap_or_else(|_| {
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        for ancestor in manifest.ancestors().skip(1) {
+            let candidate = ancestor
+                .join("pubid")
+                .join("pubid-grammar")
+                .join("artifacts");
+            if candidate.is_dir() {
+                return candidate.to_string_lossy().to_string();
+            }
+        }
+        panic!("artifacts dir not found (set PG_ARTIFACT_DIR)")
+    });
+    let artifact = PgArtifact::from_json(
+        &std::fs::read_to_string(std::path::Path::new(&dir).join("iso.json")).unwrap(),
+    )
+    .unwrap();
+    let derived = artifact
+        .derive_string("identifier", "ISO 5537:2025", "urn")
+        .unwrap();
+    assert_eq!(derived, "urn:iso:std:5537:2025");
+}

@@ -23,6 +23,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 pub mod bindings;
+pub mod derive;
 pub mod render;
 pub mod schema;
 pub mod suite;
@@ -169,6 +170,28 @@ pub struct PgArtifact {
     envelope: Value,
 }
 
+fn collect_terminals(atoms: &[Value], terms: &mut Vec<String>) {
+    for atom in atoms {
+        if let Some(obj) = atom.as_object() {
+            if let Some(kind) = obj.keys().next() {
+                match kind.as_str() {
+                    "Str" => {
+                        if let Some(p) = obj[kind].get("pattern").and_then(Value::as_str) {
+                            terms.push(p.to_string());
+                        }
+                    }
+                    "Re" => {
+                        if let Some(p) = obj[kind].get("pattern").and_then(Value::as_str) {
+                            terms.push(p.to_string());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+}
+
 impl PgArtifact {
     /// Parse and verify an envelope from its JSON text.
     pub fn from_json(text: &str) -> Result<Self, PgError> {
@@ -213,6 +236,31 @@ impl PgArtifact {
     /// The verified checksum (`sha256:...`).
     pub fn checksum(&self) -> Option<&str> {
         self.envelope.get("checksum").and_then(Value::as_str)
+    }
+
+    /// C12: constrained-decoding vocabulary — every terminal literal and
+    /// character-class pattern in every entry's grammar, deduplicated and
+    /// sorted, for LLM constrained-decoding integration.
+    pub fn terminal_vocabulary(&self) -> Vec<String> {
+        let mut terms: Vec<String> = Vec::new();
+        let entries: Vec<&Value> = self
+            .envelope
+            .get("entries")
+            .and_then(Value::as_object)
+            .map(|m| m.values().collect())
+            .unwrap_or_default();
+        for entry in entries {
+            if let Some(atoms) = entry
+                .get("grammar")
+                .and_then(|g| g.get("atoms"))
+                .and_then(Value::as_array)
+            {
+                collect_terminals(atoms, &mut terms);
+            }
+        }
+        terms.sort();
+        terms.dedup();
+        terms
     }
 
     /// The artifact's embedded test list.
