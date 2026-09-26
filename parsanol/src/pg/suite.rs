@@ -28,12 +28,14 @@ pub(crate) fn ast_to_value(node: &crate::portable::ast::AstNode, arena: &AstAren
             let before = &input[..offset.min(input.len())];
             let line = before.matches('\n').count() + 1;
             let column = offset - before.rfind('\n').map(|index| index + 1).unwrap_or(0) + 1;
+            // Wire contract (Slice parity): offset/column are byte
+            // positions, length is the character count (content.size).
             serde_json::json!({
                 "value": value,
                 "line": line,
                 "column": column,
                 "offset": offset,
-                "length": length,
+                "length": value.chars().count(),
             })
         }
         AstNode::Array { pool_index, length } => {

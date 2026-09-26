@@ -305,6 +305,17 @@ fn join_string_parts(
 /// Ports the Ruby transformer's transform_single_key_hash, including its
 /// repetition detection: a repetition value keeps its items (each
 /// non-hash item re-wrapped under the key) instead of merging.
+/// Ruby parity: a capture whose raw child is an ABSENT optional
+/// ([":maybe"] tagged empty array) flattens to nil, never "" — the
+/// named-maybe arm of CanFlatten#flatten. Only a direct capture knows
+/// the named context; inside sequences the unnamed arm ("") applies.
+fn raw_value_is_absent_maybe(value: &AstNode, arena: &AstArena) -> bool {
+    is_tagged_with(value, ":maybe", arena)
+        && array_items_of(value, arena).is_some_and(|items| {
+            items.iter().all(|item| is_tag_node(item, arena))
+        })
+}
+
 fn transform_single_key_hash(
     pair: &(String, AstNode),
     arena: &mut AstArena,
@@ -312,6 +323,9 @@ fn transform_single_key_hash(
 ) -> AstNode {
     let (key, value) = pair;
     let key_str = key.as_str();
+    if raw_value_is_absent_maybe(value, arena) {
+        return wrap_with_key(key_str, AstNode::Nil, arena);
+    }
     let transformed = to_parslet_compatible(value, arena, input);
 
     let is_tagged_repetition = is_tagged_with(value, ":repetition", arena);
@@ -394,7 +408,14 @@ fn transform_multi_key_hash(
     // Transform values first, then collect references
     let transformed_owned: Vec<(String, AstNode)> = pairs
         .iter()
-        .map(|(k, v)| (k.clone(), to_parslet_compatible(v, arena, input)))
+        .map(|(k, v)| {
+            let value = if raw_value_is_absent_maybe(v, arena) {
+                AstNode::Nil
+            } else {
+                to_parslet_compatible(v, arena, input)
+            };
+            (k.clone(), value)
+        })
         .collect();
 
     let transformed_refs: Vec<(&str, AstNode)> = transformed_owned
@@ -778,14 +799,26 @@ fn merge_fold_ruby(left: AstNode, right: AstNode, arena: &mut AstArena, input: &
             right
         }
 
-        // Both stringlike → concatenate.
+        // Both stringlike: Ruby parity (CanFlatten#merge_fold) —
+        // Slice+Slice concatenates keeping the left offset; a plain
+        // String meeting a Slice loses ("the slice wins"); two plain
+        // Strings concatenate without position.
         (l, r) if is_stringlike(l, arena) && is_stringlike(r, arena) => {
-            let (ls, lo) = stringlike_text(l, arena, input);
-            let (rs, _) = stringlike_text(r, arena, input);
-            let joined = format!("{ls}{rs}");
-            match lo {
-                Some(off) => arena.intern_string_with_offset(&joined, off),
-                None => arena.intern_string(&joined),
+            let l_has_offset = matches!(l, AstNode::InputRef { .. });
+            let r_has_offset = matches!(r, AstNode::InputRef { .. });
+            match (l_has_offset, r_has_offset) {
+                (true, true) => {
+                    let (ls, lo) = stringlike_text(l, arena, input);
+                    let (rs, _) = stringlike_text(r, arena, input);
+                    arena.intern_string_with_offset(&format!("{ls}{rs}"), lo.unwrap())
+                }
+                (true, false) => l.clone(),
+                (false, true) => r.clone(),
+                (false, false) => {
+                    let (ls, _) = stringlike_text(l, arena, input);
+                    let (rs, _) = stringlike_text(r, arena, input);
+                    arena.intern_string(&format!("{ls}{rs}"))
+                }
             }
         }
 

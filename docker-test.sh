@@ -13,6 +13,7 @@ exec docker run --rm \
   -v /Users/mulgogi/src/pubid/pubid-grammar:/pubid-grammar:ro \
   -e PG_ARTIFACT_DIR=/pubid-grammar/artifacts \
   -e PG_SUITES_DIR=/pubid-grammar/suites \
+  -e PG_CORPUS_DIR=/pubid-grammar/corpora \
  \
   rust:1-slim \
   cargo "$@"
