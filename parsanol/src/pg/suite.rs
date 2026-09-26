@@ -65,9 +65,15 @@ impl PgArtifact {
         // characters per node); size the arena for the tree, not the text.
         let mut arena = AstArena::for_input(input.len().max(1 << 16));
         let mut parser = PortableParser::new(&grammar, input, &mut arena);
-        let raw = parser
-            .parse()
-            .map_err(|err| PgError::ParseFailed(err.to_string()))?;
+        let raw = parser.parse().map_err(|err| match parser.failure_wire() {
+            Some((offset, expected)) => {
+                let before = &input[..offset.min(input.len())];
+                let line = before.matches('\n').count() + 1;
+                let column = offset - before.rfind('\n').map(|i| i + 1).unwrap_or(0) + 1;
+                PgError::ParseWire { offset, line, column, expected }
+            }
+            None => PgError::ParseFailed(err.to_string()),
+        })?;
         let shaped = to_parslet_compatible(&raw, &mut arena, input);
         Ok(ast_to_value(&shaped, &arena, input))
     }
@@ -142,7 +148,9 @@ impl PgArtifact {
                 match outcome {
                     Ok(()) => None,
                     // A reject test passing because parsing failed is green.
-                    Err(PgError::ParseFailed(_)) if kind == "reject" => None,
+                    Err(PgError::ParseFailed(_) | PgError::ParseWire { .. }) if kind == "reject" => {
+                        None
+                    }
                     Err(err) => Some(format!("test {input:?}: {err}")),
                 }
             })

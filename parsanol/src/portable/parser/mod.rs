@@ -769,6 +769,16 @@ impl<'a> PortableParser<'a> {
     /// Record a terminal failure for cause diagnostics. Only the
     /// deepest position's expectations are kept, mirroring how the
     /// Ruby engine's reporter collects the expected set.
+    /// The structured failure wire (F7): the deepest position any
+    /// terminal failed at, with the expected-set collected there.
+    pub fn failure_wire(&self) -> Option<(usize, Vec<String>)> {
+        if self.has_failure {
+            Some((self.deepest_failure_pos, self.expected_labels.clone()))
+        } else {
+            None
+        }
+    }
+
     fn note_failure(&mut self, pos: usize, label: String) {
         if !self.has_failure || pos > self.deepest_failure_pos {
             self.has_failure = true;

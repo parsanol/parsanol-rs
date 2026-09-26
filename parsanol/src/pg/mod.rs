@@ -70,6 +70,17 @@ pub enum PgError {
     UnsupportedShape(String),
     /// The portable engine failed to parse the input.
     ParseFailed(String),
+    /// Structured failure wire (F7): deepest offset, expected set, message.
+    ParseWire {
+        /// Byte offset of the deepest failure.
+        offset: usize,
+        /// One-based line of the deepest failure.
+        line: usize,
+        /// One-based column of the deepest failure.
+        column: usize,
+        /// The labels expected at that position.
+        expected: Vec<String>,
+    },
     /// A reject test unexpectedly parsed.
     UnexpectedParse(String),
     /// An example test's expected captures did not match the bound result.
@@ -111,6 +122,11 @@ impl fmt::Display for PgError {
                 write!(f, "unsupported artifact shape {shape:?} (engine supports {SUPPORTED_SHAPE:?})")
             }
             PgError::ParseFailed(detail) => write!(f, "{detail}"),
+            PgError::ParseWire { offset, line, column, expected } => write!(
+                f,
+                "Parse failed at offset {offset} (line {line}, column {column}): expected {}",
+                expected.join(", ")
+            ),
             PgError::UnexpectedParse(_input) => {
                 write!(f, "expected the input to be rejected")
             }
