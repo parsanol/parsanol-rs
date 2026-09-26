@@ -23,6 +23,8 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 pub mod bindings;
+pub mod schema;
+pub mod suite;
 
 use crate::portable::Grammar;
 
@@ -64,6 +66,17 @@ pub enum PgError {
     },
     /// A value could not be cast to the binding's declared type.
     Cast(String, String),
+    /// The portable engine failed to parse the input.
+    ParseFailed(String),
+    /// A reject test unexpectedly parsed.
+    UnexpectedParse(String),
+    /// An example test's expected captures did not match the bound result.
+    CaptureMismatch {
+        /// The example's input.
+        input: String,
+        /// The mismatch description.
+        detail: String,
+    },
 }
 
 impl fmt::Display for PgError {
@@ -92,6 +105,11 @@ impl fmt::Display for PgError {
             PgError::Cast(kind, value) => {
                 write!(f, "cannot cast {value:?} to {kind}")
             }
+            PgError::ParseFailed(detail) => write!(f, "{detail}"),
+            PgError::UnexpectedParse(_input) => {
+                write!(f, "expected the input to be rejected")
+            }
+            PgError::CaptureMismatch { detail, .. } => write!(f, "{detail}"),
             PgError::FloatInCanonicalJson => {
                 write!(
                     f,
@@ -151,6 +169,15 @@ impl PgArtifact {
     /// The verified checksum (`sha256:...`).
     pub fn checksum(&self) -> Option<&str> {
         self.envelope.get("checksum").and_then(Value::as_str)
+    }
+
+    /// The artifact's embedded test list.
+    pub fn tests(&self) -> &[Value] {
+        self.envelope
+            .get("tests")
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
     }
 
     /// Declared entry point names, sorted.

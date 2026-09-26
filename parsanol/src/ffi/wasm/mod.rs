@@ -192,6 +192,101 @@ fn ast_to_js(node: &AstNode, arena: &AstArena, input: &str) -> JsValue {
     }
 }
 
+/// A verified PG artifact exposed to JavaScript: checksum-verified load,
+/// native parse, bindings application, embedded-suite runs and the
+/// binding-requirements schema (PN 2/4).
+#[wasm_bindgen]
+pub struct PgArtifactJs {
+    artifact: PgArtifact,
+}
+
+#[wasm_bindgen]
+impl PgArtifactJs {
+    /// Load and checksum-verify an artifact envelope.
+    #[wasm_bindgen(constructor)]
+    pub fn new(artifact_json: &str) -> Result<PgArtifactJs, JsValue> {
+        let artifact =
+            PgArtifact::from_json(artifact_json).map_err(|e| JsValue::from_str(&e.to_string()))?;
+        Ok(PgArtifactJs { artifact })
+    }
+
+    /// Declared entry point names, sorted.
+    #[wasm_bindgen(js_name = entryNames)]
+    pub fn entry_names(&self) -> Vec<JsString> {
+        self.artifact
+            .entry_names()
+            .into_iter()
+            .map(JsString::from)
+            .collect()
+    }
+
+    /// Parse an entry with the native engine; returns the parsanol-shape
+    /// tree as JSON text.
+    #[wasm_bindgen(js_name = parseShape)]
+    pub fn parse_shape(&self, entry: &str, input: &str) -> Result<JsString, JsValue> {
+        let shape = self
+            .artifact
+            .parse_shape(entry, input)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        serde_json::to_string(&shape)
+            .map(JsString::from)
+            .map_err(|_| JsValue::from_str("Failed to serialize shape"))
+    }
+
+    /// Apply an entry's bindings to a parsanol-shape tree (JSON text).
+    #[wasm_bindgen(js_name = applyBindings)]
+    pub fn apply_bindings(&self, entry: &str, shape_json: &str) -> Result<JsString, JsValue> {
+        let shape: serde_json::Value = serde_json::from_str(shape_json)
+            .map_err(|e| JsValue::from_str(&format!("Invalid shape JSON: {e}")))?;
+        let bound = self
+            .artifact
+            .apply_bindings(entry, &shape)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        serde_json::to_string(&bound)
+            .map(JsString::from)
+            .map_err(|_| JsValue::from_str("Failed to serialize bindings"))
+    }
+
+    /// Parse and bind in one step.
+    #[wasm_bindgen(js_name = parseAndBind)]
+    pub fn parse_and_bind(&self, entry: &str, input: &str) -> Result<JsString, JsValue> {
+        let bound = self
+            .artifact
+            .parse_and_bind(entry, input)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        serde_json::to_string(&bound)
+            .map(JsString::from)
+            .map_err(|_| JsValue::from_str("Failed to serialize bindings"))
+    }
+
+    /// Run the artifact's embedded tests; returns the failure list as
+    /// JSON (empty array means green).
+    #[wasm_bindgen(js_name = runTests)]
+    pub fn run_tests(&self) -> Result<JsString, JsValue> {
+        let failures = self.artifact.run_tests();
+        serde_json::to_string(&failures)
+            .map(JsString::from)
+            .map_err(|_| JsValue::from_str("Failed to serialize failures"))
+    }
+
+    /// The binding-requirements schema as JSON text.
+    pub fn schema(&self) -> Result<JsString, JsValue> {
+        let schema = crate::pg::schema::from_artifact(&self.artifact)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        serde_json::to_string(&schema)
+            .map(JsString::from)
+            .map_err(|_| JsValue::from_str("Failed to serialize schema"))
+    }
+
+    /// The binding-requirements schema as TypeScript source.
+    #[wasm_bindgen(js_name = schemaTypescript)]
+    pub fn schema_typescript(&self) -> Result<JsString, JsValue> {
+        let schema = crate::pg::schema::from_artifact(&self.artifact)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        Ok(JsString::from(crate::pg::schema::to_typescript(&schema)))
+    }
+}
+
 /// Initialize the WASM module
 #[wasm_bindgen]
 extern "C" {

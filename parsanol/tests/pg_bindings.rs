@@ -133,3 +133,61 @@ fn nested_binding_paths_are_refused() {
     let err = artifact.apply_bindings("identifier", &shape).unwrap_err();
     assert!(matches!(err, parsanol::PgError::NestedBindingPath { .. }));
 }
+
+#[test]
+fn rust_native_parse_and_bind_matches_ruby_shape_and_bound() {
+    for case in fixture()["cases"].as_array().unwrap() {
+        if case["bound"]
+            .as_object()
+            .is_none_or(|bound| bound.is_empty())
+        {
+            continue; // grammars without bindings have nothing to compare
+        }
+        let envelope_text = serde_json::to_string(&case["envelope"]).unwrap();
+        let artifact = PgArtifact::from_json(&envelope_text).unwrap();
+        let entry = case["entry"].as_str().unwrap();
+        let input = case["input"].as_str().unwrap();
+        let shape = artifact
+            .parse_shape(entry, input)
+            .unwrap_or_else(|err| panic!("rust parse failed for {input:?}: {err}"));
+        assert_eq!(
+            &shape, &case["shape"],
+            "rust shape diverges from Ruby for {input:?}"
+        );
+        let bound = artifact.apply_bindings(entry, &shape).unwrap();
+        assert_eq!(&bound, &case["bound"], "bound diverges for {input:?}");
+    }
+}
+
+#[test]
+fn rust_runs_embedded_suites_green() {
+    for case in fixture()["cases"].as_array().unwrap() {
+        let envelope_text = serde_json::to_string(&case["envelope"]).unwrap();
+        let artifact = PgArtifact::from_json(&envelope_text).unwrap();
+        let failures = artifact.run_tests();
+        assert!(
+            failures.is_empty(),
+            "{} embedded suite failures: {failures:?}",
+            case["grammar"]
+        );
+    }
+}
+
+#[test]
+fn schema_from_artifact_matches_contract() {
+    let case = &fixture()["cases"][1]; // iso
+    let envelope_text = serde_json::to_string(&case["envelope"]).unwrap();
+    let artifact = PgArtifact::from_json(&envelope_text).unwrap();
+    let schema = parsanol::pg::schema::from_artifact(&artifact).unwrap();
+    let entry = case["entry"].as_str().unwrap();
+    let fields = schema[entry]["fields"].as_object().unwrap();
+    assert_eq!(fields["publisher"]["type"].as_str().unwrap(), "string");
+    assert_eq!(fields["year"]["type"].as_str().unwrap(), "integer");
+    assert_eq!(
+        fields["publisher_name"]["preprocess"].as_str().unwrap(),
+        "publisher_names"
+    );
+    let ts = parsanol::pg::schema::to_typescript(&schema);
+    assert!(ts.contains("export interface Identifier {"));
+    assert!(ts.contains("  publisherName: string;"));
+}
