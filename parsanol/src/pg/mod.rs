@@ -22,6 +22,8 @@ use std::path::Path;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
+pub mod bindings;
+
 use crate::portable::Grammar;
 
 /// Errors raised while loading or extracting from a PG artifact envelope.
@@ -46,6 +48,22 @@ pub enum PgError {
     FloatInCanonicalJson,
     /// Filesystem access failed.
     Io(std::io::Error),
+    /// A binding references an undeclared preprocess step.
+    UnknownPreprocess(String),
+    /// A preprocess step declares an op the engine does not implement.
+    UnknownPreprocessOp(String),
+    /// A binding references a table the artifact does not embed.
+    UnknownTable(String),
+    /// A binding path nests (`a.b` / `items[]` outside the leaf slot),
+    /// which the flat binding contract does not support.
+    NestedBindingPath {
+        /// The offending binding's capture name.
+        capture: String,
+        /// The offending binding's path.
+        path: String,
+    },
+    /// A value could not be cast to the binding's declared type.
+    Cast(String, String),
 }
 
 impl fmt::Display for PgError {
@@ -60,6 +78,20 @@ impl fmt::Display for PgError {
                 f,
                 "PG artifact checksum mismatch: stored {stored:?}, computed {computed:?}"
             ),
+            PgError::UnknownPreprocess(name) => {
+                write!(f, "preprocess step {name:?} not declared in artifact")
+            }
+            PgError::UnknownPreprocessOp(op) => write!(f, "unknown preprocess op {op:?}"),
+            PgError::UnknownTable(name) => {
+                write!(f, "artifact does not declare table {name:?}")
+            }
+            PgError::NestedBindingPath { capture, path } => write!(
+                f,
+                "binding {capture:?}: nested path {path:?} is not supported; bind the components instead"
+            ),
+            PgError::Cast(kind, value) => {
+                write!(f, "cannot cast {value:?} to {kind}")
+            }
             PgError::FloatInCanonicalJson => {
                 write!(
                     f,
