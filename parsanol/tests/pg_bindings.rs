@@ -252,3 +252,31 @@ fn every_baked_artifact_runs_green_on_the_rust_vm() {
     }
     assert!(checked >= 40, "expected the full flavor set, ran {checked}");
 }
+
+/// F6: all engines must render the same string from the same artifact.
+#[test]
+fn render_string_parity_with_ruby() {
+    // the fixture's iso envelope predates the render spec; read the
+    // current baked artifact
+    let dir = std::env::var("PG_ARTIFACT_DIR").unwrap_or_else(|_| {
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        for ancestor in manifest.ancestors().skip(1) {
+            let candidate = ancestor
+                .join("pubid")
+                .join("pubid-grammar")
+                .join("artifacts");
+            if candidate.is_dir() {
+                return candidate.to_string_lossy().to_string();
+            }
+        }
+        panic!("artifacts dir not found (set PG_ARTIFACT_DIR)")
+    });
+    let artifact = PgArtifact::from_json(
+        &std::fs::read_to_string(std::path::Path::new(&dir).join("iso.json")).unwrap(),
+    )
+    .unwrap();
+    let rendered = artifact
+        .render_string("identifier", "ISO 5537:2025", "default")
+        .unwrap();
+    assert_eq!(rendered, "ISO-5537:2025");
+}

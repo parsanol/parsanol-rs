@@ -23,6 +23,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 pub mod bindings;
+pub mod render;
 pub mod schema;
 pub mod suite;
 
@@ -67,7 +68,10 @@ pub enum PgError {
     /// A value could not be cast to the binding's declared type.
     Cast(String, String),
     /// The artifact declares a shape contract this engine does not support.
-    UnsupportedShape(String),
+    UnsupportedShape(String),    /// A render spec references a variant the artifact does not declare.
+    UnknownRenderVariant(String),
+    /// A render segment type the engine does not implement.
+    UnknownRenderSegment(String),
     /// The portable engine failed to parse the input.
     ParseFailed(String),
     /// Structured failure wire (F7): deepest offset, expected set, message.
@@ -117,6 +121,12 @@ impl fmt::Display for PgError {
             ),
             PgError::Cast(kind, value) => {
                 write!(f, "cannot cast {value:?} to {kind}")
+            }
+            PgError::UnknownRenderVariant(v) => {
+                write!(f, "render variant {v:?} not declared")
+            }
+            PgError::UnknownRenderSegment(t) => {
+                write!(f, "unknown render segment {t:?}")
             }
             PgError::UnsupportedShape(shape) => {
                 write!(f, "unsupported artifact shape {shape:?} (engine supports {SUPPORTED_SHAPE:?})")
