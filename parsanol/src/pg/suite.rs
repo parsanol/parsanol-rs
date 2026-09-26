@@ -9,7 +9,7 @@ use super::{PgArtifact, PgError};
 use crate::portable::parslet_transform::to_parslet_compatible;
 use crate::portable::{AstArena, Grammar, PortableParser};
 
-fn ast_to_value(node: &crate::portable::ast::AstNode, arena: &AstArena, input: &str) -> Value {
+pub(crate) fn ast_to_value(node: &crate::portable::ast::AstNode, arena: &AstArena, input: &str) -> Value {
     use crate::portable::ast::AstNode;
     match node {
         AstNode::Nil => Value::Null,

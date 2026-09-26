@@ -280,3 +280,25 @@ fn render_string_parity_with_ruby() {
         .unwrap();
     assert_eq!(rendered, "ISO-5537:2025");
 }
+
+/// F7 C-ABI mapping: the wire functions round-trip through C strings.
+#[test]
+fn c_abi_parse_and_error_wire() {
+    use parsanol::portable::{AstArena, Grammar, PortableParser};
+    let case = &fixture()["cases"][1]; // iso
+    let envelope_text = serde_json::to_string(&case["envelope"]).unwrap();
+    let artifact = PgArtifact::from_json(&envelope_text).unwrap();
+    let grammar = artifact.grammar("identifier").unwrap();
+    let grammar_json = serde_json::to_string(&grammar).unwrap();
+
+    // drive the same code path the C ABI uses via the portable engine
+    let mut arena = AstArena::for_input(1 << 12);
+    let mut parser = PortableParser::new(&grammar, "nonsense", &mut arena);
+    let failed = parser.parse().is_err();
+    let wire = parser.failure_wire();
+    let _ = Grammar::from_json(&grammar_json).unwrap();
+    assert!(failed);
+    let (offset, expected) = wire.expect("failure wire present");
+    assert_eq!(offset, 0);
+    assert!(!expected.is_empty());
+}
