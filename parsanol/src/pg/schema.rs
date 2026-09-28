@@ -125,12 +125,14 @@ fn ts_prop(path: &str) -> String {
     while index < chars.len() {
         let ch = chars[index];
         let next = chars.get(index + 1).copied();
-        if ch == '_' && index > 0 && next.is_some_and(|n| n.is_ascii_lowercase()) {
-            if chars[index - 1].is_ascii_alphanumeric() {
-                out.push(next.unwrap().to_ascii_uppercase());
-                index += 2;
-                continue;
-            }
+        if ch == '_'
+            && index > 0
+            && next.is_some_and(|n| n.is_ascii_lowercase())
+            && chars[index - 1].is_ascii_alphanumeric()
+        {
+            out.push(next.unwrap().to_ascii_uppercase());
+            index += 2;
+            continue;
         }
         out.push(ch);
         index += 1;

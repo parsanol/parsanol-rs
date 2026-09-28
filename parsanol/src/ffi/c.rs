@@ -1,26 +1,699 @@
-//! C ABI (F7 mapping): the shaped parse result and the structured failure
-//! wire exposed as C strings, over the same portable engine the artifact
-//! APIs use. Callers own returned pointers and release them with
-//! `parsanol_pg_free`.
+//! C ABI for Parsanol
 //!
-//!   char* parsanol_pg_parse(const char* grammar_json, const char* input);
-//!       -> shaped-tree JSON, or NULL on failure (see `parsanol_pg_error`)
-//!   char* parsanol_pg_error(const char* grammar_json, const char* input);
-//!       -> {"offset":N,"ranked":[[pos,[labels]]...]} or NULL on success
-//!   void  parsanol_pg_free(char* ptr);
+//! This module provides a stable C ABI for using parsanol from other languages
+//! like Python, C++, or any language that can call C functions.
+//!
+//! # Overview
+//!
+//! The C ABI provides opaque handles to grammars and parsers, along with
+//! functions for creating, using, and destroying them.
+//!
+//! # Example (C)
+//!
+//! ```c
+//! #include <parsanol.h>
+//!
+//! int main() {
+//!     // Create a grammar from JSON
+//!     const char* json = "{\"root\": 0, \"atoms\": [{\"Str\": \"hello\"}]}";
+//!     ParsanolGrammar* grammar = parsanol_grammar_new(json);
+//!
+//!     // Parse some input
+//!     const char* input = "hello world";
+//!     char* output = NULL;
+//!     int result = parsanol_parse(grammar, input, &output);
+//!
+//!     if (result == 0 && output != NULL) {
+//!         printf("Parse result: %s\n", output);
+//!         parsanol_string_free(output);
+//!     }
+//!
+//!     // Clean up
+//!     parsanol_grammar_free(grammar);
+//!     return 0;
+//! }
+//! ```
+//!
+//! # Thread Safety
+//!
+//! All functions in this module are thread-safe. Different threads can
+//! safely use different grammars simultaneously.
+//!
+//! # Memory Management
+//!
+//! The caller is responsible for freeing all resources returned by the API:
+//! - Use `parsanol_grammar_free()` to free grammars
+//! - Use `parsanol_string_free()` to free strings
+//! - Use `parsanol_result_free()` to free parse results
 
-use std::ffi::{c_char, CStr, CString};
+use std::ffi::{CStr, CString};
+use std::os::raw::{c_char, c_int, c_ulong};
+use std::ptr;
 
-use crate::portable::{AstArena, Grammar, PortableParser};
+use crate::portable::Grammar;
+
+// ============================================================================
+// Opaque Types
+// ============================================================================
+
+/// Opaque handle to a grammar
+pub struct ParsanolGrammar {
+    grammar: Grammar,
+}
+
+/// Opaque handle to a parse result
+pub struct ParsanolResult {
+    success: bool,
+    end_pos: usize,
+    error_message: Option<CString>,
+    ast_json: Option<CString>,
+}
+
+// ============================================================================
+// Error Codes
+// ============================================================================
+
+/// Success
+pub const PARSANOL_OK: c_int = 0;
+/// Null pointer passed
+pub const PARSANOL_ERROR_NULL_POINTER: c_int = -1;
+/// Invalid JSON
+pub const PARSANOL_ERROR_INVALID_JSON: c_int = -2;
+/// Parse failed
+pub const PARSANOL_ERROR_PARSE_FAILED: c_int = -3;
+/// Out of memory
+pub const PARSANOL_ERROR_OUT_OF_MEMORY: c_int = -4;
+/// Invalid grammar
+pub const PARSANOL_ERROR_INVALID_GRAMMAR: c_int = -5;
+
+// ============================================================================
+// Grammar Functions
+// ============================================================================
+
+/// Create a new grammar from JSON
+///
+/// The JSON format is:
+/// ```json
+/// {
+///     "root": 0,
+///     "atoms": [
+///         {"Str": {"pattern": "hello"}},
+///         {"Re": {"pattern": "[0-9]+"}},
+///         {"Sequence": {"atoms": [0, 1]}},
+///         {"Alternative": {"atoms": [0, 1]}},
+///         {"Repetition": {"atom": 0, "min": 0, "max": null}},
+///         {"Named": {"name": "value", "atom": 0}},
+///         {"Entity": {"atom": 0}},
+///         {"Lookahead": {"atom": 0, "positive": true}},
+///         {"Cut": null},
+///         {"Ignore": {"atom": 0}},
+///         {"Custom": {"id": 100}}
+///     ]
+/// }
+/// ```
+///
+/// # Safety
+///
+/// - `json` must be a valid null-terminated C string
+/// - The returned pointer must be freed with `parsanol_grammar_free`
+#[no_mangle]
+pub unsafe extern "C" fn parsanol_grammar_new(json: *const c_char) -> *mut ParsanolGrammar {
+    if json.is_null() {
+        return ptr::null_mut();
+    }
+
+    let json_str = match CStr::from_ptr(json).to_str() {
+        Ok(s) => s,
+        Err(_) => return ptr::null_mut(),
+    };
+
+    let grammar = match Grammar::from_json(json_str) {
+        Ok(g) => g,
+        Err(_) => return ptr::null_mut(),
+    };
+
+    let boxed = Box::new(ParsanolGrammar { grammar });
+    Box::into_raw(boxed)
+}
+
+/// Create a new grammar from JSON and return an error code
+///
+/// This is similar to `parsanol_grammar_new` but provides error details.
+///
+/// # Safety
+///
+/// - `json` must be a valid null-terminated C string
+/// - `grammar_out` must be a valid pointer to a `ParsanolGrammar*`
+/// - The returned pointer in `grammar_out` must be freed with `parsanol_grammar_free`
+#[no_mangle]
+pub unsafe extern "C" fn parsanol_grammar_new_with_error(
+    json: *const c_char,
+    grammar_out: *mut *mut ParsanolGrammar,
+) -> c_int {
+    if json.is_null() || grammar_out.is_null() {
+        return PARSANOL_ERROR_NULL_POINTER;
+    }
+
+    let json_str = match CStr::from_ptr(json).to_str() {
+        Ok(s) => s,
+        Err(_) => return PARSANOL_ERROR_INVALID_JSON,
+    };
+
+    let grammar = match Grammar::from_json(json_str) {
+        Ok(g) => g,
+        Err(_) => return PARSANOL_ERROR_INVALID_JSON,
+    };
+
+    let boxed = Box::new(ParsanolGrammar { grammar });
+    *grammar_out = Box::into_raw(boxed);
+    PARSANOL_OK
+}
+
+/// Free a grammar
+///
+/// # Safety
+///
+/// - `grammar` must be a valid pointer returned by `parsanol_grammar_new`
+/// - The pointer must not be used after this call
+#[no_mangle]
+pub unsafe extern "C" fn parsanol_grammar_free(grammar: *mut ParsanolGrammar) {
+    if !grammar.is_null() {
+        let _ = Box::from_raw(grammar);
+    }
+}
+
+/// Get the number of atoms in a grammar
+///
+/// # Safety
+///
+/// - `grammar` must be a valid pointer returned by `parsanol_grammar_new`
+#[no_mangle]
+pub unsafe extern "C" fn parsanol_grammar_atom_count(grammar: *const ParsanolGrammar) -> c_ulong {
+    if grammar.is_null() {
+        return 0;
+    }
+
+    let grammar = &*grammar;
+    grammar.grammar.atoms.len() as c_ulong
+}
+
+/// Get the root atom index
+///
+/// # Safety
+///
+/// - `grammar` must be a valid pointer returned by `parsanol_grammar_new`
+#[no_mangle]
+pub unsafe extern "C" fn parsanol_grammar_root(grammar: *const ParsanolGrammar) -> c_ulong {
+    if grammar.is_null() {
+        return 0;
+    }
+
+    let grammar = &*grammar;
+    grammar.grammar.root as c_ulong
+}
+
+// ============================================================================
+// Parsing Functions
+// ============================================================================
+
+/// Parse input using a grammar
+///
+/// # Safety
+///
+/// - `grammar` must be a valid pointer returned by `parsanol_grammar_new`
+/// - `input` must be a valid null-terminated C string
+/// - `result_out` must be a valid pointer to a `ParsanolResult*`
+/// - The returned pointer in `result_out` must be freed with `parsanol_result_free`
+#[no_mangle]
+pub unsafe extern "C" fn parsanol_parse(
+    grammar: *const ParsanolGrammar,
+    input: *const c_char,
+    result_out: *mut *mut ParsanolResult,
+) -> c_int {
+    if grammar.is_null() || input.is_null() || result_out.is_null() {
+        return PARSANOL_ERROR_NULL_POINTER;
+    }
+
+    let grammar_ref = &*grammar;
+    let input_str = match CStr::from_ptr(input).to_str() {
+        Ok(s) => s,
+        Err(_) => return PARSANOL_ERROR_PARSE_FAILED,
+    };
+
+    let parse_result = grammar_ref.grammar.parse_with_pos(input_str);
+
+    let result = match parse_result {
+        Ok(ast_result) => {
+            // Serialize AST to JSON
+            let ast_json = serde_json::to_string(&ast_result.value).ok();
+            let ast_cstring = ast_json.and_then(|j| CString::new(j).ok());
+
+            ParsanolResult {
+                success: true,
+                end_pos: ast_result.end_pos,
+                error_message: None,
+                ast_json: ast_cstring,
+            }
+        }
+        Err(e) => {
+            let error_msg = format!("{}", e);
+            let error_cstring = CString::new(error_msg).ok();
+
+            ParsanolResult {
+                success: false,
+                end_pos: 0,
+                error_message: error_cstring,
+                ast_json: None,
+            }
+        }
+    };
+
+    let boxed = Box::new(result);
+    *result_out = Box::into_raw(boxed);
+    PARSANOL_OK
+}
+
+/// Parse input and return only success/failure
+///
+/// This is a simpler API for cases where you don't need the AST.
+///
+/// # Safety
+///
+/// - `grammar` must be a valid pointer returned by `parsanol_grammar_new`
+/// - `input` must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn parsanol_parse_simple(
+    grammar: *const ParsanolGrammar,
+    input: *const c_char,
+) -> c_int {
+    if grammar.is_null() || input.is_null() {
+        return PARSANOL_ERROR_NULL_POINTER;
+    }
+
+    let grammar_ref = &*grammar;
+    let input_str = match CStr::from_ptr(input).to_str() {
+        Ok(s) => s,
+        Err(_) => return PARSANOL_ERROR_PARSE_FAILED,
+    };
+
+    match grammar_ref.grammar.parse(input_str) {
+        Ok(_) => PARSANOL_OK,
+        Err(_) => PARSANOL_ERROR_PARSE_FAILED,
+    }
+}
+
+/// Parse input and return end position
+///
+/// Returns the position after the matched content, or -1 on failure.
+///
+/// # Safety
+///
+/// - `grammar` must be a valid pointer returned by `parsanol_grammar_new`
+/// - `input` must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn parsanol_parse_end_pos(
+    grammar: *const ParsanolGrammar,
+    input: *const c_char,
+) -> c_int {
+    if grammar.is_null() || input.is_null() {
+        return PARSANOL_ERROR_NULL_POINTER;
+    }
+
+    let grammar_ref = &*grammar;
+    let input_str = match CStr::from_ptr(input).to_str() {
+        Ok(s) => s,
+        Err(_) => return PARSANOL_ERROR_PARSE_FAILED,
+    };
+
+    match grammar_ref.grammar.parse_with_pos(input_str) {
+        Ok(result) => result.end_pos as c_int,
+        Err(_) => PARSANOL_ERROR_PARSE_FAILED,
+    }
+}
+
+// ============================================================================
+// Result Functions
+// ============================================================================
+
+/// Check if a parse result was successful
+///
+/// # Safety
+///
+/// - `result` must be a valid pointer returned by `parsanol_parse`
+#[no_mangle]
+pub unsafe extern "C" fn parsanol_result_success(result: *const ParsanolResult) -> c_int {
+    if result.is_null() {
+        return 0;
+    }
+
+    let result = &*result;
+    if result.success {
+        1
+    } else {
+        0
+    }
+}
+
+/// Get the end position from a parse result
+///
+/// # Safety
+///
+/// - `result` must be a valid pointer returned by `parsanol_parse`
+#[no_mangle]
+pub unsafe extern "C" fn parsanol_result_end_pos(result: *const ParsanolResult) -> c_ulong {
+    if result.is_null() {
+        return 0;
+    }
+
+    let result = &*result;
+    result.end_pos as c_ulong
+}
+
+/// Get the error message from a parse result
+///
+/// Returns NULL if the parse was successful or there is no error message.
+///
+/// # Safety
+///
+/// - `result` must be a valid pointer returned by `parsanol_parse`
+/// - The returned string is valid until `parsanol_result_free` is called
+#[no_mangle]
+pub unsafe extern "C" fn parsanol_result_error(result: *const ParsanolResult) -> *const c_char {
+    if result.is_null() {
+        return ptr::null();
+    }
+
+    let result = &*result;
+    match &result.error_message {
+        Some(msg) => msg.as_ptr(),
+        None => ptr::null(),
+    }
+}
+
+/// Get the AST as JSON from a parse result
+///
+/// Returns NULL if the parse failed or there is no AST.
+///
+/// # Safety
+///
+/// - `result` must be a valid pointer returned by `parsanol_parse`
+/// - The returned string is valid until `parsanol_result_free` is called
+#[no_mangle]
+pub unsafe extern "C" fn parsanol_result_ast_json(result: *const ParsanolResult) -> *const c_char {
+    if result.is_null() {
+        return ptr::null();
+    }
+
+    let result = &*result;
+    match &result.ast_json {
+        Some(json) => json.as_ptr(),
+        None => ptr::null(),
+    }
+}
+
+/// Free a parse result
+///
+/// # Safety
+///
+/// - `result` must be a valid pointer returned by `parsanol_parse`
+/// - The pointer must not be used after this call
+#[no_mangle]
+pub unsafe extern "C" fn parsanol_result_free(result: *mut ParsanolResult) {
+    if !result.is_null() {
+        let _ = Box::from_raw(result);
+    }
+}
+
+// ============================================================================
+// String Functions
+// ============================================================================
+
+/// Free a string returned by the API
+///
+/// # Safety
+///
+/// - `s` must be a pointer returned by a parsanol function that returns a string
+/// - The pointer must not be used after this call
+#[no_mangle]
+pub unsafe extern "C" fn parsanol_string_free(s: *mut c_char) {
+    if !s.is_null() {
+        let _ = CString::from_raw(s);
+    }
+}
+
+// ============================================================================
+// Version Functions
+// ============================================================================
+
+/// Get the library version
+///
+/// Returns a static string like "0.1.3".
+///
+/// # Safety
+///
+/// The returned string is static and must not be freed.
+#[no_mangle]
+pub extern "C" fn parsanol_version() -> *const c_char {
+    static VERSION: &[u8] = concat!(env!("CARGO_PKG_VERSION"), "\0").as_bytes();
+    VERSION.as_ptr() as *const c_char
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+// ---------------------------------------------------------------------------
+// Handle + batch API (for the Ruby `ffi`-gem tier and other runtimes that
+// cannot load C-API extensions). Grammars register once and parse by handle;
+// results cross the boundary in the shared flat-u64 batch format, decoded on
+// the Ruby side by BatchDecoder. Pure portable code — no magnus.
+// ---------------------------------------------------------------------------
+
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+use std::sync::Mutex;
+
+use crate::ffi::shared::{collapse_ast, flatten_ast_to_u64};
+use crate::portable::{AstArena, PortableParser};
+
+static C_NEXT_HANDLE: AtomicU64 = AtomicU64::new(1);
+static C_LAST_ERROR: Mutex<String> = Mutex::new(String::new());
+
+fn c_handle_map() -> &'static Mutex<HashMap<u64, Grammar>> {
+    static MAP: std::sync::OnceLock<Mutex<HashMap<u64, Grammar>>> = std::sync::OnceLock::new();
+    MAP.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn c_set_error(msg: &str) {
+    if let Ok(mut guard) = C_LAST_ERROR.lock() {
+        guard.clear();
+        guard.push_str(msg);
+        // Keep the buffer NUL-terminated: FFI callers read a C string.
+        guard.push('\0');
+    }
+}
+
+/// Register a grammar JSON and get a handle (0 on failure).
+///
+/// # Safety
+///
+/// - `json` must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn parsanol_c_register(json: *const c_char) -> u64 {
+    if json.is_null() {
+        c_set_error("null grammar json");
+        return 0;
+    }
+    let json_str = match CStr::from_ptr(json).to_str() {
+        Ok(s) => s,
+        Err(_) => {
+            c_set_error("grammar json is not valid UTF-8");
+            return 0;
+        }
+    };
+    match Grammar::from_json(json_str) {
+        Ok(grammar) => {
+            let handle = C_NEXT_HANDLE.fetch_add(1, AtomicOrdering::Relaxed);
+            if let Ok(mut map) = c_handle_map().lock() {
+                map.insert(handle, grammar);
+            }
+            handle
+        }
+        Err(e) => {
+            c_set_error(&format!("grammar json error: {e}"));
+            0
+        }
+    }
+}
+
+/// Release a grammar registered with `parsanol_c_register`.
+///
+/// Safe to call with an unknown handle (no-op).
+#[no_mangle]
+pub extern "C" fn parsanol_c_release(handle: u64) {
+    if let Ok(mut map) = c_handle_map().lock() {
+        map.remove(&handle);
+    }
+}
+
+/// Last error message from `parsanol_c_register`/`parsanol_c_parse`.
+///
+/// The returned pointer stays valid until the next library call and must
+/// not be freed.
+#[no_mangle]
+pub extern "C" fn parsanol_c_last_error() -> *const c_char {
+    // The string lives in a static Mutex and is never freed; callers read it
+    // before issuing the next call. A NUL terminator is guaranteed.
+    match C_LAST_ERROR.lock() {
+        Ok(guard) => {
+            if guard.is_empty() {
+                // An empty String's buffer pointer is dangling, not a
+                // readable C string; hand out the static NUL instead.
+                c"".as_ptr() as *const c_char
+            } else {
+                guard.as_ptr() as *const c_char
+            }
+        }
+        Err(_) => c"".as_ptr() as *const c_char,
+    }
+}
+
+/// Parse `input` (NUL-free UTF-8, NUL-terminated) with a registered handle
+/// and write the flat-u64 batch encoding into `out`.
+///
+/// Returns:
+/// - `> 0`: number of u64 cells written (parse succeeded)
+/// - `0`: parse failed; see `parsanol_c_last_error` (empty on clean failure)
+/// - `< 0`: `-needed` — `out` is too small; retry with `cap >= needed`
+///
+/// # Safety
+///
+/// - `handle` must come from `parsanol_c_register` and not be released
+/// - `input` must be a valid null-terminated C string
+/// - `out` must be valid for writes of `cap` u64 cells
+#[no_mangle]
+pub unsafe extern "C" fn parsanol_c_parse(
+    handle: u64,
+    input: *const c_char,
+    out: *mut u64,
+    cap: usize,
+) -> isize {
+    let input_str = if input.is_null() {
+        ""
+    } else {
+        match CStr::from_ptr(input).to_str() {
+            Ok(s) => s,
+            Err(_) => {
+                c_set_error("input is not valid UTF-8");
+                return 0;
+            }
+        }
+    };
+
+    c_parse_input(handle, input_str, out, cap)
+}
+
+/// Binary-safe variant of [`parsanol_c_parse`]: reads exactly `len` bytes,
+/// so inputs may contain interior NULs.
+///
+/// `input` must be valid for reads of `len` bytes (no terminator needed,
+/// but one right after the region is fine).
+///
+/// # Safety
+///
+/// - `handle` must come from `parsanol_c_register` and not be released
+/// - `input` must be valid for reads of `len` bytes
+/// - `out` must be valid for writes of `cap` u64 cells
+#[no_mangle]
+pub unsafe extern "C" fn parsanol_c_parse_len(
+    handle: u64,
+    input: *const c_char,
+    len: usize,
+    out: *mut u64,
+    cap: usize,
+) -> isize {
+    let input_str = if input.is_null() || len == 0 {
+        ""
+    } else {
+        match std::str::from_utf8(std::slice::from_raw_parts(input.cast::<u8>(), len)) {
+            Ok(s) => s,
+            Err(_) => {
+                c_set_error("input is not valid UTF-8");
+                return 0;
+            }
+        }
+    };
+
+    c_parse_input(handle, input_str, out, cap)
+}
+
+/// Shared parse tail of `parsanol_c_parse`/`parsanol_c_parse_len`.
+unsafe fn c_parse_input(handle: u64, input_str: &str, out: *mut u64, cap: usize) -> isize {
+    use flatten_ast_to_u64;
+
+    let grammar = {
+        let map = match c_handle_map().lock() {
+            Ok(m) => m,
+            Err(_) => {
+                c_set_error("internal: handle map poisoned");
+                return 0;
+            }
+        };
+        match map.get(&handle) {
+            Some(g) => g.clone(),
+            None => {
+                c_set_error("unknown grammar handle");
+                return 0;
+            }
+        }
+    };
+
+    let mut arena = AstArena::for_input(input_str.len());
+    arena.set_input(input_str.to_string());
+    let mut parser = PortableParser::new(&grammar, input_str, &mut arena);
+    let ast = match parser.parse() {
+        Ok(ast) => ast,
+        Err(e) => {
+            c_set_error(&format!("{e}"));
+            return 0;
+        }
+    };
+
+    // Same pipeline as the extension tier: collapse adjacent input refs
+    // (semantically neutral, shrinks the flat encoding), then flatten
+    // the RAW tagged tree — NOT to_parslet_compatible's pre-fold. The
+    // Ruby-side AstTransformer must see the same tagged shapes on every
+    // tier, or the backends build different trees for one grammar.
+    let collapsed = collapse_ast(&ast, &mut arena);
+    let mut flat: Vec<u64> = Vec::new();
+    flatten_ast_to_u64(&collapsed, &arena, input_str, &mut flat);
+
+    if flat.len() > cap {
+        return -(flat.len() as isize);
+    }
+    if !flat.is_empty() {
+        ptr::copy_nonoverlapping(flat.as_ptr(), out, flat.len());
+    }
+    c_set_error("");
+    flat.len() as isize
+}
+
+// ============================================================================
+// PG artifact C ABI (PN 2): parse an artifact entry, return the shaped tree
+// as JSON, or the structured failure wire. Owned returns are freed with
+// parsanol_pg_free.
+// ============================================================================
 
 enum Outcome {
     Shape(String),
-    Failed { offset: usize, ranked: Vec<(usize, Vec<String>)> },
+    Failed {
+        offset: usize,
+        ranked: Vec<(usize, Vec<String>)>,
+    },
 }
 
 fn execute(grammar_json: &str, input: &str) -> Result<Outcome, String> {
-    let grammar: Grammar =
-        Grammar::from_json(grammar_json).map_err(|e| e.to_string())?;
+    let grammar: Grammar = Grammar::from_json(grammar_json).map_err(|e| e.to_string())?;
     let mut arena = AstArena::for_input(input.len().max(1 << 12));
     let mut parser = PortableParser::new(&grammar, input, &mut arena);
     match parser.parse() {
@@ -48,19 +721,26 @@ fn run(grammar_json: *const c_char, input: *const c_char) -> Result<Outcome, Str
     let grammar_json = unsafe { CStr::from_ptr(grammar_json) }
         .to_str()
         .map_err(|e| e.to_string())?;
-    let input = unsafe { CStr::from_ptr(input) }.to_str().map_err(|e| e.to_string())?;
+    let input = unsafe { CStr::from_ptr(input) }
+        .to_str()
+        .map_err(|e| e.to_string())?;
     execute(grammar_json, input)
 }
 
 fn to_c(string: String) -> *mut c_char {
-    CString::new(string).map(|s| s.into_raw()).unwrap_or_else(|_| std::ptr::null_mut())
+    CString::new(string)
+        .map(|s| s.into_raw())
+        .unwrap_or_else(|_| std::ptr::null_mut())
 }
 
 /// # Safety
 /// Arguments must be valid C strings. Returns shaped-tree JSON (owned;
 /// free with `parsanol_pg_free`) or NULL when parsing fails.
 #[no_mangle]
-pub unsafe extern "C" fn parsanol_pg_parse(grammar_json: *const c_char, input: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn parsanol_pg_parse(
+    grammar_json: *const c_char,
+    input: *const c_char,
+) -> *mut c_char {
     match run(grammar_json, input) {
         Ok(Outcome::Shape(json)) => to_c(json),
         _ => std::ptr::null_mut(),
@@ -71,11 +751,14 @@ pub unsafe extern "C" fn parsanol_pg_parse(grammar_json: *const c_char, input: *
 /// Arguments must be valid C strings. Returns the failure-wire JSON
 /// (owned; free with `parsanol_pg_free`) or NULL when parsing succeeds.
 #[no_mangle]
-pub unsafe extern "C" fn parsanol_pg_error(grammar_json: *const c_char, input: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn parsanol_pg_error(
+    grammar_json: *const c_char,
+    input: *const c_char,
+) -> *mut c_char {
     match run(grammar_json, input) {
-        Ok(Outcome::Failed { offset, ranked }) => to_c(
-            serde_json::json!({ "offset": offset, "ranked": ranked }).to_string(),
-        ),
+        Ok(Outcome::Failed { offset, ranked }) => {
+            to_c(serde_json::json!({ "offset": offset, "ranked": ranked }).to_string())
+        }
         _ => std::ptr::null_mut(),
     }
 }
@@ -86,5 +769,126 @@ pub unsafe extern "C" fn parsanol_pg_error(grammar_json: *const c_char, input: *
 pub unsafe extern "C" fn parsanol_pg_free(ptr: *mut c_char) {
     if !ptr.is_null() {
         drop(CString::from_raw(ptr));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::CString;
+
+    #[test]
+    fn test_version() {
+        let version = parsanol_version();
+        let version_str = unsafe { CStr::from_ptr(version) }.to_str().unwrap();
+        assert!(!version_str.is_empty());
+    }
+
+    #[test]
+    fn test_grammar_new_and_free() {
+        let json =
+            CString::new(r#"{"root": 0, "atoms": [{"Str": {"pattern": "hello"}}]}"#).unwrap();
+        let grammar = unsafe { parsanol_grammar_new(json.as_ptr()) };
+        assert!(!grammar.is_null());
+        unsafe { parsanol_grammar_free(grammar) };
+    }
+
+    #[test]
+    fn test_grammar_new_null() {
+        let grammar = unsafe { parsanol_grammar_new(ptr::null()) };
+        assert!(grammar.is_null());
+    }
+
+    #[test]
+    fn test_parse_simple() {
+        let json =
+            CString::new(r#"{"root": 0, "atoms": [{"Str": {"pattern": "hello"}}]}"#).unwrap();
+        let grammar = unsafe { parsanol_grammar_new(json.as_ptr()) };
+        assert!(!grammar.is_null());
+
+        // Parse succeeds only if the entire input is consumed
+        let input = CString::new("hello").unwrap();
+        let result = unsafe { parsanol_parse_simple(grammar, input.as_ptr()) };
+        assert_eq!(result, PARSANOL_OK);
+
+        // This fails because " world" is not consumed
+        let partial_input = CString::new("hello world").unwrap();
+        let result = unsafe { parsanol_parse_simple(grammar, partial_input.as_ptr()) };
+        assert_eq!(result, PARSANOL_ERROR_PARSE_FAILED);
+
+        let bad_input = CString::new("goodbye").unwrap();
+        let result = unsafe { parsanol_parse_simple(grammar, bad_input.as_ptr()) };
+        assert_eq!(result, PARSANOL_ERROR_PARSE_FAILED);
+
+        unsafe { parsanol_grammar_free(grammar) };
+    }
+
+    #[test]
+    fn test_c_parse_len_handles_interior_nul() {
+        let json =
+            CString::new(r#"{"root": 0, "atoms": [{"Str": {"pattern": "a\u0000b"}}]}"#).unwrap();
+        let handle = unsafe { parsanol_c_register(json.as_ptr()) };
+        assert_ne!(handle, 0);
+
+        // "a\0b" with an explicit terminator: the length API must see all
+        // three bytes, while the NUL-terminated API truncates at "a".
+        let mut buf: [u8; 4] = *b"a\0b\0";
+        let input = buf.as_mut_ptr().cast::<c_char>();
+
+        let mut out = [0u64; 64];
+        let n = unsafe { parsanol_c_parse_len(handle, input, 3, out.as_mut_ptr(), out.len()) };
+        assert!(
+            n > 0,
+            "len-parse of interior-NUL input failed: {:?}",
+            unsafe { CStr::from_ptr(parsanol_c_last_error()) }
+                .to_str()
+                .unwrap()
+        );
+
+        let n_old = unsafe { parsanol_c_parse(handle, input, out.as_mut_ptr(), out.len()) };
+        assert_eq!(n_old, 0, "NUL-terminated parse should see only \"a\"");
+
+        parsanol_c_release(handle);
+    }
+
+    #[test]
+    fn test_parse_with_result() {
+        let json =
+            CString::new(r#"{"root": 0, "atoms": [{"Str": {"pattern": "hello"}}]}"#).unwrap();
+        let grammar = unsafe { parsanol_grammar_new(json.as_ptr()) };
+        assert!(!grammar.is_null());
+
+        let input = CString::new("hello world").unwrap();
+        let mut result_ptr: *mut ParsanolResult = ptr::null_mut();
+
+        let rc = unsafe { parsanol_parse(grammar, input.as_ptr(), &mut result_ptr) };
+        assert_eq!(rc, PARSANOL_OK);
+        assert!(!result_ptr.is_null());
+
+        let success = unsafe { parsanol_result_success(result_ptr) };
+        assert_eq!(success, 1);
+
+        let end_pos = unsafe { parsanol_result_end_pos(result_ptr) };
+        assert_eq!(end_pos, 5);
+
+        let ast_json = unsafe { parsanol_result_ast_json(result_ptr) };
+        assert!(!ast_json.is_null());
+
+        unsafe { parsanol_result_free(result_ptr) };
+        unsafe { parsanol_grammar_free(grammar) };
+    }
+
+    #[test]
+    fn test_grammar_atom_count() {
+        let json = CString::new(r#"{"root": 0, "atoms": [{"Str": {"pattern": "hello"}}, {"Re": {"pattern": "[0-9]+"}}]}"#).unwrap();
+        let grammar = unsafe { parsanol_grammar_new(json.as_ptr()) };
+        assert!(!grammar.is_null());
+
+        // After optimize(), unreferenced atoms are compacted away.
+        // With root=0, only the Str at index 0 is reachable; Re at index 1 is dropped.
+        let count = unsafe { parsanol_grammar_atom_count(grammar) };
+        assert_eq!(count, 1);
+
+        unsafe { parsanol_grammar_free(grammar) };
     }
 }

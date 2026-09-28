@@ -9,7 +9,11 @@ use super::{PgArtifact, PgError};
 use crate::portable::parslet_transform::to_parslet_compatible;
 use crate::portable::{AstArena, Grammar, PortableParser};
 
-pub(crate) fn ast_to_value(node: &crate::portable::ast::AstNode, arena: &AstArena, input: &str) -> Value {
+pub(crate) fn ast_to_value(
+    node: &crate::portable::ast::AstNode,
+    arena: &AstArena,
+    input: &str,
+) -> Value {
     use crate::portable::ast::AstNode;
     match node {
         AstNode::Nil => Value::Null,
@@ -77,7 +81,13 @@ impl PgArtifact {
                     .iter()
                     .map(|(p, labels)| (*p, labels.clone()))
                     .collect();
-                PgError::ParseWire { offset, line, column, expected, ranked }
+                PgError::ParseWire {
+                    offset,
+                    line,
+                    column,
+                    expected,
+                    ranked,
+                }
             }
             None => PgError::ParseFailed(err.to_string()),
         })?;
@@ -129,7 +139,10 @@ impl PgArtifact {
                     .get("input")
                     .and_then(Value::as_str)
                     .unwrap_or_default();
-                let entry = object.get("entry").and_then(Value::as_str).unwrap_or(&fallback);
+                let entry = object
+                    .get("entry")
+                    .and_then(Value::as_str)
+                    .unwrap_or(&fallback);
                 let outcome = (|| -> Result<(), PgError> {
                     let bound = self.parse_and_bind(entry, input)?;
                     if kind == "reject" {
@@ -155,7 +168,9 @@ impl PgArtifact {
                 match outcome {
                     Ok(()) => None,
                     // A reject test passing because parsing failed is green.
-                    Err(PgError::ParseFailed(_) | PgError::ParseWire { .. }) if kind == "reject" => {
+                    Err(PgError::ParseFailed(_) | PgError::ParseWire { .. })
+                        if kind == "reject" =>
+                    {
                         None
                     }
                     Err(err) => Some(format!("test {input:?}: {err}")),

@@ -32,14 +32,10 @@ fn every_corpus_case_replays_identically() {
             continue;
         }
         let name = dir.file_name().to_str().expect("utf8 name").to_string();
-        let corpus: Value = serde_json::from_str(
-            &std::fs::read_to_string(&corpus_path).unwrap(),
-        )
-        .unwrap_or_else(|err| panic!("{name}: corpus unreadable: {err}"));
-        let artifact = PgArtifact::from_path(
-            artifacts.join(format!("{name}.json")),
-        )
-        .unwrap_or_else(|err| panic!("{name}: artifact rejected: {err}"));
+        let corpus: Value = serde_json::from_str(&std::fs::read_to_string(&corpus_path).unwrap())
+            .unwrap_or_else(|err| panic!("{name}: corpus unreadable: {err}"));
+        let artifact = PgArtifact::from_path(artifacts.join(format!("{name}.json")))
+            .unwrap_or_else(|err| panic!("{name}: artifact rejected: {err}"));
         assert_eq!(
             corpus["artifact_checksum"].as_str().unwrap(),
             artifact.checksum().unwrap(),
@@ -66,7 +62,8 @@ fn every_corpus_case_replays_identically() {
                         .parse_shape(&entry, input)
                         .unwrap_or_else(|err| panic!("{}: {err}", ctx()));
                     assert_eq!(
-                        &shape, &case["parsanol_tree"],
+                        &shape,
+                        &case["parsanol_tree"],
                         "{}: shape diverges from Ruby",
                         ctx()
                     );
@@ -74,14 +71,13 @@ fn every_corpus_case_replays_identically() {
                         .apply_bindings(&entry, &shape)
                         .unwrap_or_else(|err| panic!("{}: {err}", ctx()));
                     assert_eq!(
-                        &bound, &case["bound"],
+                        &bound,
+                        &case["bound"],
                         "{}: bound map diverges from Ruby",
                         ctx()
                     );
                     if let Some(rendered) = case.get("rendered") {
-                        for (variant, expected) in
-                            rendered.as_object().expect("rendered object")
-                        {
+                        for (variant, expected) in rendered.as_object().expect("rendered object") {
                             let got = artifact
                                 .render_string(&entry, input, variant)
                                 .unwrap_or_else(|err| panic!("{}: {err}", ctx()));
@@ -94,8 +90,7 @@ fn every_corpus_case_replays_identically() {
                         }
                     }
                     if let Some(derived) = case.get("derived") {
-                        for (derive_name, expected) in
-                            derived.as_object().expect("derived object")
+                        for (derive_name, expected) in derived.as_object().expect("derived object")
                         {
                             let got = artifact
                                 .derive_string(&entry, input, derive_name)

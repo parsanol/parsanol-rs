@@ -15,7 +15,9 @@ pub fn apply(derive: &Value, name: &str, bound: &Value) -> Result<String, PgErro
     let mut out = String::new();
     let mut rest = template;
     while let Some(start) = rest.find('{') {
-        let Some(end_rel) = rest[start..].find('}') else { break };
+        let Some(end_rel) = rest[start..].find('}') else {
+            break;
+        };
         out.push_str(&rest[..start]);
         let field = &rest[start + 1..start + end_rel];
         let value = bound.get(field).filter(|v| !v.is_null());
@@ -34,7 +36,11 @@ pub fn apply(derive: &Value, name: &str, bound: &Value) -> Result<String, PgErro
 impl PgArtifact {
     /// Evaluate a named derive spec against a bound map.
     pub fn derive(&self, name: &str, bound: &Value) -> Result<String, PgError> {
-        apply(self.envelope.get("derive").unwrap_or(&Value::Null), name, bound)
+        apply(
+            self.envelope.get("derive").unwrap_or(&Value::Null),
+            name,
+            bound,
+        )
     }
 
     /// Parse, bind, and evaluate a derive spec in one step.

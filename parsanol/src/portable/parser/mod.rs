@@ -139,6 +139,9 @@ macro_rules! log_debug {
 /// C4: maximum number of ranked failure positions retained.
 pub const MAX_RANKED_FAILURES: usize = 8;
 
+/// The packrat tree-walking parser: evaluates the compiled grammar
+/// against the input with memoization, capture scopes and ranked
+/// failure tracking.
 pub struct PortableParser<'a> {
     // ========================================================================
     // Grammar and Input (immutable)
@@ -785,6 +788,8 @@ impl<'a> PortableParser<'a> {
         &self.ranked_failures
     }
 
+    /// The structured failure wire (F7/C11): the deepest failure position
+    /// with its expected-set, when the parse failed.
     pub fn failure_wire(&self) -> Option<(usize, Vec<String>)> {
         if self.has_failure {
             Some((self.deepest_failure_pos, self.expected_labels.clone()))
@@ -812,7 +817,7 @@ impl<'a> PortableParser<'a> {
             }
             None => {
                 self.ranked_failures.push((pos, vec![label]));
-                self.ranked_failures.sort_by(|a, b| b.0.cmp(&a.0));
+                self.ranked_failures.sort_by_key(|a| std::cmp::Reverse(a.0));
                 self.ranked_failures.truncate(MAX_RANKED_FAILURES);
             }
         }

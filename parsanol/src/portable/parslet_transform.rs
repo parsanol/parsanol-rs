@@ -311,9 +311,8 @@ fn join_string_parts(
 /// the named context; inside sequences the unnamed arm ("") applies.
 fn raw_value_is_absent_maybe(value: &AstNode, arena: &AstArena) -> bool {
     is_tagged_with(value, ":maybe", arena)
-        && array_items_of(value, arena).is_some_and(|items| {
-            items.iter().all(|item| is_tag_node(item, arena))
-        })
+        && array_items_of(value, arena)
+            .is_some_and(|items| items.iter().all(|item| is_tag_node(item, arena)))
 }
 
 fn transform_single_key_hash(

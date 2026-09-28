@@ -31,7 +31,11 @@ pub mod suite;
 use crate::portable::Grammar;
 
 /// Errors raised while loading or extracting from a PG artifact envelope.
+///
+/// New failure modes arrive as the artifact schema grows; match with a
+/// catch-all arm.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum PgError {
     /// The envelope is not valid JSON.
     Json(serde_json::Error),
@@ -69,7 +73,8 @@ pub enum PgError {
     /// A value could not be cast to the binding's declared type.
     Cast(String, String),
     /// The artifact declares a shape contract this engine does not support.
-    UnsupportedShape(String),    /// A render spec references a variant the artifact does not declare.
+    UnsupportedShape(String),
+    /// A render spec references a variant the artifact does not declare.
     UnknownRenderVariant(String),
     /// A render segment type the engine does not implement.
     UnknownRenderSegment(String),

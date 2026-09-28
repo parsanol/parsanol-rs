@@ -18,7 +18,10 @@ fn render_segments(segments: &[Value], bound: &Value, out: &mut String) -> Resul
             .ok_or_else(|| PgError::UnknownRenderSegment("<non-object>".to_string()))?;
         match object.get("type").and_then(Value::as_str) {
             Some("field") => {
-                let field = object.get("field").and_then(Value::as_str).unwrap_or_default();
+                let field = object
+                    .get("field")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
                 let value = lookup(bound, field);
                 out.push_str(&match value {
                     Some(Value::String(s)) => s.clone(),
@@ -28,10 +31,18 @@ fn render_segments(segments: &[Value], bound: &Value, out: &mut String) -> Resul
                 });
             }
             Some("literal") => {
-                out.push_str(object.get("text").and_then(Value::as_str).unwrap_or_default());
+                out.push_str(
+                    object
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default(),
+                );
             }
             Some("cond") => {
-                let field = object.get("field").and_then(Value::as_str).unwrap_or_default();
+                let field = object
+                    .get("field")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
                 if lookup(bound, field).is_some() {
                     let then = object
                         .get("then")
@@ -41,7 +52,11 @@ fn render_segments(segments: &[Value], bound: &Value, out: &mut String) -> Resul
                     render_segments(&then, bound, out)?;
                 }
             }
-            other => return Err(PgError::UnknownRenderSegment(other.unwrap_or("missing").to_string())),
+            other => {
+                return Err(PgError::UnknownRenderSegment(
+                    other.unwrap_or("missing").to_string(),
+                ))
+            }
         }
     }
     Ok(())
@@ -65,7 +80,12 @@ impl PgArtifact {
     }
 
     /// Parse, bind, and render the identifier string in one step.
-    pub fn render_string(&self, entry: &str, input: &str, variant: &str) -> Result<String, PgError> {
+    pub fn render_string(
+        &self,
+        entry: &str,
+        input: &str,
+        variant: &str,
+    ) -> Result<String, PgError> {
         let bound = self.parse_and_bind(entry, input)?;
         apply(self.render_spec(), variant, &bound)
     }
