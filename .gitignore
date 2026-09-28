@@ -56,3 +56,4 @@ PRODUCTION-READINESS.md
 
 # wasm-pack output for the npm package
 /wasm/
+/target-docker/
