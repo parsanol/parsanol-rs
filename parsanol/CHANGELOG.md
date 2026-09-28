@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Green the CI gates for the pg-artifact runtime by @[object]
+
+### Other
+
+- Skip artifact-gated tests when inputs are absent by @[object]
+- V0.9.0 by @[object]
+- F4 corpus gate + three Ruby-parity leaf fixes the gate caught by @[object]
+- F6 v1: derive evaluator with cross-engine parity test by @[object]
+- Parsanol_pg_parse / parsanol_pg_error / parsanol_pg_free by @[object]
+- Ranked multi-error reporting in the portable VM by @[object]
+- F6 v1: render specs in the envelope, generic renderers in all engines by @[object]
+- Structured parse error wire on artifact APIs by @[object]
+- VM progress guards, C10 shape check, default_entry, containerized tests by @[object]
+- Ship cdylib crate-type for wasm-pack builds by @[object]
+- Add pg schema + suite runner (C8) and wasm surface (C9) by @[object]
+- Add pg bindings runtime (C7): capture collection, preprocess, casts by @[object]
+- WasmParser.fromArtifact — PG artifact consumption with checksum verification by @[object]
+- Fix formatting and Windows CRLF in the PG artifact test by @[object]
+- Add pg module: PG artifact envelopes (load, verify, extract) by @[object]
+
 ### Added
 
 - Prefix-tree splice v1 for repetition-spine documents (TODO.perf/9) by @[object]
