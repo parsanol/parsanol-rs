@@ -3,15 +3,15 @@
 
 use serde_json::Value;
 
-use super::{PgArtifact, PgError};
+use super::{PargArtifact, PargError};
 
 /// Evaluate a derive template: `{field}` interpolates the bound value;
 /// missing fields render empty.
-pub fn apply(derive: &Value, name: &str, bound: &Value) -> Result<String, PgError> {
+pub fn apply(derive: &Value, name: &str, bound: &Value) -> Result<String, PargError> {
     let template = derive
         .get(name)
         .and_then(Value::as_str)
-        .ok_or_else(|| PgError::UnknownRenderVariant(format!("derive:{name}")))?;
+        .ok_or_else(|| PargError::UnknownRenderVariant(format!("derive:{name}")))?;
     let mut out = String::new();
     let mut rest = template;
     while let Some(start) = rest.find('{') {
@@ -33,9 +33,9 @@ pub fn apply(derive: &Value, name: &str, bound: &Value) -> Result<String, PgErro
     Ok(out)
 }
 
-impl PgArtifact {
+impl PargArtifact {
     /// Evaluate a named derive spec against a bound map.
-    pub fn derive(&self, name: &str, bound: &Value) -> Result<String, PgError> {
+    pub fn derive(&self, name: &str, bound: &Value) -> Result<String, PargError> {
         apply(
             self.envelope.get("derive").unwrap_or(&Value::Null),
             name,
@@ -44,7 +44,7 @@ impl PgArtifact {
     }
 
     /// Parse, bind, and evaluate a derive spec in one step.
-    pub fn derive_string(&self, entry: &str, input: &str, name: &str) -> Result<String, PgError> {
+    pub fn derive_string(&self, entry: &str, input: &str, name: &str) -> Result<String, PargError> {
         let bound = self.parse_and_bind(entry, input)?;
         self.derive(name, &bound)
     }

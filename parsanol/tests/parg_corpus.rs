@@ -3,7 +3,7 @@
 //! them) rendered and derived strings — against the Ruby-generated
 //! references in pubid-grammar/corpora.
 
-use parsanol::PgArtifact;
+use parsanol::PargArtifact;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
@@ -24,10 +24,10 @@ fn workspace_dir(var: &str, leaf: &str) -> Option<PathBuf> {
 #[test]
 fn every_corpus_case_replays_identically() {
     let (Some(corpora), Some(artifacts)) = (
-        workspace_dir("PG_CORPUS_DIR", "corpora"),
-        workspace_dir("PG_ARTIFACT_DIR", "artifacts"),
+        workspace_dir("PARG_CORPUS_DIR", "corpora"),
+        workspace_dir("PARG_ARTIFACT_DIR", "artifacts"),
     ) else {
-        eprintln!("skipping: pubid-grammar corpora/artifacts not present (set PG_CORPUS_DIR/PG_ARTIFACT_DIR)");
+        eprintln!("skipping: pubid-grammar corpora/artifacts not present (set PARG_CORPUS_DIR/PARG_ARTIFACT_DIR)");
         return;
     };
     let mut checked = 0usize;
@@ -39,7 +39,7 @@ fn every_corpus_case_replays_identically() {
         let name = dir.file_name().to_str().expect("utf8 name").to_string();
         let corpus: Value = serde_json::from_str(&std::fs::read_to_string(&corpus_path).unwrap())
             .unwrap_or_else(|err| panic!("{name}: corpus unreadable: {err}"));
-        let artifact = PgArtifact::from_path(artifacts.join(format!("{name}.json")))
+        let artifact = PargArtifact::from_path(artifacts.join(format!("{name}.json")))
             .unwrap_or_else(|err| panic!("{name}: artifact rejected: {err}"));
         assert_eq!(
             corpus["artifact_checksum"].as_str().unwrap(),

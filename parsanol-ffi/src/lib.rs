@@ -12,7 +12,7 @@
 #[allow(unused_imports)]
 use parsanol::ffi::c::{
     parsanol_c_last_error, parsanol_c_parse, parsanol_c_parse_len, parsanol_c_register,
-    parsanol_c_release, parsanol_pg_error, parsanol_pg_free, parsanol_pg_parse,
+    parsanol_c_release, parsanol_parg_error, parsanol_parg_free, parsanol_parg_parse,
 };
 
 #[cfg(test)]
@@ -77,12 +77,12 @@ mod tests {
 
     #[test]
     fn test_pg_parse_error_free_roundtrip() {
-        // PG artifact ABI: shaped tree on success, failure wire on error,
-        // both owned and freed through parsanol_pg_free.
+        // PARG artifact ABI: shaped tree on success, failure wire on error,
+        // both owned and freed through parsanol_parg_free.
         let json = CString::new(r#"{"root": 0, "atoms": [{"Str": {"pattern": "ab"}}]}"#).unwrap();
 
         let input = CString::new("ab").unwrap();
-        let shaped = unsafe { parsanol_pg_parse(json.as_ptr(), input.as_ptr()) };
+        let shaped = unsafe { parsanol_parg_parse(json.as_ptr(), input.as_ptr()) };
         assert!(!shaped.is_null());
         let shaped_str = unsafe { CStr::from_ptr(shaped) }
             .to_string_lossy()
@@ -92,16 +92,16 @@ mod tests {
             "shaped: {}",
             shaped_str
         );
-        unsafe { parsanol_pg_free(shaped) };
+        unsafe { parsanol_parg_free(shaped) };
 
         let bad = CString::new("zz").unwrap();
-        assert!(unsafe { parsanol_pg_parse(json.as_ptr(), bad.as_ptr()) }.is_null());
-        let wire = unsafe { parsanol_pg_error(json.as_ptr(), bad.as_ptr()) };
+        assert!(unsafe { parsanol_parg_parse(json.as_ptr(), bad.as_ptr()) }.is_null());
+        let wire = unsafe { parsanol_parg_error(json.as_ptr(), bad.as_ptr()) };
         assert!(!wire.is_null());
         let wire_str = unsafe { CStr::from_ptr(wire) }
             .to_string_lossy()
             .into_owned();
         assert!(wire_str.contains("\"offset\""), "wire: {}", wire_str);
-        unsafe { parsanol_pg_free(wire) };
+        unsafe { parsanol_parg_free(wire) };
     }
 }
