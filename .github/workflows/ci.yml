@@ -37,7 +37,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: crate-ci/typos@v1.50.2
+      - uses: crate-ci/typos@v1.50.3
 
   # ============================================================================
   # Pre-flight Checks
