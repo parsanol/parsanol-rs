@@ -25,7 +25,7 @@ jobs:
       upload_url: ${{ steps.get_release.outputs.upload_url }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Get release
         id: get_release
@@ -54,7 +54,7 @@ jobs:
             strip: aarch64-linux-gnu-strip
       fail-fast: false
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -108,7 +108,7 @@ jobs:
             arch: x86_64
       fail-fast: false
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -153,7 +153,7 @@ jobs:
     needs: prepare
     if: needs.prepare.outputs.upload_url != ''
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -197,7 +197,7 @@ jobs:
     needs: prepare
     if: needs.prepare.outputs.upload_url != ''
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
         with:
