@@ -136,6 +136,12 @@ macro_rules! log_debug {
 /// The parser itself is just a coordinator - it doesn't manage resources directly,
 /// it delegates to the appropriate component. This follows the Single Responsibility
 /// Principle and makes the code more testable and maintainable.
+/// C4: maximum number of ranked failure positions retained.
+pub const MAX_RANKED_FAILURES: usize = 8;
+
+/// The packrat tree-walking parser: evaluates the compiled grammar
+/// against the input with memoization, capture scopes and ranked
+/// failure tracking.
 pub struct PortableParser<'a> {
     // ========================================================================
     // Grammar and Input (immutable)
@@ -154,6 +160,9 @@ pub struct PortableParser<'a> {
     deepest_failure_pos: usize,
     has_failure: bool,
     expected_labels: Vec<String>,
+    /// C4: ranked failures — up to MAX_RANKED_FAILURES distinct
+    /// (position, labels) pairs, deepest first.
+    ranked_failures: Vec<(usize, Vec<String>)>,
 
     // ========================================================================
     // Output (mutable)
@@ -282,6 +291,7 @@ impl<'a> PortableParser<'a> {
             input,
             input_bytes: input.as_bytes(),
             deepest_failure_pos: 0,
+            ranked_failures: Vec::new(),
             has_failure: false,
             expected_labels: Vec::new(),
             arena,
@@ -316,6 +326,7 @@ impl<'a> PortableParser<'a> {
             input,
             input_bytes: input.as_bytes(),
             deepest_failure_pos: 0,
+            ranked_failures: Vec::new(),
             has_failure: false,
             expected_labels: Vec::new(),
             arena,
@@ -769,14 +780,46 @@ impl<'a> PortableParser<'a> {
     /// Record a terminal failure for cause diagnostics. Only the
     /// deepest position's expectations are kept, mirroring how the
     /// Ruby engine's reporter collects the expected set.
+    /// The structured failure wire (F7): the deepest position any
+    /// terminal failed at, with the expected-set collected there.
+    /// C4: all distinct failure positions (deepest first), each with its
+    /// expected-set — ranked multi-error reporting.
+    pub fn failure_ranks(&self) -> &[(usize, Vec<String>)] {
+        &self.ranked_failures
+    }
+
+    /// The structured failure wire (F7/C11): the deepest failure position
+    /// with its expected-set, when the parse failed.
+    pub fn failure_wire(&self) -> Option<(usize, Vec<String>)> {
+        if self.has_failure {
+            Some((self.deepest_failure_pos, self.expected_labels.clone()))
+        } else {
+            None
+        }
+    }
+
     fn note_failure(&mut self, pos: usize, label: String) {
         if !self.has_failure || pos > self.deepest_failure_pos {
             self.has_failure = true;
             self.deepest_failure_pos = pos;
             self.expected_labels.clear();
-            self.expected_labels.push(label);
+            self.expected_labels.push(label.clone());
         } else if pos == self.deepest_failure_pos && !self.expected_labels.contains(&label) {
-            self.expected_labels.push(label);
+            self.expected_labels.push(label.clone());
+        }
+        // C4: keep every distinct position for ranked multi-error
+        // reporting; the deepest entry mirrors failure_wire.
+        match self.ranked_failures.iter_mut().find(|(p, _)| *p == pos) {
+            Some((_, labels)) => {
+                if !labels.contains(&label) {
+                    labels.push(label);
+                }
+            }
+            None => {
+                self.ranked_failures.push((pos, vec![label]));
+                self.ranked_failures.sort_by_key(|a| std::cmp::Reverse(a.0));
+                self.ranked_failures.truncate(MAX_RANKED_FAILURES);
+            }
         }
     }
 
@@ -998,9 +1041,13 @@ impl<'a> PortableParser<'a> {
                 match self.try_atom_impl(atom_id, current_pos, false) {
                     Ok(result) => {
                         self.capture_state.commit_scope();
+                        let progressed = result.end_pos != current_pos;
                         items.push(result.value);
                         current_pos = result.end_pos;
                         count += 1;
+                        if !progressed {
+                            break;
+                        }
                     }
                     Err(_) => {
                         self.capture_state.pop_scope();
@@ -1014,9 +1061,18 @@ impl<'a> PortableParser<'a> {
                 match self.try_atom_impl(atom_id, current_pos, false) {
                     Ok(result) => {
                         self.capture_state.commit_scope();
+                        // A body match that consumes nothing can never
+                        // make progress: stop instead of allocating
+                        // forever. Invalid grammars (empty-matchable
+                        // unbounded bodies) are rejected at compile time;
+                        // this is the engine's last line of defense.
+                        let progressed = result.end_pos != current_pos;
                         items.push(result.value);
                         current_pos = result.end_pos;
                         count += 1;
+                        if !progressed {
+                            break;
+                        }
                     }
                     Err(_) => {
                         self.capture_state.pop_scope();

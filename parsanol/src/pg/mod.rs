@@ -22,10 +22,20 @@ use std::path::Path;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
+pub mod bindings;
+pub mod derive;
+pub mod render;
+pub mod schema;
+pub mod suite;
+
 use crate::portable::Grammar;
 
 /// Errors raised while loading or extracting from a PG artifact envelope.
+///
+/// New failure modes arrive as the artifact schema grows; match with a
+/// catch-all arm.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum PgError {
     /// The envelope is not valid JSON.
     Json(serde_json::Error),
@@ -46,6 +56,52 @@ pub enum PgError {
     FloatInCanonicalJson,
     /// Filesystem access failed.
     Io(std::io::Error),
+    /// A binding references an undeclared preprocess step.
+    UnknownPreprocess(String),
+    /// A preprocess step declares an op the engine does not implement.
+    UnknownPreprocessOp(String),
+    /// A binding references a table the artifact does not embed.
+    UnknownTable(String),
+    /// A binding path nests (`a.b` / `items[]` outside the leaf slot),
+    /// which the flat binding contract does not support.
+    NestedBindingPath {
+        /// The offending binding's capture name.
+        capture: String,
+        /// The offending binding's path.
+        path: String,
+    },
+    /// A value could not be cast to the binding's declared type.
+    Cast(String, String),
+    /// The artifact declares a shape contract this engine does not support.
+    UnsupportedShape(String),
+    /// A render spec references a variant the artifact does not declare.
+    UnknownRenderVariant(String),
+    /// A render segment type the engine does not implement.
+    UnknownRenderSegment(String),
+    /// The portable engine failed to parse the input.
+    ParseFailed(String),
+    /// Structured failure wire (F7): deepest offset, expected set, message.
+    ParseWire {
+        /// Byte offset of the deepest failure.
+        offset: usize,
+        /// One-based line of the deepest failure.
+        line: usize,
+        /// One-based column of the deepest failure.
+        column: usize,
+        /// The labels expected at that position.
+        expected: Vec<String>,
+        /// C4: ranked (position, expected) pairs, deepest first.
+        ranked: Vec<(usize, Vec<String>)>,
+    },
+    /// A reject test unexpectedly parsed.
+    UnexpectedParse(String),
+    /// An example test's expected captures did not match the bound result.
+    CaptureMismatch {
+        /// The example's input.
+        input: String,
+        /// The mismatch description.
+        detail: String,
+    },
 }
 
 impl fmt::Display for PgError {
@@ -60,6 +116,39 @@ impl fmt::Display for PgError {
                 f,
                 "PG artifact checksum mismatch: stored {stored:?}, computed {computed:?}"
             ),
+            PgError::UnknownPreprocess(name) => {
+                write!(f, "preprocess step {name:?} not declared in artifact")
+            }
+            PgError::UnknownPreprocessOp(op) => write!(f, "unknown preprocess op {op:?}"),
+            PgError::UnknownTable(name) => {
+                write!(f, "artifact does not declare table {name:?}")
+            }
+            PgError::NestedBindingPath { capture, path } => write!(
+                f,
+                "binding {capture:?}: nested path {path:?} is not supported; bind the components instead"
+            ),
+            PgError::Cast(kind, value) => {
+                write!(f, "cannot cast {value:?} to {kind}")
+            }
+            PgError::UnknownRenderVariant(v) => {
+                write!(f, "render variant {v:?} not declared")
+            }
+            PgError::UnknownRenderSegment(t) => {
+                write!(f, "unknown render segment {t:?}")
+            }
+            PgError::UnsupportedShape(shape) => {
+                write!(f, "unsupported artifact shape {shape:?} (engine supports {SUPPORTED_SHAPE:?})")
+            }
+            PgError::ParseFailed(detail) => write!(f, "{detail}"),
+            PgError::ParseWire { offset, line, column, expected, .. } => write!(
+                f,
+                "Parse failed at offset {offset} (line {line}, column {column}): expected {}",
+                expected.join(", ")
+            ),
+            PgError::UnexpectedParse(_input) => {
+                write!(f, "expected the input to be rejected")
+            }
+            PgError::CaptureMismatch { detail, .. } => write!(f, "{detail}"),
             PgError::FloatInCanonicalJson => {
                 write!(
                     f,
@@ -73,6 +162,10 @@ impl fmt::Display for PgError {
 
 impl std::error::Error for PgError {}
 
+/// The parsanol-shape contract this engine supports (F8). A mismatching
+/// artifact is refused loudly at load, never parsed with wrong semantics.
+pub const SUPPORTED_SHAPE: &str = "parsanol-tree/v2";
+
 /// A verified PG artifact envelope.
 ///
 /// The checksum is verified at load time; a `PgArtifact` value never
@@ -82,10 +175,39 @@ pub struct PgArtifact {
     envelope: Value,
 }
 
+fn collect_terminals(atoms: &[Value], terms: &mut Vec<String>) {
+    for atom in atoms {
+        if let Some(obj) = atom.as_object() {
+            if let Some(kind) = obj.keys().next() {
+                match kind.as_str() {
+                    "Str" => {
+                        if let Some(p) = obj[kind].get("pattern").and_then(Value::as_str) {
+                            terms.push(p.to_string());
+                        }
+                    }
+                    "Re" => {
+                        if let Some(p) = obj[kind].get("pattern").and_then(Value::as_str) {
+                            terms.push(p.to_string());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+}
+
 impl PgArtifact {
     /// Parse and verify an envelope from its JSON text.
     pub fn from_json(text: &str) -> Result<Self, PgError> {
         let envelope: Value = serde_json::from_str(text).map_err(PgError::Json)?;
+        let shape = envelope
+            .get("shape")
+            .and_then(Value::as_str)
+            .ok_or(PgError::InvalidEnvelope("shape"))?;
+        if shape != SUPPORTED_SHAPE {
+            return Err(PgError::UnsupportedShape(shape.to_string()));
+        }
         verify_checksum(&envelope)?;
         Ok(Self { envelope })
     }
@@ -119,6 +241,40 @@ impl PgArtifact {
     /// The verified checksum (`sha256:...`).
     pub fn checksum(&self) -> Option<&str> {
         self.envelope.get("checksum").and_then(Value::as_str)
+    }
+
+    /// C12: constrained-decoding vocabulary — every terminal literal and
+    /// character-class pattern in every entry's grammar, deduplicated and
+    /// sorted, for LLM constrained-decoding integration.
+    pub fn terminal_vocabulary(&self) -> Vec<String> {
+        let mut terms: Vec<String> = Vec::new();
+        let entries: Vec<&Value> = self
+            .envelope
+            .get("entries")
+            .and_then(Value::as_object)
+            .map(|m| m.values().collect())
+            .unwrap_or_default();
+        for entry in entries {
+            if let Some(atoms) = entry
+                .get("grammar")
+                .and_then(|g| g.get("atoms"))
+                .and_then(Value::as_array)
+            {
+                collect_terminals(atoms, &mut terms);
+            }
+        }
+        terms.sort();
+        terms.dedup();
+        terms
+    }
+
+    /// The artifact's embedded test list.
+    pub fn tests(&self) -> &[Value] {
+        self.envelope
+            .get("tests")
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
     }
 
     /// Declared entry point names, sorted.

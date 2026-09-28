@@ -70,16 +70,6 @@ impl<K: std::hash::Hash + Eq + Clone, V> LruCache<K, V> {
         self.map.insert(key, value);
     }
 
-    /// Check if the cache contains a key without updating LRU order.
-    pub fn contains(&self, key: &K) -> bool {
-        self.map.contains_key(key)
-    }
-
-    /// Check if the cache is empty.
-    pub fn is_empty(&self) -> bool {
-        self.map.is_empty()
-    }
-
     /// Clear all entries from the cache.
     pub fn clear(&mut self) {
         self.map.clear();
@@ -115,10 +105,10 @@ mod tests {
         cache.insert(4, "four");
 
         assert_eq!(cache.len(), 3);
-        assert!(!cache.contains(&1));
-        assert!(cache.contains(&2));
-        assert!(cache.contains(&3));
-        assert!(cache.contains(&4));
+        assert_eq!(cache.get(&1), None);
+        assert!(cache.get(&2).is_some());
+        assert!(cache.get(&3).is_some());
+        assert!(cache.get(&4).is_some());
     }
 
     #[test]
@@ -135,10 +125,10 @@ mod tests {
         // Adding 4 should evict 2 (LRU)
         cache.insert(4, "four");
 
-        assert!(!cache.contains(&2));
-        assert!(cache.contains(&1)); // Still there, was accessed
-        assert!(cache.contains(&3));
-        assert!(cache.contains(&4));
+        assert_eq!(cache.get(&2), None);
+        assert!(cache.get(&1).is_some()); // Still there, was accessed
+        assert!(cache.get(&3).is_some());
+        assert!(cache.get(&4).is_some());
     }
 
     #[test]
@@ -165,8 +155,8 @@ mod tests {
 
         cache.clear();
 
-        assert!(cache.is_empty());
-        assert!(!cache.contains(&1));
-        assert!(!cache.contains(&2));
+        assert_eq!(cache.len(), 0);
+        assert_eq!(cache.get(&1), None);
+        assert_eq!(cache.get(&2), None);
     }
 }
