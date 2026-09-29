@@ -8,7 +8,10 @@
 # Path to the workspace root (default: ".")
 # This detects all workspace members automatically
 # Enable GitHub releases
-git_release_enable = false
+# GitHub releases must exist: the wasm-publish workflow fires on
+# `release: published` — without them the npm @parsanol/wasm package
+# silently desyncs from crates.io.
+git_release_enable = true
 
 # Update dependencies with `cargo update`
 dependencies_update = true
