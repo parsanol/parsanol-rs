@@ -679,9 +679,9 @@ unsafe fn c_parse_input(handle: u64, input_str: &str, out: *mut u64, cap: usize)
 }
 
 // ============================================================================
-// PG artifact C ABI (PN 2): parse an artifact entry, return the shaped tree
+// PARG artifact C ABI (PN 2): parse an artifact entry, return the shaped tree
 // as JSON, or the structured failure wire. Owned returns are freed with
-// parsanol_pg_free.
+// parsanol_parg_free.
 // ============================================================================
 
 enum Outcome {
@@ -700,7 +700,7 @@ fn execute(grammar_json: &str, input: &str) -> Result<Outcome, String> {
         Ok(raw) => {
             let shaped =
                 crate::portable::parslet_transform::to_parslet_compatible(&raw, &mut arena, input);
-            let value = crate::pg::suite::ast_to_value(&shaped, &arena, input);
+            let value = crate::parg::suite::ast_to_value(&shaped, &arena, input);
             serde_json::to_string(&value)
                 .map(Outcome::Shape)
                 .map_err(|e| e.to_string())
@@ -735,9 +735,9 @@ fn to_c(string: String) -> *mut c_char {
 
 /// # Safety
 /// Arguments must be valid C strings. Returns shaped-tree JSON (owned;
-/// free with `parsanol_pg_free`) or NULL when parsing fails.
+/// free with `parsanol_parg_free`) or NULL when parsing fails.
 #[no_mangle]
-pub unsafe extern "C" fn parsanol_pg_parse(
+pub unsafe extern "C" fn parsanol_parg_parse(
     grammar_json: *const c_char,
     input: *const c_char,
 ) -> *mut c_char {
@@ -749,9 +749,9 @@ pub unsafe extern "C" fn parsanol_pg_parse(
 
 /// # Safety
 /// Arguments must be valid C strings. Returns the failure-wire JSON
-/// (owned; free with `parsanol_pg_free`) or NULL when parsing succeeds.
+/// (owned; free with `parsanol_parg_free`) or NULL when parsing succeeds.
 #[no_mangle]
-pub unsafe extern "C" fn parsanol_pg_error(
+pub unsafe extern "C" fn parsanol_parg_error(
     grammar_json: *const c_char,
     input: *const c_char,
 ) -> *mut c_char {
@@ -764,9 +764,9 @@ pub unsafe extern "C" fn parsanol_pg_error(
 }
 
 /// # Safety
-/// Frees a pointer returned by `parsanol_pg_parse` / `parsanol_pg_error`.
+/// Frees a pointer returned by `parsanol_parg_parse` / `parsanol_parg_error`.
 #[no_mangle]
-pub unsafe extern "C" fn parsanol_pg_free(ptr: *mut c_char) {
+pub unsafe extern "C" fn parsanol_parg_free(ptr: *mut c_char) {
     if !ptr.is_null() {
         drop(CString::from_raw(ptr));
     }

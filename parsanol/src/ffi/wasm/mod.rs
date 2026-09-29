@@ -4,7 +4,7 @@
 //! When compiled with the `wasm` feature, this exposes a `WasmParser` class
 //! that can be used from JavaScript.
 
-use crate::pg::PgArtifact;
+use crate::parg::PargArtifact;
 use crate::portable::{AstArena, AstNode, Grammar, PortableParser};
 use js_sys::{Array, JsString, Object, Reflect};
 use wasm_bindgen::prelude::*;
@@ -41,18 +41,18 @@ impl WasmParser {
         })
     }
 
-    /// Create a new parser from a PG artifact envelope and entry name.
+    /// Create a new parser from a PARG artifact envelope and entry name.
     ///
     /// The artifact's canonical checksum is verified before any parsing;
     /// a mismatched or corrupt artifact is rejected (PN 2).
     ///
     /// # Arguments
-    /// * `artifact_json` - JSON text of the PG artifact envelope
+    /// * `artifact_json` - JSON text of the PARG artifact envelope
     /// * `entry` - entry point name declared in the artifact
     #[wasm_bindgen(js_name = fromArtifact)]
     pub fn from_artifact(artifact_json: &str, entry: &str) -> Result<WasmParser, JsValue> {
-        let artifact =
-            PgArtifact::from_json(artifact_json).map_err(|e| JsValue::from_str(&e.to_string()))?;
+        let artifact = PargArtifact::from_json(artifact_json)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
         let grammar = artifact
             .grammar(entry)
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
@@ -192,22 +192,22 @@ fn ast_to_js(node: &AstNode, arena: &AstArena, input: &str) -> JsValue {
     }
 }
 
-/// A verified PG artifact exposed to JavaScript: checksum-verified load,
+/// A verified PARG artifact exposed to JavaScript: checksum-verified load,
 /// native parse, bindings application, embedded-suite runs and the
 /// binding-requirements schema (PN 2/4).
 #[wasm_bindgen]
-pub struct PgArtifactJs {
-    artifact: PgArtifact,
+pub struct PargArtifactJs {
+    artifact: PargArtifact,
 }
 
 #[wasm_bindgen]
-impl PgArtifactJs {
+impl PargArtifactJs {
     /// Load and checksum-verify an artifact envelope.
     #[wasm_bindgen(constructor)]
-    pub fn new(artifact_json: &str) -> Result<PgArtifactJs, JsValue> {
-        let artifact =
-            PgArtifact::from_json(artifact_json).map_err(|e| JsValue::from_str(&e.to_string()))?;
-        Ok(PgArtifactJs { artifact })
+    pub fn new(artifact_json: &str) -> Result<PargArtifactJs, JsValue> {
+        let artifact = PargArtifact::from_json(artifact_json)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        Ok(PargArtifactJs { artifact })
     }
 
     /// Declared entry point names, sorted.
@@ -271,7 +271,7 @@ impl PgArtifactJs {
 
     /// The binding-requirements schema as JSON text.
     pub fn schema(&self) -> Result<JsString, JsValue> {
-        let schema = crate::pg::schema::from_artifact(&self.artifact)
+        let schema = crate::parg::schema::from_artifact(&self.artifact)
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
         serde_json::to_string(&schema)
             .map(JsString::from)
@@ -281,9 +281,9 @@ impl PgArtifactJs {
     /// The binding-requirements schema as TypeScript source.
     #[wasm_bindgen(js_name = schemaTypescript)]
     pub fn schema_typescript(&self) -> Result<JsString, JsValue> {
-        let schema = crate::pg::schema::from_artifact(&self.artifact)
+        let schema = crate::parg::schema::from_artifact(&self.artifact)
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
-        Ok(JsString::from(crate::pg::schema::to_typescript(&schema)))
+        Ok(JsString::from(crate::parg::schema::to_typescript(&schema)))
     }
 }
 

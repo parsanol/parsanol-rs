@@ -1,19 +1,19 @@
 //! C7 parity gate: the Rust bindings runtime must reproduce the Ruby
-//! `Parsanol::PG::Bindings` outputs byte-for-byte. The fixture is
+//! `Parsanol::PARG::Bindings` outputs byte-for-byte. The fixture is
 //! generated from Ruby (`/tmp/gen_fixture.rb` → regenerated with the
 //! Ruby toolchain) and replays here unchanged.
 
-use parsanol::PgArtifact;
+use parsanol::PargArtifact;
 use serde_json::Value;
 use std::path::PathBuf;
 
-/// Where the baked pubid-grammar artifacts live: PG_ARTIFACT_DIR when
+/// Where the baked pubid-grammar artifacts live: PARG_ARTIFACT_DIR when
 /// set, else the host layout (parsanol-rs beside pubid/pubid-grammar).
 /// None means the inputs are absent — the artifact-gated tests skip;
 /// they run in the sibling layout and wherever the env is exported
 /// (e.g. the cross-repo conformance CI).
 fn baked_artifacts_dir() -> Option<PathBuf> {
-    if let Ok(from_env) = std::env::var("PG_ARTIFACT_DIR") {
+    if let Ok(from_env) = std::env::var("PARG_ARTIFACT_DIR") {
         return Some(PathBuf::from(from_env));
     }
     let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -30,7 +30,7 @@ fn baked_artifacts_dir() -> Option<PathBuf> {
 }
 
 fn fixture() -> Value {
-    let text = include_str!("fixtures/pg_bindings.json");
+    let text = include_str!("fixtures/parg_bindings.json");
     serde_json::from_str(text).expect("fixture is valid JSON")
 }
 
@@ -38,7 +38,7 @@ fn fixture() -> Value {
 fn replay_ruby_fixture_cases() {
     for case in fixture()["cases"].as_array().unwrap() {
         let envelope_text = serde_json::to_string(&case["envelope"]).unwrap();
-        let artifact = PgArtifact::from_json(&envelope_text)
+        let artifact = PargArtifact::from_json(&envelope_text)
             .unwrap_or_else(|err| panic!("{}: envelope rejected: {err}", case["grammar"]));
         let bound = artifact
             .apply_bindings(case["entry"].as_str().unwrap(), &case["shape"])
@@ -87,9 +87,9 @@ fn synthetic_array_and_preprocess_artifact() {
 
     // Bake a valid checksum so the artifact verifies.
     let mut envelope = envelope.as_object().unwrap().clone();
-    let checksum = parsanol::pg::checksum_hex(&Value::Object(envelope.clone())).unwrap();
+    let checksum = parsanol::parg::checksum_hex(&Value::Object(envelope.clone())).unwrap();
     envelope.insert("checksum".to_string(), Value::String(checksum));
-    let artifact = PgArtifact::from_json(&serde_json::to_string(&envelope).unwrap()).unwrap();
+    let artifact = PargArtifact::from_json(&serde_json::to_string(&envelope).unwrap()).unwrap();
 
     let shape: Value = serde_json::json!({
         "part": "1",
@@ -125,12 +125,12 @@ fn unknown_preprocess_and_tables_raise() {
         }
     });
     let mut envelope = envelope.as_object().unwrap().clone();
-    let checksum = parsanol::pg::checksum_hex(&Value::Object(envelope.clone())).unwrap();
+    let checksum = parsanol::parg::checksum_hex(&Value::Object(envelope.clone())).unwrap();
     envelope.insert("checksum".to_string(), Value::String(checksum));
-    let artifact = PgArtifact::from_json(&serde_json::to_string(&envelope).unwrap()).unwrap();
+    let artifact = PargArtifact::from_json(&serde_json::to_string(&envelope).unwrap()).unwrap();
     let shape: Value = serde_json::json!({ "raw": "ab" });
     let err = artifact.apply_bindings("identifier", &shape).unwrap_err();
-    assert!(matches!(err, parsanol::PgError::UnknownPreprocess(_)));
+    assert!(matches!(err, parsanol::PargError::UnknownPreprocess(_)));
 }
 
 #[test]
@@ -149,12 +149,12 @@ fn nested_binding_paths_are_refused() {
         }
     });
     let mut envelope = envelope.as_object().unwrap().clone();
-    let checksum = parsanol::pg::checksum_hex(&Value::Object(envelope.clone())).unwrap();
+    let checksum = parsanol::parg::checksum_hex(&Value::Object(envelope.clone())).unwrap();
     envelope.insert("checksum".to_string(), Value::String(checksum));
-    let artifact = PgArtifact::from_json(&serde_json::to_string(&envelope).unwrap()).unwrap();
+    let artifact = PargArtifact::from_json(&serde_json::to_string(&envelope).unwrap()).unwrap();
     let shape: Value = serde_json::json!({ "raw": "ab" });
     let err = artifact.apply_bindings("identifier", &shape).unwrap_err();
-    assert!(matches!(err, parsanol::PgError::NestedBindingPath { .. }));
+    assert!(matches!(err, parsanol::PargError::NestedBindingPath { .. }));
 }
 
 #[test]
@@ -167,7 +167,7 @@ fn rust_native_parse_and_bind_matches_ruby_shape_and_bound() {
             continue; // grammars without bindings have nothing to compare
         }
         let envelope_text = serde_json::to_string(&case["envelope"]).unwrap();
-        let artifact = PgArtifact::from_json(&envelope_text).unwrap();
+        let artifact = PargArtifact::from_json(&envelope_text).unwrap();
         let entry = case["entry"].as_str().unwrap();
         let input = case["input"].as_str().unwrap();
         let shape = artifact
@@ -186,7 +186,7 @@ fn rust_native_parse_and_bind_matches_ruby_shape_and_bound() {
 fn rust_runs_embedded_suites_green() {
     for case in fixture()["cases"].as_array().unwrap() {
         let envelope_text = serde_json::to_string(&case["envelope"]).unwrap();
-        let artifact = PgArtifact::from_json(&envelope_text).unwrap();
+        let artifact = PargArtifact::from_json(&envelope_text).unwrap();
         let failures = artifact.run_tests();
         assert!(
             failures.is_empty(),
@@ -200,8 +200,8 @@ fn rust_runs_embedded_suites_green() {
 fn schema_from_artifact_matches_contract() {
     let case = &fixture()["cases"][1]; // iso
     let envelope_text = serde_json::to_string(&case["envelope"]).unwrap();
-    let artifact = PgArtifact::from_json(&envelope_text).unwrap();
-    let schema = parsanol::pg::schema::from_artifact(&artifact).unwrap();
+    let artifact = PargArtifact::from_json(&envelope_text).unwrap();
+    let schema = parsanol::parg::schema::from_artifact(&artifact).unwrap();
     let entry = case["entry"].as_str().unwrap();
     let fields = schema[entry]["fields"].as_object().unwrap();
     assert_eq!(fields["publisher"]["type"].as_str().unwrap(), "string");
@@ -210,7 +210,7 @@ fn schema_from_artifact_matches_contract() {
         fields["publisher_name"]["preprocess"].as_str().unwrap(),
         "publisher_names"
     );
-    let ts = parsanol::pg::schema::to_typescript(&schema);
+    let ts = parsanol::parg::schema::to_typescript(&schema);
     assert!(ts.contains("export interface Identifier {"));
     assert!(ts.contains("  publisherName: string;"));
 }
@@ -223,10 +223,10 @@ fn unsupported_shapes_are_refused_at_load() {
         "entries": {}
     });
     let mut envelope = envelope.as_object().unwrap().clone();
-    let checksum = parsanol::pg::checksum_hex(&Value::Object(envelope.clone())).unwrap();
+    let checksum = parsanol::parg::checksum_hex(&Value::Object(envelope.clone())).unwrap();
     envelope.insert("checksum".to_string(), Value::String(checksum));
-    let err = PgArtifact::from_json(&serde_json::to_string(&envelope).unwrap()).unwrap_err();
-    assert!(matches!(err, parsanol::PgError::UnsupportedShape(_)));
+    let err = PargArtifact::from_json(&serde_json::to_string(&envelope).unwrap()).unwrap_err();
+    assert!(matches!(err, parsanol::PargError::UnsupportedShape(_)));
 }
 
 /// C13: every baked flavor artifact in pubid-grammar/artifacts runs its
@@ -234,7 +234,7 @@ fn unsupported_shapes_are_refused_at_load() {
 #[test]
 fn every_baked_artifact_runs_green_on_the_rust_vm() {
     let Some(dir) = baked_artifacts_dir() else {
-        eprintln!("skipping: baked artifacts not present (set PG_ARTIFACT_DIR)");
+        eprintln!("skipping: baked artifacts not present (set PARG_ARTIFACT_DIR)");
         return;
     };
     let mut checked = 0;
@@ -244,7 +244,7 @@ fn every_baked_artifact_runs_green_on_the_rust_vm() {
             continue;
         }
         let text = std::fs::read_to_string(&path).unwrap();
-        let artifact = PgArtifact::from_json(&text)
+        let artifact = PargArtifact::from_json(&text)
             .unwrap_or_else(|err| panic!("{} rejected: {err}", path.display()));
         eprintln!("[sweep] {} ...", path.display());
         for test in artifact.tests() {
@@ -272,11 +272,11 @@ fn render_string_parity_with_ruby() {
     // the fixture's iso envelope predates the render spec; read the
     // current baked artifact
     let Some(dir) = baked_artifacts_dir() else {
-        eprintln!("skipping: baked artifacts not present (set PG_ARTIFACT_DIR)");
+        eprintln!("skipping: baked artifacts not present (set PARG_ARTIFACT_DIR)");
         return;
     };
     let artifact =
-        PgArtifact::from_json(&std::fs::read_to_string(dir.join("iso.json")).unwrap()).unwrap();
+        PargArtifact::from_json(&std::fs::read_to_string(dir.join("iso.json")).unwrap()).unwrap();
     let rendered = artifact
         .render_string("identifier", "ISO 5537:2025", "default")
         .unwrap();
@@ -289,7 +289,7 @@ fn c_abi_parse_and_error_wire() {
     use parsanol::portable::{AstArena, Grammar, PortableParser};
     let case = &fixture()["cases"][1]; // iso
     let envelope_text = serde_json::to_string(&case["envelope"]).unwrap();
-    let artifact = PgArtifact::from_json(&envelope_text).unwrap();
+    let artifact = PargArtifact::from_json(&envelope_text).unwrap();
     let grammar = artifact.grammar("identifier").unwrap();
     let grammar_json = serde_json::to_string(&grammar).unwrap();
 
@@ -309,11 +309,11 @@ fn c_abi_parse_and_error_wire() {
 #[test]
 fn derive_string_parity_with_ruby() {
     let Some(dir) = baked_artifacts_dir() else {
-        eprintln!("skipping: baked artifacts not present (set PG_ARTIFACT_DIR)");
+        eprintln!("skipping: baked artifacts not present (set PARG_ARTIFACT_DIR)");
         return;
     };
     let artifact =
-        PgArtifact::from_json(&std::fs::read_to_string(dir.join("iso.json")).unwrap()).unwrap();
+        PargArtifact::from_json(&std::fs::read_to_string(dir.join("iso.json")).unwrap()).unwrap();
     let derived = artifact
         .derive_string("identifier", "ISO 5537:2025", "urn")
         .unwrap();

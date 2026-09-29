@@ -1,16 +1,16 @@
 //! The binding-requirements schema: what a language-specific data model
 //! must implement for an entry. Derived from the declared bindings plus
-//! the artifact's example tests. Port of `Parsanol::PG::Schema` — the
+//! the artifact's example tests. Port of `Parsanol::PARG::Schema` — the
 //! TypeScript emission is byte-compatible.
 
 use serde_json::{Map, Value};
 
-use super::{PgArtifact, PgError};
+use super::{PargArtifact, PargError};
 
 /// The schema document: one record per entry with `root`, `fields`
 /// (path -> {type, card[, preprocess]}) and `examples` derived from the
 /// artifact's example tests.
-pub fn from_artifact(artifact: &PgArtifact) -> Result<Value, PgError> {
+pub fn from_artifact(artifact: &PargArtifact) -> Result<Value, PargError> {
     let mut schema = Map::new();
     for entry in artifact.entry_names() {
         let bindings = artifact.bindings(entry);

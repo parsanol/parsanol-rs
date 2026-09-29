@@ -1,11 +1,11 @@
 //! Suite runner: evaluates accept/reject/example tests against an
 //! artifact with the native portable engine plus the bindings runtime.
-//! Port of `Parsanol::PG::Artifact#run_tests` / `#run_test_list` —
+//! Port of `Parsanol::PARG::Artifact#run_tests` / `#run_test_list` —
 //! failure descriptions are word-compatible with the Ruby runner.
 
 use serde_json::Value;
 
-use super::{PgArtifact, PgError};
+use super::{PargArtifact, PargError};
 use crate::portable::parslet_transform::to_parslet_compatible;
 use crate::portable::{AstArena, Grammar, PortableParser};
 
@@ -62,10 +62,10 @@ pub(crate) fn ast_to_value(
     }
 }
 
-impl PgArtifact {
+impl PargArtifact {
     /// Parse an entry with the native portable engine and return the
     /// parsanol-shape tree as JSON.
-    pub fn parse_shape(&self, entry: &str, input: &str) -> Result<Value, PgError> {
+    pub fn parse_shape(&self, entry: &str, input: &str) -> Result<Value, PargError> {
         let grammar: Grammar = self.grammar(entry)?;
         // The shaped tree can dwarf the input (large grammars bind few
         // characters per node); size the arena for the tree, not the text.
@@ -81,7 +81,7 @@ impl PgArtifact {
                     .iter()
                     .map(|(p, labels)| (*p, labels.clone()))
                     .collect();
-                PgError::ParseWire {
+                PargError::ParseWire {
                     offset,
                     line,
                     column,
@@ -89,14 +89,14 @@ impl PgArtifact {
                     ranked,
                 }
             }
-            None => PgError::ParseFailed(err.to_string()),
+            None => PargError::ParseFailed(err.to_string()),
         })?;
         let shaped = to_parslet_compatible(&raw, &mut arena, input);
         Ok(ast_to_value(&shaped, &arena, input))
     }
 
     /// Parse and bind in one step, mirroring `Artifact#parse_and_bind`.
-    pub fn parse_and_bind(&self, entry: &str, input: &str) -> Result<Value, PgError> {
+    pub fn parse_and_bind(&self, entry: &str, input: &str) -> Result<Value, PargError> {
         let shape = self.parse_shape(entry, input)?;
         self.apply_bindings(entry, &shape)
     }
@@ -143,10 +143,10 @@ impl PgArtifact {
                     .get("entry")
                     .and_then(Value::as_str)
                     .unwrap_or(&fallback);
-                let outcome = (|| -> Result<(), PgError> {
+                let outcome = (|| -> Result<(), PargError> {
                     let bound = self.parse_and_bind(entry, input)?;
                     if kind == "reject" {
-                        return Err(PgError::UnexpectedParse(input.to_string()));
+                        return Err(PargError::UnexpectedParse(input.to_string()));
                     }
                     if kind == "example" {
                         let Some(expect) = object.get("expect").and_then(Value::as_object) else {
@@ -157,7 +157,7 @@ impl PgArtifact {
                             .filter(|(key, value)| bound.get(*key) != Some(*value))
                             .collect();
                         if !mismatched.is_empty() {
-                            return Err(PgError::CaptureMismatch {
+                            return Err(PargError::CaptureMismatch {
                                 input: input.to_string(),
                                 detail: format!("expected captures {mismatched:?}, got {bound}"),
                             });
@@ -168,7 +168,7 @@ impl PgArtifact {
                 match outcome {
                     Ok(()) => None,
                     // A reject test passing because parsing failed is green.
-                    Err(PgError::ParseFailed(_) | PgError::ParseWire { .. })
+                    Err(PargError::ParseFailed(_) | PargError::ParseWire { .. })
                         if kind == "reject" =>
                     {
                         None

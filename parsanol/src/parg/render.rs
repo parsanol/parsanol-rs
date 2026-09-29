@@ -5,17 +5,17 @@
 
 use serde_json::Value;
 
-use super::{PgArtifact, PgError};
+use super::{PargArtifact, PargError};
 
 fn lookup<'a>(bound: &'a Value, field: &str) -> Option<&'a Value> {
     bound.get(field).filter(|v| !v.is_null())
 }
 
-fn render_segments(segments: &[Value], bound: &Value, out: &mut String) -> Result<(), PgError> {
+fn render_segments(segments: &[Value], bound: &Value, out: &mut String) -> Result<(), PargError> {
     for segment in segments {
         let object = segment
             .as_object()
-            .ok_or_else(|| PgError::UnknownRenderSegment("<non-object>".to_string()))?;
+            .ok_or_else(|| PargError::UnknownRenderSegment("<non-object>".to_string()))?;
         match object.get("type").and_then(Value::as_str) {
             Some("field") => {
                 let field = object
@@ -53,7 +53,7 @@ fn render_segments(segments: &[Value], bound: &Value, out: &mut String) -> Resul
                 }
             }
             other => {
-                return Err(PgError::UnknownRenderSegment(
+                return Err(PargError::UnknownRenderSegment(
                     other.unwrap_or("missing").to_string(),
                 ))
             }
@@ -63,17 +63,17 @@ fn render_segments(segments: &[Value], bound: &Value, out: &mut String) -> Resul
 }
 
 /// Render a named variant against a bound attribute map.
-pub fn apply(render: &Value, variant: &str, bound: &Value) -> Result<String, PgError> {
+pub fn apply(render: &Value, variant: &str, bound: &Value) -> Result<String, PargError> {
     let segments = render
         .get(variant)
         .and_then(Value::as_array)
-        .ok_or_else(|| PgError::UnknownRenderVariant(variant.to_string()))?;
+        .ok_or_else(|| PargError::UnknownRenderVariant(variant.to_string()))?;
     let mut out = String::new();
     render_segments(segments, bound, &mut out)?;
     Ok(out)
 }
 
-impl PgArtifact {
+impl PargArtifact {
     /// The artifact's render spec (empty when none is declared).
     pub fn render_spec(&self) -> &Value {
         self.envelope.get("render").unwrap_or(&Value::Null)
@@ -85,7 +85,7 @@ impl PgArtifact {
         entry: &str,
         input: &str,
         variant: &str,
-    ) -> Result<String, PgError> {
+    ) -> Result<String, PargError> {
         let bound = self.parse_and_bind(entry, input)?;
         apply(self.render_spec(), variant, &bound)
     }

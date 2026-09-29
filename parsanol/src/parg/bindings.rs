@@ -2,22 +2,22 @@
 //! parsanol-shape parse tree, producing the attribute map that fills a
 //! data-model class. Pipeline: capture collection -> preprocessing ->
 //! type cast -> path assignment. Byte-compatible with
-//! `Parsanol::PG::Bindings` — the parity fixture
-//! (`tests/fixtures/pg_bindings.json`) pins the Ruby outputs.
+//! `Parsanol::PARG::Bindings` — the parity fixture
+//! (`tests/fixtures/parg_bindings.json`) pins the Ruby outputs.
 
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 
-use super::{PgArtifact, PgError};
+use super::{PargArtifact, PargError};
 
 /// Ruby `Integer(value)` semantics for the JSON values bindings see:
 /// strings with optional `0x`/`0b`/`0o` radix and underscores, JSON
 /// integers, and nothing else (bools/floats raise).
-fn cast_integer(value: &Value) -> Result<Value, PgError> {
+fn cast_integer(value: &Value) -> Result<Value, PargError> {
     let parsed = match value {
         Value::Number(n) => n
             .as_i64()
-            .ok_or_else(|| PgError::Cast("integer".to_string(), value.to_string()))?,
+            .ok_or_else(|| PargError::Cast("integer".to_string(), value.to_string()))?,
         Value::String(s) => {
             let (negative, body) = match s.strip_prefix('-') {
                 Some(rest) => (true, rest),
@@ -34,24 +34,24 @@ fn cast_integer(value: &Value) -> Result<Value, PgError> {
             };
             let cleaned = digits.replace('_', "");
             let magnitude = i128::from_str_radix(&cleaned, radix)
-                .map_err(|_| PgError::Cast("integer".to_string(), s.clone()))?;
+                .map_err(|_| PargError::Cast("integer".to_string(), s.clone()))?;
             let signed = if negative { -magnitude } else { magnitude };
-            i64::try_from(signed).map_err(|_| PgError::Cast("integer".to_string(), s.clone()))?
+            i64::try_from(signed).map_err(|_| PargError::Cast("integer".to_string(), s.clone()))?
         }
-        _ => return Err(PgError::Cast("integer".to_string(), value.to_string())),
+        _ => return Err(PargError::Cast("integer".to_string(), value.to_string())),
     };
     Ok(Value::Number(parsed.into()))
 }
 
 /// Ruby `Float(value)`: JSON floats/ints and numeric strings.
-fn cast_float(value: &Value) -> Result<Value, PgError> {
+fn cast_float(value: &Value) -> Result<Value, PargError> {
     let parsed = match value {
         Value::Number(n) => n.as_f64().unwrap_or_default(),
         Value::String(s) => s
             .trim()
             .parse::<f64>()
-            .map_err(|_| PgError::Cast("float".to_string(), s.clone()))?,
-        _ => return Err(PgError::Cast("float".to_string(), value.to_string())),
+            .map_err(|_| PargError::Cast("float".to_string(), s.clone()))?,
+        _ => return Err(PargError::Cast("float".to_string(), value.to_string())),
     };
     Ok(serde_json::Number::from_f64(parsed)
         .map(Value::Number)
@@ -84,7 +84,7 @@ fn to_ruby_string_inner(value: &Value) -> String {
     }
 }
 
-fn cast(value: Value, kind: Option<&str>) -> Result<Value, PgError> {
+fn cast(value: Value, kind: Option<&str>) -> Result<Value, PargError> {
     let value = if is_leaf(&value) {
         leaf_scalar(&value).clone()
     } else {
@@ -97,7 +97,7 @@ fn cast(value: Value, kind: Option<&str>) -> Result<Value, PgError> {
             Value::String(_) | Value::Number(_) | Value::Bool(_) | Value::Null => {
                 Ok(Value::String(to_ruby_string(&value)))
             }
-            _ => Err(PgError::Cast("string".to_string(), value.to_string())),
+            _ => Err(PargError::Cast("string".to_string(), value.to_string())),
         },
         Some("boolean") => Ok(Value::Bool(
             value == Value::Bool(true)
@@ -164,9 +164,9 @@ fn leaf_key(path: &str) -> String {
     }
 }
 
-fn validate_path(capture: &str, path: &str) -> Result<(), PgError> {
+fn validate_path(capture: &str, path: &str) -> Result<(), PargError> {
     if path.contains('.') || path.contains('[') {
-        return Err(PgError::NestedBindingPath {
+        return Err(PargError::NestedBindingPath {
             capture: capture.to_string(),
             path: path.to_string(),
         });
@@ -174,7 +174,7 @@ fn validate_path(capture: &str, path: &str) -> Result<(), PgError> {
     Ok(())
 }
 
-impl PgArtifact {
+impl PargArtifact {
     /// The binding list of an entry (empty when the entry declares none).
     pub fn bindings(&self, entry: &str) -> &[Value] {
         self.entry_value(entry, "bindings")
@@ -183,31 +183,31 @@ impl PgArtifact {
             .unwrap_or(&[])
     }
 
-    fn preprocess_steps(&self, name: &str) -> Result<&Vec<Value>, PgError> {
+    fn preprocess_steps(&self, name: &str) -> Result<&Vec<Value>, PargError> {
         self.envelope
             .get("preprocess")
             .and_then(|steps| steps.get(name))
             .and_then(Value::as_array)
-            .ok_or_else(|| PgError::UnknownPreprocess(name.to_string()))
+            .ok_or_else(|| PargError::UnknownPreprocess(name.to_string()))
     }
 
     /// Declared table rows (embedded in the envelope at compile time).
-    pub fn table_rows(&self, name: &str) -> Result<&Vec<Value>, PgError> {
+    pub fn table_rows(&self, name: &str) -> Result<&Vec<Value>, PargError> {
         let declared = self
             .envelope
             .get("tables")
             .and_then(|tables| tables.get(name))
-            .ok_or_else(|| PgError::UnknownTable(name.to_string()))?;
+            .ok_or_else(|| PargError::UnknownTable(name.to_string()))?;
         if !declared.is_object() {
-            return Err(PgError::UnknownTable(name.to_string()));
+            return Err(PargError::UnknownTable(name.to_string()));
         }
         declared
             .get("rows")
             .and_then(Value::as_array)
-            .ok_or_else(|| PgError::UnknownTable(name.to_string()))
+            .ok_or_else(|| PargError::UnknownTable(name.to_string()))
     }
 
-    fn preprocess(&self, binding: &Map<String, Value>, value: Value) -> Result<Value, PgError> {
+    fn preprocess(&self, binding: &Map<String, Value>, value: Value) -> Result<Value, PargError> {
         let Some(name) = binding.get("preprocess").and_then(Value::as_str) else {
             return Ok(value);
         };
@@ -216,22 +216,22 @@ impl PgArtifact {
             let op = step
                 .get("op")
                 .and_then(Value::as_str)
-                .ok_or_else(|| PgError::UnknownPreprocessOp("<missing>".to_string()))?;
+                .ok_or_else(|| PargError::UnknownPreprocessOp("<missing>".to_string()))?;
             if op != "table_lookup" {
-                return Err(PgError::UnknownPreprocessOp(op.to_string()));
+                return Err(PargError::UnknownPreprocessOp(op.to_string()));
             }
             let table = step
                 .get("table")
                 .and_then(Value::as_str)
-                .ok_or_else(|| PgError::UnknownPreprocessOp(op.to_string()))?;
+                .ok_or_else(|| PargError::UnknownPreprocessOp(op.to_string()))?;
             let from = step
                 .get("from")
                 .and_then(Value::as_str)
-                .ok_or_else(|| PgError::UnknownPreprocessOp(op.to_string()))?;
+                .ok_or_else(|| PargError::UnknownPreprocessOp(op.to_string()))?;
             let to = step
                 .get("to")
                 .and_then(Value::as_str)
-                .ok_or_else(|| PgError::UnknownPreprocessOp(op.to_string()))?;
+                .ok_or_else(|| PargError::UnknownPreprocessOp(op.to_string()))?;
             let needle = to_ruby_string(&value);
             let mut mapped = None;
             for row in self.table_rows(table)? {
@@ -251,7 +251,7 @@ impl PgArtifact {
         Ok(value)
     }
 
-    fn finalize(&self, binding: &Map<String, Value>, value: Value) -> Result<Value, PgError> {
+    fn finalize(&self, binding: &Map<String, Value>, value: Value) -> Result<Value, PargError> {
         let kind = binding.get("type").and_then(Value::as_str);
         cast(self.preprocess(binding, value)?, kind)
     }
@@ -261,7 +261,7 @@ impl PgArtifact {
         out: &mut Map<String, Value>,
         binding: &Map<String, Value>,
         captures: &BTreeMap<String, Vec<Value>>,
-    ) -> Result<(), PgError> {
+    ) -> Result<(), PargError> {
         let capture = binding
             .get("capture")
             .and_then(Value::as_str)
@@ -285,7 +285,7 @@ impl PgArtifact {
         prefix: &str,
         group: &[&Map<String, Value>],
         captures: &BTreeMap<String, Vec<Value>>,
-    ) -> Result<(), PgError> {
+    ) -> Result<(), PargError> {
         let count = group
             .iter()
             .filter_map(|binding| {
@@ -325,7 +325,7 @@ impl PgArtifact {
     }
 
     /// Apply an entry's bindings to a parsanol-shape parse tree.
-    pub fn apply_bindings(&self, entry: &str, shape: &Value) -> Result<Value, PgError> {
+    pub fn apply_bindings(&self, entry: &str, shape: &Value) -> Result<Value, PargError> {
         let bindings = self.bindings(entry);
         let captures = collect_captures(shape);
         let mut scalars: Vec<&Map<String, Value>> = Vec::new();

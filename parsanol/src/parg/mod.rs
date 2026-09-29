@@ -1,16 +1,16 @@
-//! PG artifact envelopes: the Rust consumer side of the parsanol grammar
+//! PARG artifact envelopes: the Rust consumer side of the parsanol grammar
 //! language.
 //!
-//! PG sources (`.pg`) are compiled by the Ruby-side `Parsanol::PG` compiler
+//! PARG sources (`.pg`) are compiled by the Ruby-side `Parsanol::PARG` compiler
 //! — one compiler, N consumers — into a checksummed JSON envelope. This
 //! module loads an envelope, verifies its canonical sha256 checksum
 //! (byte-compatible with the Ruby compiler's `Compiler.checksum`), and
 //! extracts the portable [`Grammar`] of any entry for parsing.
 //!
 //! ```no_run
-//! use parsanol::PgArtifact;
+//! use parsanol::PargArtifact;
 //!
-//! let artifact = PgArtifact::from_path("artifacts/iso.json").unwrap();
+//! let artifact = PargArtifact::from_path("artifacts/iso.json").unwrap();
 //! let grammar = artifact.grammar("identifier").unwrap();
 //! // parse `input` with PortableParser::new(&grammar, input, &mut arena)
 //! ```
@@ -30,13 +30,13 @@ pub mod suite;
 
 use crate::portable::Grammar;
 
-/// Errors raised while loading or extracting from a PG artifact envelope.
+/// Errors raised while loading or extracting from a PARG artifact envelope.
 ///
 /// New failure modes arrive as the artifact schema grows; match with a
 /// catch-all arm.
 #[derive(Debug)]
 #[non_exhaustive]
-pub enum PgError {
+pub enum PargError {
     /// The envelope is not valid JSON.
     Json(serde_json::Error),
     /// The envelope is JSON but not shaped like an artifact.
@@ -104,74 +104,74 @@ pub enum PgError {
     },
 }
 
-impl fmt::Display for PgError {
+impl fmt::Display for PargError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            PgError::Json(err) => write!(f, "PG artifact is not valid JSON: {err}"),
-            PgError::InvalidEnvelope(what) => {
-                write!(f, "PG artifact envelope is invalid: missing {what}")
+            PargError::Json(err) => write!(f, "PARG artifact is not valid JSON: {err}"),
+            PargError::InvalidEnvelope(what) => {
+                write!(f, "PARG artifact envelope is invalid: missing {what}")
             }
-            PgError::UnknownEntry(entry) => write!(f, "PG artifact has no entry {entry:?}"),
-            PgError::ChecksumMismatch { stored, computed } => write!(
+            PargError::UnknownEntry(entry) => write!(f, "PARG artifact has no entry {entry:?}"),
+            PargError::ChecksumMismatch { stored, computed } => write!(
                 f,
-                "PG artifact checksum mismatch: stored {stored:?}, computed {computed:?}"
+                "PARG artifact checksum mismatch: stored {stored:?}, computed {computed:?}"
             ),
-            PgError::UnknownPreprocess(name) => {
+            PargError::UnknownPreprocess(name) => {
                 write!(f, "preprocess step {name:?} not declared in artifact")
             }
-            PgError::UnknownPreprocessOp(op) => write!(f, "unknown preprocess op {op:?}"),
-            PgError::UnknownTable(name) => {
+            PargError::UnknownPreprocessOp(op) => write!(f, "unknown preprocess op {op:?}"),
+            PargError::UnknownTable(name) => {
                 write!(f, "artifact does not declare table {name:?}")
             }
-            PgError::NestedBindingPath { capture, path } => write!(
+            PargError::NestedBindingPath { capture, path } => write!(
                 f,
                 "binding {capture:?}: nested path {path:?} is not supported; bind the components instead"
             ),
-            PgError::Cast(kind, value) => {
+            PargError::Cast(kind, value) => {
                 write!(f, "cannot cast {value:?} to {kind}")
             }
-            PgError::UnknownRenderVariant(v) => {
+            PargError::UnknownRenderVariant(v) => {
                 write!(f, "render variant {v:?} not declared")
             }
-            PgError::UnknownRenderSegment(t) => {
+            PargError::UnknownRenderSegment(t) => {
                 write!(f, "unknown render segment {t:?}")
             }
-            PgError::UnsupportedShape(shape) => {
+            PargError::UnsupportedShape(shape) => {
                 write!(f, "unsupported artifact shape {shape:?} (engine supports {SUPPORTED_SHAPE:?})")
             }
-            PgError::ParseFailed(detail) => write!(f, "{detail}"),
-            PgError::ParseWire { offset, line, column, expected, .. } => write!(
+            PargError::ParseFailed(detail) => write!(f, "{detail}"),
+            PargError::ParseWire { offset, line, column, expected, .. } => write!(
                 f,
                 "Parse failed at offset {offset} (line {line}, column {column}): expected {}",
                 expected.join(", ")
             ),
-            PgError::UnexpectedParse(_input) => {
+            PargError::UnexpectedParse(_input) => {
                 write!(f, "expected the input to be rejected")
             }
-            PgError::CaptureMismatch { detail, .. } => write!(f, "{detail}"),
-            PgError::FloatInCanonicalJson => {
+            PargError::CaptureMismatch { detail, .. } => write!(f, "{detail}"),
+            PargError::FloatInCanonicalJson => {
                 write!(
                     f,
-                    "PG artifact contains a float, which has no canonical form"
+                    "PARG artifact contains a float, which has no canonical form"
                 )
             }
-            PgError::Io(err) => write!(f, "PG artifact could not be read: {err}"),
+            PargError::Io(err) => write!(f, "PARG artifact could not be read: {err}"),
         }
     }
 }
 
-impl std::error::Error for PgError {}
+impl std::error::Error for PargError {}
 
 /// The parsanol-shape contract this engine supports (F8). A mismatching
 /// artifact is refused loudly at load, never parsed with wrong semantics.
 pub const SUPPORTED_SHAPE: &str = "parsanol-tree/v2";
 
-/// A verified PG artifact envelope.
+/// A verified PARG artifact envelope.
 ///
-/// The checksum is verified at load time; a `PgArtifact` value never
+/// The checksum is verified at load time; a `PargArtifact` value never
 /// exists for a mismatched envelope.
 #[derive(Debug, Clone)]
-pub struct PgArtifact {
+pub struct PargArtifact {
     envelope: Value,
 }
 
@@ -197,33 +197,33 @@ fn collect_terminals(atoms: &[Value], terms: &mut Vec<String>) {
     }
 }
 
-impl PgArtifact {
+impl PargArtifact {
     /// Parse and verify an envelope from its JSON text.
-    pub fn from_json(text: &str) -> Result<Self, PgError> {
-        let envelope: Value = serde_json::from_str(text).map_err(PgError::Json)?;
+    pub fn from_json(text: &str) -> Result<Self, PargError> {
+        let envelope: Value = serde_json::from_str(text).map_err(PargError::Json)?;
         let shape = envelope
             .get("shape")
             .and_then(Value::as_str)
-            .ok_or(PgError::InvalidEnvelope("shape"))?;
+            .ok_or(PargError::InvalidEnvelope("shape"))?;
         if shape != SUPPORTED_SHAPE {
-            return Err(PgError::UnsupportedShape(shape.to_string()));
+            return Err(PargError::UnsupportedShape(shape.to_string()));
         }
         verify_checksum(&envelope)?;
         Ok(Self { envelope })
     }
 
     /// Parse and verify an envelope from a file.
-    pub fn from_path(path: impl AsRef<Path>) -> Result<Self, PgError> {
-        let text = std::fs::read_to_string(path).map_err(PgError::Io)?;
+    pub fn from_path(path: impl AsRef<Path>) -> Result<Self, PargError> {
+        let text = std::fs::read_to_string(path).map_err(PargError::Io)?;
         Self::from_json(&text)
     }
 
-    /// The grammar version declared in the PG source header.
+    /// The grammar version declared in the PARG source header.
     pub fn version(&self) -> Option<&str> {
         self.envelope.get("version").and_then(Value::as_str)
     }
 
-    /// The grammar name declared in the PG source header.
+    /// The grammar name declared in the PARG source header.
     pub fn grammar_name(&self) -> Option<&str> {
         self.envelope.get("grammar").and_then(Value::as_str)
     }
@@ -233,7 +233,7 @@ impl PgArtifact {
         self.envelope.get("shape").and_then(Value::as_str)
     }
 
-    /// The embedded PG source text (self-contained artifacts).
+    /// The embedded PARG source text (self-contained artifacts).
     pub fn source(&self) -> Option<&str> {
         self.envelope.get("source").and_then(Value::as_str)
     }
@@ -290,20 +290,20 @@ impl PgArtifact {
     }
 
     /// The root rule name of an entry.
-    pub fn entry_root(&self, entry: &str) -> Result<&str, PgError> {
+    pub fn entry_root(&self, entry: &str) -> Result<&str, PargError> {
         self.entry_value(entry, "root")
             .and_then(Value::as_str)
-            .ok_or(PgError::UnknownEntry(entry.to_string()))
+            .ok_or(PargError::UnknownEntry(entry.to_string()))
     }
 
     /// The portable [`Grammar`] of an entry, ready for the walker, VM, wasm
     /// or any other parsanol backend.
-    pub fn grammar(&self, entry: &str) -> Result<Grammar, PgError> {
+    pub fn grammar(&self, entry: &str) -> Result<Grammar, PargError> {
         let value = self
             .entry_value(entry, "grammar")
             .cloned()
-            .ok_or(PgError::UnknownEntry(entry.to_string()))?;
-        serde_json::from_value(value).map_err(PgError::Json)
+            .ok_or(PargError::UnknownEntry(entry.to_string()))?;
+        serde_json::from_value(value).map_err(PargError::Json)
     }
 
     fn entry_value(&self, entry: &str, field: &str) -> Option<&Value> {
@@ -314,20 +314,20 @@ impl PgArtifact {
     }
 }
 
-fn verify_checksum(envelope: &Value) -> Result<(), PgError> {
+fn verify_checksum(envelope: &Value) -> Result<(), PargError> {
     let obj = envelope
         .as_object()
-        .ok_or(PgError::InvalidEnvelope("top-level object"))?;
+        .ok_or(PargError::InvalidEnvelope("top-level object"))?;
     let stored = obj
         .get("checksum")
         .and_then(Value::as_str)
-        .ok_or(PgError::InvalidEnvelope("checksum"))?
+        .ok_or(PargError::InvalidEnvelope("checksum"))?
         .to_string();
     let mut payload = obj.clone();
     payload.remove("checksum");
     let computed = checksum_hex(&Value::Object(payload))?;
     if stored != computed {
-        return Err(PgError::ChecksumMismatch { stored, computed });
+        return Err(PargError::ChecksumMismatch { stored, computed });
     }
     Ok(())
 }
@@ -336,20 +336,20 @@ fn verify_checksum(envelope: &Value) -> Result<(), PgError> {
 /// `JSON.generate` of its key-sorted payload: object keys sorted, no
 /// whitespace, short escapes for `\b \t \n \f \r " \`, lowercase `\u00xx`
 /// for other control characters, raw UTF-8 otherwise.
-pub fn canonical_json(value: &Value) -> Result<String, PgError> {
+pub fn canonical_json(value: &Value) -> Result<String, PargError> {
     let mut out = String::new();
     write_canonical(value, &mut out)?;
     Ok(out)
 }
 
-fn write_canonical(value: &Value, out: &mut String) -> Result<(), PgError> {
+fn write_canonical(value: &Value, out: &mut String) -> Result<(), PargError> {
     match value {
         Value::Null => out.push_str("null"),
         Value::Bool(true) => out.push_str("true"),
         Value::Bool(false) => out.push_str("false"),
         Value::Number(number) => {
             if number.is_f64() {
-                return Err(PgError::FloatInCanonicalJson);
+                return Err(PargError::FloatInCanonicalJson);
             }
             out.push_str(&number.to_string());
         }
@@ -406,7 +406,7 @@ fn write_canonical_string(text: &str, out: &mut String) {
 }
 
 /// The `sha256:...` checksum of a payload's canonical JSON.
-pub fn checksum_hex(payload: &Value) -> Result<String, PgError> {
+pub fn checksum_hex(payload: &Value) -> Result<String, PargError> {
     let canonical = canonical_json(payload)?;
     let digest = Sha256::digest(canonical.as_bytes());
     let mut hex = String::with_capacity(digest.len() * 2);
