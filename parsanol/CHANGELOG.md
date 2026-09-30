@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Other
+
+- Cargo fmt by @[object]
+- Fast path for general character-class Re atoms by @[object]
+
 ### Fixed
 
 - Green the CI gates for the pg-artifact runtime by @[object]
