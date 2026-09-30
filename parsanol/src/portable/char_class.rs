@@ -502,7 +502,11 @@ impl CharRanges {
         // computed exactly rather than inferred, so a class like
         // [\x00-\u{10FFFF}] takes the constant-time non-ASCII path.
         let full = ranges.len() == 1 && ranges[0] == (0x80, char::MAX as u32);
-        Self { ascii, ranges, full }
+        Self {
+            ascii,
+            ranges,
+            full,
+        }
     }
 
     /// Match the character at byte `pos`; returns its UTF-8 length when it
