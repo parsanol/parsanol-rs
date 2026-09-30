@@ -38,6 +38,7 @@ parsanol-derive = { path = "../parsanol-derive", version = "0.10.0" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 regex = { workspace = true }
+regex-syntax = { workspace = true }
 hashbrown = { workspace = true }
 ahash = { workspace = true }
 sha2 = { workspace = true }
