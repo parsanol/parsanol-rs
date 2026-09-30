@@ -439,6 +439,95 @@ impl CharClassTables {
 /// Global character class tables (compile-time initialized)
 pub static CHAR_CLASSES: CharClassTables = CharClassTables::new();
 
+/// A decoded regex character class: code-point membership without the
+/// regex engine.
+///
+/// The general `CharacterPattern` fast path covers only the fixed list of
+/// well-known patterns; every other class pattern (for example the
+/// `[\x00-\u{10ffff}]` the PARG compiler emits for `%x00-10FFFF`) used to
+/// fall through to `regex::Regex::find` per position, where the meta
+/// engine's lazy-DFA determinization dominates the profile on
+/// repetition-heavy grammars. Decoding the class once into ranges and
+/// matching per character directly removes that per-position engine cost.
+///
+/// Semantics are inherited from the same HIR the `regex` crate itself
+/// compiles to, so membership is exactly what the fallback engine would
+/// decide for a pattern whose HIR is a single Unicode class.
+#[derive(Debug, Clone)]
+pub struct CharRanges {
+    /// ASCII membership bitmap: patterns are overwhelmingly ASCII-heavy,
+    /// so the hot byte test is a single indexed load.
+    ascii: [bool; 128],
+    /// Non-ASCII code-point ranges (start, end), sorted and disjoint.
+    ranges: Vec<(u32, u32)>,
+    /// True when every code point is a member (the whole-input class);
+    /// non-ASCII matching then needs no range scan.
+    full: bool,
+}
+
+impl CharRanges {
+    /// Decode a regex pattern into a [`CharRanges`] when the pattern is a
+    /// pure Unicode character class.
+    ///
+    /// Returns `None` for anything else (anchors, groups, alternations,
+    /// repetitions, byte classes) so callers keep using the regex engine;
+    /// the HIR is the same intermediate representation the `regex` crate
+    /// builds, so acceptance here is semantics-preserving by construction
+    /// (case-insensitive and negated classes arrive already resolved).
+    pub fn from_pattern(pattern: &str) -> Option<Self> {
+        let hir = regex_syntax::parse(pattern).ok()?;
+        match hir.kind() {
+            regex_syntax::hir::HirKind::Class(regex_syntax::hir::Class::Unicode(class)) => {
+                Some(Self::from_unicode_class(class))
+            }
+            _ => None,
+        }
+    }
+
+    fn from_unicode_class(class: &regex_syntax::hir::ClassUnicode) -> Self {
+        let mut ascii = [false; 128];
+        let mut ranges = Vec::new();
+        for item in class.iter() {
+            let (lo, hi) = (item.start() as u32, item.end() as u32);
+            if lo <= 0x7F {
+                for code in lo..=hi.min(0x7F) {
+                    ascii[code as usize] = true;
+                }
+            }
+            if hi > 0x7F {
+                ranges.push((lo.max(0x80), hi));
+            }
+        }
+        // HIR classes are sorted and disjoint already; the `full` flag is
+        // computed exactly rather than inferred, so a class like
+        // [\x00-\u{10FFFF}] takes the constant-time non-ASCII path.
+        let full = ranges.len() == 1 && ranges[0] == (0x80, char::MAX as u32);
+        Self { ascii, ranges, full }
+    }
+
+    /// Match the character at byte `pos`; returns its UTF-8 length when it
+    /// is a member of the class.
+    ///
+    /// The input must be valid UTF-8 with `pos` on a char boundary, which
+    /// the parser guarantees: it only advances over whole characters.
+    #[inline]
+    pub fn match_at(&self, bytes: &[u8], pos: usize) -> Option<usize> {
+        let first = *bytes.get(pos)?;
+        if first < 0x80 {
+            return self.ascii[first as usize].then_some(1);
+        }
+        let len = utf8_char_len(first);
+        let slice = bytes.get(pos..pos + len)?;
+        let ch = std::str::from_utf8(slice).ok()?.chars().next()?;
+        let code = ch as u32;
+        if self.full || self.ranges.iter().any(|&(lo, hi)| code >= lo && code <= hi) {
+            Some(len)
+        } else {
+            None
+        }
+    }
+}
+
 /// Get the UTF-8 character length from the first byte
 ///
 /// Returns the number of bytes in the UTF-8 encoded character.
@@ -633,5 +722,54 @@ mod tests {
         assert!(word.is_negation_of(&non_word));
 
         assert!(!digit.is_negation_of(&word));
+    }
+
+    #[test]
+    fn test_char_ranges_decode() {
+        // The shape the PARG compiler emits for `%x00-10FFFF`.
+        let all = CharRanges::from_pattern("[\\x00-\\u{10ffff}]").unwrap();
+        assert_eq!(all.match_at(b"x", 0), Some(1));
+        assert_eq!(all.match_at("é".as_bytes(), 0), Some(2));
+        assert_eq!(all.match_at(b"", 0), None);
+
+        // Negation is resolved by the HIR.
+        let no_quote = CharRanges::from_pattern("[^\\\\\"]").unwrap();
+        assert_eq!(no_quote.match_at(b"a", 0), Some(1));
+        assert_eq!(no_quote.match_at(b"\"", 0), None);
+        assert_eq!(no_quote.match_at(b"\\", 0), None);
+
+        // Ranges, case-insensitive flags, and unicode categories all
+        // decode to direct membership.
+        let hex = CharRanges::from_pattern("(?i)[0-9a-f]").unwrap();
+        assert_eq!(hex.match_at(b"A", 0), Some(1));
+        assert_eq!(hex.match_at(b"g", 0), None);
+
+        let letters = CharRanges::from_pattern("[\\p{L}]+");
+        // `+` is a repetition, not a pure class: must NOT decode.
+        assert!(letters.is_none());
+
+        // Non-class patterns keep the regex engine.
+        assert!(CharRanges::from_pattern("[a-z]+").is_none());
+        assert!(CharRanges::from_pattern("(a|b)").is_none());
+        assert!(CharRanges::from_pattern("^a").is_none());
+    }
+
+    #[test]
+    fn test_char_ranges_matches_regex_engine() {
+        // Membership must agree with the regex crate for the same
+        // pattern, per character, across the ASCII block and a sample of
+        // multi-byte planes.
+        let class = CharRanges::from_pattern("[\\x00-\\u{00FF}\\u{4E00}-\\u{9FFF}]").unwrap();
+        let re = regex::Regex::new("[\\x00-\\u{00FF}\\u{4E00}-\\u{9FFF}]").unwrap();
+        let text = "aZ9 é字\u{FFFE}\u{10FFFE}";
+        let bytes = text.as_bytes();
+        for (pos, ch) in text.char_indices() {
+            let expected = re.is_match(ch.encode_utf8(&mut [0u8; 4]));
+            assert_eq!(
+                class.match_at(bytes, pos),
+                expected.then(|| ch.len_utf8()),
+                "mismatch at {pos} for {ch:?}"
+            );
+        }
     }
 }

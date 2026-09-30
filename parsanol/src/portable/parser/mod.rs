@@ -850,9 +850,8 @@ impl<'a> PortableParser<'a> {
 
     #[inline]
     fn parse_re(&mut self, pattern: &str, pos: usize) -> Result<ParseResult, ParseError> {
-        let re_label = pattern.to_string();
         if pos >= self.input.len() {
-            self.note_failure(pos, re_label);
+            self.note_failure(pos, pattern.to_string());
             return Err(ParseError::Failed { position: pos });
         }
 
@@ -874,9 +873,27 @@ impl<'a> PortableParser<'a> {
                     capture_state: None,
                 });
             } else {
-                self.note_failure(pos, re_label);
+                self.note_failure(pos, pattern.to_string());
                 return Err(ParseError::Failed { position: pos });
             }
+        }
+
+        // General pure-class fast path: any pattern whose HIR is a single
+        // Unicode class matches by direct membership test — the regex
+        // engine's lazy-DFA determinization is catastrophic when a
+        // repetition drives this per character.
+        if let Some(class) = regex_cache::get_or_decode_class(pattern) {
+            return match class.match_at(self.input_bytes, pos) {
+                Some(char_len) => Ok(ParseResult {
+                    value: self.arena.input_ref(pos, char_len),
+                    end_pos: pos + char_len,
+                    capture_state: None,
+                }),
+                None => {
+                    self.note_failure(pos, pattern.to_string());
+                    Err(ParseError::Failed { position: pos })
+                }
+            };
         }
 
         // General case
@@ -901,7 +918,7 @@ impl<'a> PortableParser<'a> {
             }
         }
 
-        self.note_failure(pos, re_label);
+        self.note_failure(pos, pattern.to_string());
         Err(ParseError::Failed { position: pos })
     }
 

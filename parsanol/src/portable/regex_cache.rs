@@ -18,9 +18,11 @@
 //! assert_eq!(s.misses, 1);
 //! ```
 
+use crate::portable::char_class::CharRanges;
 use hashbrown::HashMap;
 use regex::Regex;
 use std::cell::RefCell;
+use std::sync::Arc;
 
 /// Cache statistics for monitoring
 #[derive(Debug, Clone, Copy, Default)]
@@ -37,8 +39,38 @@ thread_local! {
     /// Thread-local cache of compiled regex patterns
     static REGEX_CACHE: RefCell<HashMap<String, Regex>> = RefCell::new(HashMap::new());
 
+    /// Thread-local cache of decoded character classes: `None` marks
+    /// patterns that are not pure classes, so the (negative) HIR decode
+    /// verdict is remembered instead of re-parsed per position.
+    static CLASS_CACHE: RefCell<HashMap<String, Option<Arc<CharRanges>>>> = RefCell::new(HashMap::new());
+
     /// Thread-local cache statistics
     static CACHE_STATS: RefCell<CacheStats> = const { RefCell::new(CacheStats { hits: 0, misses: 0, size: 0 }) };
+}
+
+/// Get or decode a pure character-class pattern into a [`CharRanges`].
+///
+/// Returns `Some` only when the pattern's HIR is a single Unicode class;
+/// `None` results are cached too, so non-class patterns pay the HIR
+/// decode exactly once and then go straight to the regex engine.
+pub fn get_or_decode_class(pattern: &str) -> Option<Arc<CharRanges>> {
+    if let Some(cached) = CLASS_CACHE.with(|cache| cache.borrow().get(pattern).cloned()) {
+        return cached;
+    }
+    let decoded = CharRanges::from_pattern(pattern).map(Arc::new);
+    CLASS_CACHE.with(|cache| {
+        cache
+            .borrow_mut()
+            .insert(pattern.to_string(), decoded.clone())
+    });
+    decoded
+}
+
+/// Clear the decoded-class cache alongside the regex cache.
+///
+/// Call this wherever [`clear_cache`] is called to free memory.
+pub fn clear_class_cache() {
+    CLASS_CACHE.with(|cache| cache.borrow_mut().clear());
 }
 
 /// Get or compile a regex pattern
@@ -96,6 +128,7 @@ pub fn get_or_compile(pattern: &str) -> Option<Regex> {
 /// Call this to free memory if many unique patterns have been compiled.
 pub fn clear_cache() {
     REGEX_CACHE.with(|cache| cache.borrow_mut().clear());
+    clear_class_cache();
     CACHE_STATS.with(|stats| {
         let mut s = stats.borrow_mut();
         s.hits = 0;
