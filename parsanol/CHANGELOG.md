@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Other
 
+- Release v0.10.1 by @[object]
+- Cargo fmt by @[object]
+- Fast path for general character-class Re atoms by @[object]
+
+### Other
+
 - Cargo fmt by @[object]
 - Fast path for general character-class Re atoms by @[object]
 
