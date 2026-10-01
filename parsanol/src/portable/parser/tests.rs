@@ -781,3 +781,55 @@ mod profiling {
         ));
     }
 }
+
+#[cfg(test)]
+mod fused_neg_scan_tests {
+    use super::super::{AstArena, Grammar, PortableParser};
+
+    /// The quoted-string idiom (parsanol-ruby#115): a repetition whose body
+    /// is `Sequence[Lookahead(negative, delimiters), terminal]`. The fused
+    /// scan executes it as a byte-test loop; the general loop runs the VM
+    /// per char. Both must produce identical trees.
+    const QUOTED: &str = r#"{"atoms":[{"Str":{"pattern":"\""}},{"Entity":{"atom":8}},{"Str":{"pattern":"\\"}},{"Str":{"pattern":"\""}},{"Named":{"name":"dquote","atom":3}},{"Str":{"pattern":"n"}},{"Named":{"name":"newline","atom":5}},{"Alternative":{"atoms":[4,6]}},{"Sequence":{"atoms":[2,7]}},{"Entity":{"atom":17}},{"Str":{"pattern":"\\"}},{"Str":{"pattern":"\""}},{"Alternative":{"atoms":[10,11]}},{"Lookahead":{"atom":12,"positive":false}},{"Entity":{"atom":15}},{"Re":{"pattern":"[\\x00-\\u{10ffff}]"}},{"Sequence":{"atoms":[13,14]}},{"Repetition":{"atom":16,"min":1,"max":null,"tag":"Repetition"}},{"Named":{"name":"run","atom":9}},{"Alternative":{"atoms":[1,18]}},{"Repetition":{"atom":19,"min":0,"max":null,"tag":"Repetition"}},{"Named":{"name":"string","atom":20}},{"Str":{"pattern":"\""}},{"Sequence":{"atoms":[0,21,22]}}],"root":23}"#;
+
+    /// Semantically identical, but the fusion-eligible nodes are
+    /// wrapped (terminal and lookahead body under `Alternative`) so
+    /// the recognizer declines and the general loop runs.
+    const QUOTED_UNFUSED: &str = r#"{"atoms":[{"Str":{"pattern":"\""}},{"Entity":{"atom":8}},{"Str":{"pattern":"\\"}},{"Str":{"pattern":"\""}},{"Named":{"name":"dquote","atom":3}},{"Str":{"pattern":"n"}},{"Named":{"name":"newline","atom":5}},{"Alternative":{"atoms":[4,6]}},{"Sequence":{"atoms":[2,7]}},{"Entity":{"atom":17}},{"Str":{"pattern":"\\"}},{"Str":{"pattern":"\""}},{"Alternative":{"atoms":[10,11]}},{"Lookahead":{"atom":25,"positive":false}},{"Entity":{"atom":15}},{"Re":{"pattern":"[\\x00-\\u{10ffff}]"}},{"Sequence":{"atoms":[13,24]}},{"Repetition":{"atom":16,"min":1,"max":null,"tag":"Repetition"}},{"Named":{"name":"run","atom":9}},{"Alternative":{"atoms":[1,18]}},{"Repetition":{"atom":19,"min":0,"max":null,"tag":"Repetition"}},{"Named":{"name":"string","atom":20}},{"Str":{"pattern":"\""}},{"Sequence":{"atoms":[0,21,22]}},{"Alternative":{"atoms":[14]}},{"Alternative":{"atoms":[12]}}],"root":23}"#;
+
+    fn parse_debug(grammar_json: &str, input: &str) -> String {
+        let g = Grammar::from_json(grammar_json).unwrap();
+        let mut arena = AstArena::for_input(input.len());
+        arena.set_input(input.to_string());
+        let mut p = PortableParser::new(&g, input, &mut arena);
+        let ast = p.parse().expect("parse succeeds");
+        format!("{ast:?}")
+    }
+
+    #[test]
+    fn fused_tree_equals_general_loop_tree() {
+        for input in [
+            "\"hello world\"",
+            "\"a\\nb\"",
+            "\"\\\"quoted\\\" tail\"",
+            "\"unicode é字!\"",
+            "\"x\"",
+        ] {
+            let fused = parse_debug(QUOTED, input);
+            let general = parse_debug(QUOTED_UNFUSED, input);
+            assert_eq!(fused, general, "tree divergence for {input}");
+        }
+    }
+
+    #[test]
+    fn fused_scan_rejects_below_min_like_the_general_loop() {
+        // No terminal chars between the quotes: `1*` cannot satisfy its
+        // minimum; the fused scan declines and the general loop rejects.
+        let g = Grammar::from_json(QUOTED).unwrap();
+        let input = "\"";
+        let mut arena = AstArena::for_input(2);
+        arena.set_input(input.to_string());
+        let mut p = PortableParser::new(&g, input, &mut arena);
+        assert!(p.parse().is_err());
+    }
+}

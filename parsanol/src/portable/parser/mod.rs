@@ -28,7 +28,7 @@ use crate::portable::arena::AstArena;
 use crate::portable::ast::{AstNode, ParseError, ParseResult};
 use crate::portable::cache::{CacheEntry, DenseCache};
 use crate::portable::capture_state::CaptureState;
-use crate::portable::char_class::{utf8_char_len, CharacterPattern};
+use crate::portable::char_class::{utf8_char_len, CharRanges, CharacterPattern};
 use crate::portable::grammar::{Atom, Grammar, RepetitionTag};
 use crate::portable::regex_cache;
 
@@ -142,6 +142,18 @@ pub const MAX_RANKED_FAILURES: usize = 8;
 /// The packrat tree-walking parser: evaluates the compiled grammar
 /// against the input with memoization, capture scopes and ranked
 /// failure tracking.
+/// The terminal of a fused maximal-run scan body (see
+/// `PortableParser::neg_scan_body`).
+enum NegScanTerm {
+    /// A literal string terminal, starts-with semantics
+    Lit(String),
+    /// A decoded character class (`Re` atom whose HIR is one class)
+    Ranges(std::sync::Arc<CharRanges>),
+    /// A well-known ASCII class (`CharacterPattern`), `parse_re`'s
+    /// byte semantics
+    CharPat(CharacterPattern),
+}
+
 pub struct PortableParser<'a> {
     // ========================================================================
     // Grammar and Input (immutable)
@@ -1042,6 +1054,25 @@ impl<'a> PortableParser<'a> {
             }
         }
 
+        // Fused maximal-run scan for the quoted-string idiom: a repetition
+        // whose body is `Sequence[Lookahead(negative, delimiters), terminal]`
+        // (e.g. `1*(!("\" / "\\") any_char)`, one captured char per
+        // iteration). Running the full VM per char — dispatch, memo, failure
+        // bookkeeping — costs hundreds of ns/char for what is a byte test.
+        // The scan inlines the iteration: per position, a delimiter
+        // starts_with test and the terminal's match, building each
+        // iteration's tree with the same arena helpers the general loop's
+        // body uses, so the shape is identical. When the scan cannot
+        // satisfy `min`, fall through to the general loop: its failure
+        // bookkeeping (deepest-position labels) stays exact.
+        if let Some((delims, term)) = self.neg_scan_body(atom_id) {
+            if let Some(result) =
+                self.parse_neg_scan(&delims, &term, min, max, tag, pos, consume_all)
+            {
+                return result;
+            }
+        }
+
         let mut current_pos = pos;
         let mut count = 0;
         let mut items: Vec<AstNode> = Vec::with_capacity(min.clamp(8, 64));
@@ -1198,6 +1229,177 @@ impl<'a> PortableParser<'a> {
             end_pos: actual_end,
             capture_state: None,
         })
+    }
+
+    // ------------------------------------------------------------------
+    // Fused maximal-run scan: shape recognition and execution
+    // ------------------------------------------------------------------
+
+    /// Resolve a chain of `Entity` wrappers down to the real atom.
+    fn resolve_entity(&self, mut atom_id: usize) -> Option<&'a Atom> {
+        for _ in 0..16 {
+            match self.grammar.get_atom(atom_id) {
+                Some(Atom::Entity { atom }) => atom_id = *atom,
+                other => return other,
+            }
+        }
+        None
+    }
+
+    /// The negative lookahead's delimiter alternatives as literal strings.
+    fn delim_strings(&self, atom_id: usize) -> Option<Vec<String>> {
+        match self.resolve_entity(atom_id)? {
+            Atom::Str { pattern } => Some(vec![pattern.clone()]),
+            Atom::Alternative { atoms } => {
+                let mut out = Vec::with_capacity(atoms.len());
+                for &a in atoms {
+                    match self.resolve_entity(a)? {
+                        Atom::Str { pattern } => out.push(pattern.clone()),
+                        _ => return None,
+                    }
+                }
+                Some(out)
+            }
+            _ => None,
+        }
+    }
+
+    /// The per-iteration terminal: a literal, a decoded class, or a
+    /// well-known ASCII class — matched with `parse_re`'s exact fast-path
+    /// semantics.
+    fn neg_scan_terminal(&self, atom_id: usize) -> Option<NegScanTerm> {
+        match self.resolve_entity(atom_id)? {
+            Atom::Str { pattern } => Some(NegScanTerm::Lit(pattern.clone())),
+            Atom::Re { pattern } => {
+                if let Some(p) = CharacterPattern::from_pattern(pattern) {
+                    Some(NegScanTerm::CharPat(p))
+                } else {
+                    Some(NegScanTerm::Ranges(regex_cache::get_or_decode_class(pattern)?))
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Recognize `Sequence[Lookahead(negative, Str…), terminal]` (the
+    /// quoted-string idiom's body); `None` means the general loop runs.
+    fn neg_scan_body(&self, atom_id: usize) -> Option<(Vec<String>, NegScanTerm)> {
+        let body = match self.grammar.get_atom(atom_id)? {
+            Atom::Sequence { atoms } if atoms.len() == 2 => atoms,
+            _ => return None,
+        };
+        match self.grammar.get_atom(body[0])? {
+            Atom::Lookahead {
+                atom: la,
+                positive: false,
+            } => {
+                let delims = self.delim_strings(*la)?;
+                let term = self.neg_scan_terminal(body[1])?;
+                Some((delims, term))
+            }
+            _ => None,
+        }
+    }
+
+    /// Execute the fused scan. `None` = the shape could not satisfy `min`
+    /// here; the caller falls through to the general loop for exact
+    /// failure bookkeeping.
+    #[allow(clippy::too_many_arguments)] // mirrors the packed atom shape
+    fn parse_neg_scan(
+        &mut self,
+        delims: &[String],
+        term: &NegScanTerm,
+        min: usize,
+        max: Option<usize>,
+        tag: RepetitionTag,
+        pos: usize,
+        consume_all: bool,
+    ) -> Option<Result<ParseResult, ParseError>> {
+        let input_len = self.input.len();
+        let bytes = self.input_bytes;
+        let mut items: Vec<AstNode> = Vec::new();
+        let mut cur = pos;
+        let mut count = 0usize;
+        loop {
+            if let Some(mx) = max {
+                if count >= mx {
+                    break;
+                }
+            }
+            if cur >= input_len || delims.iter().any(|d| self.input[cur..].starts_with(d.as_str()))
+            {
+                break;
+            }
+            let len = match term {
+                NegScanTerm::Lit(s) => {
+                    if self.input[cur..].starts_with(s.as_str()) {
+                        s.len()
+                    } else {
+                        break;
+                    }
+                }
+                NegScanTerm::Ranges(r) => match r.match_at(bytes, cur) {
+                    Some(l) => l,
+                    None => break,
+                },
+                NegScanTerm::CharPat(p) => {
+                    let b = bytes[cur];
+                    if p.matches(b) {
+                        match p {
+                            CharacterPattern::Any
+                            | CharacterPattern::NonDigit
+                            | CharacterPattern::NonSpace
+                            | CharacterPattern::NonWord => utf8_char_len(b),
+                            _ => 1,
+                        }
+                    } else {
+                        break;
+                    }
+                }
+            };
+            // Each iteration's tree is the body sequence's tagged array of
+            // [lookahead => Nil, terminal => input ref] — exactly what the
+            // general loop's body produces.
+            let t = self.arena.input_ref(cur, len);
+            let (pool_idx, slen) =
+                self.arena
+                    .store_tagged_array(":sequence", &[AstNode::Nil, t]);
+            items.push(AstNode::Array {
+                pool_index: pool_idx,
+                length: slen,
+            });
+            cur += len;
+            count += 1;
+        }
+        if count < min {
+            return None;
+        }
+        // Terminals capture nothing and the negative lookahead's captures
+        // never persist, so there are no per-iteration capture scopes.
+        if consume_all && cur != input_len {
+            return Some(Err(ParseError::Failed { position: pos }));
+        }
+        if tag == RepetitionTag::Maybe && items.len() == 1 {
+            let value = items.pop().unwrap_or(AstNode::Nil);
+            return Some(Ok(ParseResult {
+                value,
+                end_pos: cur,
+                capture_state: None,
+            }));
+        }
+        let tag_str = match tag {
+            RepetitionTag::Maybe => ":maybe",
+            RepetitionTag::Repetition => ":repetition",
+        };
+        let (pool_idx, len) = self.arena.store_tagged_array(tag_str, &items);
+        Some(Ok(ParseResult {
+            value: AstNode::Array {
+                pool_index: pool_idx,
+                length: len,
+            },
+            end_pos: cur,
+            capture_state: None,
+        }))
     }
 
     #[inline]
