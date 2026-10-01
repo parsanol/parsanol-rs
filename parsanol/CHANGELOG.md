@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Other
 
+- Release v0.10.2 by @[object]
+- Restore PortableParser's doc comment displaced by NegScanTerm by @[object]
+- Fused maximal-run scan for negated-lookahead repetition bodies by @[object]
+
+### Other
+
 - Restore PortableParser's doc comment displaced by NegScanTerm by @[object]
 - Fused maximal-run scan for negated-lookahead repetition bodies by @[object]
 
