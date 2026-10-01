@@ -139,9 +139,6 @@ macro_rules! log_debug {
 /// C4: maximum number of ranked failure positions retained.
 pub const MAX_RANKED_FAILURES: usize = 8;
 
-/// The packrat tree-walking parser: evaluates the compiled grammar
-/// against the input with memoization, capture scopes and ranked
-/// failure tracking.
 /// The terminal of a fused maximal-run scan body (see
 /// `PortableParser::neg_scan_body`).
 enum NegScanTerm {
@@ -154,6 +151,9 @@ enum NegScanTerm {
     CharPat(CharacterPattern),
 }
 
+/// The packrat tree-walking parser: evaluates the compiled grammar
+/// against the input with memoization, capture scopes and ranked
+/// failure tracking.
 pub struct PortableParser<'a> {
     // ========================================================================
     // Grammar and Input (immutable)
@@ -1274,7 +1274,9 @@ impl<'a> PortableParser<'a> {
                 if let Some(p) = CharacterPattern::from_pattern(pattern) {
                     Some(NegScanTerm::CharPat(p))
                 } else {
-                    Some(NegScanTerm::Ranges(regex_cache::get_or_decode_class(pattern)?))
+                    Some(NegScanTerm::Ranges(regex_cache::get_or_decode_class(
+                        pattern,
+                    )?))
                 }
             }
             _ => None,
@@ -1326,7 +1328,10 @@ impl<'a> PortableParser<'a> {
                     break;
                 }
             }
-            if cur >= input_len || delims.iter().any(|d| self.input[cur..].starts_with(d.as_str()))
+            if cur >= input_len
+                || delims
+                    .iter()
+                    .any(|d| self.input[cur..].starts_with(d.as_str()))
             {
                 break;
             }
@@ -1361,9 +1366,9 @@ impl<'a> PortableParser<'a> {
             // [lookahead => Nil, terminal => input ref] — exactly what the
             // general loop's body produces.
             let t = self.arena.input_ref(cur, len);
-            let (pool_idx, slen) =
-                self.arena
-                    .store_tagged_array(":sequence", &[AstNode::Nil, t]);
+            let (pool_idx, slen) = self
+                .arena
+                .store_tagged_array(":sequence", &[AstNode::Nil, t]);
             items.push(AstNode::Array {
                 pool_index: pool_idx,
                 length: slen,
