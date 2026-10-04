@@ -69,6 +69,11 @@ impl FixedLenAnalysis {
             Atom::Scope { .. } => PatternLength::Variable,
             Atom::Dynamic { .. } => PatternLength::Variable,
             Atom::Custom { .. } => PatternLength::Variable,
+            // Ruby-tier state/custom atoms: variable
+            Atom::StateSet { .. }
+            | Atom::StateMatch { .. }
+            | Atom::StateSwitch { .. }
+            | Atom::CustomRef { .. } => PatternLength::Variable,
         }
     }
 }
@@ -120,6 +125,11 @@ impl NullableAnalysis {
             Atom::Scope { .. } => PatternNullability::NotNullable,
             Atom::Dynamic { .. } => PatternNullability::NotNullable,
             Atom::Custom { .. } => PatternNullability::NotNullable,
+            // Ruby-tier state/custom atoms: never nullable (conservative)
+            Atom::StateSet { .. }
+            | Atom::StateMatch { .. }
+            | Atom::StateSwitch { .. }
+            | Atom::CustomRef { .. } => PatternNullability::NotNullable,
         }
     }
 }
@@ -219,6 +229,13 @@ impl FirstSetAnalysis {
                 nullable: false,
             },
             Atom::Custom { .. } => FirstSetAnalysis {
+                charset: vec![],
+                nullable: false,
+            },
+            Atom::StateSet { .. }
+            | Atom::StateMatch { .. }
+            | Atom::StateSwitch { .. }
+            | Atom::CustomRef { .. } => FirstSetAnalysis {
                 charset: vec![],
                 nullable: false,
             },

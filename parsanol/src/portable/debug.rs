@@ -222,6 +222,10 @@ impl<'a> GrammarVisualizer<'a> {
     fn atom_label(&self, atom: &Atom) -> String {
         match atom {
             Atom::Str { pattern } => format!("str({:?})", pattern),
+            Atom::StateSet { slot, .. } => format!("state_set({slot})"),
+            Atom::StateMatch { slot } => format!("state_match({slot})"),
+            Atom::StateSwitch { slot, .. } => format!("state_switch({slot})"),
+            Atom::CustomRef { name } => format!("custom_ref({name})"),
             Atom::Re { pattern } => format!("re({:?})", pattern),
             Atom::Sequence { atoms } => format!("seq({})", atoms.len()),
             Atom::Alternative { atoms } => format!("alt({})", atoms.len()),
