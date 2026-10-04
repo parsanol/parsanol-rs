@@ -194,6 +194,43 @@ pub enum Atom {
         /// Unique identifier for the custom atom
         id: u64,
     },
+
+    /// PARG runtime-state write (parsanol-ruby#129): a literal value or an
+    /// inline expression whose consumed text lands in the named slot.
+    /// Data-only here: runtimes without the state machine reject the parse
+    /// loudly (the artifact routes to a Ruby runtime).
+    StateSet {
+        /// The state slot name
+        slot: String,
+        /// Literal value form
+        value: Option<String>,
+        /// Inline-expression form: index into the atoms array
+        expr: Option<usize>,
+    },
+
+    /// PARG runtime-state comparison: matches the slot's current value
+    /// verbatim at the position (the block-delimiter close).
+    StateMatch {
+        /// The state slot name
+        slot: String,
+    },
+
+    /// PARG runtime-state dispatch: routes to a rule by slot value.
+    StateSwitch {
+        /// The state slot name
+        slot: String,
+        /// Match value -> rule name
+        arms: std::collections::BTreeMap<String, String>,
+        /// Default rule name
+        default: Option<String>,
+    },
+
+    /// PARG custom-atom binding (a Ruby class in the artifact's customs
+    /// section).
+    CustomRef {
+        /// The binding name
+        name: String,
+    },
 }
 
 /// A complete grammar
@@ -329,6 +366,7 @@ impl Grammar {
                 Atom::Capture { .. } => "capture",
                 Atom::Scope { .. } => "scope",
                 Atom::Dynamic { .. } => "dynamic",
+                Atom::StateSet { .. } | Atom::StateMatch { .. } | Atom::StateSwitch { .. } | Atom::CustomRef { .. } => "ruby-state",
                 Atom::Custom { .. } => "custom",
             };
             *atom_types.entry(ty).or_insert(0) += 1;
@@ -347,7 +385,7 @@ impl Grammar {
                 .any(|a| matches!(a, Atom::Lookahead { .. })),
             has_captures: self.atoms.iter().any(|a| matches!(a, Atom::Capture { .. })),
             has_scopes: self.atoms.iter().any(|a| matches!(a, Atom::Scope { .. })),
-            has_dynamic: self.atoms.iter().any(|a| matches!(a, Atom::Dynamic { .. })),
+            has_dynamic: self.atoms.iter().any(|a| matches!(a, Atom::Dynamic { .. } | Atom::StateSet { .. } | Atom::StateMatch { .. } | Atom::StateSwitch { .. } | Atom::CustomRef { .. })),
         }
     }
 
@@ -829,6 +867,10 @@ pub struct GrammarAnalysis {
 /// grammar.visit_atoms(&mut counter);
 /// ```
 pub trait AtomVisitor {
+    /// Visit a PARG runtime-state/custom atom (parsanol-ruby#129).
+    /// These carry no native semantics; visitors see them as opaque.
+    fn visit_ruby_state(&mut self, _kind: &str) {}
+
     /// Visit a string atom
     fn visit_str(&mut self, _pattern: &str) {}
 
@@ -973,6 +1015,10 @@ impl Grammar {
                 Atom::Custom { id } => {
                     visitor.visit_custom(*id);
                 }
+                Atom::StateSet { .. } => visitor.visit_ruby_state("set"),
+                Atom::StateMatch { .. } => visitor.visit_ruby_state("match"),
+                Atom::StateSwitch { .. } => visitor.visit_ruby_state("switch"),
+                Atom::CustomRef { .. } => visitor.visit_ruby_state("custom"),
             }
         }
     }

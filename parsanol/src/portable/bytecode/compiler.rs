@@ -418,6 +418,10 @@ impl Compiler {
             Atom::Scope { atom } => self.compile_scope(atom),
             Atom::Dynamic { callback_id } => self.compile_dynamic(callback_id),
             Atom::Custom { id } => self.compile_custom(id),
+            Atom::StateSet { .. } | Atom::StateMatch { .. } | Atom::StateSwitch { .. }
+            | Atom::CustomRef { .. } => Err(CompileError::UnsupportedFeature {
+                feature: "ruby-tier state/custom atom (parsanol-ruby#129)".to_string(),
+            }),
         }
     }
 
@@ -590,6 +594,14 @@ impl Compiler {
             | Atom::Capture { atom, .. }
             | Atom::Scope { atom } => self.provable_first_set(*atom, visited),
             Atom::Lookahead { .. } | Atom::Cut | Atom::Dynamic { .. } | Atom::Custom { .. } => None,
+            // Ruby-tier state atoms: unprovable (state-dependent or
+            // foreign). An inline-expression set COULD recurse into the
+            // expr's first set, but the state write itself is a side
+            // effect the bytecode compiler does not model.
+            Atom::StateSet { .. }
+            | Atom::StateMatch { .. }
+            | Atom::StateSwitch { .. }
+            | Atom::CustomRef { .. } => None,
         };
         visited.remove(&atom_idx);
         result

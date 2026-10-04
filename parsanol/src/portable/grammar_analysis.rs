@@ -373,7 +373,25 @@ impl<'a> GrammarAnalyzer<'a> {
             | Atom::Custom { .. }
             | Atom::Capture { .. }
             | Atom::Scope { .. }
-            | Atom::Dynamic { .. } => None,
+            | Atom::Dynamic { .. }
+            | Atom::StateSet { value: Some(_), .. }
+            | Atom::StateSet { value: None, expr: None, .. }
+            | Atom::StateMatch { .. }
+            | Atom::StateSwitch { .. }
+            | Atom::CustomRef { .. } => None,
+            Atom::StateSet { expr: Some(atom), .. } => {
+                if *atom == target_atom {
+                    Some(vec![start_atom, *atom])
+                } else if !visited.contains(atom) {
+                    self.find_left_recursive_path(*atom, target_atom, visited)
+                        .map(|mut path| {
+                            path.insert(0, start_atom);
+                            path
+                        })
+                } else {
+                    None
+                }
+            }
         }
     }
 
@@ -420,7 +438,12 @@ impl<'a> GrammarAnalyzer<'a> {
             Atom::Cut => false,
             Atom::Custom { .. } => false, // Custom atoms are not nullable by default
             Atom::Capture { atom, .. } | Atom::Scope { atom } => self.is_nullable(*atom),
-            Atom::Dynamic { .. } => false, // Dynamic atoms are not nullable by default
+            Atom::Dynamic { .. }
+            | Atom::StateSet { expr: Some(_), .. }
+            | Atom::StateMatch { .. }
+            | Atom::StateSwitch { .. }
+            | Atom::CustomRef { .. } => false, // Ruby-tier state atoms are not nullable
+            Atom::StateSet { value: Some(_), .. } | Atom::StateSet { value: None, expr: None, .. } => true,
         }
     }
 
@@ -456,7 +479,11 @@ impl<'a> GrammarAnalyzer<'a> {
             | Atom::Re { .. }
             | Atom::Cut
             | Atom::Custom { .. }
-            | Atom::Dynamic { .. } => {}
+            | Atom::Dynamic { .. }
+            | Atom::StateSet { .. }
+            | Atom::StateMatch { .. }
+            | Atom::StateSwitch { .. }
+            | Atom::CustomRef { .. } => {}
             Atom::Sequence { atoms } | Atom::Alternative { atoms } => {
                 for &child in atoms {
                     self.collect_reachable(child, reachable);

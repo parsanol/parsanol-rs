@@ -363,6 +363,24 @@ fn remap_atom(atom: &Atom, offset: usize) -> Atom {
         Atom::Dynamic { callback_id } => Atom::Dynamic {
             callback_id: *callback_id,
         },
+        Atom::StateSet {
+            slot,
+            value,
+            expr,
+        } => Atom::StateSet {
+            slot: slot.clone(),
+            value: value.clone(),
+            expr: expr.map(|a| a + offset),
+        },
+        Atom::StateMatch { slot } => Atom::StateMatch {
+            slot: slot.clone(),
+        },
+        Atom::StateSwitch { slot, arms, default } => Atom::StateSwitch {
+            slot: slot.clone(),
+            arms: arms.clone(),
+            default: default.clone(),
+        },
+        Atom::CustomRef { name } => Atom::CustomRef { name: name.clone() },
         Atom::Custom { id } => Atom::Custom { id: *id },
     }
 }
