@@ -375,11 +375,17 @@ impl<'a> GrammarAnalyzer<'a> {
             | Atom::Scope { .. }
             | Atom::Dynamic { .. }
             | Atom::StateSet { value: Some(_), .. }
-            | Atom::StateSet { value: None, expr: None, .. }
+            | Atom::StateSet {
+                value: None,
+                expr: None,
+                ..
+            }
             | Atom::StateMatch { .. }
             | Atom::StateSwitch { .. }
             | Atom::CustomRef { .. } => None,
-            Atom::StateSet { expr: Some(atom), .. } => {
+            Atom::StateSet {
+                expr: Some(atom), ..
+            } => {
                 if *atom == target_atom {
                     Some(vec![start_atom, *atom])
                 } else if !visited.contains(atom) {
@@ -443,7 +449,12 @@ impl<'a> GrammarAnalyzer<'a> {
             | Atom::StateMatch { .. }
             | Atom::StateSwitch { .. }
             | Atom::CustomRef { .. } => false, // Ruby-tier state atoms are not nullable
-            Atom::StateSet { value: Some(_), .. } | Atom::StateSet { value: None, expr: None, .. } => true,
+            Atom::StateSet { value: Some(_), .. }
+            | Atom::StateSet {
+                value: None,
+                expr: None,
+                ..
+            } => true,
         }
     }
 

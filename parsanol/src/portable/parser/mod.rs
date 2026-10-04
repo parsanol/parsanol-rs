@@ -777,7 +777,9 @@ impl<'a> PortableParser<'a> {
                 Atom::Capture { name, atom } => self.parse_capture(name, *atom, pos, consume_all),
                 Atom::Scope { atom } => self.parse_scope(*atom, pos, consume_all),
                 Atom::Dynamic { callback_id } => self.parse_dynamic(*callback_id, pos),
-                Atom::StateSet { .. } | Atom::StateMatch { .. } | Atom::StateSwitch { .. }
+                Atom::StateSet { .. }
+                | Atom::StateMatch { .. }
+                | Atom::StateSwitch { .. }
                 | Atom::CustomRef { .. } => Err(ParseError::InvalidGrammar {
                     reason: "PARG runtime-state/custom atoms are Ruby-tier: this \
                              artifact carries a `dynamic` flag and parses on a \

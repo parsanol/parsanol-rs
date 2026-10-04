@@ -418,7 +418,9 @@ impl Compiler {
             Atom::Scope { atom } => self.compile_scope(atom),
             Atom::Dynamic { callback_id } => self.compile_dynamic(callback_id),
             Atom::Custom { id } => self.compile_custom(id),
-            Atom::StateSet { .. } | Atom::StateMatch { .. } | Atom::StateSwitch { .. }
+            Atom::StateSet { .. }
+            | Atom::StateMatch { .. }
+            | Atom::StateSwitch { .. }
             | Atom::CustomRef { .. } => Err(CompileError::UnsupportedFeature {
                 feature: "ruby-tier state/custom atom (parsanol-ruby#129)".to_string(),
             }),
