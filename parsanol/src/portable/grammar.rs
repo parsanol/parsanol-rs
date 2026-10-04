@@ -366,7 +366,10 @@ impl Grammar {
                 Atom::Capture { .. } => "capture",
                 Atom::Scope { .. } => "scope",
                 Atom::Dynamic { .. } => "dynamic",
-                Atom::StateSet { .. } | Atom::StateMatch { .. } | Atom::StateSwitch { .. } | Atom::CustomRef { .. } => "ruby-state",
+                Atom::StateSet { .. }
+                | Atom::StateMatch { .. }
+                | Atom::StateSwitch { .. }
+                | Atom::CustomRef { .. } => "ruby-state",
                 Atom::Custom { .. } => "custom",
             };
             *atom_types.entry(ty).or_insert(0) += 1;
@@ -385,7 +388,16 @@ impl Grammar {
                 .any(|a| matches!(a, Atom::Lookahead { .. })),
             has_captures: self.atoms.iter().any(|a| matches!(a, Atom::Capture { .. })),
             has_scopes: self.atoms.iter().any(|a| matches!(a, Atom::Scope { .. })),
-            has_dynamic: self.atoms.iter().any(|a| matches!(a, Atom::Dynamic { .. } | Atom::StateSet { .. } | Atom::StateMatch { .. } | Atom::StateSwitch { .. } | Atom::CustomRef { .. })),
+            has_dynamic: self.atoms.iter().any(|a| {
+                matches!(
+                    a,
+                    Atom::Dynamic { .. }
+                        | Atom::StateSet { .. }
+                        | Atom::StateMatch { .. }
+                        | Atom::StateSwitch { .. }
+                        | Atom::CustomRef { .. }
+                )
+            }),
         }
     }
 
