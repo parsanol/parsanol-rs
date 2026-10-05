@@ -148,12 +148,12 @@
             },
             {
               "Entity": {
-                "atom": 30
+                "atom": 29
               }
             },
             {
               "Entity": {
-                "atom": 24
+                "atom": 23
               }
             },
             {
@@ -162,16 +162,8 @@
               }
             },
             {
-              "Sequence": {
-                "atoms": [
-                  19,
-                  22
-                ]
-              }
-            },
-            {
               "Repetition": {
-                "atom": 23,
+                "atom": 22,
                 "min": 1,
                 "max": null,
                 "tag": "Repetition"
@@ -179,7 +171,7 @@
             },
             {
               "Entity": {
-                "atom": 28
+                "atom": 27
               }
             },
             {
@@ -191,13 +183,13 @@
               "Sequence": {
                 "atoms": [
                   19,
-                  26
+                  25
                 ]
               }
             },
             {
               "Repetition": {
-                "atom": 27,
+                "atom": 26,
                 "min": 1,
                 "max": null,
                 "tag": "Repetition"
@@ -207,19 +199,19 @@
               "Alternative": {
                 "atoms": [
                   21,
-                  25
+                  24
                 ]
               }
             },
             {
               "Named": {
                 "name": "item",
-                "atom": 29
+                "atom": 28
               }
             },
             {
               "Entity": {
-                "atom": 33
+                "atom": 32
               }
             },
             {
@@ -231,26 +223,28 @@
               "Sequence": {
                 "atoms": [
                   19,
-                  32
+                  31
                 ]
               }
             },
             {
               "Entity": {
-                "atom": 30
+                "atom": 29
               }
             },
             {
               "Sequence": {
                 "atoms": [
-                  31,
-                  34
+                  19,
+                  30,
+                  19,
+                  33
                 ]
               }
             },
             {
               "Repetition": {
-                "atom": 35,
+                "atom": 34,
                 "min": 0,
                 "max": null,
                 "tag": "Repetition"
@@ -259,28 +253,30 @@
             {
               "Sequence": {
                 "atoms": [
+                  19,
                   20,
-                  36
+                  19,
+                  35
                 ]
               }
             },
             {
               "Named": {
                 "name": "list",
-                "atom": 37
+                "atom": 36
               }
             },
             {
               "Sequence": {
                 "atoms": [
                   19,
-                  38,
+                  37,
                   19
                 ]
               }
             }
           ],
-          "root": 39
+          "root": 38
         },
         "bindings": []
       }
@@ -347,12 +343,18 @@
         "kind": "reject",
         "input": "!!!",
         "expect": {}
+      },
+      {
+        "entry": "document",
+        "kind": "reject",
+        "input": "foo bar",
+        "expect": {}
       }
     ],
     "docs": {},
-    "source": "grammar SkipParity version \"1\" {\n  skip = trivia\n  trivia = 1*( ( 1*\" \" ) / comment )\n  comment = \"(*\" *( comment / ( !\"*)\" ANY ) ) \"*)\"\n  word = ( 1*( ALPHA ) )\n  num = ( 1*( DIGIT ) )\n  sep = \",\"\n  item = ( word / num ) as item\n  list = ( item *( sep item ) ) as list\n  entry document: list\n  test { accept \"foo\" }\n  test { accept \"foo, bar\" }\n  test { accept \"foo ,bar\" }\n  test { accept \"(* note *) foo\" }\n  test { accept \"foo (* tail comment *)\" }\n  test { accept \"(* outer (* inner *) tail *) foo, bar (* end *)\" }\n  test { accept \"  foo  ,  bar  \" }\n  test { reject \"foo,\" }\n  test { reject \"!!!\" }\n}\n",
+    "source": "grammar SkipParity version \"1\" {\n  skip = trivia\n  trivia = 1*( ( 1*\" \" ) / comment )\n  comment = \"(*\" *( comment / ( !\"*)\" ANY ) ) \"*)\"\n  atomic word = ( 1*( ALPHA ) )\n  num = ( 1*( DIGIT ) )\n  sep = \",\"\n  item = ( word / num ) as item\n  list = ( item *( sep item ) ) as list\n  entry document: list\n  test { accept \"foo\" }\n  test { accept \"foo, bar\" }\n  test { accept \"foo ,bar\" }\n  test { accept \"(* note *) foo\" }\n  test { accept \"foo (* tail comment *)\" }\n  test { accept \"(* outer (* inner *) tail *) foo, bar (* end *)\" }\n  test { accept \"  foo  ,  bar  \" }\n  test { reject \"foo,\" }\n  test { reject \"!!!\" }\n  test { reject \"foo bar\" }\n}\n",
     "skip": "trivia",
-    "checksum": "sha256:74b7568317b3b982a8c078e880ee606c5957db5fbaf6f0af0822f6df8960ea1b"
+    "checksum": "sha256:642fed0bdc6b711393341e5efc81b36d9d21430b2e7d03ffdb0c6bd9e57fa7ff"
   },
   "entry": "document",
   "grammar": "SkipParity"
