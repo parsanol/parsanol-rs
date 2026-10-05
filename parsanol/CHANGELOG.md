@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Other
 
+- Release v0.11.0 by @[object]
+- Cargo fmt the state-atom round by @[object]
+- Runtime-state and custom-ref atom variants ([#129](https://github.com/parsanol/parsanol-rs/pull/129)) by @[object]
+
+### Other
+
 - Cargo fmt the state-atom round by @[object]
 - Runtime-state and custom-ref atom variants ([#129](https://github.com/parsanol/parsanol-rs/pull/129)) by @[object]
 
