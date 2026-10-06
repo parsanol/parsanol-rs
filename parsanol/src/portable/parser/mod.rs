@@ -207,6 +207,12 @@ pub struct PortableParser<'a> {
     /// Injected-trivia nesting depth (rs#172): failures inside trivia
     /// atoms are not recorded.
     trivia_depth: u32,
+    /// Captured skip trivia awaiting attachment (parsanol-ruby#152):
+    /// comment-shaped units recorded by `Atom::TriviaCapture`; the
+    /// next successful Named capture drains and attaches them under
+    /// `comments:`. Backtracking restores the drained prefix on
+    /// failure (parse_named snapshots before trying).
+    pending_trivia: Vec<(String, String, u32)>,
     /// Dynamic dispatch outcome replay (rs#174): outer backtracking
     /// re-invokes the same dispatch at the same position with the same
     /// captures; each re-invocation re-parsed its fragment with a fresh
@@ -329,6 +335,7 @@ impl<'a> PortableParser<'a> {
             capture_state: CaptureState::new(),
             dyn_cache: std::collections::HashMap::new(),
             trivia_depth: 0,
+            pending_trivia: Vec::new(),
             dynamic_outcomes: std::collections::HashMap::new(),
             rollback_on_failure,
             dynamic_dependent: dynamic_dependence(grammar),
@@ -367,6 +374,7 @@ impl<'a> PortableParser<'a> {
             capture_state: CaptureState::new(),
             dyn_cache: std::collections::HashMap::new(),
             trivia_depth: 0,
+            pending_trivia: Vec::new(),
             dynamic_outcomes: std::collections::HashMap::new(),
             rollback_on_failure: false,
             dynamic_dependent: dynamic_dependence(grammar),
@@ -867,6 +875,35 @@ impl<'a> PortableParser<'a> {
                     let result = self.try_atom_impl(*atom, pos, consume_all);
                     self.trivia_depth -= 1;
                     let result = result?;
+                    Ok(ParseResult {
+                        value: AstNode::Nil,
+                        end_pos: result.end_pos,
+                        capture_state: None,
+                    })
+                }
+                Atom::TriviaCapture { atom, rules } => {
+                    // parsanol-ruby#152: Trivia semantics plus a
+                    // recording pass — comment-shaped units (matched
+                    // text leading with a declared marker) go to the
+                    // pending channel for the next Named capture.
+                    self.trivia_depth += 1;
+                    let result = self.try_atom_impl(*atom, pos, consume_all);
+                    self.trivia_depth -= 1;
+                    let result = result?;
+                    if result.end_pos > pos {
+                        let text = &self.input[pos..result.end_pos];
+                        let stripped = text.trim_start();
+                        if let Some((_, label)) = rules
+                            .iter()
+                            .find(|(marker, _)| stripped.starts_with(marker.as_str()))
+                        {
+                            self.pending_trivia.push((
+                                label.clone(),
+                                stripped.trim().to_string(),
+                                pos as u32,
+                            ));
+                        }
+                    }
                     Ok(ParseResult {
                         value: AstNode::Nil,
                         end_pos: result.end_pos,
@@ -1527,7 +1564,54 @@ impl<'a> PortableParser<'a> {
         pos: usize,
         consume_all: bool,
     ) -> Result<ParseResult, ParseError> {
-        let result = self.try_atom_impl(atom_id, pos, consume_all)?;
+        let pending_before = self.pending_trivia.len();
+        let result = match self.try_atom_impl(atom_id, pos, consume_all) {
+            Ok(r) => r,
+            Err(e) => {
+                self.pending_trivia.truncate(pending_before);
+                return Err(e);
+            }
+        };
+        if !self.pending_trivia.is_empty() {
+            // take_pending_trivia parity (parsanol-ruby#152): ALL
+            // pending units attach to the next successful Named
+            // capture, including ones recorded by earlier sequence
+            // siblings — not only those recorded during the inner
+            // parse. pending_before above remains the restore point
+            // for the failure path only.
+            let taken: Vec<(String, String, u32)> = self.pending_trivia.drain(..).collect();
+            let units: Vec<AstNode> = taken
+                .into_iter()
+                .map(|(label, text, _offset)| {
+                    let text_node = self.arena.intern_string(&text);
+                    let (pool_idx, len) = self.arena.store_hash(&[(&label, text_node)]);
+                    AstNode::Hash {
+                        pool_index: pool_idx,
+                        length: len,
+                    }
+                })
+                .collect();
+            // A `:repetition`-tagged array of hash units survives the
+            // host-side flattening as an array (flatten_repetition
+            // selects hash items), matching the Ruby engine's
+            // comments list shape (parsanol-ruby#152 differential).
+            let (arr_idx, arr_len) = self.arena.store_tagged_array(":repetition", &units);
+            let comments = AstNode::Array {
+                pool_index: arr_idx,
+                length: arr_len,
+            };
+            let (pool_idx, len) = self
+                .arena
+                .store_hash(&[(name, result.value), ("comments", comments)]);
+            return Ok(ParseResult {
+                value: AstNode::Hash {
+                    pool_index: pool_idx,
+                    length: len,
+                },
+                end_pos: result.end_pos,
+                capture_state: None,
+            });
+        }
         let (pool_idx, len) = self.arena.store_hash(&[(name, result.value)]);
         Ok(ParseResult {
             value: AstNode::Hash {
@@ -1796,6 +1880,11 @@ impl<'a> PortableParser<'a> {
         // trees the parent's blocks would (capture parity).
         let seed = self.capture_state.clone_visible();
         temp_parser.capture_state = seed.clone_visible();
+        // The pending-trivia channel crosses the fragment boundary
+        // (context parity): units captured before the dispatch attach
+        // to Named captures inside it; whatever remains unattached
+        // comes back to the parent.
+        temp_parser.pending_trivia = std::mem::take(&mut self.pending_trivia);
 
         let result = temp_parser.try_atom_impl(temp_atom_id, pos, false)?;
 
@@ -1837,7 +1926,9 @@ impl<'a> PortableParser<'a> {
         // The subtree was built in the fragment's arena; pool-backed
         // nodes (arrays, hashes, interned strings) must be adopted
         // into the parent arena or they dangle (GH-76).
+        let leftover_pending = std::mem::take(&mut temp_parser.pending_trivia);
         let value = self.arena.adopt_node(&temp_arena, &result.value);
+        self.pending_trivia = leftover_pending;
 
         Ok(ParseResult {
             value,

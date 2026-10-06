@@ -340,6 +340,7 @@ impl<'a> GrammarAnalyzer<'a> {
             Atom::Named { atom, .. }
             | Atom::Ignore { atom }
             | Atom::Trivia { atom }
+            | Atom::TriviaCapture { atom, .. }
             | Atom::Lookahead { atom, .. } => {
                 if *atom == target_atom {
                     Some(vec![start_atom, *atom])
@@ -445,6 +446,7 @@ impl<'a> GrammarAnalyzer<'a> {
             | Atom::Entity { atom }
             | Atom::Ignore { atom }
             | Atom::Trivia { atom }
+            | Atom::TriviaCapture { atom, .. }
             | Atom::Lookahead { atom, .. } => self.is_nullable(*atom),
             Atom::Cut => false,
             Atom::Custom { .. } => false, // Custom atoms are not nullable by default
@@ -510,6 +512,7 @@ impl<'a> GrammarAnalyzer<'a> {
             | Atom::Entity { atom }
             | Atom::Ignore { atom }
             | Atom::Trivia { atom }
+            | Atom::TriviaCapture { atom, .. }
             | Atom::Lookahead { atom, .. }
             | Atom::Capture { atom, .. }
             | Atom::Scope { atom } => {

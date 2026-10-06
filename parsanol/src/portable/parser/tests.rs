@@ -997,3 +997,89 @@ mod fused_neg_scan_tests {
         assert!(p.parse().is_err());
     }
 }
+
+#[cfg(test)]
+mod trivia_capture_tests {
+    use super::super::{AstArena, AstNode, Grammar, PortableParser};
+
+    // The injected skip wrapper (parsanol-ruby#152): (spaces /
+    // line_comment)+ under a capturing TriviaCapture, ahead of a
+    // Named word. Only comment-shaped units record; the recorded
+    // units attach to the next successful Named capture under
+    // `comments:`.
+    const CAPTURING_SKIP: &str = r#"{"atoms":[
+        {"Re":{"pattern":"[ \n]"}},
+        {"Repetition":{"atom":0,"min":1,"max":null,"tag":"Repetition"}},
+        {"Str":{"pattern":"//"}},
+        {"Re":{"pattern":"[^\n]*"}},
+        {"Sequence":{"atoms":[2,3]}},
+        {"Alternative":{"atoms":[1,4]}},
+        {"TriviaCapture":{"atom":5,"rules":[["//","line_comment"]]}},
+        {"Repetition":{"atom":6,"min":0,"max":null,"tag":"Repetition"}},
+        {"Re":{"pattern":"[a-z]+"}},
+        {"Named":{"name":"word","atom":8}},
+        {"Sequence":{"atoms":[7,9]}}
+    ],"root":10}"#;
+
+    fn resolve(a: &AstArena, n: &AstNode) -> String {
+        match n {
+            AstNode::Nil => "null".to_string(),
+            AstNode::Bool(b) => b.to_string(),
+            AstNode::Int(i) => i.to_string(),
+            AstNode::Float(f) => f.to_string(),
+            AstNode::StringRef { pool_index } => {
+                format!("{:?}", a.get_string(*pool_index as usize))
+            }
+            AstNode::InputRef { offset, length } => format!(
+                "{:?}",
+                &a.get_input()[*offset as usize..(*offset + *length) as usize]
+            ),
+            AstNode::Array { pool_index, length } => {
+                let items = a.get_array(*pool_index as usize, *length as usize);
+                let inner: Vec<String> = items.iter().map(|i| resolve(a, i)).collect();
+                format!("[{}]", inner.join(","))
+            }
+            AstNode::Hash { pool_index, length } => {
+                let pairs = a.get_hash_items(*pool_index as usize, *length as usize);
+                let inner: Vec<String> = pairs
+                    .iter()
+                    .map(|(k, v)| format!("{:?}:{}", k, resolve(a, v)))
+                    .collect();
+                format!("{{{}}}", inner.join(","))
+            }
+        }
+    }
+
+    fn parse_tree(grammar_json: &str, input: &str) -> String {
+        let g = Grammar::from_json(grammar_json).unwrap();
+        let mut arena = AstArena::for_input(input.len());
+        arena.set_input(input.to_string());
+        let mut p = PortableParser::new(&g, input, &mut arena);
+        let ast = p.parse().expect("parse succeeds");
+        resolve(&arena, &ast)
+    }
+
+    #[test]
+    fn comment_trivia_attaches_to_next_named_capture() {
+        assert_eq!(
+            parse_tree(CAPTURING_SKIP, "  // note\nbeta"),
+            r#"[":sequence",[":repetition",null,null,null],{"word":"beta","comments":[":repetition",{"line_comment":"// note"}]}]"#
+        );
+    }
+
+    #[test]
+    fn whitespace_trivia_records_nothing() {
+        assert_eq!(
+            parse_tree(CAPTURING_SKIP, "   gamma"),
+            r#"[":sequence",[":repetition",null],{"word":"gamma"}]"#
+        );
+    }
+
+    #[test]
+    fn no_trivia_leaves_v1_shape_unchanged() {
+        assert_eq!(
+            parse_tree(CAPTURING_SKIP, "delta"),
+            r#"[":sequence",[":repetition"],{"word":"delta"}]"#
+        );
+    }
+}
