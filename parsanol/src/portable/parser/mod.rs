@@ -681,31 +681,6 @@ impl<'a> PortableParser<'a> {
             if self.dyn_cache.len() > 2_000_000 {
                 self.dyn_cache.clear();
             }
-            {
-                use std::sync::atomic::{AtomicU64, Ordering};
-                static N: AtomicU64 = AtomicU64::new(0);
-                static H: AtomicU64 = AtomicU64::new(0);
-                static V: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(-1);
-                static CH: AtomicU64 = AtomicU64::new(0);
-                let total = N.fetch_add(1, Ordering::Relaxed) + 1;
-                let hit = self.dyn_cache.contains_key(&key);
-                if hit {
-                    H.fetch_add(1, Ordering::Relaxed);
-                }
-                let vi = key.2 as i64;
-                let prev = V.swap(vi, Ordering::Relaxed);
-                if prev != vi && prev >= 0 {
-                    CH.fetch_add(1, Ordering::Relaxed);
-                }
-                if total % 2_000_000 == 0 {
-                    eprintln!(
-                        "DYNMEMO total={} hits={} version_changes={}",
-                        total,
-                        H.load(Ordering::Relaxed),
-                        CH.load(Ordering::Relaxed)
-                    );
-                }
-            }
             if let Some(entry) = self.dyn_cache.get(&key) {
                 let (success, end_pos, node) = (entry.success, entry.end_pos, entry.to_node());
                 return if success {
@@ -1682,9 +1657,15 @@ impl<'a> PortableParser<'a> {
         // Outcome replay (rs#174): the same dispatch at the same
         // position under the same captures replays its recorded end
         // position and subtree (None = failed dispatch) instead of
-        // re-running a fresh-memo fragment parse.
-        let version = self.capture_state.version();
-        let outcome_key = (callback_id, pos, version);
+        // re-running a fresh-memo fragment parse. The key uses the
+        // capture-state CONTENT signature, not a mutation counter:
+        // backtracking churns the counter on every store while the
+        // visible captures converge back to identical content, and a
+        // counter key would miss on every attempt (the table-grammar
+        // blowup). Two states with identical visible captures are
+        // indistinguishable to a deterministic block.
+        let capture_fp = super::dynamic::capture_signature(&self.capture_state, self.input);
+        let outcome_key = (callback_id, pos, capture_fp);
         if let Some(outcome) = self.dynamic_outcomes.get(&outcome_key) {
             return match outcome {
                 Some((end_pos, value)) => {
