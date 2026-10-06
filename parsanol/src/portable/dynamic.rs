@@ -411,7 +411,10 @@ pub struct CachedFragment {
     /// exponentially (coradoc table: 16GB RSS / minutes). The outcome
     /// is arena-tagged — only the storing arena replays it, other
     /// arenas re-parse.
-    pub outcome: Option<DynamicOutcome>,
+    /// Cached parse outcome for this dispatch (rs#174): replaying it
+    /// skips the fresh empty-memo fragment re-parse. Module-private —
+    /// a new pub field would break struct literals.
+    outcome: Option<DynamicOutcome>,
 }
 
 /// A cached dynamic-fragment parse result. `value` indexes the arena

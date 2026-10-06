@@ -286,19 +286,17 @@ impl DenseCache {
     pub fn for_input(input_len: usize, atom_count: usize) -> Self {
         // For large grammars, we need significantly more cache capacity
         // because each position may try many atoms due to alternatives
-        let estimated = if atom_count > 100 {
-            // Large grammar: estimate based on actual atom count
-            // Not all atoms are tried at every position, so use a fraction
-            // but ensure minimum capacity based on atom count
-            let base = (input_len as f64 * 0.5) as usize; // ~50% of positions
-            let per_pos = (atom_count as f64 * 0.1).ceil() as usize; // ~10% of atoms per pos
-            (base * per_pos).max(atom_count * 2) // ensure room for at least 2x atoms
-        } else {
-            // Small grammar: simple heuristic
-            (input_len / 10) * atom_count.max(3)
-        };
+        // The full packrat surface is input_len x atom_count entries;
+        // under-sizing it makes the recycle-oldest cap evict entries the
+        // backtracking parse is about to re-request, which resurfaces
+        // exponential re-exploration through eviction (rs#174: a 4-cell
+        // AsciiDoc table over a 1.7k-atom grammar got a ~3k-entry cache
+        // and burned minutes at 16GB where the full surface is ~43k
+        // entries / ~2MB). Size for the full surface, clamped: small
+        // inputs are cheap to cover completely, large inputs get a
+        // multi-million-entry ceiling (~100-200MB worst case).
+        let estimated = (input_len.saturating_mul(atom_count)).clamp(4096, 8_000_000);
 
-        // Clamp to reasonable bounds, but with higher minimum for large grammars
         let min_capacity = if atom_count > 100 { 10000 } else { 1000 };
         Self::new(estimated.clamp(min_capacity, 2_000_000))
     }
