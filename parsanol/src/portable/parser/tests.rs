@@ -848,7 +848,9 @@ mod fused_neg_scan_tests {
             }
             fn resolve_fragment(&self, _ctx: &DynamicContext) -> Option<(Grammar, usize)> {
                 let mut g = Grammar::new();
-                let bang = g.add_atom(Atom::Str { pattern: "!".to_string() });
+                let bang = g.add_atom(Atom::Str {
+                    pattern: "!".to_string(),
+                });
                 let guard = g.add_atom(Atom::Lookahead {
                     atom: bang,
                     positive: false,
@@ -856,7 +858,9 @@ mod fused_neg_scan_tests {
                 let row = g.add_atom(Atom::Dynamic {
                     callback_id: CELL_CB.load(std::sync::atomic::Ordering::Relaxed),
                 });
-                let item = g.add_atom(Atom::Sequence { atoms: vec![guard, row] });
+                let item = g.add_atom(Atom::Sequence {
+                    atoms: vec![guard, row],
+                });
                 let root = g.add_atom(Atom::Repetition {
                     atom: item,
                     min: 1,
@@ -879,8 +883,12 @@ mod fused_neg_scan_tests {
                 let content = g.add_atom(Atom::Dynamic {
                     callback_id: CONTENT_CB.load(std::sync::atomic::Ordering::Relaxed),
                 });
-                let sep = g.add_atom(Atom::Str { pattern: ",".to_string() });
-                let root = g.add_atom(Atom::Sequence { atoms: vec![content, sep] });
+                let sep = g.add_atom(Atom::Str {
+                    pattern: ",".to_string(),
+                });
+                let root = g.add_atom(Atom::Sequence {
+                    atoms: vec![content, sep],
+                });
                 g.root = root;
                 Some((g, root))
             }
@@ -894,18 +902,26 @@ mod fused_neg_scan_tests {
             }
             fn resolve_fragment(&self, _ctx: &DynamicContext) -> Option<(Grammar, usize)> {
                 let mut g = Grammar::new();
-                let bang = g.add_atom(Atom::Str { pattern: "!".to_string() });
+                let bang = g.add_atom(Atom::Str {
+                    pattern: "!".to_string(),
+                });
                 let g1 = g.add_atom(Atom::Lookahead {
                     atom: bang,
                     positive: false,
                 });
-                let comma = g.add_atom(Atom::Str { pattern: ",".to_string() });
+                let comma = g.add_atom(Atom::Str {
+                    pattern: ",".to_string(),
+                });
                 let g2 = g.add_atom(Atom::Lookahead {
                     atom: comma,
                     positive: false,
                 });
-                let any = g.add_atom(Atom::Re { pattern: "(?s).".to_string() });
-                let item = g.add_atom(Atom::Sequence { atoms: vec![g1, g2, any] });
+                let any = g.add_atom(Atom::Re {
+                    pattern: "(?s).".to_string(),
+                });
+                let item = g.add_atom(Atom::Sequence {
+                    atoms: vec![g1, g2, any],
+                });
                 let root = g.add_atom(Atom::Repetition {
                     atom: item,
                     min: 0,
@@ -918,27 +934,39 @@ mod fused_neg_scan_tests {
         }
 
         static ROW_CB: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(u64::MAX);
-        static CELL_CB: std::sync::atomic::AtomicU64 =
-            std::sync::atomic::AtomicU64::new(u64::MAX);
+        static CELL_CB: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(u64::MAX);
         static CONTENT_CB: std::sync::atomic::AtomicU64 =
             std::sync::atomic::AtomicU64::new(u64::MAX);
-        ROW_CB.store(register_dynamic_callback(Box::new(RowsFrag)), std::sync::atomic::Ordering::Relaxed);
-        CELL_CB.store(register_dynamic_callback(Box::new(RowFrag)), std::sync::atomic::Ordering::Relaxed);
-        CONTENT_CB.store(register_dynamic_callback(Box::new(ContentFrag)), std::sync::atomic::Ordering::Relaxed);
+        ROW_CB.store(
+            register_dynamic_callback(Box::new(RowsFrag)),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        CELL_CB.store(
+            register_dynamic_callback(Box::new(RowFrag)),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        CONTENT_CB.store(
+            register_dynamic_callback(Box::new(ContentFrag)),
+            std::sync::atomic::Ordering::Relaxed,
+        );
 
         let row_cb = ROW_CB.load(std::sync::atomic::Ordering::Relaxed);
-        let cell_cb = CELL_CB.load(std::sync::atomic::Ordering::Relaxed);
-        let content_cb = CONTENT_CB.load(std::sync::atomic::Ordering::Relaxed);
 
         // root: Capture("d", "|") >> Dynamic(rows)
         let mut g = Grammar::new();
-        let bar = g.add_atom(Atom::Str { pattern: "|".to_string() });
+        let bar = g.add_atom(Atom::Str {
+            pattern: "|".to_string(),
+        });
         let cap = g.add_atom(Atom::Capture {
             name: "d".to_string(),
             atom: bar,
         });
-        let rows = g.add_atom(Atom::Dynamic { callback_id: row_cb });
-        let root = g.add_atom(Atom::Sequence { atoms: vec![cap, rows] });
+        let rows = g.add_atom(Atom::Dynamic {
+            callback_id: row_cb,
+        });
+        let root = g.add_atom(Atom::Sequence {
+            atoms: vec![cap, rows],
+        });
         g.root = root;
 
         let input = format!("|{}!", "a,".repeat(60));
