@@ -196,6 +196,14 @@ pub struct PortableParser<'a> {
     // ========================================================================
     /// Capture state for named captures
     capture_state: CaptureState,
+    /// Memo for dynamic-dependent atoms (rs#174): the dense cache
+    /// skips these (capture-context dependence, GH-76), which left
+    /// dynamic-heavy grammars — coradoc tables — fully un-memoized and
+    /// catastrophically backtracking. Keyed by the capture-state
+    /// version: entries never replay across an observable capture
+    /// change, which is the soundness the dense-cache skip existed
+    /// for.
+    dyn_cache: std::collections::HashMap<(u32, u16, u64, bool), CacheEntry>,
 
     /// Enable arena rollback on failed alternatives.
     /// This is set when the cache is effectively empty (no memoization),
@@ -310,6 +318,7 @@ impl<'a> PortableParser<'a> {
             cache,
             governor,
             capture_state: CaptureState::new(),
+            dyn_cache: std::collections::HashMap::new(),
             rollback_on_failure,
             dynamic_dependent: dynamic_dependence(grammar),
             snapshot_arena,
@@ -345,6 +354,7 @@ impl<'a> PortableParser<'a> {
             cache,
             governor,
             capture_state: CaptureState::new(),
+            dyn_cache: std::collections::HashMap::new(),
             rollback_on_failure: false,
             dynamic_dependent: dynamic_dependence(grammar),
             snapshot_arena: None,
@@ -639,10 +649,81 @@ impl<'a> PortableParser<'a> {
         //
         // Dynamic-dependent atoms are context-dependent: their outcome
         // varies with capture state, which the memo key ignores (GH-76).
-        if self.grammar.is_no_cache(atom_id)
-            || self.dynamic_dependent.get(atom_id).is_some_and(|&dep| dep)
         {
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static TOTAL: AtomicU64 = AtomicU64::new(0);
+            static LAST: AtomicU64 = AtomicU64::new(0);
+            let n = TOTAL.fetch_add(1, Ordering::Relaxed) + 1;
+            if n % 20_000_000 == 0 {
+                let last = LAST.swap(n, Ordering::Relaxed);
+                eprintln!("WALK total={} (last 20M in this window)", n);
+                let _ = last;
+            }
+            if n >= 60_000_000 {
+                eprintln!("ABORT 60M atom applications");
+                std::process::abort();
+            }
+        }
+        let dynamic_dependent = self.dynamic_dependent.get(atom_id).is_some_and(|&dep| dep);
+        if self.grammar.is_no_cache(atom_id) {
             return self.parse_atom_uncached(atom_id, pos, consume_all);
+        }
+        if dynamic_dependent {
+            // Capture-context-dependent (GH-76): memo keyed by the
+            // capture-state version. Within a stretch with no capture
+            // mutations the version is stable, so repeated exploration
+            // of the same (atom, position) replays — the packrat
+            // absorption the dense cache provides everywhere else.
+            let key = (
+                pos as u32,
+                atom_id as u16,
+                self.capture_state.version(),
+                consume_all,
+            );
+            if self.dyn_cache.len() > 2_000_000 {
+                self.dyn_cache.clear();
+            }
+            if let Some(entry) = self.dyn_cache.get(&key) {
+                let (success, end_pos, node) = (entry.success, entry.end_pos, entry.to_node());
+                return if success {
+                    if consume_all && end_pos as usize != self.input.len() {
+                        return Err(ParseError::Failed { position: pos });
+                    }
+                    Ok(ParseResult {
+                        value: node,
+                        end_pos: end_pos as usize,
+                        capture_state: None,
+                    })
+                } else {
+                    return Err(ParseError::Failed { position: pos });
+                };
+            }
+            let result = self.parse_atom_uncached(atom_id, pos, consume_all);
+            match &result {
+                Ok(r) => {
+                    let mut entry = CacheEntry::from_node(
+                        pos as u32,
+                        atom_id as u16,
+                        r.end_pos as u32,
+                        &r.value,
+                        self.arena.generation(),
+                    );
+                    entry.set_consume_all(consume_all);
+                    self.dyn_cache.insert(key, entry);
+                }
+                Err(_) => {
+                    let mut entry = CacheEntry::failure(pos as u32, atom_id as u16);
+                    entry.set_consume_all(consume_all);
+                    self.dyn_cache.insert(key, entry);
+                }
+            }
+            // consume_all is re-applied per application (mirrors the
+            // dense path's outside-the-memo check); the raw result is
+            // what gets cached.
+            if consume_all && result.as_ref().is_ok_and(|r| r.end_pos != self.input.len()) {
+                return Err(ParseError::Failed { position: pos });
+            }
+            return result;
         }
 
         // Check cache

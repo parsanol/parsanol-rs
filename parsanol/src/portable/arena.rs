@@ -62,6 +62,23 @@ pub struct AstArena {
     /// Generation counter for cache invalidation on rollback
     /// Incremented each time rollback is called
     generation: u32,
+    /// Process-unique identity (rs#174): dynamic-outcome caches tag
+    /// entries with the storing arena's id. Temp arenas are dropped
+    /// per dynamic invocation and addresses can be reused by later
+    /// allocations — an id never is, so a stale entry can never replay
+    /// AstNode indices into a different arena.
+    id: usize,
+}
+
+static ARENA_ID: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
+
+impl AstArena {
+    /// Process-unique identity for this arena (stable across clones
+    /// and rollbacks; never reused by a later arena).
+    #[inline]
+    pub fn id(&self) -> usize {
+        self.id
+    }
 }
 
 impl Default for AstArena {
@@ -88,6 +105,7 @@ impl AstArena {
             hash_pool: Vec::with_capacity(capacity),
             input: None,
             generation: 0,
+            id: ARENA_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         }
     }
 
@@ -120,6 +138,7 @@ impl AstArena {
             array_pool: Vec::with_capacity(estimated_nodes * 2),
             hash_pool: Vec::with_capacity(estimated_nodes),
             input: None,
+            id: ARENA_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             generation: 0,
         }
     }

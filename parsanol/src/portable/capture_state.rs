@@ -240,6 +240,11 @@ pub struct CaptureState {
     scope_stack: Vec<usize>,
     /// Current scope depth (for overflow protection)
     depth: usize,
+    /// Observable-state version (rs#174): bumped whenever a capture
+    /// store/shadow/restore changes what dynamic blocks would observe.
+    /// Memo keys for dynamic-dependent atoms carry this so a cached
+    /// outcome can never replay across a capture-state change.
+    version: u64,
 }
 
 impl Default for CaptureState {
@@ -264,6 +269,7 @@ impl CaptureState {
             capture_order: Vec::with_capacity(capacity),
             scope_stack: Vec::with_capacity(16),
             depth: 0,
+            version: 0,
         }
     }
 
@@ -283,14 +289,40 @@ impl CaptureState {
             self.captures.insert(name.to_string(), value);
             self.capture_order
                 .push(CaptureEntry::Shadow(name.to_string(), old_value, old_node));
+            self.version = self.version.wrapping_add(1);
             false
         } else {
             // New capture
             self.nodes.remove(name);
             self.captures.insert(name.to_string(), value);
             self.capture_order.push(CaptureEntry::New(name.to_string()));
+            self.version = self.version.wrapping_add(1);
             true
         }
+    }
+
+    /// A copy of the VISIBLE capture state for read-only consumers
+    /// (dynamic-block contexts, rs#174): the undo log and scope stack
+    /// are not part of what readers observe, and they are the parts
+    /// that grow — cloning them per dynamic invocation made capture
+    /// churn quadratic in memory and time. Mutating methods on the
+    /// copy restart a fresh log from the current visible state, which
+    /// is exactly what an independent owner needs.
+    pub fn clone_visible(&self) -> CaptureState {
+        CaptureState {
+            captures: self.captures.clone(),
+            nodes: self.nodes.clone(),
+            capture_order: Vec::new(),
+            scope_stack: Vec::new(),
+            depth: 0,
+            version: self.version,
+        }
+    }
+
+    /// Observable-state version for memo keys (rs#174).
+    #[inline]
+    pub fn version(&self) -> u64 {
+        self.version
     }
 
     /// Store a named capture together with its parsed subtree
@@ -423,6 +455,7 @@ impl CaptureState {
         // Remove/restore captures added in this scope
         for _ in 0..removed_count {
             if let Some(entry) = self.capture_order.pop() {
+                self.version = self.version.wrapping_add(1);
                 match entry {
                     CaptureEntry::New(name) => {
                         self.captures.remove(&name);
@@ -472,6 +505,7 @@ impl CaptureState {
         // Remove any captures added after the snapshot (at root level)
         while self.capture_order.len() > snapshot.capture_count {
             if let Some(entry) = self.capture_order.pop() {
+                self.version = self.version.wrapping_add(1);
                 match entry {
                     CaptureEntry::New(name) => {
                         self.captures.remove(&name);
