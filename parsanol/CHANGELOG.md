@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Other
 
+- Remove leftover diagnostic abort: 60M atom-application cap kills legitimate workloads by @[object]
+- Outcome field is module-private (pub field = breaking); include DenseCache sizing by @[object]
+- Native engine: memoize dynamic-dependent atoms and dynamic outcomes by @[object]
+- Skip parity fixture: regenerated with atomic token rule by @[object]
+- Skip-trivia parity gate: replay the Ruby skip suite through the engine by @[object]
+- Release v0.11.0 by @[object]
+
+### Other
+
 - Release v0.11.0 by @[object]
 - Cargo fmt the state-atom round by @[object]
 - Runtime-state and custom-ref atom variants ([#129](https://github.com/parsanol/parsanol-rs/pull/129)) by @[object]
