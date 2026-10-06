@@ -872,6 +872,7 @@ impl<'a> BytecodeVM<'a> {
                 use crate::portable::grammar::Grammar;
                 use crate::portable::parser::PortableParser;
 
+                let start_pos = self.position;
                 let _guard = match enter_dynamic() {
                     Some(g) => g,
                     None => {
@@ -883,8 +884,11 @@ impl<'a> BytecodeVM<'a> {
                 // Create context for callback. Capture subtrees ride
                 // inside the capture state so the block reads the
                 // parsed TREE (capture parity).
-                let ctx =
-                    DynamicContext::new(self.input_str, self.position, self.capture_state.clone());
+                let ctx = DynamicContext::new(
+                    self.input_str,
+                    self.position,
+                    self.capture_state.clone_visible(),
+                );
 
                 // Dispatch cache (parsanol-ruby#80): a deterministic
                 // block's fragment is a pure function of (input, pos,
@@ -961,6 +965,32 @@ impl<'a> BytecodeVM<'a> {
                         }
                     };
 
+                // Outcome replay (rs#174): when this exact dispatch
+                // was already parsed under this arena, reuse the
+                // recorded end position and value instead of re-running
+                // a fresh empty-memo fragment parse. Outer backtracking
+                // re-invokes dynamics at the same positions
+                // exponentially; the re-parse was the whole cost
+                // (coradoc table: minutes / 16GB).
+                let arena_tag = self.arena.id();
+                eprintln!("DYN invoke cb={} pos={}", callback_id, self.position);
+                if let Some(outcome) = crate::portable::dynamic::cached_dynamic_outcome(
+                    *callback_id,
+                    self.position,
+                    &self.capture_state,
+                    self.input_str,
+                    arena_tag,
+                ) {
+                    if outcome.ok {
+                        eprintln!("DYN outcome HIT ok end={}", outcome.end_pos);
+                        self.position = outcome.end_pos;
+                        self.value_stack.push(outcome.value);
+                        return Ok(ExecutionResult::Continue);
+                    }
+                    self.track_failure();
+                    return Ok(ExecutionResult::Fail);
+                }
+
                 // Create temporary arena
                 let mut temp_arena = AstArena::for_input(self.input_str.len());
 
@@ -989,10 +1019,34 @@ impl<'a> BytecodeVM<'a> {
                         // the VM arena before the value joins the stack
                         // (GH-76 cross-arena fix).
                         let value = self.arena.adopt_node(&temp_arena, &result.value);
+                        crate::portable::dynamic::store_dynamic_outcome(
+                            *callback_id,
+                            start_pos,
+                            &self.capture_state,
+                            self.input_str,
+                            crate::portable::dynamic::DynamicOutcome {
+                                end_pos: result.end_pos,
+                                value: value.clone(),
+                                arena_tag,
+                                ok: true,
+                            },
+                        );
                         self.value_stack.push(value);
                         Ok(ExecutionResult::Continue)
                     }
                     Err(_) => {
+                        crate::portable::dynamic::store_dynamic_outcome(
+                            *callback_id,
+                            start_pos,
+                            &self.capture_state,
+                            self.input_str,
+                            crate::portable::dynamic::DynamicOutcome {
+                                end_pos: self.position,
+                                value: crate::portable::ast::AstNode::Nil,
+                                arena_tag,
+                                ok: false,
+                            },
+                        );
                         self.track_failure();
                         Ok(ExecutionResult::Fail)
                     }

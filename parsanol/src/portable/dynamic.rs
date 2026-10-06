@@ -405,6 +405,31 @@ pub struct CachedFragment {
     /// Capture writes the block performed; replayed on cache hits so
     /// side effects match the uncached path exactly.
     pub writes: Vec<(String, String)>,
+    /// Cached parse outcome for this exact dispatch (rs#174): the
+    /// fragment grammar alone still forced a fresh empty-memo parse on
+    /// every invocation, and outer backtracking re-invoked dynamics
+    /// exponentially (coradoc table: 16GB RSS / minutes). The outcome
+    /// is arena-tagged — only the storing arena replays it, other
+    /// arenas re-parse.
+    pub outcome: Option<DynamicOutcome>,
+}
+
+/// A cached dynamic-fragment parse result. `value` indexes the arena
+/// identified by `arena_tag` (the VM arena that stored it); clones are
+/// replayed only into that same arena.
+#[derive(Clone, Debug)]
+pub struct DynamicOutcome {
+    /// Where the successful fragment parse ended (start position on
+    /// failure).
+    pub end_pos: usize,
+    /// The parsed subtree, arena-local to `arena_tag`.
+    pub value: crate::portable::ast::AstNode,
+    /// Identity of the arena `value` indexes; only a VM holding this
+    /// arena replays the outcome.
+    pub arena_tag: usize,
+    /// False = the fragment failed. Failures are cached too:
+    /// backtracking re-attempts them constantly.
+    pub ok: bool,
 }
 
 thread_local! {
@@ -533,10 +558,57 @@ pub fn store_dispatch_fragment(
                 grammar: std::sync::Arc::clone(&arc),
                 root,
                 writes,
+                outcome: None,
             },
         );
     });
     arc
+}
+
+/// Look up a cached parse outcome for this dispatch. Only an outcome
+/// stored under the same arena tag replays (AstNode indices are
+/// arena-local); everything else re-parses.
+pub fn cached_dynamic_outcome(
+    callback_id: u64,
+    pos: usize,
+    captures: &CaptureState,
+    input: &str,
+    arena_tag: usize,
+) -> Option<DynamicOutcome> {
+    let input_hash = INPUT_HASH.with(|c| c.get());
+    let key = (
+        callback_id,
+        pos,
+        capture_signature(captures, input) ^ input_hash,
+    );
+    DISPATCH_CACHE.with(|c| {
+        c.borrow()
+            .get(&key)
+            .and_then(|f| f.outcome.as_ref())
+            .filter(|o| o.arena_tag == arena_tag)
+            .cloned()
+    })
+}
+
+/// Store (or update) the parse outcome for this dispatch key.
+pub fn store_dynamic_outcome(
+    callback_id: u64,
+    pos: usize,
+    captures: &CaptureState,
+    input: &str,
+    outcome: DynamicOutcome,
+) {
+    let input_hash = INPUT_HASH.with(|c| c.get());
+    let key = (
+        callback_id,
+        pos,
+        capture_signature(captures, input) ^ input_hash,
+    );
+    DISPATCH_CACHE.with(|c| {
+        if let Some(fragment) = c.borrow_mut().get_mut(&key) {
+            fragment.outcome = Some(outcome);
+        }
+    })
 }
 
 /// Snapshot the pending capture writes (used by the engine to record
