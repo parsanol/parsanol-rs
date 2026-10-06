@@ -821,6 +821,142 @@ mod fused_neg_scan_tests {
         }
     }
 
+    // rs#174 round 2 regression: nested dynamic fragments used to
+    // double the capture-state undo log at every boundary crossing
+    // (copy-in + merge-back re-stored every name), so a small nested
+    // grammar drove the log to 296k entries and the capture-content
+    // signature — computed per dynamic-dependent memo lookup — to
+    // 56s / 16GB on a 26-byte input. The fragment boundary now seeds
+    // via clone_visible and merges back only changed captures.
+    #[test]
+    fn nested_dynamic_fragments_keep_the_capture_log_bounded() {
+        use crate::portable::dynamic::{
+            register_dynamic_callback, DynamicCallback, DynamicContext,
+        };
+        use crate::portable::grammar::{Atom, Grammar, RepetitionTag};
+
+        struct RowsFrag;
+        struct RowFrag;
+        struct ContentFrag;
+
+        impl DynamicCallback for RowsFrag {
+            fn resolve(&self, _ctx: &DynamicContext) -> Option<Atom> {
+                None
+            }
+            fn description(&self) -> &str {
+                "rows"
+            }
+            fn resolve_fragment(&self, _ctx: &DynamicContext) -> Option<(Grammar, usize)> {
+                let mut g = Grammar::new();
+                let bang = g.add_atom(Atom::Str { pattern: "!".to_string() });
+                let guard = g.add_atom(Atom::Lookahead {
+                    atom: bang,
+                    positive: false,
+                });
+                let row = g.add_atom(Atom::Dynamic {
+                    callback_id: CELL_CB.load(std::sync::atomic::Ordering::Relaxed),
+                });
+                let item = g.add_atom(Atom::Sequence { atoms: vec![guard, row] });
+                let root = g.add_atom(Atom::Repetition {
+                    atom: item,
+                    min: 1,
+                    max: None,
+                    tag: RepetitionTag::Repetition,
+                });
+                g.root = root;
+                Some((g, root))
+            }
+        }
+        impl DynamicCallback for RowFrag {
+            fn resolve(&self, _ctx: &DynamicContext) -> Option<Atom> {
+                None
+            }
+            fn description(&self) -> &str {
+                "row"
+            }
+            fn resolve_fragment(&self, _ctx: &DynamicContext) -> Option<(Grammar, usize)> {
+                let mut g = Grammar::new();
+                let content = g.add_atom(Atom::Dynamic {
+                    callback_id: CONTENT_CB.load(std::sync::atomic::Ordering::Relaxed),
+                });
+                let sep = g.add_atom(Atom::Str { pattern: ",".to_string() });
+                let root = g.add_atom(Atom::Sequence { atoms: vec![content, sep] });
+                g.root = root;
+                Some((g, root))
+            }
+        }
+        impl DynamicCallback for ContentFrag {
+            fn resolve(&self, _ctx: &DynamicContext) -> Option<Atom> {
+                None
+            }
+            fn description(&self) -> &str {
+                "content"
+            }
+            fn resolve_fragment(&self, _ctx: &DynamicContext) -> Option<(Grammar, usize)> {
+                let mut g = Grammar::new();
+                let bang = g.add_atom(Atom::Str { pattern: "!".to_string() });
+                let g1 = g.add_atom(Atom::Lookahead {
+                    atom: bang,
+                    positive: false,
+                });
+                let comma = g.add_atom(Atom::Str { pattern: ",".to_string() });
+                let g2 = g.add_atom(Atom::Lookahead {
+                    atom: comma,
+                    positive: false,
+                });
+                let any = g.add_atom(Atom::Re { pattern: "(?s).".to_string() });
+                let item = g.add_atom(Atom::Sequence { atoms: vec![g1, g2, any] });
+                let root = g.add_atom(Atom::Repetition {
+                    atom: item,
+                    min: 0,
+                    max: None,
+                    tag: RepetitionTag::Repetition,
+                });
+                g.root = root;
+                Some((g, root))
+            }
+        }
+
+        static ROW_CB: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(u64::MAX);
+        static CELL_CB: std::sync::atomic::AtomicU64 =
+            std::sync::atomic::AtomicU64::new(u64::MAX);
+        static CONTENT_CB: std::sync::atomic::AtomicU64 =
+            std::sync::atomic::AtomicU64::new(u64::MAX);
+        ROW_CB.store(register_dynamic_callback(Box::new(RowsFrag)), std::sync::atomic::Ordering::Relaxed);
+        CELL_CB.store(register_dynamic_callback(Box::new(RowFrag)), std::sync::atomic::Ordering::Relaxed);
+        CONTENT_CB.store(register_dynamic_callback(Box::new(ContentFrag)), std::sync::atomic::Ordering::Relaxed);
+
+        let row_cb = ROW_CB.load(std::sync::atomic::Ordering::Relaxed);
+        let cell_cb = CELL_CB.load(std::sync::atomic::Ordering::Relaxed);
+        let content_cb = CONTENT_CB.load(std::sync::atomic::Ordering::Relaxed);
+
+        // root: Capture("d", "|") >> Dynamic(rows)
+        let mut g = Grammar::new();
+        let bar = g.add_atom(Atom::Str { pattern: "|".to_string() });
+        let cap = g.add_atom(Atom::Capture {
+            name: "d".to_string(),
+            atom: bar,
+        });
+        let rows = g.add_atom(Atom::Dynamic { callback_id: row_cb });
+        let root = g.add_atom(Atom::Sequence { atoms: vec![cap, rows] });
+        g.root = root;
+
+        let input = format!("|{}!", "a,".repeat(60));
+        let mut arena = AstArena::for_input(input.len());
+        let mut parser = PortableParser::new(&g, input.as_str(), &mut arena);
+        let result = parser.try_atom(root, 0).expect("nested fragments parse");
+        assert_eq!(result.end_pos, input.len() - 1);
+
+        // The undo log (whose length version() tracks) must stay
+        // bounded by the captures the fragments actually changed —
+        // not doubled per boundary crossing.
+        assert!(
+            parser.capture_state.version() < 500,
+            "capture undo log exploded: version={}",
+            parser.capture_state.version()
+        );
+    }
+
     #[test]
     fn fused_scan_rejects_below_min_like_the_general_loop() {
         // No terminal chars between the quotes: `1*` cannot satisfy its

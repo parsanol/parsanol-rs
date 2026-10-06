@@ -154,6 +154,7 @@ enum NegScanTerm {
 /// The packrat tree-walking parser: evaluates the compiled grammar
 /// against the input with memoization, capture scopes and ranked
 /// failure tracking.
+
 pub struct PortableParser<'a> {
     // ========================================================================
     // Grammar and Input (immutable)
@@ -672,12 +673,18 @@ impl<'a> PortableParser<'a> {
             // mutations the version is stable, so repeated exploration
             // of the same (atom, position) replays — the packrat
             // absorption the dense cache provides everywhere else.
-            let key = (
-                pos as u32,
-                atom_id as u16,
-                self.capture_state.version(),
-                consume_all,
-            );
+            // rs#174 round 2: key on the capture-state CONTENT
+            // signature, not the mutation-history counter. Backtracking
+            // churns the version on every store while the visible
+            // captures converge back to identical content, so a
+            // counter key missed on every attempt and the table
+            // grammar re-explored exponentially (97.9s / 2.4GB on the
+            // coradoc 4-cell repro). Two states with identical visible
+            // captures are indistinguishable to a deterministic block,
+            // so replay is sound — the same argument as the
+            // dispatch-outcome cache below (rs#184).
+            let capture_fp = super::dynamic::capture_signature(&self.capture_state, self.input);
+            let key = (pos as u32, atom_id as u16, capture_fp, consume_all);
             if self.dyn_cache.len() > 2_000_000 {
                 self.dyn_cache.clear();
             }
@@ -1680,6 +1687,7 @@ impl<'a> PortableParser<'a> {
             };
         }
 
+
         // Dispatch cache (parsanol-ruby#80): a deterministic block's
         // fragment is a pure function of (input, pos, captures) — the
         // exact key below. A hit skips the host round-trip (block
@@ -1776,37 +1784,60 @@ impl<'a> PortableParser<'a> {
     ) -> Result<ParseResult, ParseError> {
         let mut temp_arena = AstArena::for_input(self.input.len());
         let mut temp_parser = PortableParser::new(temp_grammar, self.input, &mut temp_arena);
-        for name in self.capture_state.names() {
-            if let Some(value) = self.capture_state.get(name) {
-                temp_parser.capture_state.store(name, value);
-            }
-            // Capture subtrees cross the fragment boundary too: nested
-            // dynamic dispatches inside the fragment read the same
-            // parsed trees the parent's blocks would (capture parity).
-            if let Some(nc) = self.capture_state.get_node(name) {
-                temp_parser.capture_state.store_with_node(
-                    name,
-                    self.capture_state.get(name).expect("text companion"),
-                    nc.value,
-                    nc.fingerprint,
-                );
-            }
-        }
+        // Seed the fragment's visible capture state wholesale
+        // (rs#174 round 2): the per-name store loop pushed two undo-log
+        // entries per capture per boundary crossing, and the merge-back
+        // below doubled the log again — every nesting level multiplied
+        // the log (1 → 2 → 4 → … → 296k entries on the coradoc 4-cell
+        // table), each Shadow entry deep-cloning the previous node
+        // tree (16GB). clone_visible copies the maps without the log;
+        // the merge-back then replays only what the fragment CHANGED.
+        //
+        // Capture subtrees cross the fragment boundary too: nested
+        // dynamic dispatches inside the fragment read the same parsed
+        // trees the parent's blocks would (capture parity).
+        let seed = self.capture_state.clone_visible();
+        temp_parser.capture_state = seed.clone_visible();
 
         let result = temp_parser.try_atom_impl(temp_atom_id, pos, false)?;
 
-        // Merge captures from temp parser
-        for name in temp_parser.capture_state.names() {
-            if let Some(value) = temp_parser.capture_state.get(name) {
-                self.capture_state.store(name, value);
-            }
-            if let Some(nc) = temp_parser.capture_state.get_node(name) {
-                self.capture_state.store_with_node(
-                    name,
-                    temp_parser.capture_state.get(name).expect("text companion"),
-                    nc.value,
-                    nc.fingerprint,
-                );
+        // Merge captures from temp parser: replay only what the
+        // fragment CHANGED relative to its seed (rs#174 round 2). The
+        // previous loop re-stored every name — including the parent's
+        // own, unchanged — so each boundary crossing doubled the undo
+        // log per nesting level.
+        for name in temp_parser.capture_state.visible_names() {
+            let new_value = temp_parser.capture_state.get(name);
+            let old_value = seed.get(name);
+            let text_changed = match (new_value, old_value) {
+                (Some(a), Some(b)) => {
+                    a.get_text(self.input) != b.get_text(self.input)
+                }
+                (Some(_), None) | (None, Some(_)) => true,
+                (None, None) => false,
+            };
+            let node_changed = match (
+                temp_parser.capture_state.get_node(name),
+                seed.get_node(name),
+            ) {
+                (Some(a), Some(b)) => a.fingerprint != b.fingerprint,
+                (Some(_), None) | (None, Some(_)) => true,
+                (None, None) => false,
+            };
+            if text_changed || node_changed {
+                if let Some(value) = temp_parser.capture_state.get(name) {
+                    self.capture_state.store(name, value);
+                }
+                if let (Some(value), Some(nc)) =
+                    (temp_parser.capture_state.get(name), temp_parser.capture_state.get_node(name))
+                {
+                    self.capture_state.store_with_node(
+                        name,
+                        value,
+                        nc.value,
+                        nc.fingerprint,
+                    );
+                }
             }
         }
 
