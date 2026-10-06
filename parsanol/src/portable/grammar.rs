@@ -110,6 +110,20 @@ pub enum Atom {
         atom: usize,
     },
 
+    /// Captured skip trivia (parsanol-ruby#152): Trivia matching
+    /// semantics plus recording of comment-shaped units for
+    /// attachment to the next successful Named capture under
+    /// `comments:`. Engines predating this variant reject
+    /// capture-carrying artifacts loudly (unknown variant), which is
+    /// the declared gate.
+    TriviaCapture {
+        /// Index into atoms array
+        atom: usize,
+        /// Leading-literal marker -> kind label, derived from the
+        /// skip declaration's capture list (e.g. "//" -> "line_comment")
+        rules: Vec<(String, String)>,
+    },
+
     /// Capture matched text with a name
     ///
     /// Stores the matched text in the capture state with the given name.
@@ -374,6 +388,7 @@ impl Grammar {
                 Atom::Cut => "cut",
                 Atom::Ignore { .. } => "ignore",
                 Atom::Trivia { .. } => "trivia",
+                Atom::TriviaCapture { .. } => "trivia_capture",
                 Atom::Capture { .. } => "capture",
                 Atom::Scope { .. } => "scope",
                 Atom::Dynamic { .. } => "dynamic",
@@ -751,7 +766,9 @@ impl Grammar {
                 Atom::Named { atom, .. } => vec![*atom],
                 Atom::Entity { atom } => vec![*atom],
                 Atom::Lookahead { atom, .. } => vec![*atom],
-                Atom::Ignore { atom } | Atom::Trivia { atom } => vec![*atom],
+                Atom::Ignore { atom }
+                | Atom::Trivia { atom }
+                | Atom::TriviaCapture { atom, .. } => vec![*atom],
                 Atom::Capture { atom, .. } => vec![*atom],
                 Atom::Scope { atom } => vec![*atom],
                 _ => vec![],
@@ -804,7 +821,9 @@ impl Grammar {
                 Atom::Lookahead { atom, .. } => {
                     *atom = remap[*atom];
                 }
-                Atom::Ignore { atom } | Atom::Trivia { atom } => {
+                Atom::Ignore { atom }
+                | Atom::Trivia { atom }
+                | Atom::TriviaCapture { atom, .. } => {
                     *atom = remap[*atom];
                 }
                 Atom::Capture { atom, .. } => {
@@ -1017,7 +1036,9 @@ impl Grammar {
                 Atom::Cut => {
                     visitor.visit_cut();
                 }
-                Atom::Ignore { atom } | Atom::Trivia { atom } => {
+                Atom::Ignore { atom }
+                | Atom::Trivia { atom }
+                | Atom::TriviaCapture { atom, .. } => {
                     visitor.visit_ignore_pre(*atom);
                     self.visit_atom(*atom, visitor);
                     visitor.visit_ignore_post(*atom);

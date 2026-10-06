@@ -424,6 +424,10 @@ impl Compiler {
             | Atom::CustomRef { .. } => Err(CompileError::UnsupportedFeature {
                 feature: "ruby-tier state/custom atom (parsanol-ruby#129)".to_string(),
             }),
+            Atom::TriviaCapture { .. } => Err(CompileError::UnsupportedFeature {
+                feature: "trivia capture needs the interpreter's context channel                           (parsanol-ruby#152); this program tier declines and the                           caller runs the tree-walking interpreter"
+                    .to_string(),
+            }),
         }
     }
 
@@ -594,6 +598,7 @@ impl Compiler {
             | Atom::Entity { atom }
             | Atom::Ignore { atom }
             | Atom::Trivia { atom }
+            | Atom::TriviaCapture { atom, .. }
             | Atom::Capture { atom, .. }
             | Atom::Scope { atom } => self.provable_first_set(*atom, visited),
             Atom::Lookahead { .. } | Atom::Cut | Atom::Dynamic { .. } | Atom::Custom { .. } => None,
