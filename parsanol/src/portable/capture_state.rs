@@ -539,12 +539,15 @@ impl CaptureState {
         self.depth = 0;
     }
 
-    /// Iterate over all capture names (in order of first occurrence)
-    /// Distinct visible capture names (map keys, not undo-log entries).
+    /// Distinct visible capture names (map keys; order unspecified).
     pub fn visible_names(&self) -> impl Iterator<Item = &String> {
         self.captures.keys()
     }
 
+    /// Iterate over all capture names in undo-log order: one entry
+    /// per store (New or Shadow), so re-stored names repeat. Callers
+    /// that need the distinct visible set should use
+    /// [Self::visible_names].
     pub fn names(&self) -> impl Iterator<Item = &String> {
         self.capture_order.iter().map(|entry| match entry {
             CaptureEntry::New(name) => name,
