@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Other
 
+- Satisfy the lint gates: fmt, dead bindings, orphaned doc line by @[object]
+- Restore the names() doc and document the undo-log semantics by @[object]
+- Fragment boundary seeds visible capture state (rs#174) by @[object]
+
+### Other
+
 - Signature-keyed dynamic outcome cache by @[object]
 - Release v0.13.0 by @[object]
 
