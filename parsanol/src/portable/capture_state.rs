@@ -540,6 +540,11 @@ impl CaptureState {
     }
 
     /// Iterate over all capture names (in order of first occurrence)
+    /// Distinct visible capture names (map keys, not undo-log entries).
+    pub fn visible_names(&self) -> impl Iterator<Item = &String> {
+        self.captures.keys()
+    }
+
     pub fn names(&self) -> impl Iterator<Item = &String> {
         self.capture_order.iter().map(|entry| match entry {
             CaptureEntry::New(name) => name,
