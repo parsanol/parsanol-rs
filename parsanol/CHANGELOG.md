@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Other
 
+- Replay dynamic dispatch outcomes by @[object]
+
+### Other
+
 - Remove leftover diagnostic abort: 60M atom-application cap kills legitimate workloads by @[object]
 - Outcome field is module-private (pub field = breaking); include DenseCache sizing by @[object]
 - Native engine: memoize dynamic-dependent atoms and dynamic outcomes by @[object]
