@@ -413,7 +413,7 @@ impl Compiler {
             Atom::Entity { atom } => self.compile_reference(atom),
             Atom::Lookahead { atom, positive } => self.compile_lookahead(atom, positive),
             Atom::Cut => self.compile_cut(),
-            Atom::Ignore { atom } => self.compile_ignore(atom),
+            Atom::Ignore { atom } | Atom::Trivia { atom } => self.compile_ignore(atom),
             Atom::Capture { name, atom } => self.compile_capture(&name, atom),
             Atom::Scope { atom } => self.compile_scope(atom),
             Atom::Dynamic { callback_id } => self.compile_dynamic(callback_id),
@@ -593,6 +593,7 @@ impl Compiler {
             Atom::Named { atom, .. }
             | Atom::Entity { atom }
             | Atom::Ignore { atom }
+            | Atom::Trivia { atom }
             | Atom::Capture { atom, .. }
             | Atom::Scope { atom } => self.provable_first_set(*atom, visited),
             Atom::Lookahead { .. } | Atom::Cut | Atom::Dynamic { .. } | Atom::Custom { .. } => None,

@@ -248,6 +248,7 @@ impl<'a> GrammarVisualizer<'a> {
             }
             Atom::Cut => "cut".to_string(),
             Atom::Ignore { atom } => format!("ignore(a{})", atom),
+            Atom::Trivia { atom } => format!("trivia(a{})", atom),
             Atom::Capture { name, .. } => format!("capture({:?})", name),
             Atom::Scope { .. } => "scope".to_string(),
             Atom::Dynamic { callback_id } => format!("dynamic({})", callback_id),

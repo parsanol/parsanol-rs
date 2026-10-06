@@ -63,7 +63,7 @@ impl FixedLenAnalysis {
 
             // Named captures preserve the inner pattern's length (need atom index)
             Atom::Named { .. } => PatternLength::Variable,
-            Atom::Ignore { .. } => PatternLength::Variable,
+            Atom::Ignore { .. } | Atom::Trivia { .. } => PatternLength::Variable,
             Atom::Entity { .. } => PatternLength::Variable,
             Atom::Capture { .. } => PatternLength::Variable,
             Atom::Scope { .. } => PatternLength::Variable,
@@ -118,7 +118,7 @@ impl NullableAnalysis {
             Atom::Alternative { .. } => PatternNullability::NotNullable,
             Atom::Repetition { .. } => PatternNullability::NotNullable,
             Atom::Named { .. } => PatternNullability::NotNullable,
-            Atom::Ignore { .. } => PatternNullability::NotNullable,
+            Atom::Ignore { .. } | Atom::Trivia { .. } => PatternNullability::NotNullable,
             Atom::Entity { .. } => PatternNullability::NotNullable,
             Atom::Cut => PatternNullability::NotNullable,
             Atom::Capture { .. } => PatternNullability::NotNullable,
@@ -209,6 +209,10 @@ impl FirstSetAnalysis {
                 nullable: false,
             },
             Atom::Ignore { .. } => FirstSetAnalysis {
+                charset: vec![],
+                nullable: false,
+            },
+            Atom::Trivia { .. } => FirstSetAnalysis {
                 charset: vec![],
                 nullable: false,
             },
