@@ -649,21 +649,6 @@ impl<'a> PortableParser<'a> {
         //
         // Dynamic-dependent atoms are context-dependent: their outcome
         // varies with capture state, which the memo key ignores (GH-76).
-        {
-            use std::sync::atomic::{AtomicU64, Ordering};
-            static TOTAL: AtomicU64 = AtomicU64::new(0);
-            static LAST: AtomicU64 = AtomicU64::new(0);
-            let n = TOTAL.fetch_add(1, Ordering::Relaxed) + 1;
-            if n % 20_000_000 == 0 {
-                let last = LAST.swap(n, Ordering::Relaxed);
-                eprintln!("WALK total={} (last 20M in this window)", n);
-                let _ = last;
-            }
-            if n >= 60_000_000 {
-                eprintln!("ABORT 60M atom applications");
-                std::process::abort();
-            }
-        }
         let dynamic_dependent = self.dynamic_dependent.get(atom_id).is_some_and(|&dep| dep);
         if self.grammar.is_no_cache(atom_id) {
             return self.parse_atom_uncached(atom_id, pos, consume_all);
