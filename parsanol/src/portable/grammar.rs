@@ -100,6 +100,16 @@ pub enum Atom {
         atom: usize,
     },
 
+    /// Injected skip trivia (rs#172): Ignore semantics for matching
+    /// and values, but diagnostics-transparent — deepest-failure
+    /// tracking and expected-set rendering skip positions inside it.
+    /// Engines predating this variant reject skip-carrying artifacts
+    /// loudly (unknown variant), which is the declared gate.
+    Trivia {
+        /// Index into atoms array
+        atom: usize,
+    },
+
     /// Capture matched text with a name
     ///
     /// Stores the matched text in the capture state with the given name.
@@ -363,6 +373,7 @@ impl Grammar {
                 Atom::Lookahead { .. } => "lookahead",
                 Atom::Cut => "cut",
                 Atom::Ignore { .. } => "ignore",
+                Atom::Trivia { .. } => "trivia",
                 Atom::Capture { .. } => "capture",
                 Atom::Scope { .. } => "scope",
                 Atom::Dynamic { .. } => "dynamic",
@@ -740,7 +751,7 @@ impl Grammar {
                 Atom::Named { atom, .. } => vec![*atom],
                 Atom::Entity { atom } => vec![*atom],
                 Atom::Lookahead { atom, .. } => vec![*atom],
-                Atom::Ignore { atom } => vec![*atom],
+                Atom::Ignore { atom } | Atom::Trivia { atom } => vec![*atom],
                 Atom::Capture { atom, .. } => vec![*atom],
                 Atom::Scope { atom } => vec![*atom],
                 _ => vec![],
@@ -793,7 +804,7 @@ impl Grammar {
                 Atom::Lookahead { atom, .. } => {
                     *atom = remap[*atom];
                 }
-                Atom::Ignore { atom } => {
+                Atom::Ignore { atom } | Atom::Trivia { atom } => {
                     *atom = remap[*atom];
                 }
                 Atom::Capture { atom, .. } => {
@@ -1006,7 +1017,7 @@ impl Grammar {
                 Atom::Cut => {
                     visitor.visit_cut();
                 }
-                Atom::Ignore { atom } => {
+                Atom::Ignore { atom } | Atom::Trivia { atom } => {
                     visitor.visit_ignore_pre(*atom);
                     self.visit_atom(*atom, visitor);
                     visitor.visit_ignore_post(*atom);

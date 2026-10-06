@@ -194,6 +194,7 @@ impl<'a> GrammarAnalyzer<'a> {
                 | Atom::Named { atom, .. }
                 | Atom::Entity { atom }
                 | Atom::Ignore { atom }
+                | Atom::Trivia { atom }
                 | Atom::Lookahead { atom, .. }
                 | Atom::Capture { atom, .. }
                 | Atom::Scope { atom } => {
@@ -336,7 +337,10 @@ impl<'a> GrammarAnalyzer<'a> {
                 }
                 None
             }
-            Atom::Named { atom, .. } | Atom::Ignore { atom } | Atom::Lookahead { atom, .. } => {
+            Atom::Named { atom, .. }
+            | Atom::Ignore { atom }
+            | Atom::Trivia { atom }
+            | Atom::Lookahead { atom, .. } => {
                 if *atom == target_atom {
                     Some(vec![start_atom, *atom])
                 } else if !visited.contains(atom) {
@@ -440,6 +444,7 @@ impl<'a> GrammarAnalyzer<'a> {
             Atom::Named { atom, .. }
             | Atom::Entity { atom }
             | Atom::Ignore { atom }
+            | Atom::Trivia { atom }
             | Atom::Lookahead { atom, .. } => self.is_nullable(*atom),
             Atom::Cut => false,
             Atom::Custom { .. } => false, // Custom atoms are not nullable by default
@@ -504,6 +509,7 @@ impl<'a> GrammarAnalyzer<'a> {
             | Atom::Named { atom, .. }
             | Atom::Entity { atom }
             | Atom::Ignore { atom }
+            | Atom::Trivia { atom }
             | Atom::Lookahead { atom, .. }
             | Atom::Capture { atom, .. }
             | Atom::Scope { atom } => {
@@ -641,6 +647,7 @@ impl<'a> GrammarAnalyzer<'a> {
             Atom::Named { atom, .. }
             | Atom::Entity { atom }
             | Atom::Ignore { atom }
+            | Atom::Trivia { atom }
             | Atom::Lookahead { atom, .. } => self.get_first_literal(*atom),
             _ => None,
         }

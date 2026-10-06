@@ -204,6 +204,9 @@ pub struct PortableParser<'a> {
     /// change, which is the soundness the dense-cache skip existed
     /// for.
     dyn_cache: std::collections::HashMap<(u32, u16, u64, bool), CacheEntry>,
+    /// Injected-trivia nesting depth (rs#172): failures inside trivia
+    /// atoms are not recorded.
+    trivia_depth: u32,
     /// Dynamic dispatch outcome replay (rs#174): outer backtracking
     /// re-invokes the same dispatch at the same position with the same
     /// captures; each re-invocation re-parsed its fragment with a fresh
@@ -325,6 +328,7 @@ impl<'a> PortableParser<'a> {
             governor,
             capture_state: CaptureState::new(),
             dyn_cache: std::collections::HashMap::new(),
+            trivia_depth: 0,
             dynamic_outcomes: std::collections::HashMap::new(),
             rollback_on_failure,
             dynamic_dependent: dynamic_dependence(grammar),
@@ -362,6 +366,7 @@ impl<'a> PortableParser<'a> {
             governor,
             capture_state: CaptureState::new(),
             dyn_cache: std::collections::HashMap::new(),
+            trivia_depth: 0,
             dynamic_outcomes: std::collections::HashMap::new(),
             rollback_on_failure: false,
             dynamic_dependent: dynamic_dependence(grammar),
@@ -872,6 +877,21 @@ impl<'a> PortableParser<'a> {
                         capture_state: None,
                     })
                 }
+                Atom::Trivia { atom } => {
+                    // rs#172: failures inside injected trivia never
+                    // surface — note_failure is suppressed while the
+                    // depth is positive, so deepest-failure positions
+                    // and expected sets point at real content.
+                    self.trivia_depth += 1;
+                    let result = self.try_atom_impl(*atom, pos, consume_all);
+                    self.trivia_depth -= 1;
+                    let result = result?;
+                    Ok(ParseResult {
+                        value: AstNode::Nil,
+                        end_pos: result.end_pos,
+                        capture_state: None,
+                    })
+                }
                 Atom::Custom { id } => self.parse_custom(*id, pos),
                 Atom::Capture { name, atom } => self.parse_capture(name, *atom, pos, consume_all),
                 Atom::Scope { atom } => self.parse_scope(*atom, pos, consume_all),
@@ -919,6 +939,9 @@ impl<'a> PortableParser<'a> {
     }
 
     fn note_failure(&mut self, pos: usize, label: String) {
+        if self.trivia_depth > 0 {
+            return; // inside injected trivia (rs#172)
+        }
         if !self.has_failure || pos > self.deepest_failure_pos {
             self.has_failure = true;
             self.deepest_failure_pos = pos;

@@ -353,6 +353,9 @@ fn remap_atom(atom: &Atom, offset: usize) -> Atom {
         Atom::Ignore { atom } => Atom::Ignore {
             atom: atom + offset,
         },
+        Atom::Trivia { atom } => Atom::Trivia {
+            atom: atom + offset,
+        },
         Atom::Capture { name, atom } => Atom::Capture {
             name: name.clone(),
             atom: atom + offset,
