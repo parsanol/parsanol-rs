@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Other
 
+- Signature-keyed dynamic outcome cache by @[object]
+- Release v0.13.0 by @[object]
+
+### Other
+
 - Version 0.13.0: the Trivia atom variant is semver-minor for a 0.x line by @[object]
 - Trivia atom variant (rs#172 diagnostics parity) by @[object]
 
