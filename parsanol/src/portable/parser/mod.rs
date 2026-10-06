@@ -1579,7 +1579,7 @@ impl<'a> PortableParser<'a> {
             // siblings — not only those recorded during the inner
             // parse. pending_before above remains the restore point
             // for the failure path only.
-            let taken: Vec<(String, String, u32)> = self.pending_trivia.drain(..).collect();
+            let taken: Vec<(String, String, u32)> = std::mem::take(&mut self.pending_trivia);
             let units: Vec<AstNode> = taken
                 .into_iter()
                 .map(|(label, text, _offset)| {
