@@ -154,7 +154,6 @@ enum NegScanTerm {
 /// The packrat tree-walking parser: evaluates the compiled grammar
 /// against the input with memoization, capture scopes and ranked
 /// failure tracking.
-
 pub struct PortableParser<'a> {
     // ========================================================================
     // Grammar and Input (immutable)
@@ -1687,7 +1686,6 @@ impl<'a> PortableParser<'a> {
             };
         }
 
-
         // Dispatch cache (parsanol-ruby#80): a deterministic block's
         // fragment is a pure function of (input, pos, captures) — the
         // exact key below. A hit skips the host round-trip (block
@@ -1810,9 +1808,7 @@ impl<'a> PortableParser<'a> {
             let new_value = temp_parser.capture_state.get(name);
             let old_value = seed.get(name);
             let text_changed = match (new_value, old_value) {
-                (Some(a), Some(b)) => {
-                    a.get_text(self.input) != b.get_text(self.input)
-                }
+                (Some(a), Some(b)) => a.get_text(self.input) != b.get_text(self.input),
                 (Some(_), None) | (None, Some(_)) => true,
                 (None, None) => false,
             };
@@ -1828,15 +1824,12 @@ impl<'a> PortableParser<'a> {
                 if let Some(value) = temp_parser.capture_state.get(name) {
                     self.capture_state.store(name, value);
                 }
-                if let (Some(value), Some(nc)) =
-                    (temp_parser.capture_state.get(name), temp_parser.capture_state.get_node(name))
-                {
-                    self.capture_state.store_with_node(
-                        name,
-                        value,
-                        nc.value,
-                        nc.fingerprint,
-                    );
+                if let (Some(value), Some(nc)) = (
+                    temp_parser.capture_state.get(name),
+                    temp_parser.capture_state.get_node(name),
+                ) {
+                    self.capture_state
+                        .store_with_node(name, value, nc.value, nc.fingerprint);
                 }
             }
         }
