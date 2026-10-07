@@ -1104,7 +1104,7 @@ mod constant_lookbehind_tests {
         {"Constant":{"value":{"Hash":[["hr",{"Bool":true}]]}}},
         {"Sequence":{"atoms":[1,2]}},
         {"Re":{"pattern":"[a-z]+"}},
-        {"Lookbehind":{"count":1,"pattern":"-","positive":true}},
+        {"Lookbehind":{"look":{"Literal":{"count":1,"pattern":"-"}},"positive":true}},
         {"Sequence":{"atoms":[5,4]}},
         {"Named":{"name":"guarded","atom":6}},
         {"Repetition":{"atom":7,"min":0,"max":null,"tag":"Repetition"}},
@@ -1119,7 +1119,7 @@ mod constant_lookbehind_tests {
         {"Constant":{"value":{"Str":"x"}}},
         {"Sequence":{"atoms":[1,2]}},
         {"Re":{"pattern":"[a-z]+"}},
-        {"Lookbehind":{"count":1,"pattern":"z","positive":true}},
+        {"Lookbehind":{"look":{"Literal":{"count":1,"pattern":"z"}},"positive":true}},
         {"Sequence":{"atoms":[5,4]}},
         {"Named":{"name":"guarded","atom":6}},
         {"Repetition":{"atom":7,"min":1,"max":null,"tag":"Repetition"}},
@@ -1189,5 +1189,30 @@ mod constant_lookbehind_tests {
     #[test]
     fn lookbehind_fails_when_the_byte_behind_differs() {
         assert!(parse_err(FAIL, "-abc"));
+    }
+
+    // The flanking form (parsanol-ruby#163): the regex variant is
+    // searched in the preceding text and must end at the position —
+    // class-based, multibyte, variable-length.
+    const REGEX_GUARD: &str = r#"{"atoms":[
+        {"Re":{"pattern":"[a-z ]"}},
+        {"Lookbehind":{"look":{"Regex":{"source":"[[:space:]]"}},"positive":true}},
+        {"Re":{"pattern":"[a-z]+"}},
+        {"Sequence":{"atoms":[0,1,2]}}
+    ],"root":3}"#;
+
+    #[test]
+    fn regex_lookbehind_ends_at_the_position() {
+        // " abc": the first byte consumed is the space, so at the
+        // run start the preceding text ends with whitespace.
+        let tree = parse_tree(REGEX_GUARD, " abc");
+        assert!(tree.contains("abc"), "tree: {tree}");
+    }
+
+    #[test]
+    fn regex_lookbehind_fails_without_the_class_behind() {
+        // "x abc": whichever byte the lead consumes, the text behind
+        // the run start is a letter — the class never holds.
+        assert!(parse_err(REGEX_GUARD, "x abc"));
     }
 }

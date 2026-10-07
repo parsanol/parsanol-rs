@@ -40,6 +40,28 @@ pub enum ConstantValue {
     Hash(Vec<(String, ConstantValue)>),
 }
 
+/// What a [Atom::Lookbehind] tests against the text behind the
+/// position. `Literal` compares a fixed byte window (the 0.15/0.16
+/// shape); `Regex` end-anchors a pattern at the position — the
+/// CommonMark flanking form ("preceded by whitespace/punctuation"),
+/// which is class-based, multibyte and variable-length.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LookSpec {
+    /// Fixed byte window comparison
+    Literal {
+        /// Window size in bytes
+        count: u64,
+        /// The literal those bytes must equal
+        pattern: String,
+    },
+    /// Pattern searched in the preceding text, required to end at
+    /// the position (JS/PCRE lookbehind semantics)
+    Regex {
+        /// The regex source
+        source: String,
+    },
+}
+
 /// Atom types that make up a grammar
 ///
 /// These correspond to the different parsanol atom types.
@@ -158,10 +180,8 @@ pub enum Atom {
     /// nothing, yields nil — coradoc-markdown's `precedes?` /
     /// `does_not_precede?` guards.
     Lookbehind {
-        /// How many bytes behind the position to inspect
-        count: usize,
-        /// The literal those bytes must equal for a positive match
-        pattern: String,
+        /// The behind-window test
+        look: LookSpec,
         /// Positive (assert) or negative (refute) lookbehind
         positive: bool,
     },

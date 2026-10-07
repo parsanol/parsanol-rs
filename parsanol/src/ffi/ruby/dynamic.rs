@@ -237,21 +237,18 @@ impl RubyDynamicCallback {
                     Err(_) => continue,
                 },
             };
-            // parsanol-ruby#160: values that are parser expressions
-            // (the open_block/continuation chain pattern stores atom
-            // chains in captures) intern into the host registry as
-            // opaque handles — text conversion would silently drop
-            // the write and every downstream chain-read would miss.
+            // parsanol-ruby#160: values that are not plain strings —
+            // parser expressions (the open_block/continuation chain
+            // pattern stores atom chains in captures) AND symbols and
+            // other scalars the chain-reads compare by identity (the
+            // lazy-continuation :block marker) — intern into the host
+            // registry as opaque handles. Text conversion would
+            // silently drop the write and every downstream read would
+            // miss.
             let text: Result<String, Error> = TryConvert::try_convert(v);
             let value = match text {
                 Ok(t) => crate::portable::dynamic::WriteValue::Text(t),
                 Err(_) => {
-                    let is_atom = atoms_base_class(ruby)
-                        .map(|base| v.is_kind_of(base))
-                        .unwrap_or(false);
-                    if !is_atom {
-                        continue;
-                    }
                     let handle = intern_host_atom(&v);
                     crate::portable::dynamic::WriteValue::Opaque(handle)
                 }

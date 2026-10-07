@@ -29,7 +29,9 @@ use crate::portable::ast::{AstNode, ParseError, ParseResult};
 use crate::portable::cache::{CacheEntry, DenseCache};
 use crate::portable::capture_state::CaptureState;
 use crate::portable::char_class::{utf8_char_len, CharRanges, CharacterPattern};
-use crate::portable::grammar::{Atom, ConstantValue, Grammar, RepetitionTag};
+use crate::portable::grammar::{
+    Atom, ConstantValue, Grammar, LookSpec, RepetitionTag,
+};
 use crate::portable::regex_cache;
 
 /// Memoized scan plans keyed by class pattern (TODO.perf/2). Grammars
@@ -920,16 +922,28 @@ impl<'a> PortableParser<'a> {
                         capture_state: None,
                     })
                 }
-                Atom::Lookbehind {
-                    count,
-                    pattern,
-                    positive,
-                } => {
+                Atom::Lookbehind { look, positive } => {
                     // coradoc-markdown precedes?/does_not_precede?
-                    // parity: inspect the +count+ bytes behind pos;
-                    // consume nothing.
-                    let bytes = self.input_bytes;
-                    let matched = pos >= *count && &bytes[pos - *count..pos] == pattern.as_bytes();
+                    // parity: the behind-window test, consume nothing.
+                    // Literal compares a fixed byte window; Regex is
+                    // searched in the preceding text and must end at
+                    // the position (class-based, multibyte,
+                    // variable-length — the flanking form).
+                    let matched = match look {
+                        LookSpec::Literal { count, pattern } => {
+                            let count = *count as usize;
+                            pos >= count
+                                && &self.input_bytes[pos - count..pos]
+                                    == pattern.as_bytes()
+                        }
+                        LookSpec::Regex { source } => {
+                            let anchored = format!("(?:{})\\z", source);
+                            match crate::portable::regex_cache::get_or_compile(&anchored) {
+                                Some(re) => re.is_match(&self.input[..pos]),
+                                None => false,
+                            }
+                        }
+                    };
                     if matched == *positive {
                         Ok(ParseResult {
                             value: AstNode::Nil,

@@ -363,13 +363,8 @@ fn remap_atom(atom: &Atom, offset: usize) -> Atom {
         Atom::Constant { value } => Atom::Constant {
             value: value.clone(),
         },
-        Atom::Lookbehind {
-            count,
-            pattern,
-            positive,
-        } => Atom::Lookbehind {
-            count: *count,
-            pattern: pattern.clone(),
+        Atom::Lookbehind { look, positive } => Atom::Lookbehind {
+            look: look.clone(),
             positive: *positive,
         },
         Atom::Capture { name, atom } => Atom::Capture {
