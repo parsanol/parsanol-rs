@@ -5,7 +5,7 @@
 
 use crate::portable::dynamic::{DynamicCallback, DynamicContext};
 use crate::portable::grammar::Atom;
-use magnus::{value::ReprValue, Error, IntoValue, Module, RClass, Ruby, TryConvert, Value};
+use magnus::{value::ReprValue, Error, IntoValue, Module, RArray, RClass, Ruby, TryConvert, Value};
 
 // ============================================================================
 // Host atom registry (parsanol-ruby#160)
@@ -16,28 +16,57 @@ thread_local! {
     /// capture handles. The engine never evaluates them — later
     /// dispatches do, through the rehydrated context — so the only
     /// requirement is that the value stays alive for the parse.
-    static HOST_ATOMS: std::cell::RefCell<Vec<Value>> =
-        const { std::cell::RefCell::new(Vec::new()) };
+    ///
+    /// The registry is a GC-marked Ruby array held in a boxed slot:
+    /// a plain Rust container of `Value`s is invisible to the GC, and
+    /// an interned chain built inside a callback (e.g.
+    /// `caps[:cont] >> rule`) is usually a Ruby temporary with no
+    /// other reference — the collector then sweeps it and the next
+    /// rehydration dereferences a freed object (parsanol-ruby#177,
+    /// SIGSEGV on linux x86_64/ruby 3.3). The box keeps the registered
+    /// address stable for `gc_register_address`.
+    static HOST_ATOMS: std::cell::RefCell<Option<Box<RArray>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+fn live_registry() -> Option<RArray> {
+    HOST_ATOMS.with(|r| r.borrow().as_deref().copied())
 }
 
 /// Register a live host value and return its handle.
 pub fn intern_host_atom(value: &Value) -> u64 {
     HOST_ATOMS.with(|r| {
-        let mut reg = r.borrow_mut();
-        reg.push(*value);
-        (reg.len() - 1) as u64
+        let mut slot = r.borrow_mut();
+        if slot.is_none() {
+            let ruby = Ruby::get().expect("intern_host_atom called off the Ruby thread");
+            let registry = Box::new(ruby.ary_new());
+            ruby.gc_register_address(&*registry);
+            *slot = Some(registry);
+        }
+        let registry = slot.as_deref().copied().expect("just initialized");
+        registry.push(*value).expect("host atom registry push");
+        (registry.len() - 1) as u64
     })
 }
 
 /// Fetch a live host value by handle.
 pub fn host_atom(handle: u64) -> Option<Value> {
-    HOST_ATOMS.with(|r| r.borrow().get(handle as usize).copied())
+    live_registry()?.entry(handle as isize).ok()
 }
 
 /// Drop all registered host values. Called at top-level parse entry:
 /// handles are only meaningful within one parse's capture state.
 pub fn reset_host_atoms() {
-    HOST_ATOMS.with(|r| r.borrow_mut().clear());
+    HOST_ATOMS.with(|r| {
+        if let Some(registry) = r.borrow_mut().take() {
+            match Ruby::get() {
+                Ok(ruby) => ruby.gc_unregister_address(&*registry),
+                // No Ruby thread to unregister on: leaking the box keeps
+                // the registered address pointing at live memory.
+                Err(_) => std::mem::forget(registry),
+            }
+        }
+    });
 }
 
 /// Resolve Parsanol::Atoms::Base once per call site use.
