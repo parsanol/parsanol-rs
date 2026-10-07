@@ -58,6 +58,12 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- GC-root the host atom registry (ruby#177) by @[object]
+- Drop the exploratory note trace; satisfy the format gate by @[object]
+- Track the deepest failure position through trivia (rs#171) by @[object]
+
+### Other
+
 - Satisfy the lint gate: mem::take over drain by @[object]
 - Trivia capture channel and Atom::TriviaCapture (rs#172/#152) by @[object]
 
