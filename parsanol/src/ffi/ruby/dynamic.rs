@@ -190,9 +190,14 @@ impl RubyDynamicCallback {
                 None
             }
             Err(e) => {
-                if trace {
-                    eprintln!("DYN-BRIDGE: funcall failed: {e:?}");
-                }
+                // A block exception is a grammar bug, not control flow;
+                // swallowing it silently turns divergence into mystery
+                // (rs#165 hid here). Keep the fail-the-dispatch
+                // semantics but always surface the error.
+                eprintln!(
+                    "DYN-BRIDGE: callback {} raised: {e:?}",
+                    self.callback_id
+                );
                 None
             }
         }

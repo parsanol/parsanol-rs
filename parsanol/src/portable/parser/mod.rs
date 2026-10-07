@@ -1834,6 +1834,15 @@ impl<'a> PortableParser<'a> {
         // indistinguishable to a deterministic block.
         let capture_fp = super::dynamic::capture_signature(&self.capture_state, self.input);
         let outcome_key = (callback_id, pos, capture_fp);
+        if std::env::var("PARSANOL_CACHE_TRACE").is_ok() {
+            eprintln!(
+                "OUTCOME-LOOKUP cb={} pos={} fp={:016x} hit={}",
+                callback_id,
+                pos,
+                capture_fp,
+                self.dynamic_outcomes.contains_key(&outcome_key)
+            );
+        }
         if let Some(outcome) = self.dynamic_outcomes.get(&outcome_key) {
             return match outcome {
                 Some((end_pos, value)) => {
