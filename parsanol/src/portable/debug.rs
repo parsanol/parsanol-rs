@@ -255,7 +255,7 @@ impl<'a> GrammarVisualizer<'a> {
             Atom::Constant { value } => format!("constant({:?})", value),
             Atom::Lookbehind { look, positive } => {
                 format!("lookbehind({:?}, +{})", look, positive)
-            },
+            }
             Atom::Capture { name, .. } => format!("capture({:?})", name),
             Atom::Scope { .. } => "scope".to_string(),
             Atom::Dynamic { callback_id } => format!("dynamic({})", callback_id),

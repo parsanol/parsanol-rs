@@ -29,9 +29,7 @@ use crate::portable::ast::{AstNode, ParseError, ParseResult};
 use crate::portable::cache::{CacheEntry, DenseCache};
 use crate::portable::capture_state::CaptureState;
 use crate::portable::char_class::{utf8_char_len, CharRanges, CharacterPattern};
-use crate::portable::grammar::{
-    Atom, ConstantValue, Grammar, LookSpec, RepetitionTag,
-};
+use crate::portable::grammar::{Atom, ConstantValue, Grammar, LookSpec, RepetitionTag};
 use crate::portable::regex_cache;
 
 /// Memoized scan plans keyed by class pattern (TODO.perf/2). Grammars
@@ -933,8 +931,7 @@ impl<'a> PortableParser<'a> {
                         LookSpec::Literal { count, pattern } => {
                             let count = *count as usize;
                             pos >= count
-                                && &self.input_bytes[pos - count..pos]
-                                    == pattern.as_bytes()
+                                && &self.input_bytes[pos - count..pos] == pattern.as_bytes()
                         }
                         LookSpec::Regex { source } => {
                             let anchored = format!("(?:{})\\z", source);
