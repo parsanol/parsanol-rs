@@ -24,6 +24,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   store parser expressions in captures natively. New exhaustive-enum
   variants are semver-minor on the 0.x line (the 0.13.0 precedent).
 
+## [0.17.0] - 2026-10-07
+
+### Added
+
+- LookSpec for Atom::Lookbehind: Literal (the fixed byte window) or
+  Regex (end-anchored at the position) - the CommonMark flanking
+  form (rs#163 gap 1). The wire shape change rejects loudly on
+  0.15/0.16.
+
+### Fixed
+
+- The dynamic-bridge writeback interns every non-string host value -
+  the lazy-continuation :block marker no longer drops natively
+  (parsanol-ruby#160).
+
+New exhaustive-enum variants are semver-minor on the 0.x line (the
+0.13.0 precedent).
+
 ## [Unreleased]
 
 ### Other
