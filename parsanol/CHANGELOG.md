@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Other
 
+- Satisfy the lint gate: mem::take over drain by @[object]
+- Trivia capture channel and Atom::TriviaCapture (rs#172/#152) by @[object]
+
+### Other
+
 - Satisfy the lint gates: fmt, dead bindings, orphaned doc line by @[object]
 - Restore the names() doc and document the undo-log semantics by @[object]
 - Fragment boundary seeds visible capture state (rs#174) by @[object]
