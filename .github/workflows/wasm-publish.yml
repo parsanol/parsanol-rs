@@ -15,6 +15,12 @@ jobs:
   publish:
     name: Build and publish @parsanol/wasm to npm
     runs-on: ubuntu-latest
+    # Every release tag fires this workflow (the workspace releases
+    # parsanol and parsanol-derive together), but @parsanol/wasm is
+    # versioned by the workspace — the second tag's publish hits the
+    # first's staged version and fails with npm 409 (seen on v0.17.2).
+    # Only the main crate's tag publishes.
+    if: startsWith(github.event.release.tag_name, 'parsanol-v') || github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v7
 
