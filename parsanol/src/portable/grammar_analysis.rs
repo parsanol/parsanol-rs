@@ -337,6 +337,7 @@ impl<'a> GrammarAnalyzer<'a> {
                 }
                 None
             }
+            Atom::Constant { .. } | Atom::Lookbehind { .. } => None,
             Atom::Named { atom, .. }
             | Atom::Ignore { atom }
             | Atom::Trivia { atom }
@@ -442,6 +443,7 @@ impl<'a> GrammarAnalyzer<'a> {
             Atom::Sequence { atoms } => atoms.iter().all(|&a| self.is_nullable(a)),
             Atom::Alternative { atoms } => atoms.iter().any(|&a| self.is_nullable(a)),
             Atom::Repetition { min, .. } => *min == 0,
+            Atom::Constant { .. } | Atom::Lookbehind { .. } => true,
             Atom::Named { atom, .. }
             | Atom::Entity { atom }
             | Atom::Ignore { atom }
@@ -507,6 +509,7 @@ impl<'a> GrammarAnalyzer<'a> {
                     self.collect_reachable(child, reachable);
                 }
             }
+            Atom::Constant { .. } | Atom::Lookbehind { .. } => {}
             Atom::Repetition { atom, .. }
             | Atom::Named { atom, .. }
             | Atom::Entity { atom }

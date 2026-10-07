@@ -1083,3 +1083,105 @@ mod trivia_capture_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod constant_lookbehind_tests {
+    use super::super::{AstArena, AstNode, Grammar, PortableParser};
+
+    // coradoc-markdown parity (rs#137 follow-up): Output /
+    // precedes? atoms become wire-expressible Constant / Lookbehind.
+    // Grammar: dash+ then Constant{hr: true} then Guarded*
+    //   Guarded = Lookbehind(one byte behind is dash) then [a-z]+
+    const PASS: &str = r#"{"atoms":[
+        {"Re":{"pattern":"-"}},
+        {"Repetition":{"atom":0,"min":1,"max":null,"tag":"Repetition"}},
+        {"Constant":{"value":{"Hash":[["hr",{"Bool":true}]]}}},
+        {"Sequence":{"atoms":[1,2]}},
+        {"Re":{"pattern":"[a-z]+"}},
+        {"Lookbehind":{"count":1,"pattern":"-","positive":true}},
+        {"Sequence":{"atoms":[5,4]}},
+        {"Named":{"name":"guarded","atom":6}},
+        {"Repetition":{"atom":7,"min":0,"max":null,"tag":"Repetition"}},
+        {"Sequence":{"atoms":[3,8]}}
+    ],"root":9}"#;
+
+    // Same shape but the guard demands the byte 'z' behind: nothing
+    // can pass, so a min-1 run makes the whole parse fail.
+    const FAIL: &str = r#"{"atoms":[
+        {"Re":{"pattern":"-"}},
+        {"Repetition":{"atom":0,"min":1,"max":null,"tag":"Repetition"}},
+        {"Constant":{"value":{"Str":"x"}}},
+        {"Sequence":{"atoms":[1,2]}},
+        {"Re":{"pattern":"[a-z]+"}},
+        {"Lookbehind":{"count":1,"pattern":"z","positive":true}},
+        {"Sequence":{"atoms":[5,4]}},
+        {"Named":{"name":"guarded","atom":6}},
+        {"Repetition":{"atom":7,"min":1,"max":null,"tag":"Repetition"}},
+        {"Sequence":{"atoms":[3,8]}}
+    ],"root":9}"#;
+
+    fn resolve(a: &AstArena, n: &AstNode) -> String {
+        match n {
+            AstNode::Nil => "null".to_string(),
+            AstNode::Bool(b) => b.to_string(),
+            AstNode::Int(i) => i.to_string(),
+            AstNode::Float(f) => f.to_string(),
+            AstNode::StringRef { pool_index } => {
+                format!("{:?}", a.get_string(*pool_index as usize))
+            }
+            AstNode::InputRef { offset, length } => format!(
+                "{:?}",
+                &a.get_input()[*offset as usize..(*offset + *length) as usize]
+            ),
+            AstNode::Array { pool_index, length } => {
+                let items = a.get_array(*pool_index as usize, *length as usize);
+                let inner: Vec<String> = items.iter().map(|i| resolve(a, i)).collect();
+                format!("[{}]", inner.join(","))
+            }
+            AstNode::Hash { pool_index, length } => {
+                let pairs = a.get_hash_items(*pool_index as usize, *length as usize);
+                let inner: Vec<String> = pairs
+                    .iter()
+                    .map(|(k, v)| format!("{:?}:{}", k, resolve(a, v)))
+                    .collect();
+                format!("{{{}}}", inner.join(","))
+            }
+        }
+    }
+
+    fn parse_tree(grammar_json: &str, input: &str) -> String {
+        let g = Grammar::from_json(grammar_json).unwrap();
+        let mut arena = AstArena::for_input(input.len());
+        arena.set_input(input.to_string());
+        let mut p = PortableParser::new(&g, input, &mut arena);
+        let ast = p.parse().expect("parse succeeds");
+        resolve(&arena, &ast)
+    }
+
+    fn parse_err(grammar_json: &str, input: &str) -> bool {
+        let g = Grammar::from_json(grammar_json).unwrap();
+        let mut arena = AstArena::for_input(input.len());
+        arena.set_input(input.to_string());
+        let mut p = PortableParser::new(&g, input, &mut arena);
+        p.parse().is_err()
+    }
+
+    #[test]
+    fn constant_yields_the_wire_value_after_its_prefix() {
+        assert_eq!(
+            parse_tree(PASS, "-"),
+            r#"[":sequence",[":sequence",[":repetition","-"],{"hr":true}],[":repetition"]]"#
+        );
+    }
+
+    #[test]
+    fn lookbehind_passes_when_the_byte_behind_matches() {
+        let tree = parse_tree(PASS, "---abc");
+        assert!(tree.contains("guarded"), "tree: {tree}");
+    }
+
+    #[test]
+    fn lookbehind_fails_when_the_byte_behind_differs() {
+        assert!(parse_err(FAIL, "-abc"));
+    }
+}

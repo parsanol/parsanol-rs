@@ -360,6 +360,18 @@ fn remap_atom(atom: &Atom, offset: usize) -> Atom {
             atom: atom + offset,
             rules: rules.clone(),
         },
+        Atom::Constant { value } => Atom::Constant {
+            value: value.clone(),
+        },
+        Atom::Lookbehind {
+            count,
+            pattern,
+            positive,
+        } => Atom::Lookbehind {
+            count: *count,
+            pattern: pattern.clone(),
+            positive: *positive,
+        },
         Atom::Capture { name, atom } => Atom::Capture {
             name: name.clone(),
             atom: atom + offset,

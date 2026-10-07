@@ -29,7 +29,7 @@ use crate::portable::ast::{AstNode, ParseError, ParseResult};
 use crate::portable::cache::{CacheEntry, DenseCache};
 use crate::portable::capture_state::CaptureState;
 use crate::portable::char_class::{utf8_char_len, CharRanges, CharacterPattern};
-use crate::portable::grammar::{Atom, Grammar, RepetitionTag};
+use crate::portable::grammar::{Atom, ConstantValue, Grammar, RepetitionTag};
 use crate::portable::regex_cache;
 
 /// Memoized scan plans keyed by class pattern (TODO.perf/2). Grammars
@@ -910,6 +910,36 @@ impl<'a> PortableParser<'a> {
                         capture_state: None,
                     })
                 }
+                Atom::Constant { value } => {
+                    // coradoc-markdown Output parity: empty match that
+                    // yields the wire constant.
+                    let node = self.store_constant(value);
+                    Ok(ParseResult {
+                        value: node,
+                        end_pos: pos,
+                        capture_state: None,
+                    })
+                }
+                Atom::Lookbehind {
+                    count,
+                    pattern,
+                    positive,
+                } => {
+                    // coradoc-markdown precedes?/does_not_precede?
+                    // parity: inspect the +count+ bytes behind pos;
+                    // consume nothing.
+                    let bytes = self.input_bytes;
+                    let matched = pos >= *count && &bytes[pos - *count..pos] == pattern.as_bytes();
+                    if matched == *positive {
+                        Ok(ParseResult {
+                            value: AstNode::Nil,
+                            end_pos: pos,
+                            capture_state: None,
+                        })
+                    } else {
+                        Err(ParseError::Failed { position: pos })
+                    }
+                }
                 Atom::Custom { id } => self.parse_custom(*id, pos),
                 Atom::Capture { name, atom } => self.parse_capture(name, *atom, pos, consume_all),
                 Atom::Scope { atom } => self.parse_scope(*atom, pos, consume_all),
@@ -1557,6 +1587,43 @@ impl<'a> PortableParser<'a> {
     }
 
     #[inline]
+    fn store_constant(&mut self, value: &ConstantValue) -> AstNode {
+        match value {
+            ConstantValue::Nil => AstNode::Nil,
+            ConstantValue::Bool(b) => AstNode::Bool(*b),
+            ConstantValue::Int(i) => AstNode::Int(*i),
+            ConstantValue::Str(s) => self.arena.intern_string(s),
+            ConstantValue::Array(items) => {
+                let nodes: Vec<AstNode> = items.iter().map(|v| self.store_constant(v)).collect();
+                let (idx, len) = self.arena.store_array(&nodes);
+                AstNode::Array {
+                    pool_index: idx,
+                    length: len,
+                }
+            }
+            ConstantValue::Hash(pairs) => {
+                let nodes: Vec<AstNode> =
+                    pairs.iter().map(|(_, v)| self.store_constant(v)).collect();
+                let (arr_idx, arr_len) = self.arena.store_array(&nodes);
+                let comments = AstNode::Array {
+                    pool_index: arr_idx,
+                    length: arr_len,
+                };
+                let _ = comments; // pairs flatten via sequence-shaped hash below
+                let keys: Vec<(&str, AstNode)> = pairs
+                    .iter()
+                    .zip(nodes)
+                    .map(|((k, _), v)| (k.as_str(), v))
+                    .collect();
+                let (idx, len) = self.arena.store_hash(&keys);
+                AstNode::Hash {
+                    pool_index: idx,
+                    length: len,
+                }
+            }
+        }
+    }
+
     fn parse_named(
         &mut self,
         name: &str,

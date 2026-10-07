@@ -418,6 +418,15 @@ impl Compiler {
             Atom::Scope { atom } => self.compile_scope(atom),
             Atom::Dynamic { callback_id } => self.compile_dynamic(callback_id),
             Atom::Custom { id } => self.compile_custom(id),
+            Atom::Constant { .. } | Atom::Lookbehind { .. } => {
+                Err(CompileError::UnsupportedFeature {
+                    feature: "constant-yield / lookbehind atoms \
+                              (parsanol-ruby#137 follow-up); this program tier \
+                              declines and the caller runs the tree-walking \
+                              interpreter"
+                        .to_string(),
+                })
+            }
             Atom::StateSet { .. }
             | Atom::StateMatch { .. }
             | Atom::StateSwitch { .. }
@@ -602,6 +611,7 @@ impl Compiler {
             | Atom::Capture { atom, .. }
             | Atom::Scope { atom } => self.provable_first_set(*atom, visited),
             Atom::Lookahead { .. } | Atom::Cut | Atom::Dynamic { .. } | Atom::Custom { .. } => None,
+            Atom::Constant { .. } | Atom::Lookbehind { .. } => None,
             // Ruby-tier state atoms: unprovable (state-dependent or
             // foreign). An inline-expression set COULD recurse into the
             // expr's first set, but the state write itself is a side
