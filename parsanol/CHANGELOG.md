@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Other
 
+- Release v0.14.0 by @[object]
+- Satisfy the lint gate: mem::take over drain by @[object]
+- Trivia capture channel and Atom::TriviaCapture (rs#172/#152) by @[object]
+
+### Other
+
 - Satisfy the lint gate: mem::take over drain by @[object]
 - Trivia capture channel and Atom::TriviaCapture (rs#172/#152) by @[object]
 
