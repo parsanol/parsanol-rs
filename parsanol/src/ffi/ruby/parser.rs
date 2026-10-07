@@ -374,6 +374,9 @@ pub fn parse_handle_events(handle: u64, input: RString) -> Result<Value, Error> 
 
     let mut arena = AstArena::for_input(input_str.len());
     arena.set_input(input_str.to_string());
+    if !crate::portable::dynamic::in_dynamic_dispatch() {
+        crate::ffi::ruby::dynamic::reset_host_atoms();
+    }
     let mut parser = PortableParser::new(&entry.grammar, input_str, &mut arena);
     let raw = parser.parse().map_err(|e| {
         let diagnostics = parser.failure_diagnostics();
@@ -457,6 +460,9 @@ pub fn parse_handle_prefix(handle: u64, input: RString) -> Result<Value, Error> 
 
     let mut arena = AstArena::for_input(input_str.len());
     arena.set_input(input_str.to_string());
+    if !crate::portable::dynamic::in_dynamic_dispatch() {
+        crate::ffi::ruby::dynamic::reset_host_atoms();
+    }
     let mut parser = PortableParser::new(&entry.grammar, input_str, &mut arena);
     let result = match parser.parse_with_end_pos() {
         Ok(result) => result,
@@ -549,6 +555,9 @@ fn parse_with_grammar(
     }
 
     let mut arena = AstArena::for_input(input.len());
+    if !crate::portable::dynamic::in_dynamic_dispatch() {
+        crate::ffi::ruby::dynamic::reset_host_atoms();
+    }
     let mut parser = PortableParser::new(grammar, input, &mut arena);
 
     let ast = match parser.parse() {
@@ -876,6 +885,9 @@ pub fn parse_with_stats(
     };
 
     let mut arena = AstArena::for_input(input.len());
+    if !crate::portable::dynamic::in_dynamic_dispatch() {
+        crate::ffi::ruby::dynamic::reset_host_atoms();
+    }
     let mut parser = PortableParser::new(&grammar, &input, &mut arena);
 
     let ast = parser
@@ -929,6 +941,9 @@ pub fn parse_batch(grammar_json: String, input: String) -> Result<Vec<u64>, Erro
 
     let mut arena = AstArena::for_input(input.len());
     arena.set_input(input.clone());
+    if !crate::portable::dynamic::in_dynamic_dispatch() {
+        crate::ffi::ruby::dynamic::reset_host_atoms();
+    }
     let mut parser = PortableParser::new(&grammar, &input, &mut arena);
 
     // 1. Parse
@@ -985,6 +1000,9 @@ pub fn parse_with_builder(
 
     // Parse with builder
     let mut arena = AstArena::for_input(input.len());
+    if !crate::portable::dynamic::in_dynamic_dispatch() {
+        crate::ffi::ruby::dynamic::reset_host_atoms();
+    }
     let mut parser = PortableParser::new(&grammar, &input, &mut arena);
 
     parser

@@ -359,7 +359,7 @@ pub(crate) fn enter_dynamic() -> Option<DynamicGuard> {
 // ============================================================================
 
 thread_local! {
-    static CAPTURE_WRITES: std::cell::RefCell<Vec<(String, String)>> =
+    static CAPTURE_WRITES: std::cell::RefCell<Vec<(String, WriteValue)>> =
         const { std::cell::RefCell::new(Vec::new()) };
 }
 
@@ -369,11 +369,29 @@ thread_local! {
 /// after the callback resolves — inside whatever capture scope
 /// encloses the dynamic atom, so backtracking discards them exactly
 /// like capture-atom writes when the enclosing branch fails.
-pub fn note_capture_writes(writes: Vec<(String, String)>) {
+pub fn note_capture_writes(writes: Vec<(String, WriteValue)>) {
     if writes.is_empty() {
         return;
     }
     CAPTURE_WRITES.with(|w| w.borrow_mut().extend(writes));
+}
+
+/// A capture write's value (parsanol-ruby#160): literal text, or a
+/// handle into the host registry for atom-valued writes — the
+/// open_block/continuation chain pattern stores parser expressions in
+/// captures and later dispatches read them back as live atoms.
+#[derive(Clone, Debug)]
+pub enum WriteValue {
+    /// Literal text
+    Text(String),
+    /// Host-registry handle for an atom-valued capture
+    Opaque(u64),
+}
+
+impl From<&str> for WriteValue {
+    fn from(s: &str) -> Self {
+        WriteValue::Text(s.to_string())
+    }
 }
 
 /// Drain pending capture writes into a capture state, converting each
@@ -382,8 +400,12 @@ pub fn note_capture_writes(writes: Vec<(String, String)>) {
 pub fn drain_capture_writes_into(captures: &mut CaptureState) {
     CAPTURE_WRITES.with(|w| {
         let mut pending = w.borrow_mut();
-        for (name, text) in pending.drain(..) {
-            captures.store(&name, super::capture_state::CaptureValue::text(text));
+        for (name, value) in pending.drain(..) {
+            let cv = match value {
+                WriteValue::Text(t) => super::capture_state::CaptureValue::text(t),
+                WriteValue::Opaque(handle) => super::capture_state::CaptureValue::opaque(handle),
+            };
+            captures.store(&name, cv);
         }
     });
 }
@@ -404,7 +426,7 @@ pub struct CachedFragment {
     pub root: usize,
     /// Capture writes the block performed; replayed on cache hits so
     /// side effects match the uncached path exactly.
-    pub writes: Vec<(String, String)>,
+    pub writes: Vec<(String, WriteValue)>,
     /// Cached parse outcome for this exact dispatch (rs#174): the
     /// fragment grammar alone still forced a fresh empty-memo parse on
     /// every invocation, and outer backtracking re-invoked dynamics
@@ -506,7 +528,7 @@ pub(crate) fn capture_signature(captures: &CaptureState, input: &str) -> u64 {
 pub type FragmentHit = (
     std::sync::Arc<super::grammar::Grammar>,
     usize,
-    Vec<(String, String)>,
+    Vec<(String, WriteValue)>,
 );
 
 /// Look up a cached fragment for this (callback, position, captures,
@@ -541,7 +563,7 @@ pub fn store_dispatch_fragment(
     input: &str,
     grammar: super::grammar::Grammar,
     root: usize,
-    writes: Vec<(String, String)>,
+    writes: Vec<(String, WriteValue)>,
 ) -> std::sync::Arc<super::grammar::Grammar> {
     let input_hash = INPUT_HASH.with(|c| c.get());
     let key = (
@@ -616,7 +638,7 @@ pub fn store_dynamic_outcome(
 
 /// Snapshot the pending capture writes (used by the engine to record
 /// what a freshly resolved block wrote, for replay on cache hits).
-pub fn take_pending_writes() -> Vec<(String, String)> {
+pub fn take_pending_writes() -> Vec<(String, WriteValue)> {
     CAPTURE_WRITES.with(|w| std::mem::take(&mut *w.borrow_mut()))
 }
 

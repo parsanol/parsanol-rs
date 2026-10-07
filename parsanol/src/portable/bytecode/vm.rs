@@ -903,11 +903,16 @@ impl<'a> BytecodeVM<'a> {
                         self.input_str,
                     ) {
                         Some((g, _root, writes)) => {
-                            for (name, text) in writes {
-                                self.capture_state.store(
-                                    &name,
-                                    crate::portable::capture_state::CaptureValue::text(text),
-                                );
+                            for (name, value) in writes {
+                                let cv = match value {
+                                    crate::portable::dynamic::WriteValue::Text(t) => {
+                                        crate::portable::capture_state::CaptureValue::text(t)
+                                    }
+                                    crate::portable::dynamic::WriteValue::Opaque(handle) => {
+                                        crate::portable::capture_state::CaptureValue::opaque(handle)
+                                    }
+                                };
+                                self.capture_state.store(&name, cv);
                             }
                             g
                         }
@@ -943,13 +948,20 @@ impl<'a> BytecodeVM<'a> {
                                 }
                             };
                             let writes = crate::portable::dynamic::take_pending_writes();
-                            for (name, text) in &writes {
-                                self.capture_state.store(
-                                    name,
-                                    crate::portable::capture_state::CaptureValue::text(
-                                        text.clone(),
-                                    ),
-                                );
+                            for (name, value) in &writes {
+                                let cv = match value {
+                                    crate::portable::dynamic::WriteValue::Text(t) => {
+                                        crate::portable::capture_state::CaptureValue::text(
+                                            t.clone(),
+                                        )
+                                    }
+                                    crate::portable::dynamic::WriteValue::Opaque(handle) => {
+                                        crate::portable::capture_state::CaptureValue::opaque(
+                                            *handle,
+                                        )
+                                    }
+                                };
+                                self.capture_state.store(name, cv);
                             }
                             let root = resolved.root;
                             crate::portable::dynamic::store_dispatch_fragment(

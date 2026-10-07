@@ -530,7 +530,10 @@ mod capture_writes {
                 .map(|c| c.into_owned())
                 .unwrap_or_default();
             let next = format!("{cont}+");
-            note_capture_writes(vec![("cont".to_string(), next)]);
+            note_capture_writes(vec![(
+                "cont".to_string(),
+                crate::portable::dynamic::WriteValue::Text(next),
+            )]);
 
             // Dispatch: with cont "a+" match "B", else match "A".
             let pattern = if cont.is_empty() { "A" } else { "B" };
@@ -608,7 +611,10 @@ mod capture_writes {
     /// read back exactly, independent of the input.
     #[test]
     fn writes_read_back_as_text_values() {
-        note_capture_writes(vec![("k".to_string(), "literal".to_string())]);
+        note_capture_writes(vec![(
+            "k".to_string(),
+            crate::portable::dynamic::WriteValue::Text("literal".to_string()),
+        )]);
         let mut caps = CaptureState::new();
         drain_capture_writes_into(&mut caps);
         let input = "completely unrelated input";

@@ -7,6 +7,50 @@ use crate::portable::dynamic::{DynamicCallback, DynamicContext};
 use crate::portable::grammar::Atom;
 use magnus::{value::ReprValue, Error, IntoValue, Module, RClass, Ruby, TryConvert, Value};
 
+// ============================================================================
+// Host atom registry (parsanol-ruby#160)
+// ============================================================================
+
+thread_local! {
+    /// Live Ruby values (parser expressions) referenced by opaque
+    /// capture handles. The engine never evaluates them — later
+    /// dispatches do, through the rehydrated context — so the only
+    /// requirement is that the value stays alive for the parse.
+    static HOST_ATOMS: std::cell::RefCell<Vec<Value>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Register a live host value and return its handle.
+pub fn intern_host_atom(value: &Value) -> u64 {
+    HOST_ATOMS.with(|r| {
+        let mut reg = r.borrow_mut();
+        reg.push(*value);
+        (reg.len() - 1) as u64
+    })
+}
+
+/// Fetch a live host value by handle.
+pub fn host_atom(handle: u64) -> Option<Value> {
+    HOST_ATOMS.with(|r| r.borrow().get(handle as usize).copied())
+}
+
+/// Drop all registered host values. Called at top-level parse entry:
+/// handles are only meaningful within one parse's capture state.
+pub fn reset_host_atoms() {
+    HOST_ATOMS.with(|r| r.borrow_mut().clear());
+}
+
+/// Resolve Parsanol::Atoms::Base once per call site use.
+fn atoms_base_class(ruby: &Ruby) -> Option<RClass> {
+    let object_class: RClass = ruby.class_object();
+    let parsanol_mod: magnus::RModule = object_class
+        .const_get::<_, magnus::RModule>("Parsanol")
+        .ok()?;
+    let atoms_mod: magnus::RModule = parsanol_mod.const_get::<_, magnus::RModule>("Atoms").ok()?;
+    let base: RClass = atoms_mod.const_get::<_, RClass>("Base").ok()?;
+    Some(base)
+}
+
 /// Ruby dynamic callback wrapper
 ///
 /// This struct wraps a Ruby callback ID and implements the `DynamicCallback`.
@@ -169,7 +213,7 @@ impl RubyDynamicCallback {
         let Ok(hash): Result<magnus::RHash, Error> = TryConvert::try_convert(caps_after) else {
             return;
         };
-        let mut writes: Vec<(String, String)> = Vec::new();
+        let mut writes: Vec<(String, crate::portable::dynamic::WriteValue)> = Vec::new();
         let Ok(pairs): Result<magnus::RArray, Error> = hash.funcall("to_a", ()) else {
             return;
         };
@@ -182,15 +226,47 @@ impl RubyDynamicCallback {
                 (Some(k), Some(v)) => (k, v),
                 _ => continue,
             };
-            let Ok(name): Result<String, Error> = TryConvert::try_convert(k) else {
-                continue;
+            // Blocks write symbol keys (the seeded context hashes
+            // are symbol-keyed); accept either spelling.
+            let sym_name: Option<String> = magnus::Symbol::from_value(k)
+                .and_then(|sym| sym.name().ok().map(|n| n.to_string()));
+            let name: String = match sym_name {
+                Some(n) => n,
+                None => match String::try_convert(k) {
+                    Ok(s) => s,
+                    Err(_) => continue,
+                },
             };
-            let Ok(text): Result<String, Error> = TryConvert::try_convert(v) else {
-                continue;
+            // parsanol-ruby#160: values that are parser expressions
+            // (the open_block/continuation chain pattern stores atom
+            // chains in captures) intern into the host registry as
+            // opaque handles — text conversion would silently drop
+            // the write and every downstream chain-read would miss.
+            let text: Result<String, Error> = TryConvert::try_convert(v);
+            let value = match text {
+                Ok(t) => crate::portable::dynamic::WriteValue::Text(t),
+                Err(_) => {
+                    let is_atom = atoms_base_class(ruby)
+                        .map(|base| v.is_kind_of(base))
+                        .unwrap_or(false);
+                    if !is_atom {
+                        continue;
+                    }
+                    let handle = intern_host_atom(&v);
+                    crate::portable::dynamic::WriteValue::Opaque(handle)
+                }
             };
-            let unchanged = seeded.iter().any(|(sn, st)| *sn == name && *st == text);
+            let text_marker = match &value {
+                crate::portable::dynamic::WriteValue::Text(t) => t.clone(),
+                crate::portable::dynamic::WriteValue::Opaque(handle) => {
+                    format!("\u{0}atom#{handle}")
+                }
+            };
+            let unchanged = seeded
+                .iter()
+                .any(|(sn, st)| *sn == name && *st == text_marker);
             if !unchanged {
-                writes.push((name, text));
+                writes.push((name, value));
             }
         }
         if !writes.is_empty() {
@@ -212,6 +288,15 @@ fn build_ruby_context(ctx: &DynamicContext, ruby: &Ruby) -> Option<Value> {
     let captures_hash = ruby.hash_new();
     for name in ctx.captures.names() {
         if let Some(value) = ctx.captures.get(name) {
+            // parsanol-ruby#160: opaque handles rehydrate as the live
+            // host value so chain-reads (caps[:cont]) see the parser
+            // expression the earlier dispatch stored.
+            if let crate::portable::capture_state::CaptureValue::Opaque { handle } = &value {
+                if let Some(atom) = host_atom(*handle) {
+                    let _ = captures_hash.aset(ruby.to_symbol(name.as_str()), atom);
+                }
+                continue;
+            }
             let text = value.get_text(ctx.input());
             let _ = captures_hash.aset(ruby.to_symbol(name.as_str()), text.as_ref());
         }
