@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.0] - 2026-10-07
+
+### Added
+
+- Constant and Lookbehind wire atoms (rs#137 follow-up): constant-yield
+  and byte-window-lookbehind atoms, making coradoc-markdown Output /
+  precedes? shapes natively serializable. New exhaustive-enum variants
+  are semver-minor on the 0.x line (the 0.13.0 precedent).
+
 ## [Unreleased]
 
 ### Other
