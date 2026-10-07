@@ -483,7 +483,7 @@ pub fn begin_parse(input: &str) {
 
 pub(crate) fn capture_signature(captures: &CaptureState, input: &str) -> u64 {
     let mut h: u64 = 0x9e37_79b9_7f4a_7c15;
-    let mut names: Vec<&String> = captures.names().collect();
+    let mut names: Vec<&String> = captures.visible_names().collect();
     names.sort();
     for name in names {
         if let Some(value) = captures.get(name) {
