@@ -20,6 +20,11 @@ jobs:
   prepare:
     name: Prepare Release
     runs-on: ubuntu-latest
+    # The parsanol-derive releases fire this workflow's release
+    # trigger too; their runs have no libparsanol artifacts to build
+    # and the get-release step fails, leaving a red X on main for
+    # every dual release. Only the main crate's tags carry binaries.
+    if: startsWith(github.event.release.tag_name, 'parsanol-v')
     outputs:
       tag_name: ${{ steps.get_release.outputs.tag_name }}
       upload_url: ${{ steps.get_release.outputs.upload_url }}
