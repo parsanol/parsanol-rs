@@ -21,6 +21,25 @@ pub enum RepetitionTag {
     Maybe,
 }
 
+/// Wire-representable constant for [Atom::Constant] (coradoc-markdown
+/// `Output` atoms). Ordered hash pairs keep Eq without ordering
+/// ambiguity; floats are out of scope for constant yields.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ConstantValue {
+    /// No value
+    Nil,
+    /// Boolean
+    Bool(bool),
+    /// Integer
+    Int(i64),
+    /// String
+    Str(String),
+    /// Array of constants
+    Array(Vec<ConstantValue>),
+    /// Ordered key-value pairs
+    Hash(Vec<(String, ConstantValue)>),
+}
+
 /// Atom types that make up a grammar
 ///
 /// These correspond to the different parsanol atom types.
@@ -122,6 +141,29 @@ pub enum Atom {
         /// Leading-literal marker -> kind label, derived from the
         /// skip declaration's capture list (e.g. "//" -> "line_comment")
         rules: Vec<(String, String)>,
+    },
+
+    /// Match nothing and yield a constant value (coradoc-markdown's
+    /// `Output` atoms: `thematic_break.output(hr: true)`). The value
+    /// is wire data — hosts serialize their constant-yielding atoms
+    /// to this variant. Engines predating it reject such artifacts
+    /// loudly (unknown variant), the declared gate.
+    Constant {
+        /// The value yielded on (empty) match
+        value: ConstantValue,
+    },
+
+    /// Look behind the current position: the previous +count+ bytes
+    /// must equal +pattern+ (positive) or differ (negative). Consumes
+    /// nothing, yields nil — coradoc-markdown's `precedes?` /
+    /// `does_not_precede?` guards.
+    Lookbehind {
+        /// How many bytes behind the position to inspect
+        count: usize,
+        /// The literal those bytes must equal for a positive match
+        pattern: String,
+        /// Positive (assert) or negative (refute) lookbehind
+        positive: bool,
     },
 
     /// Capture matched text with a name
@@ -389,6 +431,8 @@ impl Grammar {
                 Atom::Ignore { .. } => "ignore",
                 Atom::Trivia { .. } => "trivia",
                 Atom::TriviaCapture { .. } => "trivia_capture",
+                Atom::Constant { .. } => "constant",
+                Atom::Lookbehind { .. } => "lookbehind",
                 Atom::Capture { .. } => "capture",
                 Atom::Scope { .. } => "scope",
                 Atom::Dynamic { .. } => "dynamic",
@@ -1042,6 +1086,9 @@ impl Grammar {
                     visitor.visit_ignore_pre(*atom);
                     self.visit_atom(*atom, visitor);
                     visitor.visit_ignore_post(*atom);
+                }
+                Atom::Constant { .. } | Atom::Lookbehind { .. } => {
+                    // Leaves: no children to visit.
                 }
                 Atom::Capture { name, atom } => {
                     visitor.visit_capture_pre(name, *atom);

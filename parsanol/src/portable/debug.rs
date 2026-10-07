@@ -252,6 +252,12 @@ impl<'a> GrammarVisualizer<'a> {
             Atom::TriviaCapture { atom, rules } => {
                 format!("trivia_capture(a{}, {:?})", atom, rules)
             }
+            Atom::Constant { value } => format!("constant({:?})", value),
+            Atom::Lookbehind {
+                count,
+                pattern,
+                positive,
+            } => format!("lookbehind({}b, {:?}, +{})", count, pattern, positive),
             Atom::Capture { name, .. } => format!("capture({:?})", name),
             Atom::Scope { .. } => "scope".to_string(),
             Atom::Dynamic { callback_id } => format!("dynamic({})", callback_id),

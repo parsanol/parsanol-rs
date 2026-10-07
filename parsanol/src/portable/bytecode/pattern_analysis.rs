@@ -58,7 +58,9 @@ impl FixedLenAnalysis {
             Atom::Repetition { .. } => PatternLength::Variable,
 
             // Patterns that don't consume input
-            Atom::Lookahead { .. } => PatternLength::CannotMatch,
+            Atom::Lookahead { .. } | Atom::Constant { .. } | Atom::Lookbehind { .. } => {
+                PatternLength::CannotMatch
+            }
             Atom::Cut => PatternLength::CannotMatch,
 
             // Named captures preserve the inner pattern's length (need atom index)
@@ -109,7 +111,9 @@ impl NullableAnalysis {
     pub fn analyze(&self, atom: &Atom) -> PatternNullability {
         match atom {
             // Always nullable (can match empty)
-            Atom::Lookahead { .. } => PatternNullability::Nullable,
+            Atom::Lookahead { .. } | Atom::Constant { .. } | Atom::Lookbehind { .. } => {
+                PatternNullability::Nullable
+            }
             Atom::Repetition { min: 0, .. } => PatternNullability::Nullable,
             Atom::Str { pattern } if pattern.is_empty() => PatternNullability::Nullable,
 
@@ -223,6 +227,10 @@ impl FirstSetAnalysis {
             Atom::TriviaCapture { .. } => FirstSetAnalysis {
                 charset: vec![],
                 nullable: false,
+            },
+            Atom::Constant { .. } | Atom::Lookbehind { .. } => FirstSetAnalysis {
+                charset: vec![],
+                nullable: true,
             },
             Atom::Entity { .. } => FirstSetAnalysis {
                 charset: vec![],
