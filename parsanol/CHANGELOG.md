@@ -42,6 +42,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 New exhaustive-enum variants are semver-minor on the 0.x line (the
 0.13.0 precedent).
 
+## [0.17.1] - 2026-10-07
+
+### Fixed
+
+- Capture iteration uses map keys, not the undo log (rs#165):
+  fragment-seeded capture states exposed nothing through the dynamic
+  bridge — context materialization omitted every capture and
+  capture_signature hashed every fragment temp as empty. The
+  coradoc lazy-continuation divergence (7 kramdown examples) was
+  exactly this; the full markdown suite (637 examples) and the
+  engine differential (13/13) parse tree-identically natively now.
+
 ## [Unreleased]
 
 ### Other
