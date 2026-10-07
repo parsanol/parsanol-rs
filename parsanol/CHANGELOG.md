@@ -28,6 +28,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Other
 
+- Carry the 0.16.0 version: new exhaustive-enum variants are semver-minor for a 0.x line (the 0.13.0 precedent) by @[object]
+- Atom-valued capture writes as opaque host handles (rs#137/#160) by @[object]
+
+### Other
+
 - Satisfy the lint gate: mem::take over drain by @[object]
 - Trivia capture channel and Atom::TriviaCapture (rs#172/#152) by @[object]
 
