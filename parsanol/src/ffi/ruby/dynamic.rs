@@ -194,10 +194,7 @@ impl RubyDynamicCallback {
                 // swallowing it silently turns divergence into mystery
                 // (rs#165 hid here). Keep the fail-the-dispatch
                 // semantics but always surface the error.
-                eprintln!(
-                    "DYN-BRIDGE: callback {} raised: {e:?}",
-                    self.callback_id
-                );
+                eprintln!("DYN-BRIDGE: callback {} raised: {e:?}", self.callback_id);
                 None
             }
         }
