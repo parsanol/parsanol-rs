@@ -1845,9 +1845,16 @@ impl<'a> PortableParser<'a> {
         if let Some((fragment, root, writes)) =
             super::dynamic::cached_fragment(callback_id, pos, &self.capture_state, self.input)
         {
-            for (name, text) in writes {
-                self.capture_state
-                    .store(&name, super::capture_state::CaptureValue::text(text));
+            for (name, value) in writes {
+                let cv = match value {
+                    super::dynamic::WriteValue::Text(t) => {
+                        super::capture_state::CaptureValue::text(t)
+                    }
+                    super::dynamic::WriteValue::Opaque(handle) => {
+                        super::capture_state::CaptureValue::opaque(handle)
+                    }
+                };
+                self.capture_state.store(&name, cv);
             }
             return self.parse_fragment(&fragment, root, pos);
         }
@@ -1882,9 +1889,16 @@ impl<'a> PortableParser<'a> {
         // state below. They are recorded with the cached fragment so
         // hits replay them.
         let writes = super::dynamic::take_pending_writes();
-        for (name, text) in &writes {
-            self.capture_state
-                .store(name, super::capture_state::CaptureValue::text(text.clone()));
+        for (name, value) in &writes {
+            let cv = match value {
+                super::dynamic::WriteValue::Text(t) => {
+                    super::capture_state::CaptureValue::text(t.clone())
+                }
+                super::dynamic::WriteValue::Opaque(handle) => {
+                    super::capture_state::CaptureValue::opaque(*handle)
+                }
+            };
+            self.capture_state.store(name, cv);
         }
 
         // Cache ONLY self-consistent fragments (small host-atom

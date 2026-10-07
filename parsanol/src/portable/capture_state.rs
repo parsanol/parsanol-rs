@@ -118,6 +118,16 @@ pub enum CaptureValue {
     /// (parsanol-ruby#80): continuation state a block composes, not
     /// tied to any input span.
     Text(Box<str>),
+    /// An atom-valued capture held on the host side
+    /// (parsanol-ruby#160): the open_block/continuation
+    /// chain-read-before-write pattern stores parser expressions in
+    /// captures. The engine never evaluates them — later dispatches
+    /// do — so the value is an opaque handle into the host registry,
+    /// distinct per handle for content signatures.
+    Opaque {
+        /// Host-registry slot holding the live value
+        handle: u64,
+    },
 }
 
 impl CaptureValue {
@@ -133,6 +143,13 @@ impl CaptureValue {
         Self::Text(s.into())
     }
 
+    /// Create an atom-valued capture (parsanol-ruby#160): the handle
+    /// references the host registry holding the live expression.
+    #[inline]
+    pub fn opaque(handle: u64) -> Self {
+        Self::Opaque { handle }
+    }
+
     /// The captured text: a borrow of the input for spans, the stored
     /// literal otherwise.
     #[inline]
@@ -140,6 +157,11 @@ impl CaptureValue {
         match self {
             Self::Span { offset, length } => input[*offset..*offset + *length].into(),
             Self::Text(t) => std::borrow::Cow::Owned(t.to_string()),
+            Self::Opaque { handle } => {
+                // Stable, handle-distinct marker: content signatures
+                // must tell two different chained expressions apart.
+                std::borrow::Cow::Owned(format!("\u{0}atom#{handle}"))
+            }
         }
     }
 
@@ -148,7 +170,7 @@ impl CaptureValue {
     pub fn span(&self) -> Option<(usize, usize)> {
         match self {
             Self::Span { offset, length } => Some((*offset, *length)),
-            Self::Text(_) => None,
+            Self::Text(_) | Self::Opaque { .. } => None,
         }
     }
 
@@ -157,7 +179,7 @@ impl CaptureValue {
     pub fn end(&self) -> usize {
         match self {
             Self::Span { offset, length } => offset + length,
-            Self::Text(_) => 0,
+            Self::Text(_) | Self::Opaque { .. } => 0,
         }
     }
 
@@ -167,6 +189,7 @@ impl CaptureValue {
         match self {
             Self::Span { length, .. } => *length == 0,
             Self::Text(t) => t.is_empty(),
+            Self::Opaque { .. } => false,
         }
     }
 }
