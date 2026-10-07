@@ -546,6 +546,16 @@ pub fn cached_fragment(
         pos,
         capture_signature(captures, input) ^ input_hash,
     );
+    let trace = std::env::var("PARSANOL_CACHE_TRACE").is_ok();
+    if trace {
+        eprintln!(
+            "CACHE-LOOKUP cb={} pos={} sig={:016x} hit={}",
+            callback_id,
+            pos,
+            capture_signature(captures, input) ^ input_hash,
+            DISPATCH_CACHE.with(|c| c.borrow().contains_key(&key))
+        );
+    }
     DISPATCH_CACHE.with(|c| {
         c.borrow()
             .get(&key)
