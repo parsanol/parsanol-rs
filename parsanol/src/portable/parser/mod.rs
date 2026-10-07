@@ -998,9 +998,6 @@ impl<'a> PortableParser<'a> {
     }
 
     fn note_failure(&mut self, pos: usize, label: String) {
-        if std::env::var("PARSANOL_CACHE_TRACE").is_ok() {
-            eprintln!("NOTE pos={} label={:?} depth={}", pos, label, self.trivia_depth);
-        }
         // rs#171: the deepest POSITION is tracked regardless of trivia
         // nesting — the ruby engine's deepest-failure reporting sees
         // failures inside injected trivia (their terminals fail at
