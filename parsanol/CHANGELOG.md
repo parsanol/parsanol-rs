@@ -14,6 +14,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   precedes? shapes natively serializable. New exhaustive-enum variants
   are semver-minor on the 0.x line (the 0.13.0 precedent).
 
+## [0.16.0] - 2026-10-07
+
+### Added
+
+- Atom-valued capture writes across the dynamic bridge
+  (parsanol-ruby#160): `CaptureValue::Opaque` handles and the typed
+  `WriteValue` channel let the open_block/continuation chain pattern
+  store parser expressions in captures natively. New exhaustive-enum
+  variants are semver-minor on the 0.x line (the 0.13.0 precedent).
+
 ## [Unreleased]
 
 ### Other
