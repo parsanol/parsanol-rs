@@ -60,7 +60,18 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      # Cross-linking aarch64 on an x86_64 runner without the target
+      # gcc falls back to the host cc, whose lld rejects rustc's
+      # --fix-cortex-a53-843419 ("only supported on AArch64") - the
+      # job has failed on every release since the runner moved to
+      # -fuse-ld=lld. Install the real cross toolchain.
+      - name: Install cross toolchain (aarch64)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
+
       - name: Build library
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
         uses: actions-rs/cargo@v1
         with:
           command: build
@@ -204,10 +215,23 @@ jobs:
           targets: wasm32-unknown-unknown
 
       - name: Install wasm-pack
-        uses: jetli/wasm-pack-action@v0.4.0
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack
 
       - name: Build WASM package
-        run: wasm-pack build --target web --features wasm
+        # The crate stays rlib-only (the ruby side's cdylib twin owns
+        # the libparsanol.* naming); enable cdylib just-in-time - the
+        # recipe wasm-publish.yml has proven on every release while
+        # this job's 2020-era action failed to parse the workspace
+        # manifest ("TOML parse error at line 1, column 1").
+      - name: Enable cdylib for wasm-pack
+        run: |
+          sed -i 's/^crate-type = \["rlib"\]/crate-type = ["rlib", "cdylib"]/' parsanol/Cargo.toml
+          grep -q cdylib parsanol/Cargo.toml || { echo "could not patch crate-type in parsanol/Cargo.toml"; exit 1; }
+
+      - name: Build WASM package
+        run: wasm-pack build parsanol --target web --out-dir ../pkg --release --features wasm
 
       - name: Prepare artifacts
         run: |
