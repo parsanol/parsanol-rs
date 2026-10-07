@@ -153,7 +153,7 @@ impl RubyDynamicCallback {
         // the post-call readback can diff out the block's writes.
         let seeded: Vec<(String, String)> = ctx
             .captures
-            .names()
+            .visible_names()
             .filter_map(|n| {
                 ctx.captures
                     .get(n)
@@ -285,7 +285,7 @@ fn build_ruby_context(ctx: &DynamicContext, ruby: &Ruby) -> Option<Value> {
     let _ = hash.aset(ruby.to_symbol("pos"), ctx.pos() as i64);
     let _ = hash.aset(ruby.to_symbol("remaining"), ctx.remaining());
     let captures_hash = ruby.hash_new();
-    for name in ctx.captures.names() {
+    for name in ctx.captures.visible_names() {
         if let Some(value) = ctx.captures.get(name) {
             // parsanol-ruby#160: opaque handles rehydrate as the live
             // host value so chain-reads (caps[:cont]) see the parser
