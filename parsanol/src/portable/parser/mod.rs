@@ -65,10 +65,9 @@ fn scan_plan_for(
 /// capture context at the same position can resolve differently).
 /// Empty when the grammar has no Dynamic atoms (TODO.perf/5).
 fn dynamic_dependence(grammar: &Grammar) -> Vec<bool> {
-    let has_dynamic = grammar
-        .atoms
-        .iter()
-        .any(|a| matches!(a, Atom::Dynamic { .. }));
+    let has_dynamic = grammar.atoms.iter().any(|a| {
+        matches!(a, Atom::Dynamic { .. }) // TEMP-BISECT state marking disabled
+    });
     if !has_dynamic {
         return Vec::new();
     }
@@ -100,7 +99,16 @@ fn dynamic_dependence(grammar: &Grammar) -> Vec<bool> {
         .atoms
         .iter()
         .enumerate()
-        .filter_map(|(i, a)| matches!(a, Atom::Dynamic { .. }).then_some(i))
+        .filter_map(|(i, a)| {
+            matches!(
+                a,
+                Atom::Dynamic { .. }
+                    | Atom::StateSet { .. }
+                    | Atom::StateMatch { .. }
+                    | Atom::StateSwitch { .. }
+            )
+            .then_some(i)
+        })
         .collect();
     while let Some(a) = stack.pop() {
         if dep[a] {
@@ -110,6 +118,20 @@ fn dynamic_dependence(grammar: &Grammar) -> Vec<bool> {
         stack.extend(parents[a].iter().copied());
     }
     dep
+}
+
+/// Rule-name → Named-atom index for StateSwitch dispatch: the wire
+/// inlines rule bodies, so a rule name resolves to the Named atom
+/// that carries it (first occurrence wins — inlined copies are
+/// equivalent).
+fn named_atom_index(grammar: &Grammar) -> std::collections::HashMap<String, usize> {
+    let mut index = std::collections::HashMap::new();
+    for (i, atom) in grammar.atoms.iter().enumerate() {
+        if let Atom::Named { name, .. } = atom {
+            index.entry(name.clone()).or_insert(i);
+        }
+    }
+    index
 }
 
 /// Logging macros - no-op when logging feature is disabled
@@ -225,9 +247,17 @@ pub struct PortableParser<'a> {
     /// allowing safe cleanup of garbage from failed parse branches.
     rollback_on_failure: bool,
 
+    dbg_depth: u64,
+
     /// Per-atom dynamic dependence (empty when the grammar has no
     /// Dynamic atoms): memoization is skipped for these atoms.
     dynamic_dependent: Vec<bool>,
+
+    /// Rule-name index for state dispatch (parsanol-ruby#129):
+    /// StateSwitch arms reference rules by name; the wire inlines
+    /// rule bodies, so the resolution target is the Named atom
+    /// carrying the rule's name.
+    named_atoms: std::collections::HashMap<String, usize>,
 
     /// Stable arena backing snapshot-marked cache entries (incremental
     /// reparsing, TODO.perf/4). Hits on snapshot entries adopt their
@@ -338,7 +368,9 @@ impl<'a> PortableParser<'a> {
             pending_trivia: Vec::new(),
             dynamic_outcomes: std::collections::HashMap::new(),
             rollback_on_failure,
+            dbg_depth: 0,
             dynamic_dependent: dynamic_dependence(grammar),
+            named_atoms: named_atom_index(grammar),
             snapshot_arena,
             snapshots_in_live,
             dispatch_counts: None,
@@ -377,7 +409,9 @@ impl<'a> PortableParser<'a> {
             pending_trivia: Vec::new(),
             dynamic_outcomes: std::collections::HashMap::new(),
             rollback_on_failure: false,
+            dbg_depth: 0,
             dynamic_dependent: dynamic_dependence(grammar),
+            named_atoms: named_atom_index(grammar),
             snapshot_arena: None,
             snapshots_in_live: false,
             dispatch_counts: None,
@@ -659,6 +693,32 @@ impl<'a> PortableParser<'a> {
         pos: usize,
         consume_all: bool,
     ) -> Result<ParseResult, ParseError> {
+        self.dbg_depth += 1;
+        if std::env::var("PARSANOL_VM_DEBUG").is_ok() && self.dbg_depth > 120 {
+            let dbg = format!("{:?}", self.grammar.get_atom(atom_id));
+            eprintln!(
+                "D{} id {} pos {} {}",
+                self.dbg_depth,
+                atom_id,
+                pos,
+                &dbg[..dbg.len().min(70)]
+            );
+            if self.dbg_depth > 150 {
+                self.dbg_depth = 0;
+                std::process::abort();
+            }
+        }
+        let r = self.try_atom_impl_inner(atom_id, pos, consume_all);
+        self.dbg_depth -= 1;
+        r
+    }
+
+    fn try_atom_impl_inner(
+        &mut self,
+        atom_id: usize,
+        pos: usize,
+        consume_all: bool,
+    ) -> Result<ParseResult, ParseError> {
         if let Some(counts) = &mut self.dispatch_counts {
             counts[atom_id] += 1;
         }
@@ -722,6 +782,10 @@ impl<'a> PortableParser<'a> {
                     );
                     entry.set_consume_all(consume_all);
                     self.dyn_cache.insert(key, entry);
+                }
+                Err(ref e) if matches!(e, ParseError::InvalidGrammar { .. }) => {
+                    // Runtime-level abort (CustomRef): never memoized,
+                    // never a branch outcome — see the dense-path note.
                 }
                 Err(_) => {
                     let mut entry = CacheEntry::failure(pos as u32, atom_id as u16);
@@ -813,6 +877,16 @@ impl<'a> PortableParser<'a> {
                 Ok(result)
             }
             Err(e) => {
+                // InvalidGrammar is a property of the RUNTIME, not of
+                // this branch: reaching a CustomRef means no native
+                // runtime can parse this artifact, and letting the
+                // failure act as a branch outcome would silently
+                // diverge from the Ruby interpreter (which evaluates
+                // the custom atom). Propagate it unmemoized — the FFI
+                // layer's interpreter recovery handles it.
+                if matches!(e, ParseError::InvalidGrammar { .. }) {
+                    return Err(e);
+                }
                 // CRITICAL: Cache failures too!
                 // Without this, failed alternatives are re-parsed exponentially
                 // This is the key to packrat parser performance
@@ -955,12 +1029,18 @@ impl<'a> PortableParser<'a> {
                 Atom::Capture { name, atom } => self.parse_capture(name, *atom, pos, consume_all),
                 Atom::Scope { atom } => self.parse_scope(*atom, pos, consume_all),
                 Atom::Dynamic { callback_id } => self.parse_dynamic(*callback_id, pos),
-                Atom::StateSet { .. }
-                | Atom::StateMatch { .. }
-                | Atom::StateSwitch { .. }
-                | Atom::CustomRef { .. } => Err(ParseError::InvalidGrammar {
-                    reason: "PARG runtime-state/custom atoms are Ruby-tier: this \
-                             artifact carries a `dynamic` flag and parses on a \
+                Atom::StateSet { slot, value, expr } => {
+                    self.parse_state_set(slot, value, expr, pos, consume_all)
+                }
+                Atom::StateMatch { slot } => self.parse_state_match(slot, pos),
+                Atom::StateSwitch {
+                    slot,
+                    arms,
+                    default,
+                } => self.parse_state_switch(slot, arms, default, pos, consume_all),
+                Atom::CustomRef { .. } => Err(ParseError::InvalidGrammar {
+                    reason: "PARG custom atoms are Ruby-tier: this artifact \
+                             carries a `dynamic` flag and parses on a \
                              Ruby runtime (parsanol-ruby#129)"
                         .to_string(),
                 }),
@@ -1187,12 +1267,25 @@ impl<'a> PortableParser<'a> {
             for &atom_id in atoms {
                 let cp = self.arena.checkpoint();
                 self.capture_state.push_scope();
-                if let Ok(result) = self.try_atom_impl(atom_id, pos, consume_all) {
-                    self.capture_state.commit_scope();
-                    return Ok(result);
+                match self.try_atom_impl(atom_id, pos, consume_all) {
+                    Ok(result) => {
+                        self.capture_state.commit_scope();
+                        return Ok(result);
+                    }
+                    Err(e) if matches!(e, ParseError::InvalidGrammar { .. }) => {
+                        // Runtime-level abort (CustomRef): not a branch
+                        // outcome — propagating keeps the native pass
+                        // from silently skipping a custom atom the Ruby
+                        // interpreter would evaluate.
+                        self.capture_state.pop_scope();
+                        self.arena.rollback(cp);
+                        return Err(e);
+                    }
+                    Err(_) => {
+                        self.capture_state.pop_scope();
+                        self.arena.rollback(cp);
+                    }
                 }
-                self.capture_state.pop_scope();
-                self.arena.rollback(cp);
             }
             return Err(ParseError::Failed { position: pos });
         }
@@ -1206,6 +1299,10 @@ impl<'a> PortableParser<'a> {
                 Ok(result) => {
                     self.capture_state.commit_scope();
                     return Ok(result);
+                }
+                Err(e) if matches!(e, ParseError::InvalidGrammar { .. }) => {
+                    self.capture_state.pop_scope();
+                    return Err(e);
                 }
                 Err(_) => {
                     self.capture_state.pop_scope();
@@ -1716,8 +1813,16 @@ impl<'a> PortableParser<'a> {
         // A lookahead inspects without consuming: captures made inside
         // its body never persist, positive or negative.
         self.capture_state.push_scope();
-        let matches = self.try_atom_impl(atom_id, pos, consume_all).is_ok();
+        let inner = self.try_atom_impl(atom_id, pos, consume_all);
         self.capture_state.pop_scope();
+        if let Err(ParseError::InvalidGrammar { .. }) = inner {
+            // Runtime-level abort (CustomRef): a lookahead must not
+            // swallow it into "does not match" — see parse_alternative.
+            return Err(ParseError::InvalidGrammar {
+                reason: "runtime-level abort inside lookahead".to_string(),
+            });
+        }
+        let matches = inner.is_ok();
         if matches == positive {
             Ok(ParseResult {
                 value: AstNode::Nil,
@@ -1726,6 +1831,110 @@ impl<'a> PortableParser<'a> {
             })
         } else {
             Err(ParseError::Failed { position: pos })
+        }
+    }
+
+    /// PARG runtime-state write (parsanol-ruby#129): slots live in the
+    /// capture store, so branch failure rolls writes back through the
+    /// same undo discipline as captures. Literal form always succeeds
+    /// and consumes nothing; the inline-expression form stores the
+    /// expression's consumed text (the block_open pattern).
+    #[inline]
+    fn parse_state_set(
+        &mut self,
+        slot: &str,
+        value: &Option<String>,
+        expr: &Option<usize>,
+        pos: usize,
+        consume_all: bool,
+    ) -> Result<ParseResult, ParseError> {
+        if let Some(literal) = value {
+            self.capture_state.store(
+                slot,
+                super::capture_state::CaptureValue::text(literal.as_str()),
+            );
+            // State atoms never contribute to enclosing composites
+            // (the interpreter's flatten drops them — the #129 spec
+            // pins `((set m = "a") (state m) 1*alpha) as t` on "ab"
+            // yielding "b").
+            return Ok(ParseResult {
+                value: AstNode::Nil,
+                end_pos: pos,
+                capture_state: Some(self.capture_state.clone()),
+            });
+        }
+        let expr_id = expr.ok_or_else(|| ParseError::InvalidGrammar {
+            reason: "StateSet carries neither a literal value nor an expression".to_string(),
+        })?;
+        let result = self.try_atom_impl(expr_id, pos, consume_all)?;
+        let span = &self.input[pos..result.end_pos];
+        self.capture_state
+            .store(slot, super::capture_state::CaptureValue::text(span));
+        // The expression form KEEPS the sub-atom's outcome — the Ruby
+        // StateSet returns it (`outcome`), and captures on the set
+        // (`(set fence = ...) as delimiter`) bind the matched fence
+        // text through it.
+        Ok(ParseResult {
+            value: result.value,
+            end_pos: result.end_pos,
+            capture_state: Some(self.capture_state.clone()),
+        })
+    }
+
+    /// PARG runtime-state comparison: matches the slot's current value
+    /// verbatim at the position (the block-delimiter close).
+    #[inline]
+    fn parse_state_match(&mut self, slot: &str, pos: usize) -> Result<ParseResult, ParseError> {
+        let expected = self
+            .capture_state
+            .get(slot)
+            .map(|v| v.get_text(self.input).into_owned());
+        let Some(expected) = expected else {
+            self.note_failure(pos, format!("state({slot})"));
+            return Err(ParseError::Failed { position: pos });
+        };
+        if self.input_bytes[pos..].starts_with(expected.as_bytes()) {
+            let len = expected.len();
+            Ok(ParseResult {
+                value: AstNode::Nil,
+                end_pos: pos + len,
+                capture_state: Some(self.capture_state.clone()),
+            })
+        } else {
+            self.note_failure(pos, format!("state({slot})"));
+            Err(ParseError::Failed { position: pos })
+        }
+    }
+
+    /// PARG runtime-state dispatch: routes to the arm (or default)
+    /// named by the slot's current value. A nil resolution fails the
+    /// atom — native dynamic-callback parity.
+    #[inline]
+    fn parse_state_switch(
+        &mut self,
+        slot: &str,
+        arms: &std::collections::BTreeMap<String, String>,
+        default: &Option<String>,
+        pos: usize,
+        consume_all: bool,
+    ) -> Result<ParseResult, ParseError> {
+        let current = self
+            .capture_state
+            .get(slot)
+            .map(|v| v.get_text(self.input).into_owned());
+        let rule = current
+            .as_deref()
+            .and_then(|c| arms.get(c))
+            .or(default.as_ref());
+        let Some(rule_name) = rule else {
+            self.note_failure(pos, format!("switch({slot})"));
+            return Err(ParseError::Failed { position: pos });
+        };
+        match self.named_atoms.get(rule_name.as_str()) {
+            Some(&atom_id) => self.try_atom_impl(atom_id, pos, consume_all),
+            None => Err(ParseError::InvalidGrammar {
+                reason: format!("StateSwitch references unknown rule {rule_name:?}"),
+            }),
         }
     }
 

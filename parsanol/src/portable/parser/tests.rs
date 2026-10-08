@@ -1216,3 +1216,261 @@ mod constant_lookbehind_tests {
         assert!(parse_err(REGEX_GUARD, "x abc"));
     }
 }
+
+#[cfg(test)]
+mod state_tests {
+    use super::*;
+    use crate::portable::arena::AstArena;
+
+    // The block_open/block_close shape: StateSet(expr) remembers the
+    // opening delimiter's consumed text; StateMatch requires exactly
+    // that text verbatim at the close position.
+    #[test]
+    fn state_set_expr_and_match_close_delimiter() {
+        let mut g = Grammar::new();
+        let open = g.add_atom(Atom::Str {
+            pattern: "--".to_string(),
+        });
+        let set = g.add_atom(Atom::StateSet {
+            slot: "delim".to_string(),
+            value: None,
+            expr: Some(open),
+        });
+        let body = g.add_atom(Atom::Str {
+            pattern: "x".to_string(),
+        });
+        let close = g.add_atom(Atom::StateMatch {
+            slot: "delim".to_string(),
+        });
+        let root = g.add_atom(Atom::Sequence {
+            atoms: vec![set, body, close],
+        });
+        g.root = root;
+
+        let mut arena = AstArena::new();
+        let mut p = PortableParser::new(&g, "--x--", &mut arena);
+        assert!(p.parse().is_ok());
+
+        // A different-length or different-text close never matches:
+        // the comparison is verbatim against the captured text.
+        let mut arena = AstArena::new();
+        let mut p = PortableParser::new(&g, "--x~-", &mut arena);
+        assert!(p.parse().is_err());
+    }
+
+    // A switch routes by the slot's literal value to a named rule.
+    #[test]
+    fn state_switch_routes_by_slot_value() {
+        let mut g = Grammar::new();
+        let a = g.add_atom(Atom::Str {
+            pattern: "A".to_string(),
+        });
+        let b = g.add_atom(Atom::Str {
+            pattern: "B".to_string(),
+        });
+        let _d1 = g.add_atom(Atom::Named {
+            name: "d1".to_string(),
+            atom: a,
+        });
+        let _d2 = g.add_atom(Atom::Named {
+            name: "d2".to_string(),
+            atom: b,
+        });
+        let set = g.add_atom(Atom::StateSet {
+            slot: "mode".to_string(),
+            value: Some("d1".to_string()),
+            expr: None,
+        });
+        let switch = g.add_atom(Atom::StateSwitch {
+            slot: "mode".to_string(),
+            arms: [
+                ("d1".to_string(), "d1".to_string()),
+                ("d2".to_string(), "d2".to_string()),
+            ]
+            .into_iter()
+            .collect(),
+            default: None,
+        });
+        let root = g.add_atom(Atom::Sequence {
+            atoms: vec![set, switch],
+        });
+        g.root = root;
+
+        let mut arena = AstArena::new();
+        let mut p = PortableParser::new(&g, "A", &mut arena);
+        assert!(p.parse().is_ok());
+
+        // The default arm covers unmatched slot values.
+        let set_default_route = g.add_atom(Atom::StateSet {
+            slot: "mode".to_string(),
+            value: Some("other".to_string()),
+            expr: None,
+        });
+        let mut arena = AstArena::new();
+        let switch_default = g.add_atom(Atom::StateSwitch {
+            slot: "mode".to_string(),
+            arms: [("d1".to_string(), "d1".to_string())].into_iter().collect(),
+            default: Some("d2".to_string()),
+        });
+        let root_default = g.add_atom(Atom::Sequence {
+            atoms: vec![set_default_route, switch_default],
+        });
+        g.root = root_default;
+        let mut p = PortableParser::new(&g, "B", &mut arena);
+        assert!(p.parse().is_ok());
+
+        // No arm and no default: the atom fails.
+        let mut arena = AstArena::new();
+        let mut p = PortableParser::new(&g, "A", &mut arena);
+        assert!(p.parse().is_err());
+    }
+
+    // State writes ride the capture undo log: a failed branch's slot
+    // write must not leak into later alternatives. With a leak, the
+    // second branch would match the input's first byte and the root
+    // would end as Incomplete rather than Failed.
+    #[test]
+    fn state_write_rolls_back_on_failed_branch() {
+        let mut g = Grammar::new();
+        let write = g.add_atom(Atom::StateSet {
+            slot: "s".to_string(),
+            value: Some("X".to_string()),
+            expr: None,
+        });
+        let fail = g.add_atom(Atom::Str {
+            pattern: "Z".to_string(),
+        });
+        let leak_branch = g.add_atom(Atom::Sequence {
+            atoms: vec![write, fail],
+        });
+        let read = g.add_atom(Atom::StateMatch {
+            slot: "s".to_string(),
+        });
+        let root = g.add_atom(Atom::Alternative {
+            atoms: vec![leak_branch, read],
+        });
+        g.root = root;
+
+        let mut arena = AstArena::new();
+        let mut p = PortableParser::new(&g, "XY", &mut arena);
+        // No leak: read fails (slot unset), the root fails outright.
+        // With a leak it would match "X" and end as Incomplete.
+        match p.parse() {
+            Err(ParseError::Failed { .. }) => {}
+            other => panic!(
+                "expected Failed, got {:?}",
+                other.err().map(|e| e.to_string())
+            ),
+        }
+    }
+
+    // StateMatch on an unset slot fails at the position.
+    #[test]
+    fn state_match_unset_slot_fails() {
+        let mut g = Grammar::new();
+        let read = g.add_atom(Atom::StateMatch {
+            slot: "nope".to_string(),
+        });
+        g.root = read;
+
+        let mut arena = AstArena::new();
+        let mut p = PortableParser::new(&g, "anything", &mut arena);
+        assert!(p.parse().is_err());
+    }
+}
+
+#[cfg(test)]
+mod custom_ref_tests {
+    use super::*;
+    use crate::portable::arena::AstArena;
+
+    // Reaching a CustomRef aborts the WHOLE native pass (a runtime
+    // property), never just the branch: with branch semantics an
+    // alternative could silently skip the custom atom and diverge
+    // from the Ruby interpreter, which evaluates it.
+    #[test]
+    fn custom_ref_aborts_the_parse_not_the_branch() {
+        let mut g = Grammar::new();
+        let custom = g.add_atom(Atom::CustomRef {
+            name: "my_custom".to_string(),
+        });
+        let lit = g.add_atom(Atom::Str {
+            pattern: "A".to_string(),
+        });
+        let root = g.add_atom(Atom::Alternative {
+            atoms: vec![custom, lit],
+        });
+        g.root = root;
+
+        let mut arena = AstArena::new();
+        let mut p = PortableParser::new(&g, "A", &mut arena);
+        match p.parse() {
+            Err(ParseError::InvalidGrammar { .. }) => {}
+            other => panic!("expected InvalidGrammar, got {:?}", other),
+        }
+    }
+}
+
+#[cfg(test)]
+mod state_compaction_tests {
+    use super::*;
+    use crate::portable::arena::AstArena;
+
+    // The compaction pass must treat the StateSet's inline expression
+    // as reachable AND remap its index: dropping either corrupts the
+    // expr into a stale pointer — observed as a self-referential
+    // delimiter cycle (infinite recursion) on the coradoc-adoc
+    // artifact (parsanol-ruby#162).
+    #[test]
+    fn state_set_expr_survives_from_json_compaction() {
+        let mut g = Grammar::new();
+        let tick = g.add_atom(Atom::Str {
+            pattern: "`".to_string(),
+        });
+        let rep = g.add_atom(Atom::Repetition {
+            atom: tick,
+            min: 3,
+            max: None,
+            tag: crate::portable::grammar::RepetitionTag::Repetition,
+        });
+        let set = g.add_atom(Atom::StateSet {
+            slot: "fence".to_string(),
+            value: None,
+            expr: Some(rep),
+        });
+        let body = g.add_atom(Atom::Str {
+            pattern: "x".to_string(),
+        });
+        let close = g.add_atom(Atom::StateMatch {
+            slot: "fence".to_string(),
+        });
+        let root = g.add_atom(Atom::Sequence {
+            atoms: vec![set, body, close],
+        });
+        g.root = root;
+
+        let json = g.to_json().expect("serialize");
+        let loaded = Grammar::from_json(&json).expect("load");
+
+        // The runtime StateSet's expr must still point at a Repetition.
+        let set_id = loaded
+            .atoms
+            .iter()
+            .position(|a| matches!(a, Atom::StateSet { .. }))
+            .expect("StateSet present");
+        let expr = match &loaded.atoms[set_id] {
+            Atom::StateSet { expr, .. } => expr.expect("expr kept"),
+            other => panic!("unexpected atom {:?}", other),
+        };
+        assert!(
+            matches!(&loaded.atoms[expr], Atom::Repetition { min: 3, .. }),
+            "expr must remap to the repetition, got {:?}",
+            loaded.atoms[expr]
+        );
+
+        // And the fence-close shape must parse.
+        let mut arena = AstArena::new();
+        let mut p = PortableParser::new(&loaded, "```x```", &mut arena);
+        assert!(p.parse().is_ok());
+    }
+}
