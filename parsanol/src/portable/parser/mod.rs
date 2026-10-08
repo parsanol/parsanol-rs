@@ -65,9 +65,23 @@ fn scan_plan_for(
 /// capture context at the same position can resolve differently).
 /// Empty when the grammar has no Dynamic atoms (TODO.perf/5).
 fn dynamic_dependence(grammar: &Grammar) -> Vec<bool> {
-    let has_dynamic = grammar.atoms.iter().any(|a| {
-        matches!(a, Atom::Dynamic { .. }) // TEMP-BISECT state marking disabled
-    });
+    dependence_closure(grammar, |a| {
+        matches!(
+            a,
+            Atom::Dynamic { .. } | Atom::StateMatch { .. } | Atom::StateSwitch { .. }
+        )
+    })
+}
+
+/// Ancestors of StateSet writes (parsanol-ruby#185): a dyn-cache
+/// replay re-derives the VALUE but skips the slot write, so a later
+/// reader sees a stale slot. These atoms bypass the dyn cache.
+fn state_write_dependence(grammar: &Grammar) -> Vec<bool> {
+    dependence_closure(grammar, |a| matches!(a, Atom::StateSet { .. }))
+}
+
+fn dependence_closure(grammar: &Grammar, is_seed: impl Fn(&Atom) -> bool) -> Vec<bool> {
+    let has_dynamic = grammar.atoms.iter().any(|a| is_seed(a));
     if !has_dynamic {
         return Vec::new();
     }
@@ -99,16 +113,7 @@ fn dynamic_dependence(grammar: &Grammar) -> Vec<bool> {
         .atoms
         .iter()
         .enumerate()
-        .filter_map(|(i, a)| {
-            matches!(
-                a,
-                Atom::Dynamic { .. }
-                    | Atom::StateSet { .. }
-                    | Atom::StateMatch { .. }
-                    | Atom::StateSwitch { .. }
-            )
-            .then_some(i)
-        })
+        .filter_map(|(i, a)| is_seed(a).then_some(i))
         .collect();
     while let Some(a) = stack.pop() {
         if dep[a] {
@@ -253,6 +258,12 @@ pub struct PortableParser<'a> {
     /// Dynamic atoms): memoization is skipped for these atoms.
     dynamic_dependent: Vec<bool>,
 
+    /// Per-atom ancestry of StateSet writes (parsanol-ruby#185): a
+    /// dyn-cache replay re-derives the VALUE but skips the slot
+    /// write, so a later reader sees a stale slot. These atoms
+    /// bypass the dyn cache entirely.
+    state_write_dependent: Vec<bool>,
+
     /// Rule-name index for state dispatch (parsanol-ruby#129):
     /// StateSwitch arms reference rules by name; the wire inlines
     /// rule bodies, so the resolution target is the Named atom
@@ -370,6 +381,7 @@ impl<'a> PortableParser<'a> {
             rollback_on_failure,
             dbg_depth: 0,
             dynamic_dependent: dynamic_dependence(grammar),
+            state_write_dependent: state_write_dependence(grammar),
             named_atoms: named_atom_index(grammar),
             snapshot_arena,
             snapshots_in_live,
@@ -411,6 +423,7 @@ impl<'a> PortableParser<'a> {
             rollback_on_failure: false,
             dbg_depth: 0,
             dynamic_dependent: dynamic_dependence(grammar),
+            state_write_dependent: state_write_dependence(grammar),
             named_atoms: named_atom_index(grammar),
             snapshot_arena: None,
             snapshots_in_live: false,
@@ -734,6 +747,16 @@ impl<'a> PortableParser<'a> {
         if self.grammar.is_no_cache(atom_id) {
             return self.parse_atom_uncached(atom_id, pos, consume_all);
         }
+        if self
+            .state_write_dependent
+            .get(atom_id)
+            .is_some_and(|&dep| dep)
+        {
+            // A replay re-derives the value but skips the slot write
+            // (parsanol-ruby#185): the reader after it would see a
+            // stale slot. No memo at all for these atoms.
+            return self.parse_atom_uncached(atom_id, pos, consume_all);
+        }
         if dynamic_dependent {
             // Capture-context-dependent (GH-76): memo keyed by the
             // capture-state version. Within a stretch with no capture
@@ -955,11 +978,18 @@ impl<'a> PortableParser<'a> {
                         capture_state: None,
                     })
                 }
-                Atom::TriviaCapture { atom, rules } => {
+                Atom::TriviaCapture {
+                    atom,
+                    rules,
+                    whitespace,
+                } => {
                     // parsanol-ruby#152: Trivia semantics plus a
                     // recording pass — comment-shaped units (matched
                     // text leading with a declared marker) go to the
                     // pending channel for the next Named capture.
+                    // parsanol-ruby#180: a declared whitespace kind
+                    // records marker-less units verbatim (the
+                    // source-preserving mode).
                     self.trivia_depth += 1;
                     let result = self.try_atom_impl(*atom, pos, consume_all);
                     self.trivia_depth -= 1;
@@ -976,6 +1006,9 @@ impl<'a> PortableParser<'a> {
                                 stripped.trim().to_string(),
                                 pos as u32,
                             ));
+                        } else if let Some(kind) = whitespace {
+                            self.pending_trivia
+                                .push((kind.clone(), text.to_string(), pos as u32));
                         }
                     }
                     Ok(ParseResult {

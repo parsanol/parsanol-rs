@@ -356,9 +356,14 @@ fn remap_atom(atom: &Atom, offset: usize) -> Atom {
         Atom::Trivia { atom } => Atom::Trivia {
             atom: atom + offset,
         },
-        Atom::TriviaCapture { atom, rules } => Atom::TriviaCapture {
+        Atom::TriviaCapture {
+            atom,
+            rules,
+            whitespace,
+        } => Atom::TriviaCapture {
             atom: atom + offset,
             rules: rules.clone(),
+            whitespace: whitespace.clone(),
         },
         Atom::Constant { value } => Atom::Constant {
             value: value.clone(),
