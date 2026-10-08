@@ -58,6 +58,10 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- Release v0.18.0 by @[object]
+
+### Other
+
 - TriviaCapture whitespace kind: record marker-less units (ruby#180) by @[object]
 
 ### Other
