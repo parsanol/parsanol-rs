@@ -249,7 +249,7 @@ impl<'a> GrammarVisualizer<'a> {
             Atom::Cut => "cut".to_string(),
             Atom::Ignore { atom } => format!("ignore(a{})", atom),
             Atom::Trivia { atom } => format!("trivia(a{})", atom),
-            Atom::TriviaCapture { atom, rules } => {
+            Atom::TriviaCapture { atom, rules, .. } => {
                 format!("trivia_capture(a{}, {:?})", atom, rules)
             }
             Atom::Constant { value } => format!("constant({:?})", value),

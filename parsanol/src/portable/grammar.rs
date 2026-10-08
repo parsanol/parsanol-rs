@@ -163,6 +163,12 @@ pub enum Atom {
         /// Leading-literal marker -> kind label, derived from the
         /// skip declaration's capture list (e.g. "//" -> "line_comment")
         rules: Vec<(String, String)>,
+        /// parsanol-ruby#180: when declared, trivia units that match
+        /// no marker record under this kind — the source-preserving
+        /// mode. Optional: engines predating it deserialize fine and
+        /// simply don't record whitespace units (documented caveat).
+        #[serde(default)]
+        whitespace: Option<String>,
     },
 
     /// Match nothing and yield a constant value (coradoc-markdown's

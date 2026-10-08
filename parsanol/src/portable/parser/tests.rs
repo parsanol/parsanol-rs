@@ -1474,3 +1474,137 @@ mod state_compaction_tests {
         assert!(p.parse().is_ok());
     }
 }
+
+#[cfg(test)]
+mod state_whitespace_tests {
+    use super::*;
+    use crate::portable::arena::AstArena;
+
+    // parsanol-ruby#180: a declared whitespace kind records
+    // marker-less trivia units verbatim (the source-preserving mode).
+    #[test]
+    fn trivia_capture_whitespace_kind_records_markerless_units() {
+        let mut g = Grammar::new();
+        let space = g.add_atom(Atom::Re {
+            pattern: "[ ]".to_string(),
+        });
+        let lower = g.add_atom(Atom::Re {
+            pattern: "[a-z]".to_string(),
+        });
+        let word_run = g.add_atom(Atom::Repetition {
+            atom: lower,
+            min: 1,
+            max: None,
+            tag: crate::portable::grammar::RepetitionTag::Repetition,
+        });
+        let word = g.add_atom(Atom::Named {
+            name: "word".to_string(),
+            atom: word_run,
+        });
+        // wrapper: 0..1 of (spaces / comment); only the comment form
+        // has a marker — bare spaces record under the fallback kind.
+        let spaces_rep = g.add_atom(Atom::Repetition {
+            atom: space,
+            min: 1,
+            max: None,
+            tag: crate::portable::grammar::RepetitionTag::Repetition,
+        });
+        let comment = g.add_atom(Atom::Str {
+            pattern: "//".to_string(),
+        });
+        let alt = g.add_atom(Atom::Alternative {
+            atoms: vec![spaces_rep, comment],
+        });
+        let capture = g.add_atom(Atom::TriviaCapture {
+            atom: alt,
+            rules: vec![("//".to_string(), "comment".to_string())],
+            whitespace: Some("space".to_string()),
+        });
+        let root = g.add_atom(Atom::Sequence {
+            atoms: vec![capture, word, capture],
+        });
+        g.root = root;
+
+        let mut arena = AstArena::new();
+        let mut p = PortableParser::new(&g, " alpha ", &mut arena);
+        match p.parse() {
+            Ok(_) => {}
+            Err(e) => panic!("parse failed: {e:?}"),
+        }
+        // Recorded units are verbatim. The LEADING " " drained into
+        // the word Named's comments (the #152 lifecycle); the
+        // trailing " " stays pending at end of parse.
+        let pending = std::mem::take(&mut p.pending_trivia);
+        let labels: Vec<&str> = pending.iter().map(|(l, _, _)| l.as_str()).collect();
+        assert_eq!(labels, vec!["space"]);
+        assert_eq!(pending[0].1, " ");
+    }
+}
+
+#[cfg(test)]
+mod fence_regression_tests {
+    use super::*;
+    use crate::portable::arena::AstArena;
+
+    // parsanol-ruby#185: a FAILED block attempt's dyn-cache entry for
+    // the fence StateSet replayed without the slot write — the second
+    // block's close then matched a stale slot. State-write subtrees
+    // bypass the dyn cache.
+    #[test]
+    fn state_set_is_not_served_from_the_dyn_cache() {
+        let mut g = Grammar::new();
+        let dash = g.add_atom(Atom::Str {
+            pattern: "-".to_string(),
+        });
+        let fence = g.add_atom(Atom::Repetition {
+            atom: dash,
+            min: 4,
+            max: None,
+            tag: crate::portable::grammar::RepetitionTag::Repetition,
+        });
+        let set = g.add_atom(Atom::StateSet {
+            slot: "fence".to_string(),
+            value: None,
+            expr: Some(fence),
+        });
+        let nl = g.add_atom(Atom::Str {
+            pattern: "\n".to_string(),
+        });
+        let x = g.add_atom(Atom::Str {
+            pattern: "x".to_string(),
+        });
+        let body = g.add_atom(Atom::Repetition {
+            atom: x,
+            min: 1,
+            max: None,
+            tag: crate::portable::grammar::RepetitionTag::Repetition,
+        });
+        let close = g.add_atom(Atom::StateMatch {
+            slot: "fence".to_string(),
+        });
+        let q = g.add_atom(Atom::Str {
+            pattern: "Q".to_string(),
+        });
+        // The first alternative FAILS after the set (poisoning a naive
+        // dyn cache with a success entry at position 0); the second
+        // re-evaluates the same set at the same position — the slot
+        // write must happen for its close to match.
+        let failing = g.add_atom(Atom::Sequence {
+            atoms: vec![set, nl, q, nl, close, nl],
+        });
+        let ok = g.add_atom(Atom::Sequence {
+            atoms: vec![set, nl, body, nl, close, nl],
+        });
+        let root = g.add_atom(Atom::Alternative {
+            atoms: vec![failing, ok],
+        });
+        g.root = root;
+
+        let mut arena = AstArena::new();
+        let mut p = PortableParser::new(&g, "------\nx\n------\n", &mut arena);
+        match p.parse() {
+            Ok(_) => {}
+            Err(e) => panic!("expected the retry to parse, got {e:?}"),
+        }
+    }
+}
