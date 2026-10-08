@@ -58,6 +58,11 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- Release v0.18.1 by @[object]
+- Release v0.18.0 by @[object]
+
+### Other
+
 - Release v0.18.0 by @[object]
 
 ### Other
