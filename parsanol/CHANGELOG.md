@@ -58,6 +58,10 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- TriviaCapture whitespace kind: record marker-less units (ruby#180) by @[object]
+
+### Other
+
 - Evaluate PARG runtime-state atoms natively (parsanol-ruby#129/#162) by @[object]
 
 ### Other
