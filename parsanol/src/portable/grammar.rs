@@ -835,6 +835,12 @@ impl Grammar {
                 | Atom::TriviaCapture { atom, .. } => vec![*atom],
                 Atom::Capture { atom, .. } => vec![*atom],
                 Atom::Scope { atom } => vec![*atom],
+                // PARG runtime state (parsanol-ruby#129): the inline
+                // expression is reachable only through the StateSet —
+                // missing it compacted the expression away and the
+                // stale expr index then pointed at whatever landed
+                // there (the self-referential delimiter cycle).
+                Atom::StateSet { expr, .. } => expr.iter().copied().collect(),
                 _ => vec![],
             };
             for child in children {
@@ -895,6 +901,9 @@ impl Grammar {
                 }
                 Atom::Scope { atom } => {
                     *atom = remap[*atom];
+                }
+                Atom::StateSet { expr: Some(e), .. } => {
+                    *e = remap[*e];
                 }
                 _ => {}
             }
