@@ -240,6 +240,13 @@ pub struct PortableParser<'a> {
     /// `comments:`. Backtracking restores the drained prefix on
     /// failure (parse_named snapshots before trying).
     pending_trivia: Vec<(String, String, u32)>,
+    /// A trivia drain happened during the in-flight parse span
+    /// (mark_cache_unsafe parity): a replayed memo entry would carry
+    /// the attached comments while the pending channel refills, and
+    /// the same unit would attach twice (expressir keyword
+    /// alternatives + the schemaBody retry). Outcomes spanning a
+    /// drain are not stored.
+    trivia_drained: bool,
     /// Dynamic dispatch outcome replay (rs#174): outer backtracking
     /// re-invokes the same dispatch at the same position with the same
     /// captures; each re-invocation re-parsed its fragment with a fresh
@@ -377,6 +384,7 @@ impl<'a> PortableParser<'a> {
             dyn_cache: std::collections::HashMap::new(),
             trivia_depth: 0,
             pending_trivia: Vec::new(),
+            trivia_drained: false,
             dynamic_outcomes: std::collections::HashMap::new(),
             rollback_on_failure,
             dbg_depth: 0,
@@ -419,6 +427,7 @@ impl<'a> PortableParser<'a> {
             dyn_cache: std::collections::HashMap::new(),
             trivia_depth: 0,
             pending_trivia: Vec::new(),
+            trivia_drained: false,
             dynamic_outcomes: std::collections::HashMap::new(),
             rollback_on_failure: false,
             dbg_depth: 0,
@@ -793,9 +802,9 @@ impl<'a> PortableParser<'a> {
                     return Err(ParseError::Failed { position: pos });
                 };
             }
-            let result = self.parse_atom_uncached(atom_id, pos, consume_all);
+            let result = self.parse_scoped_trivia_drain(atom_id, pos, consume_all);
             match &result {
-                Ok(r) => {
+                Ok(r) if !self.trivia_drained => {
                     let mut entry = CacheEntry::from_node(
                         pos as u32,
                         atom_id as u16,
@@ -806,6 +815,7 @@ impl<'a> PortableParser<'a> {
                     entry.set_consume_all(consume_all);
                     self.dyn_cache.insert(key, entry);
                 }
+                Ok(_) => {}
                 Err(ref e) if matches!(e, ParseError::InvalidGrammar { .. }) => {
                     // Runtime-level abort (CustomRef): never memoized,
                     // never a branch outcome — see the dense-path note.
@@ -879,23 +889,29 @@ impl<'a> PortableParser<'a> {
         }
 
         // Parse uncached
-        match self.parse_atom_uncached(atom_id, pos, consume_all) {
+        match self.parse_scoped_trivia_drain(atom_id, pos, consume_all) {
             Ok(result) => {
                 // consume_all universal check (see the cache-hit path)
                 if consume_all && result.end_pos != self.input.len() {
                     return Err(ParseError::Failed { position: pos });
                 }
 
-                // Cache successful result with inlined node data
-                let mut entry = CacheEntry::from_node(
-                    pos as u32,
-                    atom_id as u16,
-                    result.end_pos as u32,
-                    &result.value,
-                    self.arena.generation(),
-                );
-                entry.set_consume_all(consume_all);
-                self.cache.insert(entry);
+                // Outcomes spanning a trivia drain are not stored: the
+                // replay would carry the attached comments while the
+                // pending channel refills on retry, attaching the same
+                // unit twice (mark_cache_unsafe parity).
+                if !self.trivia_drained {
+                    // Cache successful result with inlined node data
+                    let mut entry = CacheEntry::from_node(
+                        pos as u32,
+                        atom_id as u16,
+                        result.end_pos as u32,
+                        &result.value,
+                        self.arena.generation(),
+                    );
+                    entry.set_consume_all(consume_all);
+                    self.cache.insert(entry);
+                }
 
                 Ok(result)
             }
@@ -919,6 +935,26 @@ impl<'a> PortableParser<'a> {
                 Err(e)
             }
         }
+    }
+
+    /// Runs the uncached parse with the trivia-drain flag scoped to
+    /// this span: a nested frame ORs its drain upward, so every
+    /// enclosing memo store whose outcome spans the drain is skipped
+    /// too (the interpreter's storable_outcome? unsafe-events
+    /// discipline, ported).
+    #[inline]
+    fn parse_scoped_trivia_drain(
+        &mut self,
+        atom_id: usize,
+        pos: usize,
+        consume_all: bool,
+    ) -> Result<ParseResult, ParseError> {
+        let saved = self.trivia_drained;
+        self.trivia_drained = false;
+        let result = self.parse_atom_uncached(atom_id, pos, consume_all);
+        let drained = self.trivia_drained;
+        self.trivia_drained = saved || drained;
+        result
     }
 
     #[inline]
@@ -1001,10 +1037,16 @@ impl<'a> PortableParser<'a> {
                             .iter()
                             .find(|(marker, _)| stripped.starts_with(marker.as_str()))
                         {
+                            // The offset must agree with the recorded
+                            // content as a slice of the input: trimmed
+                            // marker text starts after the unit's
+                            // leading whitespace, not at the wrapper.
+                            let trimmed = stripped.trim();
+                            let unit_start = pos + (text.len() - stripped.len());
                             self.pending_trivia.push((
                                 label.clone(),
-                                stripped.trim().to_string(),
-                                pos as u32,
+                                trimmed.to_string(),
+                                unit_start as u32,
                             ));
                         } else if let Some(kind) = whitespace {
                             self.pending_trivia
@@ -1776,11 +1818,17 @@ impl<'a> PortableParser<'a> {
         pos: usize,
         consume_all: bool,
     ) -> Result<ParseResult, ParseError> {
-        let pending_before = self.pending_trivia.len();
+        // Full snapshot/restore (take_pending_trivia_snapshot parity):
+        // an inner Named that succeeded empty can have drained pending
+        // units; when THIS capture fails, the drained units must come
+        // back — a truncate-only rollback cannot resurrect them and
+        // the units die with the failed branch (expressir keyword
+        // alternatives ate the trivia before the next token).
+        let pending_snapshot = self.pending_trivia.clone();
         let result = match self.try_atom_impl(atom_id, pos, consume_all) {
             Ok(r) => r,
             Err(e) => {
-                self.pending_trivia.truncate(pending_before);
+                self.pending_trivia = pending_snapshot;
                 return Err(e);
             }
         };
@@ -1791,11 +1839,16 @@ impl<'a> PortableParser<'a> {
             // siblings — not only those recorded during the inner
             // parse. pending_before above remains the restore point
             // for the failure path only.
+            self.trivia_drained = true;
             let taken: Vec<(String, String, u32)> = std::mem::take(&mut self.pending_trivia);
             let units: Vec<AstNode> = taken
                 .into_iter()
-                .map(|(label, text, _offset)| {
-                    let text_node = self.arena.intern_string(&text);
+                .map(|(label, text, offset)| {
+                    // The recorded offset rides the node so the unit's
+                    // slice replays at its true input position — a
+                    // pool-only intern decodes as a position-0 slice
+                    // and breaks source replay (parsanol-ruby#180).
+                    let text_node = self.arena.intern_string_with_offset(&text, offset);
                     let (pool_idx, len) = self.arena.store_hash(&[(&label, text_node)]);
                     AstNode::Hash {
                         pool_index: pool_idx,
