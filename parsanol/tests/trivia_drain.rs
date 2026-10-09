@@ -110,7 +110,7 @@ fn comments_of(node: &AstNode, arena: &AstArena, out: &mut Vec<String>) {
 }
 
 #[test]
-fn a_unit_drained_by_a_failed_branchs_empty_named_survives_and_attaches_once() {
+fn a_unit_drained_by_a_failed_branches_empty_named_survives_and_attaches_once() {
     let grammar = Grammar::from_json(&regression_grammar()).expect("grammar compiles");
     let input = " alpha;";
     let mut arena = AstArena::new();
