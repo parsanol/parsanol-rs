@@ -58,6 +58,11 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- Fix test name typo flagged by typos by @[object]
+- Trivia channel: snapshot/restore, drain-scoped memo, positioned units by @[object]
+
+### Other
+
 - Release v0.18.0 by @[object]
 
 ### Other
