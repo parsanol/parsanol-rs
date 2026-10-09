@@ -422,6 +422,16 @@ impl Grammar {
     fn compute_no_cache(&mut self) {
         self.no_cache.clear();
         self.no_cache.resize(self.atoms.len(), false);
+        // Trivia wrappers carry a side effect the memo cannot replay:
+        // TriviaCapture RECORDS the matched unit into the pending
+        // channel, and Trivia brackets the diagnostics depth. A cached
+        // outcome would skip the re-record on a retried walk, and the
+        // pending channel would miss units the final tree must carry.
+        for (i, atom) in self.atoms.iter().enumerate() {
+            if matches!(atom, Atom::Trivia { .. } | Atom::TriviaCapture { .. }) {
+                self.no_cache[i] = true;
+            }
+        }
     }
 
     /// Serialize to JSON
