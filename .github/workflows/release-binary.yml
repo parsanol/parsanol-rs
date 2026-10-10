@@ -125,14 +125,12 @@ jobs:
           cd out && tar -czvf parsanol-${{ matrix.target }}.tar.gz *
 
       - name: Upload artifact
-        uses: actions/upload-release-asset@v1
+        # upload-release-asset@v1 (2019 API) fails "Invalid name for
+        # request"; gh release upload is the supported path.
+        run: gh release upload "$TAG" "out/parsanol-${{ matrix.target }}.tar.gz" --clobber
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          asset_name: parsanol-${{ matrix.target }}.tar.gz
-          asset_path: out/parsanol-${{ matrix.target }}.tar.gz
-          upload_url: ${{ needs.prepare.outputs.upload_url }}
-          asset_content_type: application/gzip
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.prepare.outputs.tag_name }}
 
   # ============================================================================
   # macOS Builds
@@ -178,14 +176,12 @@ jobs:
           cd out && tar -czvf parsanol-${{ matrix.target }}.tar.gz *
 
       - name: Upload artifact
-        uses: actions/upload-release-asset@v1
+        # upload-release-asset@v1 (2019 API) fails "Invalid name for
+        # request"; gh release upload is the supported path.
+        run: gh release upload "$TAG" "out/parsanol-${{ matrix.target }}.tar.gz" --clobber
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          asset_name: parsanol-${{ matrix.target }}.tar.gz
-          asset_path: out/parsanol-${{ matrix.target }}.tar.gz
-          upload_url: ${{ needs.prepare.outputs.upload_url }}
-          asset_content_type: application/gzip
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.prepare.outputs.tag_name }}
 
   # ============================================================================
   # Windows Builds
@@ -222,14 +218,10 @@ jobs:
           cd out && 7z a -tzip parsanol-x86_64-windows.zip *
 
       - name: Upload artifact
-        uses: actions/upload-release-asset@v1
+        run: gh release upload "$TAG" "out/parsanol-x86_64-windows.zip" --clobber
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          asset_name: parsanol-x86_64-windows.zip
-          asset_path: out/parsanol-x86_64-windows.zip
-          upload_url: ${{ needs.prepare.outputs.upload_url }}
-          asset_content_type: application/zip
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.prepare.outputs.tag_name }}
 
   # ============================================================================
   # WASM Build
@@ -272,11 +264,7 @@ jobs:
           cd out && tar -czvf parsanol-wasm.tar.gz *
 
       - name: Upload artifact
-        uses: actions/upload-release-asset@v1
+        run: gh release upload "$TAG" "out/parsanol-wasm.tar.gz" --clobber
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          asset_name: parsanol-wasm.tar.gz
-          asset_path: out/parsanol-wasm.tar.gz
-          upload_url: ${{ needs.prepare.outputs.upload_url }}
-          asset_content_type: application/gzip
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.prepare.outputs.tag_name }}
