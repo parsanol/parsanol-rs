@@ -127,7 +127,7 @@ jobs:
       - name: Upload artifact
         # upload-release-asset@v1 (2019 API) fails "Invalid name for
         # request"; gh release upload is the supported path.
-        run: gh release upload "$TAG" "out/parsanol-${{ matrix.target }}.tar.gz" --clobber
+        run: gh release upload -R "$GITHUB_REPOSITORY" "$TAG" "out/parsanol-${{ matrix.target }}.tar.gz" --clobber
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.prepare.outputs.tag_name }}
@@ -178,7 +178,7 @@ jobs:
       - name: Upload artifact
         # upload-release-asset@v1 (2019 API) fails "Invalid name for
         # request"; gh release upload is the supported path.
-        run: gh release upload "$TAG" "out/parsanol-${{ matrix.target }}.tar.gz" --clobber
+        run: gh release upload -R "$GITHUB_REPOSITORY" "$TAG" "out/parsanol-${{ matrix.target }}.tar.gz" --clobber
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.prepare.outputs.tag_name }}
@@ -218,7 +218,7 @@ jobs:
           cd out && 7z a -tzip parsanol-x86_64-windows.zip *
 
       - name: Upload artifact
-        run: gh release upload "$TAG" "out/parsanol-x86_64-windows.zip" --clobber
+        run: gh release upload -R "$GITHUB_REPOSITORY" "$TAG" "out/parsanol-x86_64-windows.zip" --clobber
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.prepare.outputs.tag_name }}
@@ -264,7 +264,7 @@ jobs:
           cd out && tar -czvf parsanol-wasm.tar.gz *
 
       - name: Upload artifact
-        run: gh release upload "$TAG" "out/parsanol-wasm.tar.gz" --clobber
+        run: gh release upload -R "$GITHUB_REPOSITORY" "$TAG" "out/parsanol-wasm.tar.gz" --clobber
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.prepare.outputs.tag_name }}
