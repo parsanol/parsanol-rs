@@ -58,13 +58,16 @@ jobs:
 
       - name: Get release
         id: get_release
-        uses: bruceadams/get-release@v1.3.2
-        # Skip if not in the official repository
+        # bruceadams/get-release@v1.3.2 takes a NUMERIC release id -
+        # passing the tag returned Not Found. Resolve the release by
+        # tag directly; the outputs match what the jobs consume.
         if: github.repository == 'parsanol/parsanol-rs'
-        with:
-          id: ${{ steps.tag.outputs.tag }}
+        run: |
+          resp=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/${{ steps.tag.outputs.tag }}")
+          echo "tag_name=${{ steps.tag.outputs.tag }}" >> "$GITHUB_OUTPUT"
+          echo "upload_url=$(jq -r '.upload_url' <<<"$resp" | sed 's/{?name,label}//')" >> "$GITHUB_OUTPUT"
         env:
-          GITHUB_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
 
   # ============================================================================
   # Linux Builds
