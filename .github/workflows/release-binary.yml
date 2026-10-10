@@ -224,12 +224,9 @@ jobs:
         with:
           tool: wasm-pack
 
-      - name: Build WASM package
-        # The crate stays rlib-only (the ruby side's cdylib twin owns
-        # the libparsanol.* naming); enable cdylib just-in-time - the
-        # recipe wasm-publish.yml has proven on every release while
-        # this job's 2020-era action failed to parse the workspace
-        # manifest ("TOML parse error at line 1, column 1").
+      # The crate stays rlib-only (the ruby side's cdylib twin owns
+      # the libparsanol.* naming); cdylib is enabled just-in-time
+      # below - wasm-pack needs a library target to package.
       - name: Enable cdylib for wasm-pack
         run: |
           sed -i 's/^crate-type = \["rlib"\]/crate-type = ["rlib", "cdylib"]/' parsanol/Cargo.toml
