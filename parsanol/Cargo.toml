@@ -63,7 +63,9 @@ getrandom_03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] 
 
 [dev-dependencies]
 criterion = { version = "0.8", features = ["html_reports"] }
-proptest = "1.4"
+# 1.12 raised its MSRV past the workspace's 1.86 leg; the
+# feature-set re-resolution on that CI leg picks the newest 1.x.
+proptest = "=1.10.0"
 
 
 # Examples
