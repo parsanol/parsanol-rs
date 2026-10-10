@@ -12,6 +12,10 @@ on:
       - created
       - prereleased
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build against (defaults to the latest release)"
+        required: false
 
 env:
   CARGO_TERM_COLOR: always
@@ -36,11 +40,29 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v7
 
+      - name: Resolve release tag
+        id: tag
+        # Release events carry their tag; dispatch may pass one; a
+        # bare dispatch resolves the latest release.
+        run: |
+          tag="${{ github.event.release.tag_name }}"
+          if [ -z "$tag" ]; then tag="${{ inputs.tag }}"; fi
+          if [ -z "$tag" ]; then
+            tag=$(gh release list -R "$GITHUB_REPOSITORY" --limit 1 \
+              --json tagName -q '.[0].tagName')
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "building against $tag"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
       - name: Get release
         id: get_release
         uses: bruceadams/get-release@v1.3.2
         # Skip if not in the official repository
         if: github.repository == 'parsanol/parsanol-rs'
+        with:
+          id: ${{ steps.tag.outputs.tag }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
 
