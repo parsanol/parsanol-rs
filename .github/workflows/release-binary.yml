@@ -218,6 +218,9 @@ jobs:
           cd out && 7z a -tzip parsanol-x86_64-windows.zip *
 
       - name: Upload artifact
+        # pwsh does not expand $VAR env syntax (bash-ism) - the
+        # repository argument arrived empty. bash is on the runner.
+        shell: bash
         run: gh release upload -R "$GITHUB_REPOSITORY" "$TAG" "out/parsanol-x86_64-windows.zip" --clobber
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
