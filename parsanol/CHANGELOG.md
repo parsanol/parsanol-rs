@@ -58,6 +58,11 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- Pin proptest to =1.10.0 (MSRV) by @[object]
+- Corpus test: skip stale sibling checkouts with guidance by @[object]
+
+### Other
+
 - Fix test name typo flagged by typos by @[object]
 - Trivia channel: snapshot/restore, drain-scoped memo, positioned units by @[object]
 
