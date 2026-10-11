@@ -58,6 +58,10 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- Pin the wire-atom vocabulary as a contract test by @[object]
+
+### Other
+
 - Pin proptest to =1.10.0 (MSRV) by @[object]
 - Corpus test: skip stale sibling checkouts with guidance by @[object]
 
