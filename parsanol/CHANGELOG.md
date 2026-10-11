@@ -58,6 +58,11 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- Release v0.18.4 by @[object]
+- Pin the wire-atom vocabulary as a contract test by @[object]
+
+### Other
+
 - Pin the wire-atom vocabulary as a contract test by @[object]
 
 ### Other
