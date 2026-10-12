@@ -17,6 +17,14 @@ on:
     branches:
       - main
 
+# Serialize runs: two overlapping release-plz invocations raced on
+# 2026-10-12 — one published 0.18.5 (13:44Z) while the other, reading
+# the pre-merge snapshot, opened a duplicate release PR (13:43:47Z,
+# #227). Queued runs always start from the post-merge state.
+concurrency:
+  group: release-plz
+  cancel-in-progress: false
+
 jobs:
   release-plz:
     name: Release-plz
