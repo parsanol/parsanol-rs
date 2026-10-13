@@ -58,6 +58,11 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- Release v0.18.6 by @[object]
+- Update proptest requirement by @[object]
+
+### Other
+
 - Update proptest requirement by @[object]
 
 ### Other
