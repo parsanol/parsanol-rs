@@ -58,6 +58,10 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- Conformance corpus: cross-engine behavioral gate (parsanol-tree/v2) by @[object]
+
+### Other
+
 - Update proptest requirement by @[object]
 
 ### Other
