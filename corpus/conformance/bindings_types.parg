@@ -1,0 +1,16 @@
+grammar ConformanceTypes version "1.0.0" {
+  ## A year: four digits, cast to integer.
+  main = 4*( %x30-39 ) as year
+
+  bindings main {
+    year -> year (integer)
+  }
+
+  entry main: main
+
+  test main {
+    example "2020" { year: 2020 }
+    reject "20a0"
+    reject "123"
+  }
+}
