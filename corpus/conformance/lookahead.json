@@ -1,0 +1,112 @@
+{
+  "bindings": null,
+  "version": "1.0.0",
+  "grammar": "ConformanceLookahead",
+  "shape": "parsanol-tree/v2",
+  "binding_version": 1,
+  "entries": {
+    "main": {
+      "root": "main",
+      "grammar": {
+        "atoms": [
+          {
+            "Entity": {
+              "atom": 5
+            }
+          },
+          {
+            "Re": {
+              "pattern": "[\\x61-\\x7a]"
+            }
+          },
+          {
+            "Repetition": {
+              "atom": 1,
+              "min": 1,
+              "max": null,
+              "tag": "Repetition"
+            }
+          },
+          {
+            "Str": {
+              "pattern": "="
+            }
+          },
+          {
+            "Lookahead": {
+              "atom": 3,
+              "positive": false
+            }
+          },
+          {
+            "Sequence": {
+              "atoms": [
+                2,
+                4
+              ]
+            }
+          },
+          {
+            "Str": {
+              "pattern": " "
+            }
+          },
+          {
+            "Re": {
+              "pattern": "[\\x61-\\x7a]"
+            }
+          },
+          {
+            "Repetition": {
+              "atom": 7,
+              "min": 1,
+              "max": null,
+              "tag": "Repetition"
+            }
+          },
+          {
+            "Sequence": {
+              "atoms": [
+                0,
+                6,
+                8
+              ]
+            }
+          }
+        ],
+        "root": 9
+      },
+      "bindings": []
+    }
+  },
+  "preprocess": {},
+  "tables": {},
+  "lint": {
+    "order_warnings": []
+  },
+  "default_entry": "main",
+  "render": {},
+  "derive": {},
+  "tests": [
+    {
+      "entry": "main",
+      "kind": "accept",
+      "input": "abc xyz",
+      "expect": {}
+    },
+    {
+      "entry": "main",
+      "kind": "reject",
+      "input": "abc=xyz",
+      "expect": {}
+    }
+  ],
+  "docs": {
+    "plain": "A key: letters not followed by an equals sign.",
+    "main": "A key followed by a value."
+  },
+  "source": "grammar ConformanceLookahead version \"1.0.0\" {\n  ## A key: letters not followed by an equals sign.\n  plain = 1*%x61-7A !\"=\"\n  ## A key followed by a value.\n  main = plain \" \" 1*%x61-7A\n\n  entry main: main\n\n  test main {\n    accept \"abc xyz\"\n    reject \"abc=xyz\"\n  }\n}\n",
+  "source_hash": "89cc740b6defae99810667747e19def94d8898020ecd0b0a760d5e44c421d4ac",
+  "compiler_version": "1.3.91",
+  "checksum": "sha256:a5528f2a5112e0673fcf64a0211032a2101ccee642600431782e55ab633e18ac"
+}

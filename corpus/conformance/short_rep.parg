@@ -1,0 +1,17 @@
+grammar ConformanceShortRep version "1.0.0" {
+  ## One to three letters, captured.
+  short = 1*3(%x61-7A) as code
+
+  bindings short {
+    code -> code (string)
+  }
+
+  entry short: short
+
+  test short {
+    example "ab" { code: "ab" }
+    example "abc" { code: "abc" }
+    reject "abcd"
+    reject ""
+  }
+}

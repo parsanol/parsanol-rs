@@ -1,0 +1,23 @@
+grammar ConformanceTable version "1.0.0" {
+  ## A stage abbreviation resolved through the stages table.
+  main = alt from_table "stages" column "abbr" as abbr
+
+  preprocess resolve {
+    table_lookup stages abbr -> code
+  }
+
+  bindings main {
+    abbr -> code (string) preprocess: resolve
+  }
+
+  entry main: main
+
+  test main {
+    accept "DIS"
+    accept "IS"
+    reject "XX"
+    # example-level assertions on the preprocessed binding are gated on
+    # the native preprocess row lookup (parsanol-rs: embedded table rows
+    # are not reachable from the native bind path yet)
+  }
+}

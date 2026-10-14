@@ -1,0 +1,82 @@
+{
+  "bindings": null,
+  "version": "1.0.0",
+  "grammar": "ConformanceTypes",
+  "shape": "parsanol-tree/v2",
+  "binding_version": 1,
+  "entries": {
+    "main": {
+      "root": "main",
+      "grammar": {
+        "atoms": [
+          {
+            "Re": {
+              "pattern": "[\\x30-\\x39]"
+            }
+          },
+          {
+            "Repetition": {
+              "atom": 0,
+              "min": 4,
+              "max": null,
+              "tag": "Repetition"
+            }
+          },
+          {
+            "Named": {
+              "name": "year",
+              "atom": 1
+            }
+          }
+        ],
+        "root": 2
+      },
+      "bindings": [
+        {
+          "capture": "year",
+          "path": "year",
+          "type": "integer",
+          "card": null,
+          "preprocess": null
+        }
+      ]
+    }
+  },
+  "preprocess": {},
+  "tables": {},
+  "lint": {
+    "order_warnings": []
+  },
+  "default_entry": "main",
+  "render": {},
+  "derive": {},
+  "tests": [
+    {
+      "entry": "main",
+      "kind": "example",
+      "input": "2020",
+      "expect": {
+        "year": 2020
+      }
+    },
+    {
+      "entry": "main",
+      "kind": "reject",
+      "input": "20a0",
+      "expect": {}
+    },
+    {
+      "entry": "main",
+      "kind": "reject",
+      "input": "123",
+      "expect": {}
+    }
+  ],
+  "docs": {
+    "main": "A year: four digits, cast to integer."
+  },
+  "source": "grammar ConformanceTypes version \"1.0.0\" {\n  ## A year: four digits, cast to integer.\n  main = 4*( %x30-39 ) as year\n\n  bindings main {\n    year -> year (integer)\n  }\n\n  entry main: main\n\n  test main {\n    example \"2020\" { year: 2020 }\n    reject \"20a0\"\n    reject \"123\"\n  }\n}\n",
+  "source_hash": "6aed5af99db6c2c3b34a26a778a1fd5cd98607621a045082c60efe9c0cf291e0",
+  "compiler_version": "1.3.91",
+  "checksum": "sha256:31c361acbfbca68167e6deea74e7e608a84166e5784b7331fd606b847488fa4f"
+}

@@ -1,0 +1,13 @@
+grammar ConformanceRejects version "1.0.0" {
+  ## A quoted string.
+  main = %x22 0*( !%x22 ANY ) %x22
+
+  entry main: main
+
+  test main {
+    accept "\"hello\""
+    accept "\"\""
+    reject "hello"
+    reject "\"unclosed"
+  }
+}

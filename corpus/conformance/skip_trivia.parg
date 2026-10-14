@@ -1,0 +1,23 @@
+grammar ConformanceSkip version "1.0.0" {
+  ## Whitespace between tokens.
+  trivia = 1*" "
+  ## A key = value pair; trivia rides between tokens.
+  main = ( 1*%x61-7A as key ) "=" ( 1*%x30-39 as value )
+
+  skip = trivia
+
+  bindings main {
+    key -> key
+    value -> value
+  }
+
+  entry main: main
+
+  test main {
+    accept "abc=42"
+    accept "  abc = 42"
+    example "abc=42" { key: "abc"
+      value: "42" }
+    reject "abc = "
+  }
+}
