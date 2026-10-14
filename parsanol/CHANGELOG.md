@@ -58,6 +58,11 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- Release v0.18.7 by @[object]
+- Conformance corpus: cross-engine behavioral gate (parsanol-tree/v2) by @[object]
+
+### Other
+
 - Conformance corpus: cross-engine behavioral gate (parsanol-tree/v2) by @[object]
 
 ### Other
