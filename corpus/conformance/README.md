@@ -27,7 +27,10 @@ embeds its rows into the artifact; the file stays for source parity).
 2. **Every engine runs every case in CI.** Failures block, always.
 3. **A case that exposes a divergence is added even (especially) when
    the fix is pending** — the red case is the issue tracker.
-4. `example` expectations assert the *bound captures* (post-bindings,
+4. **Compile-parity ignores provenance fields** (`compiler_version`,
+   `checksum`): artifacts bind to their source via `source_hash`, so gem
+   version bumps do not — and must not — invalidate corpus cases.
+5. `example` expectations assert the *bound captures* (post-bindings,
    post-preprocess) — the observable consumer surface — not internal
    trees. Tree-level parity stays with the ruby/rust differential gate.
 
