@@ -27,6 +27,7 @@
 use ahash::AHashMap;
 use std::cell::RefCell;
 
+use super::ast::ParseError;
 use super::transform::Value;
 
 /// Maximum allowed scope depth to prevent stack overflow
@@ -436,14 +437,26 @@ impl CaptureState {
     /// Panics if scope depth exceeds `MAX_SCOPE_DEPTH`.
     #[inline]
     pub fn push_scope(&mut self) {
-        if self.depth >= MAX_SCOPE_DEPTH {
+        if self.try_push_scope().is_err() {
             panic!(
                 "Scope depth {} exceeds maximum {}",
                 self.depth, MAX_SCOPE_DEPTH
             );
         }
+    }
+
+    /// Enter a runtime scope without panicking on input-driven depth limits.
+    #[inline]
+    pub(crate) fn try_push_scope(&mut self) -> Result<(), ParseError> {
+        if self.depth >= MAX_SCOPE_DEPTH {
+            return Err(ParseError::RecursionLimitExceeded {
+                depth: self.depth,
+                max_depth: MAX_SCOPE_DEPTH,
+            });
+        }
         self.scope_stack.push(self.capture_order.len());
         self.depth += 1;
+        Ok(())
     }
 
     /// Close a scope, keeping every capture made in it: they become
@@ -894,6 +907,29 @@ mod tests {
         assert_eq!(state1.len(), 3);
         assert_eq!(state1.get("b").unwrap().span().map(|s| s.0), Some(10)); // Overwritten
         assert!(state1.contains("c"));
+    }
+
+    #[test]
+    fn test_checked_scope_limit_is_atomic_and_reusable() {
+        let mut state = CaptureState::new();
+        for depth in 0..MAX_SCOPE_DEPTH {
+            assert_eq!(state.depth(), depth);
+            state.try_push_scope().unwrap();
+        }
+        state.store("retained", CaptureValue::new(0, 1));
+        assert!(matches!(
+            state.try_push_scope(),
+            Err(ParseError::RecursionLimitExceeded {
+                depth: MAX_SCOPE_DEPTH,
+                max_depth: MAX_SCOPE_DEPTH
+            })
+        ));
+        assert_eq!(state.depth(), MAX_SCOPE_DEPTH);
+        assert!(state.contains("retained"));
+        state.pop_scope();
+        assert!(!state.contains("retained"));
+        state.try_push_scope().unwrap();
+        assert_eq!(state.depth(), MAX_SCOPE_DEPTH);
     }
 
     #[test]
