@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.8] - 2026-10-15
+
+### Fixed
+
+- Return capture-depth resource errors instead of panicking in parser runtime
+  paths; unwind capture scopes and preserve parser reuse after an aborted parse
+  ([#239](https://github.com/parsanol/parsanol-rs/pull/239)).
+
+### Performance
+
+- Check debug depth before reading the debug environment variable
+  ([#238](https://github.com/parsanol/parsanol-rs/pull/238)).
+
 ## [0.15.0] - 2026-10-07
 
 ### Added
@@ -55,11 +68,6 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
   engine differential (13/13) parse tree-identically natively now.
 
 ## [Unreleased]
-
-### Other
-
-- Guard debug environment checks with parse depth ([#238](https://github.com/parsanol/parsanol-rs/pull/238)) by @[object]
-- Return capture depth errors without panicking ([#239](https://github.com/parsanol/parsanol-rs/pull/239)) by @[object]
 
 ### Other
 
