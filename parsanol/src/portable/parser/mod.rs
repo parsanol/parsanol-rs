@@ -716,7 +716,7 @@ impl<'a> PortableParser<'a> {
         consume_all: bool,
     ) -> Result<ParseResult, ParseError> {
         self.dbg_depth += 1;
-        if std::env::var("PARSANOL_VM_DEBUG").is_ok() && self.dbg_depth > 120 {
+        if self.dbg_depth > 120 && std::env::var("PARSANOL_VM_DEBUG").is_ok() {
             let dbg = format!("{:?}", self.grammar.get_atom(atom_id));
             eprintln!(
                 "D{} id {} pos {} {}",
