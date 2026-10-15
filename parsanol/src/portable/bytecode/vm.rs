@@ -848,7 +848,7 @@ impl<'a> BytecodeVM<'a> {
             // ========================================================================
             Instruction::PushScope => {
                 // Push a new capture scope
-                self.capture_state.push_scope();
+                self.capture_state.try_push_scope()?;
                 Ok(ExecutionResult::Continue)
             }
 
@@ -1046,6 +1046,7 @@ impl<'a> BytecodeVM<'a> {
                         self.value_stack.push(value);
                         Ok(ExecutionResult::Continue)
                     }
+                    Err(error @ ParseError::RecursionLimitExceeded { .. }) => Err(error),
                     Err(_) => {
                         crate::portable::dynamic::store_dynamic_outcome(
                             *callback_id,

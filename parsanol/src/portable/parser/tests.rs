@@ -1608,3 +1608,117 @@ mod fence_regression_tests {
         }
     }
 }
+
+#[test]
+fn test_capture_limit_propagates_and_unwinds_every_scope_operator() {
+    use crate::portable::capture_state::MAX_SCOPE_DEPTH;
+    for initial_depth in [MAX_SCOPE_DEPTH - 2, MAX_SCOPE_DEPTH - 1, MAX_SCOPE_DEPTH] {
+        for operator in 0..7 {
+            for fresh in [false, true] {
+                let mut grammar = Grammar::new();
+                let leaf = grammar.add_atom(Atom::Str {
+                    pattern: "a".into(),
+                });
+                let mut nested = leaf;
+                for _ in 0..4 {
+                    nested = grammar.add_atom(Atom::Scope { atom: nested });
+                }
+                grammar.root = grammar.add_atom(match operator {
+                    0 => Atom::Sequence {
+                        atoms: vec![nested],
+                    },
+                    1 => Atom::Alternative {
+                        atoms: vec![nested, leaf],
+                    },
+                    2 => Atom::Repetition {
+                        atom: nested,
+                        min: 0,
+                        max: Some(1),
+                        tag: RepetitionTag::Repetition,
+                    },
+                    3 => Atom::Repetition {
+                        atom: nested,
+                        min: 0,
+                        max: None,
+                        tag: RepetitionTag::Repetition,
+                    },
+                    4 => Atom::Lookahead {
+                        atom: nested,
+                        positive: true,
+                    },
+                    5 => Atom::Lookahead {
+                        atom: nested,
+                        positive: false,
+                    },
+                    _ => Atom::Scope { atom: nested },
+                });
+                let mut arena = AstArena::new();
+                let mut parser = PortableParser::new(&grammar, "a", &mut arena);
+                parser.rollback_on_failure = fresh;
+                for _ in 0..initial_depth {
+                    parser.capture_state_mut().push_scope();
+                }
+                for _ in 0..2 {
+                    assert!(
+                        matches!(
+                            parser.parse(),
+                            Err(ParseError::RecursionLimitExceeded {
+                                max_depth: MAX_SCOPE_DEPTH,
+                                ..
+                            })
+                        ),
+                        "operator {operator}, depth {initial_depth}, fresh {fresh}"
+                    );
+                    assert_eq!(parser.capture_state().depth(), initial_depth);
+                }
+                for _ in 0..initial_depth {
+                    parser.capture_state_mut().pop_scope();
+                }
+                assert!(
+                    !matches!(
+                        parser.parse(),
+                        Err(ParseError::RecursionLimitExceeded { .. })
+                    ),
+                    "limit error must not be memoized"
+                );
+                assert_eq!(parser.capture_state().depth(), 0);
+            }
+        }
+    }
+}
+
+#[test]
+fn test_capture_limit_rolls_back_captures_before_reuse() {
+    use crate::portable::capture_state::MAX_SCOPE_DEPTH;
+    let mut grammar = Grammar::new();
+    let leaf = grammar.add_atom(Atom::Str {
+        pattern: "a".into(),
+    });
+    let capture = grammar.add_atom(Atom::Capture {
+        name: "temporary".into(),
+        atom: leaf,
+    });
+    let mut nested = leaf;
+    for _ in 0..4 {
+        nested = grammar.add_atom(Atom::Scope { atom: nested });
+    }
+    grammar.root = grammar.add_atom(Atom::Sequence {
+        atoms: vec![capture, nested],
+    });
+    let mut arena = AstArena::new();
+    let mut parser = PortableParser::new(&grammar, "aa", &mut arena);
+    for _ in 0..MAX_SCOPE_DEPTH - 2 {
+        parser.capture_state_mut().push_scope();
+    }
+    assert!(matches!(
+        parser.parse(),
+        Err(ParseError::RecursionLimitExceeded { .. })
+    ));
+    assert!(!parser.capture_state().contains("temporary"));
+    assert_eq!(parser.capture_state().depth(), MAX_SCOPE_DEPTH - 2);
+    for _ in 0..MAX_SCOPE_DEPTH - 2 {
+        parser.capture_state_mut().pop_scope();
+    }
+    assert!(parser.parse().is_ok());
+    assert!(parser.capture_state().contains("temporary"));
+}

@@ -732,6 +732,13 @@ impl<'a> PortableParser<'a> {
         }
         let r = self.try_atom_impl_inner(atom_id, pos, consume_all);
         self.dbg_depth -= 1;
+        if self.dbg_depth == 0 && matches!(&r, Err(ParseError::RecursionLimitExceeded { .. })) {
+            // Successful children may have cached values before their captures
+            // were rolled back by the abort. A retry must execute those captures.
+            self.cache.clear();
+            self.dyn_cache.clear();
+            self.dynamic_outcomes.clear();
+        }
         r
     }
 
@@ -816,8 +823,14 @@ impl<'a> PortableParser<'a> {
                     self.dyn_cache.insert(key, entry);
                 }
                 Ok(_) => {}
-                Err(ref e) if matches!(e, ParseError::InvalidGrammar { .. }) => {
-                    // Runtime-level abort (CustomRef): never memoized,
+                Err(ref e)
+                    if matches!(
+                        e,
+                        ParseError::InvalidGrammar { .. }
+                            | ParseError::RecursionLimitExceeded { .. }
+                    ) =>
+                {
+                    // Runtime-level abort: never memoized,
                     // never a branch outcome — see the dense-path note.
                 }
                 Err(_) => {
@@ -922,8 +935,12 @@ impl<'a> PortableParser<'a> {
                 // failure act as a branch outcome would silently
                 // diverge from the Ruby interpreter (which evaluates
                 // the custom atom). Propagate it unmemoized — the FFI
-                // layer's interpreter recovery handles it.
-                if matches!(e, ParseError::InvalidGrammar { .. }) {
+                // layer's interpreter recovery handles it. Resource limits
+                // likewise abort parsing rather than representing a mismatch.
+                if matches!(
+                    e,
+                    ParseError::InvalidGrammar { .. } | ParseError::RecursionLimitExceeded { .. }
+                ) {
                     return Err(e);
                 }
                 // CRITICAL: Cache failures too!
@@ -1296,7 +1313,7 @@ impl<'a> PortableParser<'a> {
         // A failed element discards the captures of every earlier
         // element: the sequence never matched (GH-76 follow-up —
         // capture writes must not leak across failed branches).
-        self.capture_state.push_scope();
+        self.capture_state.try_push_scope()?;
         let last = atoms.len().saturating_sub(1);
         for (idx, &atom_id) in atoms.iter().enumerate() {
             let result = match self.try_atom_impl(atom_id, current_pos, consume_all && idx == last)
@@ -1341,15 +1358,21 @@ impl<'a> PortableParser<'a> {
         if self.rollback_on_failure {
             for &atom_id in atoms {
                 let cp = self.arena.checkpoint();
-                self.capture_state.push_scope();
+                self.capture_state.try_push_scope()?;
                 match self.try_atom_impl(atom_id, pos, consume_all) {
                     Ok(result) => {
                         self.capture_state.commit_scope();
                         return Ok(result);
                     }
-                    Err(e) if matches!(e, ParseError::InvalidGrammar { .. }) => {
-                        // Runtime-level abort (CustomRef): not a branch
-                        // outcome — propagating keeps the native pass
+                    Err(e)
+                        if matches!(
+                            e,
+                            ParseError::InvalidGrammar { .. }
+                                | ParseError::RecursionLimitExceeded { .. }
+                        ) =>
+                    {
+                        // Runtime abort or resource limit: not a branch
+                        // outcome. Propagating keeps the native pass
                         // from silently skipping a custom atom the Ruby
                         // interpreter would evaluate.
                         self.capture_state.pop_scope();
@@ -1369,13 +1392,19 @@ impl<'a> PortableParser<'a> {
         // corruption), but captures made in a failed branch are still
         // discarded — they belong to a branch that never matched.
         for &atom_id in atoms {
-            self.capture_state.push_scope();
+            self.capture_state.try_push_scope()?;
             match self.try_atom_impl(atom_id, pos, consume_all) {
                 Ok(result) => {
                     self.capture_state.commit_scope();
                     return Ok(result);
                 }
-                Err(e) if matches!(e, ParseError::InvalidGrammar { .. }) => {
+                Err(e)
+                    if matches!(
+                        e,
+                        ParseError::InvalidGrammar { .. }
+                            | ParseError::RecursionLimitExceeded { .. }
+                    ) =>
+                {
                     self.capture_state.pop_scope();
                     return Err(e);
                 }
@@ -1448,10 +1477,13 @@ impl<'a> PortableParser<'a> {
         // discards them, and each optional iteration that fails to
         // match discards only its own (the successful prefix keeps
         // its captures — a partial run is a successful repetition).
-        self.capture_state.push_scope();
+        self.capture_state.try_push_scope()?;
         if let Some(max_count) = max {
             while count < max_count {
-                self.capture_state.push_scope();
+                if let Err(error) = self.capture_state.try_push_scope() {
+                    self.capture_state.pop_scope();
+                    return Err(error);
+                }
                 match self.try_atom_impl(atom_id, current_pos, false) {
                     Ok(result) => {
                         self.capture_state.commit_scope();
@@ -1463,6 +1495,11 @@ impl<'a> PortableParser<'a> {
                             break;
                         }
                     }
+                    Err(error @ ParseError::RecursionLimitExceeded { .. }) => {
+                        self.capture_state.pop_scope();
+                        self.capture_state.pop_scope();
+                        return Err(error);
+                    }
                     Err(_) => {
                         self.capture_state.pop_scope();
                         break;
@@ -1471,7 +1508,10 @@ impl<'a> PortableParser<'a> {
             }
         } else {
             loop {
-                self.capture_state.push_scope();
+                if let Err(error) = self.capture_state.try_push_scope() {
+                    self.capture_state.pop_scope();
+                    return Err(error);
+                }
                 match self.try_atom_impl(atom_id, current_pos, false) {
                     Ok(result) => {
                         self.capture_state.commit_scope();
@@ -1487,6 +1527,11 @@ impl<'a> PortableParser<'a> {
                         if !progressed {
                             break;
                         }
+                    }
+                    Err(error @ ParseError::RecursionLimitExceeded { .. }) => {
+                        self.capture_state.pop_scope();
+                        self.capture_state.pop_scope();
+                        return Err(error);
                     }
                     Err(_) => {
                         self.capture_state.pop_scope();
@@ -1898,9 +1943,12 @@ impl<'a> PortableParser<'a> {
     ) -> Result<ParseResult, ParseError> {
         // A lookahead inspects without consuming: captures made inside
         // its body never persist, positive or negative.
-        self.capture_state.push_scope();
+        self.capture_state.try_push_scope()?;
         let inner = self.try_atom_impl(atom_id, pos, consume_all);
         self.capture_state.pop_scope();
+        if matches!(&inner, Err(ParseError::RecursionLimitExceeded { .. })) {
+            return inner;
+        }
         if let Err(ParseError::InvalidGrammar { .. }) = inner {
             // Runtime-level abort (CustomRef): a lookahead must not
             // swallow it into "does not match" — see parse_alternative.
@@ -2090,7 +2138,7 @@ impl<'a> PortableParser<'a> {
         consume_all: bool,
     ) -> Result<ParseResult, ParseError> {
         // Push a new scope
-        self.capture_state.push_scope();
+        self.capture_state.try_push_scope()?;
 
         // Parse the inner atom
         let result = self.try_atom_impl(atom_id, pos, consume_all);
@@ -2244,6 +2292,7 @@ impl<'a> PortableParser<'a> {
                 self.dynamic_outcomes
                     .insert(outcome_key, Some((r.end_pos, r.value.clone())));
             }
+            Err(ParseError::RecursionLimitExceeded { .. }) => {}
             Err(_) => {
                 if self.dynamic_outcomes.len() > 2_000_000 {
                     self.dynamic_outcomes.clear();

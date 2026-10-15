@@ -400,3 +400,147 @@ fn test_capture_state_max_depth() {
 
     assert_eq!(state.depth(), 0);
 }
+
+#[test]
+fn test_public_backends_return_capture_limit_and_can_be_reused() {
+    use crate::portable::ast::ParseError;
+    use crate::portable::capture_state::MAX_SCOPE_DEPTH;
+    // The test stack accommodates a legal grammar at the existing 1000-scope
+    // boundary; it does not change the parser's resource limit.
+    std::thread::Builder::new()
+        .stack_size(32 * 1024 * 1024)
+        .spawn(|| {
+            for depth in [MAX_SCOPE_DEPTH - 1, MAX_SCOPE_DEPTH, MAX_SCOPE_DEPTH + 1] {
+                let mut grammar = Grammar::new();
+                let leaf = grammar.add_atom(Atom::Str {
+                    pattern: "a".into(),
+                });
+                let mut nested = leaf;
+                for _ in 0..depth {
+                    nested = grammar.add_atom(Atom::Scope { atom: nested });
+                }
+                grammar.root = nested;
+                for mut parser in [
+                    Parser::packrat(grammar.clone()),
+                    Parser::bytecode(grammar.clone()),
+                ] {
+                    for _ in 0..2 {
+                        let result = parser.parse("a");
+                        if depth <= MAX_SCOPE_DEPTH
+                            || parser.backend()
+                                == crate::portable::bytecode::backend::Backend::Bytecode
+                        {
+                            assert_eq!(result.unwrap().end_pos, 1);
+                        } else {
+                            assert!(
+                                matches!(
+                                    result,
+                                    Err(ParseError::RecursionLimitExceeded {
+                                        max_depth: MAX_SCOPE_DEPTH,
+                                        ..
+                                    })
+                                ),
+                                "{result:?}"
+                            );
+                        }
+                    }
+                }
+            }
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+#[test]
+fn test_public_precompiled_scope_limit_and_reuse() {
+    use crate::portable::ast::ParseError;
+    use crate::portable::bytecode::{instruction::Instruction, program::Program};
+    use crate::portable::capture_state::MAX_SCOPE_DEPTH;
+    for depth in [MAX_SCOPE_DEPTH - 1, MAX_SCOPE_DEPTH, MAX_SCOPE_DEPTH + 1] {
+        let mut program = Program::new();
+        for _ in 0..depth {
+            program.add_instruction(Instruction::PushScope);
+        }
+        for _ in 0..depth {
+            program.add_instruction(Instruction::PopScope);
+        }
+        program.add_instruction(Instruction::End);
+        let mut parser = Parser::bytecode(Grammar::new()).with_program(program);
+        for _ in 0..2 {
+            let result = parser.parse("");
+            if depth <= MAX_SCOPE_DEPTH {
+                assert_eq!(result.unwrap().end_pos, 0);
+            } else {
+                assert!(
+                    matches!(
+                        result,
+                        Err(ParseError::RecursionLimitExceeded {
+                            max_depth: MAX_SCOPE_DEPTH,
+                            ..
+                        })
+                    ),
+                    "{result:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn test_dynamic_capture_limit_propagates_through_both_backends() {
+    use crate::portable::ast::ParseError;
+    use crate::portable::capture_state::MAX_SCOPE_DEPTH;
+    std::thread::Builder::new()
+        .stack_size(32 * 1024 * 1024)
+        .spawn(|| {
+            let mut grammar = Grammar::new();
+            let mut nested = grammar.add_atom(Atom::Str {
+                pattern: "a".into(),
+            });
+            for _ in 0..MAX_SCOPE_DEPTH {
+                nested = grammar.add_atom(Atom::Scope { atom: nested });
+            }
+            grammar.root = grammar.add_atom(Atom::Scope { atom: nested });
+            struct Fragment(Grammar);
+            impl crate::portable::dynamic::DynamicCallback for Fragment {
+                fn resolve(&self, _: &crate::portable::dynamic::DynamicContext) -> Option<Atom> {
+                    None
+                }
+                fn description(&self) -> &str {
+                    "depth_limit"
+                }
+                fn resolve_fragment(
+                    &self,
+                    _: &crate::portable::dynamic::DynamicContext,
+                ) -> Option<(Grammar, usize)> {
+                    Some((self.0.clone(), self.0.root))
+                }
+            }
+            let callback_id = register_dynamic_callback(Box::new(Fragment(grammar)));
+            let mut grammar = Grammar::new();
+            grammar.root = grammar.add_atom(Atom::Dynamic { callback_id });
+            for mut parser in [
+                Parser::packrat(grammar.clone()),
+                Parser::bytecode(grammar.clone()),
+            ] {
+                for _ in 0..2 {
+                    let result = parser.parse("a");
+                    assert!(
+                        matches!(
+                            result,
+                            Err(ParseError::RecursionLimitExceeded {
+                                max_depth: MAX_SCOPE_DEPTH,
+                                ..
+                            })
+                        ),
+                        "backend {:?}: {result:?}",
+                        parser.backend()
+                    );
+                }
+            }
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
