@@ -1,10 +1,13 @@
-//! Suite runner: evaluates accept/reject/example tests against an
-//! artifact with the native portable engine plus the bindings runtime.
-//! Port of `Parsanol::PARG::Artifact#run_tests` / `#run_test_list` —
-//! failure descriptions are word-compatible with the Ruby runner.
+//! Suite runner: evaluates accept/reject/example/capture tests against
+//! an artifact with the native portable engine plus the bindings
+//! runtime. Port of `Parsanol::PARG::Artifact#run_tests` /
+//! `#run_test_list` — failure descriptions are word-compatible with the
+//! Ruby runner. `capture` is the grammar-layer phase (raw captures);
+//! `example` the bindings layer (bound attribute hash).
 
 use serde_json::Value;
 
+use super::bindings::{is_leaf, leaf_scalar};
 use super::{PargArtifact, PargError};
 use crate::portable::parslet_transform::to_parslet_compatible;
 use crate::portable::{AstArena, Grammar, PortableParser};
@@ -59,6 +62,24 @@ pub(crate) fn ast_to_value(
             }
             Value::Object(object)
         }
+    }
+}
+
+/// Canonical test-value form (parsanol-ruby#216): one equality surface
+/// for capture and example expectations. Terminals reduce to their text
+/// (native slice wire objects to their `value` field), structure
+/// recurses. Value-compatible with Ruby's `Bindings.canonical`.
+pub(crate) fn canonical(value: &Value) -> Value {
+    match value {
+        Value::Array(items) => Value::Array(items.iter().map(canonical).collect()),
+        Value::Object(object) if is_leaf(value) => leaf_scalar(value).clone(),
+        Value::Object(object) => Value::Object(
+            object
+                .iter()
+                .map(|(key, item)| (key.clone(), canonical(item)))
+                .collect(),
+        ),
+        other => other.clone(),
     }
 }
 
@@ -144,22 +165,61 @@ impl PargArtifact {
                     .and_then(Value::as_str)
                     .unwrap_or(&fallback);
                 let outcome = (|| -> Result<(), PargError> {
-                    let bound = self.parse_and_bind(entry, input)?;
+                    let shape = self.parse_shape(entry, input)?;
                     if kind == "reject" {
                         return Err(PargError::UnexpectedParse(input.to_string()));
                     }
                     if kind == "example" {
+                        let bound = self.apply_bindings(entry, &shape)?;
                         let Some(expect) = object.get("expect").and_then(Value::as_object) else {
                             return Ok(());
                         };
                         let mismatched: Vec<(&String, &Value)> = expect
                             .iter()
-                            .filter(|(key, value)| bound.get(*key) != Some(*value))
+                            .filter(|(key, value)| {
+                                canonical(bound.get(*key).unwrap_or(&Value::Null))
+                                    != canonical(value)
+                            })
                             .collect();
                         if !mismatched.is_empty() {
                             return Err(PargError::CaptureMismatch {
                                 input: input.to_string(),
                                 detail: format!("expected captures {mismatched:?}, got {bound}"),
+                            });
+                        }
+                    }
+                    if kind == "capture" {
+                        let Some(expect) = object.get("expect").and_then(Value::as_object) else {
+                            return Ok(());
+                        };
+                        let captures = super::bindings::collect_captures(&shape);
+                        let mismatched: Vec<(&String, &Value)> = expect
+                            .iter()
+                            .filter(|(key, expected)| {
+                                let actual =
+                                    captures.get(key.as_str()).and_then(|values| values.first());
+                                !matches!(actual,
+                                    Some(actual) if !actual.is_null()
+                                        && canonical(actual) == canonical(expected))
+                            })
+                            .collect();
+                        if !mismatched.is_empty() {
+                            let actuals: serde_json::Map<String, Value> = mismatched
+                                .iter()
+                                .map(|(key, _)| {
+                                    let actual = captures
+                                        .get(key.as_str())
+                                        .and_then(|values| values.first())
+                                        .map(canonical)
+                                        .unwrap_or(Value::Null);
+                                    ((*key).clone(), actual)
+                                })
+                                .collect();
+                            return Err(PargError::CaptureMismatch {
+                                input: input.to_string(),
+                                detail: format!(
+                                    "expected captures {mismatched:?}, got {actuals:?}"
+                                ),
                             });
                         }
                     }
@@ -177,5 +237,67 @@ impl PargArtifact {
                 }
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::canonical;
+    use crate::PargArtifact;
+    use serde_json::Value;
+
+    #[test]
+    fn canonical_reduces_slice_wire_objects_to_text() {
+        let slice = serde_json::json!({
+            "value": "ab", "line": 1, "column": 1, "offset": 0, "length": 2
+        });
+        assert_eq!(canonical(&slice), Value::String("ab".into()));
+    }
+
+    #[test]
+    fn canonical_recurses_structure_and_keeps_scalars() {
+        let value = serde_json::json!({
+            "name": {"value": "ab", "line": 1, "column": 1, "offset": 0, "length": 2},
+            "year": 2020,
+            "ok": true,
+            "items": [{"value": "x", "line": 1, "column": 2, "offset": 1, "length": 1}]
+        });
+        assert_eq!(
+            canonical(&value),
+            serde_json::json!({ "name": "ab", "year": 2020, "ok": true, "items": ["x"] })
+        );
+    }
+
+    #[test]
+    fn canonical_leaves_plain_objects_intact() {
+        let value = serde_json::json!({ "a": { "b": "c" } });
+        assert_eq!(canonical(&value), value);
+    }
+
+    #[test]
+    fn capture_kind_replays_green_against_ruby_compiled_fixture() {
+        let artifact =
+            PargArtifact::from_json(include_str!("../../tests/fixtures/parg_capture.json"))
+                .expect("ruby-compiled fixture must verify");
+        assert!(artifact.run_tests().is_empty());
+    }
+
+    #[test]
+    fn capture_kind_reports_mismatched_expectations() {
+        let artifact =
+            PargArtifact::from_json(include_str!("../../tests/fixtures/parg_capture.json"))
+                .expect("ruby-compiled fixture must verify");
+        let mut tests: Vec<Value> =
+            serde_json::from_str(artifact.envelope.get("tests").unwrap().to_string().as_str())
+                .unwrap();
+        // Corrupt the capture expectation: "AB" -> "ZZ" (same shape).
+        for test in tests.iter_mut() {
+            if test["kind"] == "capture" {
+                test["expect"]["pub"] = Value::String("ZZ".into());
+            }
+        }
+        let failures = artifact.run_test_list(&tests);
+        assert_eq!(failures.len(), 1, "{failures:?}");
+        assert!(failures[0].contains("expected captures"), "{failures:?}");
     }
 }
