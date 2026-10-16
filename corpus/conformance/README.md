@@ -10,8 +10,8 @@ convention — an engine that ships with a red case here does not ship.
 Each case is a pair:
 
 - `<name>.parg` — the source grammar, carrying a `test` section
-  (`accept` / `reject` / `example { capture: value }`) that pins the
-  case's observable behavior
+  (`accept` / `reject`, plus `capture { ... }` and/or `example { ... }`
+  expectations) that pins the case's observable behavior
 - `<name>.json` — the compiled artifact envelope, produced by the
   reference compiler (parsanol-ruby) and checksum-covered; the
   envelope's `source_hash` binds it to the `.parg`
@@ -30,9 +30,15 @@ embeds its rows into the artifact; the file stays for source parity).
 4. **Compile-parity ignores provenance fields** (`compiler_version`,
    `checksum`): artifacts bind to their source via `source_hash`, so gem
    version bumps do not — and must not — invalidate corpus cases.
-5. `example` expectations assert the *bound captures* (post-bindings,
-   post-preprocess) — the observable consumer surface — not internal
-   trees. Tree-level parity stays with the ruby/rust differential gate.
+5. **Two test phases** (parsanol-ruby#216): `capture` asserts the *raw
+   capture tree* — the grammar layer, no bindings section needed.
+   `example` asserts the *bound, preprocessed attribute hash* — the
+   bindings layer, the observable consumer surface. `example` in a
+   grammar without bindings rows is an authoring error; Tree-level
+   parity stays with the ruby/rust differential gate.
+6. **Expectation equality is canonical** on every engine: terminals
+   reduce to their text (slice wire objects to their `value`), structure
+   recurses — Ruby `Bindings.canonical`, Rust `suite::canonical`.
 
 ## Running
 

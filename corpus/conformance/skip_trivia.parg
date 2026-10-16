@@ -6,17 +6,12 @@ grammar ConformanceSkip version "1.0.0" {
 
   skip = trivia
 
-  bindings main {
-    key -> key
-    value -> value
-  }
-
   entry main: main
 
   test main {
     accept "abc=42"
     accept "  abc = 42"
-    example "abc=42" { key: "abc"
+    capture "abc=42" { key: "abc"
       value: "42" }
     reject "abc = "
   }

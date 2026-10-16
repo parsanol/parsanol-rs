@@ -6,14 +6,10 @@ grammar ConformanceNesting version "1.0.0" {
   ## A list: comma-separated paths.
   main = path *( "," " " path )
 
-  bindings main {
-    path -> path
-  }
-
   entry main: main
 
   test main {
-    example "a.b" { path: "a.b" }
+    capture "a.b" { path: "a.b" }
     accept "a.b, c1d2, e3"
     reject "a..b"
   }

@@ -2,18 +2,13 @@ grammar ConformanceAtoms version "1.0.0" {
   ## A word, separator, number - the lexical baseline.
   main = (1*%x61-7A as text) " " (1*%x30-39 as digits)
 
-  bindings main {
-    text -> text
-    digits -> digits
-  }
-
   entry main: main
 
   test main {
     accept "abc 42"
     reject "abc"
     reject "ABC 42"
-    example "ab 42" { text: "ab"
+    capture "ab 42" { text: "ab"
       digits: "42" }
   }
 }
