@@ -110,7 +110,7 @@ fn cast(value: Value, kind: Option<&str>) -> Result<Value, PargError> {
 /// BFS capture collection, identical traversal order to Ruby's queue:
 /// hash values are recorded under their key then enqueued; array
 /// elements are enqueued in order.
-fn collect_captures(shape: &Value) -> BTreeMap<String, Vec<Value>> {
+pub(crate) fn collect_captures(shape: &Value) -> BTreeMap<String, Vec<Value>> {
     let mut found: BTreeMap<String, Vec<Value>> = BTreeMap::new();
     let mut queue: Vec<&Value> = vec![shape];
     while let Some(node) = queue.first().copied() {
@@ -135,13 +135,13 @@ fn collect_captures(shape: &Value) -> BTreeMap<String, Vec<Value>> {
 /// objects. Ruby's FFI hands Bindings opaque leaf objects whose `to_s` is
 /// the captured text and whose internals never join the capture map; the
 /// JSON-serialized equivalent is an object carrying a `value` field.
-fn is_leaf(value: &Value) -> bool {
+pub(crate) fn is_leaf(value: &Value) -> bool {
     value
         .as_object()
         .is_some_and(|object| object.contains_key("value"))
 }
 
-fn leaf_scalar(value: &Value) -> &Value {
+pub(crate) fn leaf_scalar(value: &Value) -> &Value {
     if is_leaf(value) {
         value
             .as_object()
