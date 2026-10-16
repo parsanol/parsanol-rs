@@ -4,14 +4,10 @@ grammar ConformanceLookbehind version "1.0.0" {
   ## Words and emphasis.
   main = 1*( emph / ( !"*" ANY ) )
 
-  bindings main {
-    emph -> emph
-  }
-
   entry main: main
 
   test main {
-    example "*cool*" { emph: "*cool*" }
+    capture "*cool*" { emph: "*cool*" }
     reject "a*b*"
   }
 }

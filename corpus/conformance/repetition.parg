@@ -4,18 +4,13 @@ grammar ConformanceRepetition version "1.0.0" {
   ## An optional dash prefix, then the pair.
   dashed = [ "-" as dash ] pair
 
-  bindings dashed {
-    dash -> dash
-    code -> code (string)
-  }
-
   entry dashed: dashed
 
   test dashed {
     accept "-ab"
-    example "-ab" { dash: "-"
+    capture "-ab" { dash: "-"
       code: "ab" }
-    example "ab" { code: "ab" }
+    capture "ab" { code: "ab" }
     reject "-a"
     reject "abc"
   }
