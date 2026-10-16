@@ -57,7 +57,10 @@ jobs:
         run: |
           if [[ "${{ github.event_name }}" == "push" ]]; then
             echo "should_run=true" >> $GITHUB_OUTPUT
-          elif git diff --name-only HEAD^ HEAD | grep -qE '\.(rs|toml|lock)$'; then
+          # corpus/ (.parg/.json, no code suffix) carries the conformance
+          # gate: a corpus-only change must run the suite or the engine
+          # gates never see it.
+          elif git diff --name-only HEAD^ HEAD | grep -qE '\.(rs|toml|lock)$|^corpus/'; then
             echo "should_run=true" >> $GITHUB_OUTPUT
           else
             echo "should_run=false" >> $GITHUB_OUTPUT
