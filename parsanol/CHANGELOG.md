@@ -58,6 +58,13 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- Suite replay: drop the unused object binding (rustc 1.86 -D warnings) by @[object]
+- Suite replay: capture kind for the grammar layer (parsanol-ruby#216) by @[object]
+- Guard debug environment checks with parse depth ([#238](https://github.com/parsanol/parsanol-rs/pull/238)) by @[object]
+- Return capture depth errors without panicking ([#239](https://github.com/parsanol/parsanol-rs/pull/239)) by @[object]
+
+### Other
+
 - Conformance corpus: cross-engine behavioral gate (parsanol-tree/v2) by @[object]
 
 ### Other
