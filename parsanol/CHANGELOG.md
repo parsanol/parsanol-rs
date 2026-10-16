@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.8] - 2026-10-16
+
+### Fixed
+
+- Return capture depth errors without panicking, preserving parser reuse
+  after a depth limit is reached ([#239](https://github.com/parsanol/parsanol-rs/pull/239)).
+- Classify grammar-layer conformance failures in the capture phase
+  ([#241](https://github.com/parsanol/parsanol-rs/pull/241),
+  [#242](https://github.com/parsanol/parsanol-rs/pull/242)).
+
+### Performance
+
+- Avoid reading the debug environment below the parse depth threshold
+  ([#238](https://github.com/parsanol/parsanol-rs/pull/238)).
+
 ## [0.15.0] - 2026-10-07
 
 ### Added
@@ -55,13 +70,6 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
   engine differential (13/13) parse tree-identically natively now.
 
 ## [Unreleased]
-
-### Other
-
-- Suite replay: drop the unused object binding (rustc 1.86 -D warnings) by @[object]
-- Suite replay: capture kind for the grammar layer (parsanol-ruby#216) by @[object]
-- Guard debug environment checks with parse depth ([#238](https://github.com/parsanol/parsanol-rs/pull/238)) by @[object]
-- Return capture depth errors without panicking ([#239](https://github.com/parsanol/parsanol-rs/pull/239)) by @[object]
 
 ### Other
 
