@@ -72,7 +72,7 @@ pub(crate) fn ast_to_value(
 pub(crate) fn canonical(value: &Value) -> Value {
     match value {
         Value::Array(items) => Value::Array(items.iter().map(canonical).collect()),
-        Value::Object(object) if is_leaf(value) => leaf_scalar(value).clone(),
+        Value::Object(_) if is_leaf(value) => leaf_scalar(value).clone(),
         Value::Object(object) => Value::Object(
             object
                 .iter()
