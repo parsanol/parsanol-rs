@@ -548,25 +548,15 @@ fn parse_with_grammar(
                     // fall through to the walker with a FRESH arena
                 }
                 VmCappedOutcome::Parsed {
-                    result,
-                    diagnostics,
-                } => {
-                    let result = match result {
-                        Ok(result) => result,
-                        Err(e) => {
-                            return Err(Error::new(
-                                ruby.exception_runtime_error(),
-                                native_failure_message(&e, diagnostics),
-                            ));
-                        }
-                    };
-                    // The VM reports the prefix it matched; a full parse
-                    // that stopped short is the walker's to decide.
-                    if result.end_pos == input.len() {
-                        let collapsed = crate::ffi::shared::collapse_ast(&result.value, &mut arena);
-                        return transform_ast(&collapsed, &arena, input, ruby);
-                    }
+                    result: Ok(result), ..
+                } if result.end_pos == input.len() => {
+                    let collapsed = crate::ffi::shared::collapse_ast(&result.value, &mut arena);
+                    return transform_ast(&collapsed, &arena, input, ruby);
                 }
+                // A VM failure, or a prefix that stopped short, is the
+                // walker's to decide: its tree, or its error, so failure
+                // messages do not depend on which engine ran.
+                VmCappedOutcome::Parsed { .. } => {}
             }
         }
     }
@@ -830,28 +820,17 @@ pub fn parse_fresh(grammar_json: String, input: String) -> Result<Value, Error> 
                 &mut arena,
                 vm_backtrack_budget(input.len()),
             );
-            if let VmCappedOutcome::Parsed {
-                result,
-                diagnostics,
-            } = outcome
-            {
-                let result = match result {
-                    Ok(result) => result,
-                    Err(e) => {
-                        return Err(Error::new(
-                            ruby.exception_runtime_error(),
-                            native_failure_message(&e, diagnostics),
-                        ));
-                    }
-                };
-                // The VM reports the prefix it matched; a full parse
-                // that stopped short is the walker's to decide.
-                if result.end_pos == input.len() {
+            match outcome {
+                VmCappedOutcome::Parsed {
+                    result: Ok(result), ..
+                } if result.end_pos == input.len() => {
                     let collapsed = crate::ffi::shared::collapse_ast(&result.value, &mut arena);
                     return transform_ast(&collapsed, &arena, &input, &ruby);
                 }
-            } else {
-                mark_vm_sticky_off(hash);
+                // A VM failure, or a prefix that stopped short, is the
+                // walker's to decide (see parse_with_grammar).
+                VmCappedOutcome::Parsed { .. } => {}
+                VmCappedOutcome::BudgetExceeded => mark_vm_sticky_off(hash),
             }
         }
     }
@@ -862,9 +841,16 @@ pub fn parse_fresh(grammar_json: String, input: String) -> Result<Value, Error> 
     let cache = DenseCache::new(0);
     let mut parser = PortableParser::new_with_cache(&grammar, &input, &mut arena, cache);
 
-    let ast = parser
-        .parse()
-        .map_err(|e| Error::new(ruby.exception_runtime_error(), e.to_string()))?;
+    let ast = match parser.parse() {
+        Ok(ast) => ast,
+        Err(e) => {
+            let diagnostics = parser.failure_diagnostics();
+            return Err(Error::new(
+                ruby.exception_runtime_error(),
+                native_failure_message(&e, diagnostics),
+            ));
+        }
+    };
 
     // Transform AST to Ruby format
     transform_ast(&ast, &arena, &input, &ruby)
