@@ -1,0 +1,19 @@
+use helper
+
+grammar ConformanceImports version "1.0.0" {
+  ## Qualified reference into a `use` import (the parsanol-ruby#208 surface).
+  main = helper.code "!"
+
+  bindings main {
+    code -> code
+  }
+
+  entry main: main
+
+  test {
+    accept "ab!"
+    reject "ab"
+    reject "abc!"
+    capture "ab!" { code: "ab" }
+  }
+}

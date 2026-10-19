@@ -1,0 +1,14 @@
+grammar ConformanceCasefold version "1.0.0" {
+  ## Case-insensitive keyword followed by a number.
+  main = %i"select" " " ( 1*%x30-39 as number )
+
+  entry main: main
+
+  test {
+    accept "select 42"
+    accept "SELECT 42"
+    accept "Select 42"
+    reject "selection 42"
+    capture "SELECT 7" { number: "7" }
+  }
+}
