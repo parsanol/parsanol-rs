@@ -20,7 +20,7 @@ serde_json = "1.0"
 # 0.11.1 raised its MSRV to rustc 1.88, past the workspace's 1.86
 # CI leg; the lockfile is not committed, so that leg re-resolves to
 # the newest 0.11.x on every run (the proptest =1.10.0 precedent).
-sha2 = "=0.11.0"
+sha2 = "=0.11.1"
 regex = "1.10"
 regex-syntax = "0.8"
 hashbrown = "0.17"
