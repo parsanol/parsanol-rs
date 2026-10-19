@@ -611,3 +611,31 @@ fn differential_parg_escaped_classes() {
         assert_agree_collapsed(&g, input);
     }
 }
+
+#[test]
+fn differential_zero_width_repetition_body() {
+    // A body that matches without consuming input is counted once and
+    // the loop stops, on both engines (the VM looped until its timeout).
+    let lookahead_only = GrammarBuilder::new()
+        .rule("root", str("a").lookahead().many1())
+        .build()
+        .to_json()
+        .unwrap();
+    let guard_chain = GrammarBuilder::new()
+        .rule(
+            "root",
+            seq(vec![
+                dynamic(str("a").lookahead()),
+                dynamic(str("b").not_ahead()),
+            ])
+            .many(),
+        )
+        .build()
+        .to_json()
+        .unwrap();
+    for g in [lookahead_only, guard_chain] {
+        for input in ["aaa", "a", "b", ""] {
+            assert_agree(&g, input);
+        }
+    }
+}
