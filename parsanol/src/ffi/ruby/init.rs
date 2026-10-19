@@ -10,6 +10,7 @@ use super::parser::{
     incremental_parse, incremental_release, incremental_session, incremental_stats, is_available,
     optimized_atom_count, parse, parse_batch, parse_fresh, parse_handle, parse_handle_events,
     parse_handle_prefix, parse_with_builder, parse_with_stats, register_grammar, release_grammar,
+    set_cache_version,
 };
 use crate::portable::dynamic::{
     clear_dynamic_callbacks, dynamic_callback_count, get_dynamic_callback_description,
@@ -109,6 +110,7 @@ pub fn init(ruby: &Ruby) -> Result<(), Error> {
 
     // Handle-based parsing: register a grammar once, then parse by handle.
     // Avoids the per-call JSON marshal + hash and copies of the input string.
+    native_module.define_module_function("_set_cache_version", function!(set_cache_version, 1))?;
     native_module.define_module_function("_register_grammar", function!(register_grammar, 1))?;
     native_module.define_module_function("_release_grammar", function!(release_grammar, 1))?;
     native_module

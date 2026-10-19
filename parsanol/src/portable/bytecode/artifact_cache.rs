@@ -12,6 +12,7 @@
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::RwLock;
 
 use super::compiler;
 use super::program::Program;
@@ -24,13 +25,30 @@ pub const ENV_DIR: &str = "PARSANOL_CACHE_DIR";
 
 const CACHE_SUBDIR: &str = "parsanol/artifacts";
 
-/// FNV-1a 64-bit over the grammar JSON: stable across processes and
-/// releases (unlike std's SipHash, which is randomly seeded).
+/// The engine release: its compiler decides the program, so a program
+/// compiled by one release is never served to another.
+const ENGINE_VERSION: &str = concat!("parsanol-rs ", env!("CARGO_PKG_VERSION"));
+
+/// The host build (e.g. `parsanol-ruby 1.3.95`), set once at load.
+static HOST_VERSION: RwLock<String> = RwLock::new(String::new());
+
+/// Name the host build in every cache key, so each host release starts
+/// from a fresh cache too.
+pub fn set_host_version(version: &str) {
+    *HOST_VERSION.write().unwrap_or_else(|e| e.into_inner()) = version.to_string();
+}
+
+/// FNV-1a 64-bit over the engine version, the host version, and the
+/// grammar JSON: stable across processes (unlike std's SipHash, which is
+/// randomly seeded) and distinct for every engine or host release.
 pub fn grammar_key(grammar_json: &str) -> u64 {
+    let host = HOST_VERSION.read().unwrap_or_else(|e| e.into_inner());
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for b in grammar_json.as_bytes() {
-        h ^= *b as u64;
-        h = h.wrapping_mul(0x0000_0100_0000_01B3);
+    for part in [ENGINE_VERSION, host.as_str(), grammar_json] {
+        for b in part.as_bytes().iter().chain(b"\0") {
+            h ^= *b as u64;
+            h = h.wrapping_mul(0x0000_0100_0000_01B3);
+        }
     }
     h
 }
@@ -169,6 +187,27 @@ mod tests {
         assert_eq!(loaded.instruction_count(), program.instruction_count());
         std::env::remove_var(ENV_DIR);
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn key_names_the_engine_and_host_versions() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let json = "{\"root\":1}";
+        set_host_version("host 1.0.0");
+        let first = grammar_key(json);
+        assert_eq!(grammar_key(json), first, "keys are stable");
+        set_host_version("host 1.0.1");
+        assert_ne!(grammar_key(json), first, "a new host release is a miss");
+        set_host_version("");
+
+        // The engine version is always part of the key: with no host set
+        // it still differs from a hash of the grammar alone.
+        let mut bare: u64 = 0xcbf2_9ce4_8422_2325;
+        for b in json.as_bytes() {
+            bare ^= *b as u64;
+            bare = bare.wrapping_mul(0x0000_0100_0000_01B3);
+        }
+        assert_ne!(grammar_key(json), bare);
     }
 
     #[test]

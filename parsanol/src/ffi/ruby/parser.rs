@@ -267,6 +267,19 @@ pub fn is_available() -> bool {
 // instead of copying it.
 // ============================================================================
 
+/// Name the host gem build in the compiled-program cache key, so every
+/// gem release starts from a fresh cache. Called once when the extension
+/// loads.
+///
+/// # Example
+///
+/// ```ruby
+/// Parsanol::Native._set_cache_version("parsanol-ruby #{Parsanol::VERSION}")
+/// ```
+pub fn set_cache_version(version: String) {
+    crate::portable::bytecode::artifact_cache::set_host_version(&version);
+}
+
 /// Register a grammar JSON and return a handle for `parse_handle`.
 ///
 /// # Example
