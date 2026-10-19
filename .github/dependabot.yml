@@ -14,6 +14,13 @@ updates:
       timezone: "UTC"
     # Limit open PRs
     open-pull-requests-limit: 10
+    # Deliberate MSRV pins (rs#230 proptest, rs#232 sha2) — do not
+    # bump without an MSRV decision: sha2 0.11.1 requires rustc 1.88,
+    # past the 1.86 floor this workspace supports. Dependabot bumps of
+    # pinned "=x.y.z" versions defeat the pin.
+    ignore:
+      - dependency-name: "sha2"
+      - dependency-name: "proptest"
     # Group all dependencies into a single PR when possible
     groups:
       production-dependencies:
