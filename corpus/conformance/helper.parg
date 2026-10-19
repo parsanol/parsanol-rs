@@ -1,0 +1,6 @@
+grammar ConformanceHelper version "1.0.0" {
+  ## A two-letter code, captured for qualified reference.
+  code = 2*2(%x61-7A) as code
+
+  entry code: code
+}

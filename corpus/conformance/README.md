@@ -16,6 +16,13 @@ Each case is a pair:
   reference compiler (parsanol-ruby) and checksum-covered; the
   envelope's `source_hash` binds it to the `.parg`
 
+A `.parg` **without a sibling `.json` is an import helper** — it exists
+to be referenced via `use` (resolved against its file name) and is
+skipped by the case walkers. `use`-carrying cases merge imports from
+this directory at compile time; their replay passes the corpus as
+`imports_dir` on the Ruby rebuild path (envelope-atom engines need
+nothing — the atoms are merged at bake time).
+
 `stages.yaml` is data for the `preprocess_table` case (the compiler
 embeds its rows into the artifact; the file stays for source parity).
 
