@@ -1,0 +1,31 @@
+grammar ConformanceTriviaCapture version "1.0.0" {
+  ## Comment-shaped trivia in capture mode (parsanol-rs#172): a comment
+  ## rides with the capture it precedes under `comments:`; whitespace is
+  ## never recorded; captured bytes never join span captures. The
+  ## comment DATA is pinned by the ruby differential spec
+  ## (trivia_capture_spec); this case pins acceptance across engines —
+  ## including the bytecode VM's decline-to-interpreter path on Ruby.
+  line_comment = "//" ( *( !newline ANY ) )
+  block_comment = "/*" ( *( !"*/" ANY ) ) "*/"
+  newline = %x0A
+  word = ( 1*( ALPHA ) ) as word
+  num = ( 1*( DIGIT ) ) as num
+  item = ( word / num ) as item
+  list = ( item *( "," item ) ) as list
+
+  skip = trivia capture: comments
+  trivia = 1*( ( 1*" " ) / line_comment / block_comment / newline )
+
+  entry document: list
+
+  test {
+    accept "alpha, 42"
+    accept "alpha /* intro */ , 42"
+    accept "alpha // head\n, 42"
+    accept "alpha /* multi\nline */, 42"
+    reject "alpha ,"
+    reject "/* orphan"
+    capture "alpha /* intro */ , 42" { word: "alpha" }
+    capture "42" { num: "42" }
+  }
+}
