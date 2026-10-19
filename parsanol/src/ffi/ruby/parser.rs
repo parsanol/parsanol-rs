@@ -560,8 +560,12 @@ fn parse_with_grammar(
                             ));
                         }
                     };
-                    let collapsed = crate::ffi::shared::collapse_ast(&result.value, &mut arena);
-                    return transform_ast(&collapsed, &arena, input, ruby);
+                    // The VM reports the prefix it matched; a full parse
+                    // that stopped short is the walker's to decide.
+                    if result.end_pos == input.len() {
+                        let collapsed = crate::ffi::shared::collapse_ast(&result.value, &mut arena);
+                        return transform_ast(&collapsed, &arena, input, ruby);
+                    }
                 }
             }
         }
@@ -840,10 +844,15 @@ pub fn parse_fresh(grammar_json: String, input: String) -> Result<Value, Error> 
                         ));
                     }
                 };
-                let collapsed = crate::ffi::shared::collapse_ast(&result.value, &mut arena);
-                return transform_ast(&collapsed, &arena, &input, &ruby);
+                // The VM reports the prefix it matched; a full parse
+                // that stopped short is the walker's to decide.
+                if result.end_pos == input.len() {
+                    let collapsed = crate::ffi::shared::collapse_ast(&result.value, &mut arena);
+                    return transform_ast(&collapsed, &arena, &input, &ruby);
+                }
+            } else {
+                mark_vm_sticky_off(hash);
             }
-            mark_vm_sticky_off(hash);
         }
     }
 
