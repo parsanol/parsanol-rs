@@ -269,6 +269,13 @@ pub struct CaptureState {
     /// Memo keys for dynamic-dependent atoms carry this so a cached
     /// outcome can never replay across a capture-state change.
     version: u64,
+    /// Recovery journal (TODO.sota/1): when enabled, every `store`
+    /// observation is appended here and NEVER rolled back — the
+    /// generational undo log empties the visible store on the failing
+    /// branch, so recovery's best-effort partial reads the journal
+    /// instead. Off by default: zero cost on success paths.
+    journaling: bool,
+    journal: Vec<(String, CaptureValue)>,
 }
 
 impl Default for CaptureState {
@@ -294,7 +301,25 @@ impl CaptureState {
             scope_stack: Vec::with_capacity(16),
             depth: 0,
             version: 0,
+            journaling: false,
+            journal: Vec::new(),
         }
+    }
+
+    /// Enable/disable the recovery journal; disabling clears it.
+    #[inline]
+    pub fn set_journaling(&mut self, on: bool) {
+        self.journaling = on;
+        if !on {
+            self.journal.clear();
+        }
+    }
+
+    /// The recovery journal: every capture observed while journaling,
+    /// in capture order, including writes later rolled back.
+    #[inline]
+    pub fn journal(&self) -> &[(String, CaptureValue)] {
+        &self.journal
     }
 
     /// Store a named capture
@@ -307,6 +332,9 @@ impl CaptureState {
     /// `true` if this was a new capture, `false` if it shadowed an existing one.
     #[inline]
     pub fn store(&mut self, name: &str, value: CaptureValue) -> bool {
+        if self.journaling {
+            self.journal.push((name.to_string(), value.clone()));
+        }
         if let Some(old_value) = self.captures.get(name).cloned() {
             // Shadowing an existing capture
             let old_node = self.nodes.remove(name);
@@ -338,6 +366,8 @@ impl CaptureState {
             nodes: self.nodes.clone(),
             capture_order: Vec::new(),
             scope_stack: Vec::new(),
+            journaling: false,
+            journal: Vec::new(),
             depth: 0,
             version: self.version,
         }
@@ -359,6 +389,9 @@ impl CaptureState {
         node_value: Value,
         fingerprint: u64,
     ) -> bool {
+        if self.journaling {
+            self.journal.push((name.to_string(), value.clone()));
+        }
         let old_node = self.nodes.insert(
             name.to_string(),
             NodeCapture {
