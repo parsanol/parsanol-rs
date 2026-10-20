@@ -1,3 +1,4 @@
+## Semantics: I1, T1, C1, C7, K1, B1, A1, A2, M0
 use helper
 
 grammar ConformanceImports version "1.0.0" {
