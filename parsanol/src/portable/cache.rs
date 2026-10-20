@@ -282,6 +282,27 @@ impl DenseCache {
     /// For small grammars (< 100 atoms), we use a simple heuristic.
     /// For large grammars (like EXPRESS with 2273 atoms), we need a larger cache
     /// to avoid collisions that destroy performance.
+    ///
+    /// # Memory bound
+    ///
+    /// With `E = clamp(input_len * atom_count, 4096, 2_000_000)` entries:
+    ///
+    /// | component | bound |
+    /// |---|---|
+    /// | slot table | `4 B * next_pow2(E)`, doubled once when the 0.75 load factor is crossed: <= 16 MiB |
+    /// | entries | `24 B * E`: <= 48 MB (45.8 MiB) |
+    ///
+    /// So the cache itself is bounded at **~62 MiB per parser**, independent of
+    /// input size. That is the only hard-bounded allocation in a plain parse:
+    /// the arena is not included here and is **uncapped by default**
+    /// (`ParserConfig::max_memory == 0`), so total parse memory stays
+    /// input-proportional in the worst case. Call
+    /// `PortableParser::set_max_memory` to make the governor enforce a ceiling.
+    ///
+    /// Incremental sessions retain snapshot-marked entries past the cap. Their
+    /// arena is bounded by the 32 MiB snapshot budget, and the entry cap grows
+    /// with the retained set (see `insert`), so the slot table does not double
+    /// per insert.
     #[inline]
     pub fn for_input(input_len: usize, atom_count: usize) -> Self {
         // For large grammars, we need significantly more cache capacity
@@ -376,7 +397,17 @@ impl DenseCache {
                 self.drops += dropped as u64;
                 self.rebuild_slots();
             } else {
-                self.resize();
+                // Nothing recyclable: the cache is a retained snapshot set.
+                // Raise the entry cap; the load-factor check below resizes
+                // the slot table when the entries actually need it. Calling
+                // resize() here doubled the slot table on *every* insert past
+                // the cap, so a long incremental session grew memory without
+                // bound while the entry count rose linearly.
+                self.max_entries = self
+                    .entries
+                    .len()
+                    .saturating_mul(2)
+                    .max(self.max_entries + 1);
             }
         }
 
@@ -797,5 +828,57 @@ mod tests {
         assert_eq!(entry.pos, 100);
         assert_eq!(entry.atom_id, 42);
         assert_eq!(entry.node_tag, NodeTag::Nil);
+    }
+
+    #[test]
+    fn test_cache_memory_bound() {
+        let tiny = DenseCache::for_input(16, 2);
+        assert!(
+            tiny.memory_usage() < 200 * 1024,
+            "tiny cache: {}",
+            tiny.memory_usage()
+        );
+
+        // input_len * atom_count clamps at 2M entries: 48 MB entries plus
+        // an 8-16 MiB slot table. 65 MiB is the documented ceiling.
+        let giant = DenseCache::for_input(usize::MAX / 2, 10_000);
+        assert!(
+            giant.memory_usage() > 40 * 1024 * 1024,
+            "giant cache should reserve the entry tier: {}",
+            giant.memory_usage()
+        );
+        assert!(
+            giant.memory_usage() <= 65 * 1024 * 1024,
+            "cache exceeded its documented bound: {}",
+            giant.memory_usage()
+        );
+    }
+
+    #[test]
+    fn test_snapshot_entries_beyond_cap_do_not_double_slots_per_insert() {
+        let mut cache = DenseCache::new(16);
+        for pos in 0..40u32 {
+            cache.insert(CacheEntry {
+                pos,
+                atom_id: 1,
+                generation: SNAPSHOT_BIT,
+                success: true,
+                ..CacheEntry::default()
+            });
+        }
+
+        assert_eq!(
+            cache.len(),
+            40,
+            "snapshot entries must be retained past the cap"
+        );
+        assert!(
+            cache.capacity() <= 128,
+            "slot table grew past the load-factor schedule: {}",
+            cache.capacity()
+        );
+        for pos in 0..40u32 {
+            assert!(cache.get(pos, 1, 0).is_some(), "snapshot {pos} missing");
+        }
     }
 }
