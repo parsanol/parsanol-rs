@@ -75,8 +75,8 @@
   "docs": {
     "main": "A year: four digits, cast to integer."
   },
-  "source": "grammar ConformanceTypes version \"1.0.0\" {\n  ## A year: four digits, cast to integer.\n  main = 4*( %x30-39 ) as year\n\n  bindings main {\n    year -> year (integer)\n  }\n\n  entry main: main\n\n  test main {\n    example \"2020\" { year: 2020 }\n    reject \"20a0\"\n    reject \"123\"\n  }\n}\n",
-  "source_hash": "6aed5af99db6c2c3b34a26a778a1fd5cd98607621a045082c60efe9c0cf291e0",
-  "compiler_version": "1.3.91",
-  "checksum": "sha256:31c361acbfbca68167e6deea74e7e608a84166e5784b7331fd606b847488fa4f"
+  "source": "## Semantics: C3, K1, K2, B1, B2, B3, A1, A3, M0\ngrammar ConformanceTypes version \"1.0.0\" {\n  ## A year: four digits, cast to integer.\n  main = 4*( %x30-39 ) as year\n\n  bindings main {\n    year -> year (integer)\n  }\n\n  entry main: main\n\n  test main {\n    example \"2020\" { year: 2020 }\n    reject \"20a0\"\n    reject \"123\"\n  }\n}\n",
+  "source_hash": "b37cf28feab3b9c55d8386d2dd5fe7023cdddf18a08cec7637e6453381e114b0",
+  "compiler_version": "1.3.96",
+  "checksum": "sha256:d1a598711b37dfc91eb1621347414d8f1b013e9be6ff30ba5b8cf9ec2351862e"
 }

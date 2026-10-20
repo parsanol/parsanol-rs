@@ -101,8 +101,8 @@
   "docs": {
     "main": "A stage abbreviation resolved through the stages table."
   },
-  "source": "grammar ConformanceTable version \"1.0.0\" {\n  ## A stage abbreviation resolved through the stages table.\n  main = alt from_table \"stages\" column \"abbr\" as abbr\n\n  preprocess resolve {\n    table_lookup stages abbr -> code\n  }\n\n  bindings main {\n    abbr -> code (string) preprocess: resolve\n  }\n\n  entry main: main\n\n  test main {\n    accept \"DIS\"\n    accept \"IS\"\n    reject \"XX\"\n    # example-level assertions on the preprocessed binding are gated on\n    # the native preprocess row lookup (parsanol-rs: embedded table rows\n    # are not reachable from the native bind path yet)\n  }\n}\n",
-  "source_hash": "5a50555a3a4e72a0ad27a24621f4e2d253ff59b976a655a85585e367e6733f00",
-  "compiler_version": "1.3.91",
-  "checksum": "sha256:1335cd2c368af648b0f056ac1a76f84b4d5ef9e1b3af474973481f0e61ffd93e"
+  "source": "## Semantics: D1, D2, B5, B3, M0, A1\ngrammar ConformanceTable version \"1.0.0\" {\n  ## A stage abbreviation resolved through the stages table.\n  main = alt from_table \"stages\" column \"abbr\" as abbr\n\n  preprocess resolve {\n    table_lookup stages abbr -> code\n  }\n\n  bindings main {\n    abbr -> code (string) preprocess: resolve\n  }\n\n  entry main: main\n\n  test main {\n    accept \"DIS\"\n    accept \"IS\"\n    reject \"XX\"\n    # example-level assertions on the preprocessed binding are gated on\n    # the native preprocess row lookup (parsanol-rs: embedded table rows\n    # are not reachable from the native bind path yet)\n  }\n}\n",
+  "source_hash": "88e4d0f22636b259db1b8b7385204b0742f60e59222fde4cb53b09351b88fec0",
+  "compiler_version": "1.3.96",
+  "checksum": "sha256:49491c440b4cdfe8c971bdfcf2f6e56f3792ce72b18e1cd09cc93c7acd46174d"
 }

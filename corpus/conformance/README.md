@@ -5,6 +5,12 @@ artifacts: Ruby (both execution modes), the Rust native engine, the wasm
 build, and the TypeScript runtime. Alignment is enforced by CI, not by
 convention — an engine that ships with a red case here does not ship.
 
+The normative rules this corpus pins live in
+[`docs/parg-semantics.md`](https://github.com/parsanol/parsanol-ruby/blob/main/docs/parg-semantics.md)
+(parsanol-ruby): the match relation, capture and flattening laws, trivia
+rewrite, bindings obligations, and the case↔rule coverage matrix. Each case
+cites the rule IDs it pins in its first line (`## Semantics: …`).
+
 ## Layout
 
 Each case is a pair:
@@ -46,6 +52,10 @@ embeds its rows into the artifact; the file stays for source parity).
 6. **Expectation equality is canonical** on every engine: terminals
    reduce to their text (slice wire objects to their `value`), structure
    recurses — Ruby `Bindings.canonical`, Rust `suite::canonical`.
+7. **Every case cites the normative rules it pins** in its first line
+   (`## Semantics: T1, C1, …`, see `docs/parg-semantics.md`). A new or
+   changed case without rule citations fails review; a rule with no
+   case is a gap tracked in parsanol-rs#254.
 
 ## Running
 

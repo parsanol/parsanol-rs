@@ -103,8 +103,8 @@
   "docs": {
     "main": "A quoted string."
   },
-  "source": "grammar ConformanceRejects version \"1.0.0\" {\n  ## A quoted string.\n  main = %x22 0*( !%x22 ANY ) %x22\n\n  entry main: main\n\n  test main {\n    accept \"\\\"hello\\\"\"\n    accept \"\\\"\\\"\"\n    reject \"hello\"\n    reject \"\\\"unclosed\"\n  }\n}\n",
-  "source_hash": "ec7df6cf5087d09b8d50b177159d46055504df12f653ffa823194412c8ee7490",
-  "compiler_version": "1.3.91",
-  "checksum": "sha256:734d529206cd44fd412bebd1dfa63182c4322ab048b30b6df43b0488fc141fbe"
+  "source": "## Semantics: T3, T5, C1, C3, C5, M0, A1\ngrammar ConformanceRejects version \"1.0.0\" {\n  ## A quoted string.\n  main = %x22 0*( !%x22 ANY ) %x22\n\n  entry main: main\n\n  test main {\n    accept \"\\\"hello\\\"\"\n    accept \"\\\"\\\"\"\n    reject \"hello\"\n    reject \"\\\"unclosed\"\n  }\n}\n",
+  "source_hash": "1e48f5760abefaaf30071c0fd7532d7def02b9157dcfd3673e2f06128ecdb01c",
+  "compiler_version": "1.3.96",
+  "checksum": "sha256:27e9d20094c16f6a4d5f956f6ab8221fcd1d1ea6d54489716b18082a7f3e0337"
 }

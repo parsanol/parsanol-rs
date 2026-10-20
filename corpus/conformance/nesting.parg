@@ -1,3 +1,4 @@
+## Semantics: T3, C1, C2, C3, C7, K1, V4, M0, A1, A2
 grammar ConformanceNesting version "1.0.0" {
   ## A name segment: letters/digits.
   segment = 1*( %x61-7A / %x30-39 )
