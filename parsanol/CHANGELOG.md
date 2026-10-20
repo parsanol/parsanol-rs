@@ -73,6 +73,11 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- Packrat cache: document the memory bound, stop slot-table doubling by @[object]
+- Expose parseShapeRecovering (TODO.sota/1) by @[object]
+
+### Other
+
 - Char classes: byte-string literal in the escape-decoding test (clippy) by @[object]
 - Stop a repetition after an iteration that consumes nothing by @[object]
 - Ruby bridge: VM failures are reported by the walker by @[object]
