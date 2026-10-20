@@ -233,6 +233,20 @@ impl PargArtifactJs {
             .map_err(|_| JsValue::from_str("Failed to serialize shape"))
     }
 
+    /// Best-effort recovery (TODO.sota/1): success returns
+    /// `{"ok": true, "shape": ...}`; failure returns
+    /// `{"ok": false, "captures": ..., "error": ..., "consumed_upto"}`.
+    #[wasm_bindgen(js_name = parseShapeRecovering)]
+    pub fn parse_shape_recovering(&self, entry: &str, input: &str) -> Result<JsString, JsValue> {
+        let recovered = self
+            .artifact
+            .parse_shape_recovering(entry, input)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        serde_json::to_string(&recovered)
+            .map(JsString::from)
+            .map_err(|_| JsValue::from_str("Failed to serialize recovery"))
+    }
+
     /// Apply an entry's bindings to a parsanol-shape tree (JSON text).
     #[wasm_bindgen(js_name = applyBindings)]
     pub fn apply_bindings(&self, entry: &str, shape_json: &str) -> Result<JsString, JsValue> {
