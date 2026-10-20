@@ -485,6 +485,14 @@ impl<'a> PortableParser<'a> {
         self.arena.memory_usage() + self.cache.memory_usage()
     }
 
+    /// Cache-only memory usage: the hard-bounded tier (see
+    /// `DenseCache::for_input`). The arena is reported by `memory_usage`
+    /// and is uncapped unless a memory governor limit is set.
+    #[inline]
+    pub fn cache_memory_usage(&self) -> usize {
+        self.cache.memory_usage()
+    }
+
     /// Get a reference to the capture state
     #[inline]
     pub fn capture_state(&self) -> &CaptureState {
