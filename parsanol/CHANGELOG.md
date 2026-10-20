@@ -73,6 +73,15 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- Optional nil capture, array bindings, boolean cast by @[object]
+- Merge pull request #261 from parsanol/fix/resource-abort-diagnostics by @[object]
+- Artifact errors: report resource aborts instead of phantom syntax by @[object]
+- Merge pull request #257 from parsanol/test/incremental-multiregion by @[object]
+- Keystroke probe: report splice engagement and retained arena by @[object]
+- Multi-region differential gate and keystroke probe by @[object]
+
+### Other
+
 - Packrat cache: document the memory bound, stop slot-table doubling by @[object]
 - Expose parseShapeRecovering (TODO.sota/1) by @[object]
 
