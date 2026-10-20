@@ -5,7 +5,7 @@
 
 use super::instruction::Instruction;
 use super::program::{CharSet, Program};
-use crate::portable::char_class::CharacterPattern;
+use crate::portable::char_class::{CharRanges, CharacterPattern};
 use crate::portable::grammar::{Atom, Grammar, RepetitionTag};
 use std::collections::VecDeque;
 
@@ -477,13 +477,11 @@ impl Compiler {
             return Ok(entry);
         }
 
-        // Check for simple character ranges
-        if pattern.starts_with('[') && pattern.ends_with(']') {
-            if let Some(set) = self.parse_char_class(pattern) {
-                let set_idx = self.program.add_char_set(set);
-                self.program.add_instruction(Instruction::charset(set_idx));
-                return Ok(entry);
-            }
+        // ASCII-only character classes become a byte charset
+        if let Some(set) = ascii_class_set(pattern) {
+            let set_idx = self.program.add_char_set(set);
+            self.program.add_instruction(Instruction::charset(set_idx));
+            return Ok(entry);
         }
 
         // Fall back to regex
@@ -507,45 +505,6 @@ impl Compiler {
         }
 
         set
-    }
-
-    /// Try to parse a character class like [a-z], [abc], or [^...]
-    fn parse_char_class(&self, pattern: &str) -> Option<CharSet> {
-        let inner = &pattern[1..pattern.len() - 1]; // Remove brackets
-
-        // Check for negation
-        let (chars, negated) = if let Some(stripped) = inner.strip_prefix('^') {
-            (stripped, true)
-        } else {
-            (inner, false)
-        };
-
-        let mut set = CharSet::new();
-
-        let mut i = 0;
-        let bytes = chars.as_bytes();
-
-        while i < bytes.len() {
-            if i + 2 < bytes.len() && bytes[i + 1] == b'-' {
-                // Range: a-z
-                let start = bytes[i];
-                let end = bytes[i + 2];
-                for b in start..=end {
-                    set.add(b);
-                }
-                i += 3;
-            } else {
-                set.add(bytes[i]);
-                i += 1;
-            }
-        }
-
-        // Negate if needed
-        if negated {
-            set.negate();
-        }
-
-        Some(set)
     }
 
     /// Compile a sequence of atoms
@@ -651,92 +610,10 @@ impl Compiler {
         Some((union, false))
     }
 
-    /// Lead bytes of a regex we can prove: a single character class
-    /// `[...]` with no quantifier, alternation, or anchor anything else.
+    /// Lead bytes of a regex we can prove: a single character class with
+    /// no quantifier, alternation, or anchor.
     fn regex_first_bytes(&self, pattern: &str) -> Option<Vec<u8>> {
-        if !(pattern.starts_with('[') && pattern.ends_with(']')) || pattern.len() < 3 {
-            return None;
-        }
-        let inner = &pattern[1..pattern.len() - 1];
-        if inner.contains("||") || inner.is_empty() {
-            return None;
-        }
-        let mut negated = false;
-        let mut chars = inner.char_indices().peekable();
-        if let Some((_, first)) = chars.peek() {
-            if *first == '^' {
-                negated = true;
-                chars.next();
-            }
-        }
-        let mut allowed = [false; 256];
-        let mut any = false;
-        let bytes = inner.as_bytes();
-        let _ = chars;
-        let mut i = if negated { 1 } else { 0 };
-        while i < bytes.len() {
-            match bytes[i] {
-                b'\\' => {
-                    let esc = bytes.get(i + 1)?;
-                    match esc {
-                        b'd' => (b'0'..=b'9').for_each(|b| allowed[b as usize] = true),
-                        b'w' => {
-                            (b'a'..=b'z').for_each(|b| allowed[b as usize] = true);
-                            (b'A'..=b'Z').for_each(|b| allowed[b as usize] = true);
-                            (b'0'..=b'9').for_each(|b| allowed[b as usize] = true);
-                            allowed[b'_' as usize] = true;
-                        }
-                        b's' | b' ' | b'\t' | b'\n' | b'\r' | 0x0b | 0x0c => {
-                            // \s and literal whitespace escapes
-                            for b in [b' ', b'\t', b'\n', b'\r', 0x0b, 0x0c] {
-                                allowed[b as usize] = true;
-                            }
-                        }
-                        b'n' => allowed[b'\n' as usize] = true,
-                        b'r' => allowed[b'\r' as usize] = true,
-                        b't' => allowed[b'\t' as usize] = true,
-                        b'f' => allowed[0x0c] = true,
-                        b'v' => allowed[0x0b] = true,
-                        other => allowed[*other as usize] = true,
-                    }
-                    any = true;
-                    i += 2;
-                }
-                b'-' if i > 0 && i + 1 < bytes.len() => {
-                    let lo = bytes[i - 1];
-                    let hi = bytes[i + 1];
-                    if lo > hi {
-                        return None;
-                    }
-                    (lo..=hi).for_each(|b| allowed[b as usize] = true);
-                    any = true;
-                    i += 2;
-                }
-                b']' if i > 0 => {
-                    return None; // nested class: unsupported
-                }
-                b => {
-                    allowed[b as usize] = true;
-                    any = true;
-                    i += 1;
-                }
-            }
-        }
-        if negated {
-            for slot in allowed.iter_mut() {
-                *slot = !*slot;
-            }
-            any = true;
-        }
-        if !any {
-            return None;
-        }
-        Some(
-            (0..256u32)
-                .filter(|&b| allowed[b as usize])
-                .map(|b| b as u8)
-                .collect(),
-        )
+        CharRanges::from_pattern(pattern).map(|class| class.first_bytes())
     }
 
     /// Compile alternatives (ordered choice)
@@ -944,11 +821,9 @@ impl Compiler {
                 if let Some(char_pattern) = CharacterPattern::from_pattern(pattern) {
                     let set = self.char_pattern_to_set(char_pattern);
                     Some(self.program.add_char_set(set))
-                } else if pattern.starts_with('[') && pattern.ends_with(']') {
-                    let set = self.parse_char_class(pattern)?;
-                    Some(self.program.add_char_set(set))
                 } else {
-                    None
+                    let set = ascii_class_set(pattern)?;
+                    Some(self.program.add_char_set(set))
                 }
             }
             Atom::Str { pattern } if pattern.len() == 1 => {
@@ -1227,6 +1102,25 @@ impl std::error::Error for CompileError {}
 /// Convenience function to compile a grammar
 pub fn compile(grammar: Grammar) -> Result<Program, CompileError> {
     Compiler::new(grammar).compile()
+}
+
+/// A byte charset for a regex that is a single ASCII-only character class.
+///
+/// Decoding goes through `CharRanges` (the regex crate's own HIR), so
+/// escapes such as `[\x61-\x7a]` mean exactly what the tree-walker's
+/// regex path decides. Classes with any non-ASCII member — including
+/// negated classes, which resolve to the full Unicode complement — have
+/// multi-byte members a one-byte charset cannot consume, so they stay on
+/// the regex instruction.
+fn ascii_class_set(pattern: &str) -> Option<CharSet> {
+    let ascii = *CharRanges::from_pattern(pattern)?.ascii_only()?;
+    let mut set = CharSet::new();
+    for (b, member) in ascii.into_iter().enumerate() {
+        if member {
+            set.add(b as u8);
+        }
+    }
+    Some(set)
 }
 
 #[cfg(test)]

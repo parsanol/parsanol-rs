@@ -5,6 +5,7 @@
 
 #![cfg(test)]
 
+use crate::ffi::shared::collapse_ast;
 use crate::portable::arena::AstArena;
 use crate::portable::bytecode::{compile_bytecode, parse_with_vm};
 use crate::portable::grammar::{Atom, Grammar};
@@ -98,6 +99,35 @@ fn assert_agree_compiled(
                 materialize(&p.value, &packrat_arena, input),
                 materialize(&v.value, &vm_arena, input),
                 "tree differs for input {input:?}"
+            );
+        }
+        (Err(_), Err(_)) => {}
+        (p, v) => panic!("success/failure mismatch for input {input:?}: packrat={p:?} vm={v:?}"),
+    }
+}
+
+/// Like [`assert_agree`], but compares the trees after `collapse_ast`, the
+/// shape every bridge (Ruby, C) delivers. A `1*class` repetition compiles
+/// to one Span, whose raw tree holds the run as one value where the walker
+/// holds one value per character; collapsing joins both into one slice.
+fn assert_agree_collapsed(grammar_json: &str, input: &str) {
+    let grammar = Grammar::from_json(grammar_json).expect("grammar compiles");
+    let program = compile_bytecode(grammar.clone()).expect("VM compiles grammar");
+
+    let mut packrat_arena = AstArena::new();
+    let packrat = PortableParser::new(&grammar, input, &mut packrat_arena).parse_with_end_pos();
+    let mut vm_arena = AstArena::new();
+    let vm = parse_with_vm(&program, input, &mut vm_arena);
+
+    match (&packrat, &vm) {
+        (Ok(p), Ok(v)) => {
+            assert_eq!(p.end_pos, v.end_pos, "end_pos differs for input {input:?}");
+            let p_tree = collapse_ast(&p.value, &mut packrat_arena);
+            let v_tree = collapse_ast(&v.value, &mut vm_arena);
+            assert_eq!(
+                materialize(&p_tree, &packrat_arena, input),
+                materialize(&v_tree, &vm_arena, input),
+                "collapsed tree differs for input {input:?}"
             );
         }
         (Err(_), Err(_)) => {}
@@ -516,5 +546,68 @@ fn differential_selective_memo() {
         "",
     ] {
         assert_agree_compiled(&grammar, &program, input);
+    }
+}
+
+fn parg_class_grammar() -> String {
+    // Classes spelled the way the PARG compiler emits them: escaped
+    // ranges (`%x61-7A`), one-member classes (`%x0A`), a negated class,
+    // and the whole-input class (`ANY`). The three-way word/number/
+    // string choice has escaped, disjoint lead bytes, so it also runs
+    // the lead-byte dispatch analysis over escaped patterns.
+    let item = choice(vec![
+        dynamic(capture("word", re(r"[\x61-\x7a]").many1())),
+        dynamic(capture("num", re(r"[\x30-\x39]").many1())),
+        dynamic(capture(
+            "str",
+            seq(vec![
+                dynamic(re(r"[\x22]")),
+                dynamic(re(r"[^\x22]").many()),
+                dynamic(re(r"[\x22]")),
+            ]),
+        )),
+        dynamic(capture(
+            "comment",
+            seq(vec![
+                dynamic(re(r"[\x23]")),
+                dynamic(
+                    seq(vec![
+                        dynamic(re(r"[\x0a]").not_ahead()),
+                        dynamic(re(r"[\x00-\u{10ffff}]")),
+                    ])
+                    .many(),
+                ),
+            ]),
+        )),
+    ]);
+    let ws = choice(vec![dynamic(re(r"[\x20]")), dynamic(re(r"[\x0a]"))]);
+    GrammarBuilder::new()
+        .rule(
+            "root",
+            choice(vec![dynamic(ref_("ws")), dynamic(ref_("item"))]).many(),
+        )
+        .rule("ws", ws)
+        .rule("item", item)
+        .build()
+        .to_json()
+        .unwrap()
+}
+
+#[test]
+fn differential_parg_escaped_classes() {
+    let g = parg_class_grammar();
+    for input in [
+        "abab",
+        "zyx wvu",
+        "abc 123\nxyz",
+        "\"q\" \"é ü\"",
+        "# cmt é\nword",
+        "# no newline at end ☃",
+        "ab\"unterminated",
+        "ABC",
+        "a-b",
+        "",
+    ] {
+        assert_agree_collapsed(&g, input);
     }
 }

@@ -509,6 +509,33 @@ impl CharRanges {
         }
     }
 
+    /// The ASCII membership bitmap when the class has no non-ASCII members:
+    /// the only shape a one-byte-per-step matcher (the bytecode VM's
+    /// charset) can express exactly.
+    pub fn ascii_only(&self) -> Option<&[bool; 128]> {
+        self.ranges.is_empty().then_some(&self.ascii)
+    }
+
+    /// Every byte that can begin the UTF-8 encoding of a member. A
+    /// contiguous code-point range has contiguous lead bytes, so each
+    /// non-ASCII range contributes the span between its endpoints' leads.
+    pub fn first_bytes(&self) -> Vec<u8> {
+        let mut bytes: Vec<u8> = (0u8..0x80).filter(|&b| self.ascii[b as usize]).collect();
+        // Range endpoints come from HIR `char`s, so they are scalar values.
+        let lead = |code: u32| {
+            let mut buf = [0u8; 4];
+            char::from_u32(code).map_or(0xF4, |ch| ch.encode_utf8(&mut buf).as_bytes()[0])
+        };
+        for &(lo, hi) in &self.ranges {
+            for b in lead(lo)..=lead(hi) {
+                if !bytes.contains(&b) {
+                    bytes.push(b);
+                }
+            }
+        }
+        bytes
+    }
+
     /// Match the character at byte `pos`; returns its UTF-8 length when it
     /// is a member of the class.
     ///
@@ -775,5 +802,46 @@ mod tests {
                 "mismatch at {pos} for {ch:?}"
             );
         }
+    }
+
+    #[test]
+    fn test_char_ranges_ascii_only() {
+        // Escaped ranges decode to their real members, not the escape's
+        // characters ('\\', '6', '1', ...).
+        let lower = CharRanges::from_pattern("[\\x61-\\x7a]").unwrap();
+        let ascii = lower.ascii_only().unwrap();
+        assert!((b'a'..=b'z').all(|b| ascii[b as usize]));
+        assert!([b'\\', b'6', b'1', b'A']
+            .iter()
+            .all(|&b| !ascii[b as usize]));
+
+        // Any non-ASCII member (including a negation's complement) cannot
+        // be a byte set.
+        assert!(CharRanges::from_pattern("[\\x00-\\u{10ffff}]")
+            .unwrap()
+            .ascii_only()
+            .is_none());
+        assert!(CharRanges::from_pattern("[^\\x22]")
+            .unwrap()
+            .ascii_only()
+            .is_none());
+    }
+
+    #[test]
+    fn test_char_ranges_first_bytes() {
+        let lower = CharRanges::from_pattern("[\\x61-\\x7a]").unwrap();
+        assert_eq!(lower.first_bytes(), (b'a'..=b'z').collect::<Vec<u8>>());
+
+        // Non-ASCII members contribute their UTF-8 lead bytes: é is C3 A9,
+        // 字 is E5 AD 97.
+        let mixed = CharRanges::from_pattern("[a\\x{e9}\\x{5b57}]").unwrap();
+        assert_eq!(mixed.first_bytes(), vec![b'a', 0xC3, 0xE5]);
+
+        // The whole-input class leads with every ASCII byte and C2..=F4.
+        let all = CharRanges::from_pattern("[\\x00-\\u{10ffff}]")
+            .unwrap()
+            .first_bytes();
+        assert!((0u8..0x80).all(|b| all.contains(&b)));
+        assert!((0xC2u8..=0xF4).all(|b| all.contains(&b)));
     }
 }
