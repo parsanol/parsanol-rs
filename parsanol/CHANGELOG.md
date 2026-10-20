@@ -73,6 +73,17 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- Char classes: byte-string literal in the escape-decoding test (clippy) by @[object]
+- Stop a repetition after an iteration that consumes nothing by @[object]
+- Ruby bridge: VM failures are reported by the walker by @[object]
+- Ruby bridge: a VM parse that stops short is the walker's to decide by @[object]
+- Program cache: key on the engine and host versions by @[object]
+- Decode character classes through CharRanges by @[object]
+- Recovery R1: restore failure_wire's doc comment by @[object]
+- Recovery R1: parse_shape_recovering — failure forensics envelope (TODO.sota/1) by @[object]
+
+### Other
+
 - Conformance corpus: cross-engine behavioral gate (parsanol-tree/v2) by @[object]
 
 ### Other
