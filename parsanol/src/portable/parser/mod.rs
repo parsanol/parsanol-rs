@@ -199,6 +199,11 @@ pub struct PortableParser<'a> {
     deepest_failure_pos: usize,
     has_failure: bool,
     expected_labels: Vec<String>,
+    /// Recovery (TODO.sota/1): the furthest position any successful
+    /// atom match ended, tracked ONLY while `track_max_end` is on —
+    /// the recovery pass sets it; normal parses pay nothing.
+    track_max_end: bool,
+    max_end_pos: usize,
     /// C4: ranked failures — up to MAX_RANKED_FAILURES distinct
     /// (position, labels) pairs, deepest first.
     ranked_failures: Vec<(usize, Vec<String>)>,
@@ -374,6 +379,8 @@ impl<'a> PortableParser<'a> {
             input,
             input_bytes: input.as_bytes(),
             deepest_failure_pos: 0,
+            track_max_end: false,
+            max_end_pos: 0,
             ranked_failures: Vec::new(),
             has_failure: false,
             expected_labels: Vec::new(),
@@ -417,6 +424,8 @@ impl<'a> PortableParser<'a> {
             input,
             input_bytes: input.as_bytes(),
             deepest_failure_pos: 0,
+            track_max_end: false,
+            max_end_pos: 0,
             ranked_failures: Vec::new(),
             has_failure: false,
             expected_labels: Vec::new(),
@@ -731,6 +740,13 @@ impl<'a> PortableParser<'a> {
             }
         }
         let r = self.try_atom_impl_inner(atom_id, pos, consume_all);
+        if self.track_max_end {
+            if let Ok(result) = &r {
+                if result.end_pos > self.max_end_pos {
+                    self.max_end_pos = result.end_pos;
+                }
+            }
+        }
         self.dbg_depth -= 1;
         if self.dbg_depth == 0 && matches!(&r, Err(ParseError::RecursionLimitExceeded { .. })) {
             // Successful children may have cached values before their captures
@@ -1161,6 +1177,24 @@ impl<'a> PortableParser<'a> {
 
     /// The structured failure wire (F7/C11): the deepest failure position
     /// with its expected-set, when the parse failed.
+    /// Enable furthest-success tracking for a recovery pass.
+    #[inline]
+    pub fn set_track_max_end(&mut self, on: bool) {
+        self.track_max_end = on;
+        if !on {
+            self.max_end_pos = 0;
+        }
+    }
+
+    /// The furthest position any successful atom match ended (valid
+    /// only while `track_max_end` was enabled for the parse).
+    #[inline]
+    pub fn max_end_pos(&self) -> usize {
+        self.max_end_pos
+    }
+
+    /// The deepest failure position and its expected labels, when the
+    /// last parse attempt recorded a failure.
     pub fn failure_wire(&self) -> Option<(usize, Vec<String>)> {
         if self.has_failure {
             Some((self.deepest_failure_pos, self.expected_labels.clone()))

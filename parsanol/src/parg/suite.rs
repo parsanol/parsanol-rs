@@ -9,6 +9,7 @@ use serde_json::Value;
 
 use super::bindings::{is_leaf, leaf_scalar};
 use super::{PargArtifact, PargError};
+use crate::portable::capture_state::CaptureValue;
 use crate::portable::parslet_transform::to_parslet_compatible;
 use crate::portable::{AstArena, Grammar, PortableParser};
 
@@ -83,6 +84,64 @@ pub(crate) fn canonical(value: &Value) -> Value {
     }
 }
 
+/// Wire rendering of one committed capture for the recovery envelope:
+/// input-backed spans render as the standard slice wire objects, text
+/// captures render bare, host-opaque handles render null (not
+/// portable).
+fn capture_wire(value: &CaptureValue, input: &str) -> Value {
+    match value {
+        CaptureValue::Span { offset, length } => {
+            let offset = *offset;
+            let length = *length;
+            let text = input.get(offset..offset + length).unwrap_or_default();
+            let before = &input[..offset.min(input.len())];
+            let line = before.matches('\n').count() + 1;
+            let column = offset - before.rfind('\n').map(|i| i + 1).unwrap_or(0) + 1;
+            serde_json::json!({
+                "value": text, "line": line, "column": column,
+                "offset": offset, "length": text.chars().count()
+            })
+        }
+        CaptureValue::Text(t) => Value::String(t.to_string()),
+        CaptureValue::Opaque { .. } => Value::Null,
+    }
+}
+
+/// The recovery envelope for a failed parse: the captures committed
+/// before the failure plus the failure wire. Captures of the failing
+/// branch may be present — this is best-effort data, annotated as such
+/// by the `ok: false` marker.
+fn recovery_shape(entry: &str, parser: &PortableParser, input: &str) -> Value {
+    let _ = entry;
+    let mut captures = serde_json::Map::new();
+    for (name, value) in parser.capture_state().journal() {
+        // Journal order is capture order — an array per name preserves
+        // the per-iteration narrative a rep of same-named captures
+        // leaves behind.
+        let slot = captures
+            .entry(name.clone())
+            .or_insert_with(|| Value::Array(Vec::new()));
+        if let Value::Array(items) = slot {
+            items.push(capture_wire(value, input));
+        }
+    }
+    let error = match parser.failure_wire() {
+        Some((offset, expected)) => {
+            let before = &input[..offset.min(input.len())];
+            let line = before.matches('\n').count() + 1;
+            let column = offset - before.rfind('\n').map(|i| i + 1).unwrap_or(0) + 1;
+            serde_json::json!({
+                "offset": offset, "line": line, "column": column, "expected": expected
+            })
+        }
+        None => serde_json::json!({ "offset": input.len(), "expected": [] }),
+    };
+    serde_json::json!({
+        "ok": false, "captures": captures, "error": error,
+        "consumed_upto": parser.max_end_pos()
+    })
+}
+
 impl PargArtifact {
     /// Parse an entry with the native portable engine and return the
     /// parsanol-shape tree as JSON.
@@ -120,6 +179,40 @@ impl PargArtifact {
     pub fn parse_and_bind(&self, entry: &str, input: &str) -> Result<Value, PargError> {
         let shape = self.parse_shape(entry, input)?;
         self.apply_bindings(entry, &shape)
+    }
+
+    /// Best-effort recovery (parsanol-ruby TODO.sota/1, R1): on success
+    /// returns `{"ok": true, "shape": ...}` exactly like `parse_shape`;
+    /// on failure returns `{"ok": false, "captures": ..., "error": ...}`
+    /// where `captures` carries every capture committed before the
+    /// failure (spans as the standard slice wire objects) and `error`
+    /// is the failure wire (offset/line/column/expected). Zero extra
+    /// cost on success paths — the recovery envelope is built only
+    /// from state the failed parse already left behind.
+    pub fn parse_shape_recovering(&self, entry: &str, input: &str) -> Result<Value, PargError> {
+        let grammar: Grammar = self.grammar(entry)?;
+        let mut arena = AstArena::for_input(input.len().max(1 << 16));
+        let mut parser = PortableParser::new(&grammar, input, &mut arena);
+        match parser.parse() {
+            Ok(_) => {
+                let shape = self.parse_shape(entry, input)?;
+                Ok(serde_json::json!({ "ok": true, "shape": shape }))
+            }
+            Err(_) => {
+                // The generational undo log empties the visible store
+                // on the failing branch — that rollback IS the
+                // correctness mechanism. Recovery re-parses once with
+                // journaling enabled: the journal observes every
+                // capture, including writes the failed attempt rolled
+                // back. Success paths never journal (zero cost).
+                let mut arena2 = AstArena::for_input(input.len().max(1 << 16));
+                let mut journaling = PortableParser::new(&grammar, input, &mut arena2);
+                journaling.capture_state_mut().set_journaling(true);
+                journaling.set_track_max_end(true);
+                let _ = journaling.parse();
+                Ok(recovery_shape(entry, &journaling, input))
+            }
+        }
     }
 
     /// Run the artifact's embedded tests; empty result means green.
@@ -280,6 +373,48 @@ mod tests {
             PargArtifact::from_json(include_str!("../../tests/fixtures/parg_capture.json"))
                 .expect("ruby-compiled fixture must verify");
         assert!(artifact.run_tests().is_empty());
+    }
+
+    #[test]
+    fn recovering_returns_the_shape_on_success() {
+        let artifact =
+            PargArtifact::from_json(include_str!("../../tests/fixtures/parg_capture.json"))
+                .expect("ruby-compiled fixture must verify");
+        let recovered = artifact
+            .parse_shape_recovering("identifier", "AB2020")
+            .unwrap();
+        assert_eq!(recovered["ok"], Value::Bool(true));
+        assert_eq!(
+            recovered["shape"],
+            artifact.parse_shape("identifier", "AB2020").unwrap()
+        );
+    }
+
+    #[test]
+    fn recovering_reports_committed_captures_on_failure() {
+        let artifact =
+            PargArtifact::from_json(include_str!("../../tests/fixtures/parg_capture.json"))
+                .expect("ruby-compiled fixture must verify");
+        // "AB20": `pub` matches "AB", the digits match "2" and "0",
+        // then `4digit` wants a third digit at EOF and the sequence
+        // fails. The furthest successful match ends at EOF — the
+        // failure wire points there too. Rule-level captures are
+        // tree-level in the portable engine and do not survive the
+        // failed sequence: the recovery envelope is failure forensics
+        // (R1), with partial-tree recovery specced as the engine
+        // capability in TODO.sota/1.
+        let recovered = artifact
+            .parse_shape_recovering("identifier", "AB20")
+            .unwrap();
+        assert_eq!(recovered["ok"], Value::Bool(false));
+        assert_eq!(recovered["consumed_upto"], Value::Number(4.into()));
+        assert_eq!(recovered["error"]["offset"], Value::Number(4.into()));
+        assert!(
+            recovered["error"]["expected"]
+                .as_array()
+                .is_some_and(|e| !e.is_empty()),
+            "expected set present: {recovered}"
+        );
     }
 
     #[test]
