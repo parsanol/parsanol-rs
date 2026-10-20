@@ -254,6 +254,16 @@ fn flatten_repetition(items: &[AstNode], arena: &mut AstArena, input: &str) -> A
     if flat.is_empty() {
         return store_array_node(&[], arena);
     }
+    // Parslet flatten law (V3, ruby#231): when any iteration is a map,
+    // keep exactly the map iterations and drop text/other items. The
+    // corpus shape phase caught this divergence: Rust kept the text.
+    if flat.iter().any(|item| matches!(item, AstNode::Hash { .. })) {
+        let hashes: Vec<AstNode> = flat
+            .into_iter()
+            .filter(|item| matches!(item, AstNode::Hash { .. }))
+            .collect();
+        return store_array_node(&hashes, arena);
+    }
     let mut string_parts: Vec<String> = Vec::with_capacity(flat.len());
     let mut first_input_offset: Option<u32> = None;
     for item in &flat {
