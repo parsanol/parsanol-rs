@@ -1,0 +1,18 @@
+## Semantics: B2, B3, K1, C1, A1, A3, M0
+grammar ConformanceBindingsCasts version "1.0.0" {
+  ## Boolean cast from captured text.
+  flag = ( %x74 %x72 %x75 %x65 ) / ( %x66 %x61 %x6C %x73 %x65 )
+  main = ( flag ) as enabled
+
+  bindings main {
+    enabled -> enabled (boolean)
+  }
+
+  entry main: main
+
+  test main {
+    example "true" { enabled: true }
+    example "false" { enabled: false }
+    reject "truex"
+  }
+}
