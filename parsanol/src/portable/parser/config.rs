@@ -5,7 +5,14 @@
 /// Default maximum input size: 100 MB
 pub const DEFAULT_MAX_INPUT_SIZE: usize = 100 * 1024 * 1024;
 
-/// Default maximum recursion depth
+/// Default maximum recursion depth, counted in rule-reference frames.
+///
+/// The governor increments its counter for every `Entity` evaluation (a
+/// rule reference), not per input nesting level, so one document level
+/// can consume several frames. The effective nesting ceiling is therefore
+/// grammar-dependent: the reference JSON grammar, for example, reaches
+/// the limit near ~198 nested arrays at this default. Exceeding it is a
+/// `RecursionLimitExceeded` abort, not a syntax failure.
 pub const DEFAULT_MAX_RECURSION_DEPTH: usize = 1000;
 
 /// Default timeout in milliseconds (0 = no timeout)
