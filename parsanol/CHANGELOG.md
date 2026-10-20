@@ -73,6 +73,12 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- Release v0.18.10 by @[object]
+- Packrat cache: document the memory bound, stop slot-table doubling by @[object]
+- Expose parseShapeRecovering (TODO.sota/1) by @[object]
+
+### Other
+
 - Packrat cache: document the memory bound, stop slot-table doubling by @[object]
 - Expose parseShapeRecovering (TODO.sota/1) by @[object]
 
