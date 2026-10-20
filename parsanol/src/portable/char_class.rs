@@ -811,9 +811,7 @@ mod tests {
         let lower = CharRanges::from_pattern("[\\x61-\\x7a]").unwrap();
         let ascii = lower.ascii_only().unwrap();
         assert!((b'a'..=b'z').all(|b| ascii[b as usize]));
-        assert!([b'\\', b'6', b'1', b'A']
-            .iter()
-            .all(|&b| !ascii[b as usize]));
+        assert!(b"\\61A".iter().all(|&b| !ascii[b as usize]));
 
         // Any non-ASCII member (including a negation's complement) cannot
         // be a byte set.
