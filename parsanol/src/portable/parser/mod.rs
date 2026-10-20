@@ -1193,6 +1193,8 @@ impl<'a> PortableParser<'a> {
         self.max_end_pos
     }
 
+    /// The deepest failure position and its expected labels, when the
+    /// last parse attempt recorded a failure.
     pub fn failure_wire(&self) -> Option<(usize, Vec<String>)> {
         if self.has_failure {
             Some((self.deepest_failure_pos, self.expected_labels.clone()))
