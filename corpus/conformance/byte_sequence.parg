@@ -1,0 +1,14 @@
+## Semantics: T4, T3, C3, M0, A1
+grammar ConformanceByteSequence version "1.0.0" {
+  ## CRLF, then exactly two ASCII digits.
+  main = %x0D.0A 2*2( %x30-39 )
+
+  entry main: main
+
+  test main {
+    accept "\r\n42"
+    reject "\r42"
+    reject "\n42"
+    reject "\r\n4"
+  }
+}

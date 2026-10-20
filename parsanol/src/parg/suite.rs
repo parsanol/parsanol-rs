@@ -297,11 +297,13 @@ impl PargArtifact {
                         let mismatched: Vec<(&String, &Value)> = expect
                             .iter()
                             .filter(|(key, expected)| {
+                                // A present nil capture (for example an absent
+                                // optional inside `as`) is a value, not a
+                                // missing capture: compare presence first.
                                 let actual =
                                     captures.get(key.as_str()).and_then(|values| values.first());
                                 !matches!(actual,
-                                    Some(actual) if !actual.is_null()
-                                        && canonical(actual) == canonical(expected))
+                                    Some(actual) if canonical(actual) == canonical(expected))
                             })
                             .collect();
                         if !mismatched.is_empty() {

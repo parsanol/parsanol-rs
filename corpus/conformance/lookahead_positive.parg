@@ -1,0 +1,14 @@
+## Semantics: C5, T1, C1, C3, M0, A1
+grammar ConformanceLookaheadPositive version "1.0.0" {
+  ## A word that must start with "ab".
+  main = &"ab" 1*%x61-7A
+
+  entry main: main
+
+  test main {
+    accept "ab"
+    accept "abc"
+    reject "xb"
+    reject "a"
+  }
+}

@@ -1,0 +1,13 @@
+## Semantics: D1, D2, C2, T1, M0, A1
+grammar ConformanceTableOverlap version "1.0.0" {
+  ## Longest-first table expansion: "AB" must be tried before "A".
+  main = alt from_table "overlap" column "code" %x21
+
+  entry main: main
+
+  test main {
+    accept "AB!"
+    accept "A!"
+    reject "B!"
+  }
+}
