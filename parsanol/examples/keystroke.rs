@@ -92,8 +92,11 @@ fn main() {
     let p95 = times[(times.len() * 95) / 100];
     let mean_reused = reused_total as f64 / times.len() as f64;
     println!(
-        "edits={} median_ms={median:.3} p95_ms={p95:.3} mean_reused_entries={mean_reused:.0}",
-        times.len()
+        "edits={} median_ms={median:.3} p95_ms={p95:.3} mean_reused_entries={mean_reused:.0} \
+         spliced_parses={} arena_bytes={}",
+        times.len(),
+        session.spliced_parses(),
+        session.retained_arena().memory_usage()
     );
     let _ = std::io::stdout().flush();
 }
