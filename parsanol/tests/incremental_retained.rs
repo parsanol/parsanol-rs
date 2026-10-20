@@ -237,6 +237,72 @@ fn retained_matches_full_reparse_across_edit_session() {
 }
 
 #[test]
+fn retained_matches_full_reparse_across_multi_region_edits() {
+    // TODO.sota/7 acceptance: multi-region edits with the differential
+    // gate running after every one of them. Kept at 500 edits so the
+    // debug-build gate stays CI-sized; the nightly fuzz job can raise
+    // the count by parameter.
+    let grammar = kv_grammar();
+    let mut session = IncrementalParser::new(&grammar);
+    let mut input = kv_corpus(80);
+    session.parse_retained(&input).expect("initial parse");
+
+    let mut rng: u64 = 0xC0FF_EE00_1234_5678;
+    let mut reused = 0usize;
+    let mut regions = std::collections::BTreeSet::new();
+    for step in 0..500u32 {
+        rng ^= rng << 13;
+        rng ^= rng >> 7;
+        rng ^= rng << 17;
+        let offset = (rng as usize) % input.len();
+        let current = input.as_bytes()[offset];
+        // Same-class replacement keeps the document valid at any offset:
+        // digits stay digits, letters stay letters, punctuation is
+        // rewritten to itself (a no-op edit still dirties its region).
+        let replacement = if current.is_ascii_digit() {
+            b'0' + ((rng >> 16) % 10) as u8
+        } else if current.is_ascii_alphabetic() {
+            b'a' + ((rng >> 16) % 26) as u8
+        } else {
+            current
+        };
+        let mut next = input.clone();
+        next.replace_range(offset..offset + 1, &(replacement as char).to_string());
+        input = next;
+
+        let result = session
+            .parse_with_edit_retained(&input, Edit::replace(offset, 1, 1))
+            .unwrap_or_else(|error| {
+                panic!("edit {step} at {offset}: retained reparse failed: {error:?}")
+            });
+        reused += result.reused_cache_entries;
+        regions.insert(offset / 64);
+
+        let (ref_arena, reference) = full_reparse(&grammar, &input);
+        assert_same_outcome(
+            step,
+            offset,
+            2,
+            session.retained_arena(),
+            Ok(&result.ast),
+            &ref_arena,
+            reference.as_ref().map_err(|e| format!("{e:?}")),
+        );
+    }
+
+    assert!(reused > 0, "no cache entries survived across the session");
+    assert!(
+        regions.len() > 10,
+        "edits covered only {} regions",
+        regions.len()
+    );
+    assert!(
+        session.retained_arena().memory_usage() < 64 * 1024 * 1024,
+        "retained arena exceeded the session budget"
+    );
+}
+
+#[test]
 fn retained_sessions_reuse_containers_and_stay_bounded() {
     let grammar = kv_grammar();
     let mut session = IncrementalParser::new(&grammar);
