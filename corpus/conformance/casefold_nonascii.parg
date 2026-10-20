@@ -1,0 +1,13 @@
+## Semantics: T2, T1, C1, M0, A1
+grammar ConformanceCasefoldUnicode version "1.0.0" {
+  ## Case-insensitive literal with a non-ASCII letter.
+  main = %i"é" %x21
+
+  entry main: main
+
+  test main {
+    accept "é!"
+    accept "É!"
+    reject "e!"
+  }
+}

@@ -1,0 +1,20 @@
+## Semantics: C5, S1, S4, S5, S6, T1, M0, A1
+grammar ConformanceSkipLookahead version "1.0.0" {
+  ## Whitespace trivia.
+  trivia = 1*" "
+  ## A guard that inspects the RAW byte after "a": trivia is not injected
+  ## inside a lookahead, so a space there must fail even though the skip
+  ## rule would otherwise consume it.
+  main = "a" !" " "c"
+
+  skip = trivia
+
+  entry main: main
+
+  test main {
+    accept "ac"
+    accept "ac   "
+    reject "a c"
+    reject "a  c"
+  }
+}

@@ -1,0 +1,19 @@
+## Semantics: S1, S5, T1, C3, M0, A1
+grammar ConformanceTrailingTrivia version "1.0.0" {
+  ## Whitespace trivia.
+  trivia = 1*" "
+  ## A key followed by "="; trailing whitespace must be consumed by the
+  ## entry-boundary skip before the full-consumption check.
+  main = 1*%x61-7A "="
+
+  skip = trivia
+
+  entry main: main
+
+  test main {
+    accept "a="
+    accept "a=   "
+    accept "  a =  "
+    reject "a= !"
+  }
+}
