@@ -151,25 +151,33 @@ impl PargArtifact {
         // characters per node); size the arena for the tree, not the text.
         let mut arena = AstArena::for_input(input.len().max(1 << 16));
         let mut parser = PortableParser::new(&grammar, input, &mut arena);
-        let raw = parser.parse().map_err(|err| match parser.failure_wire() {
-            Some((offset, expected)) => {
-                let before = &input[..offset.min(input.len())];
-                let line = before.matches('\n').count() + 1;
-                let column = offset - before.rfind('\n').map(|i| i + 1).unwrap_or(0) + 1;
-                let ranked = parser
-                    .failure_ranks()
-                    .iter()
-                    .map(|(p, labels)| (*p, labels.clone()))
-                    .collect();
-                PargError::ParseWire {
-                    offset,
-                    line,
-                    column,
-                    expected,
-                    ranked,
-                }
+        let raw = parser.parse().map_err(|err| {
+            if err.is_abort() {
+                // Resource and runtime aborts are not syntax expectations:
+                // the failure wire belongs to whatever branch was active, so
+                // rendering it would send users after a phantom `]`.
+                return PargError::ParseFailed(err.to_string());
             }
-            None => PargError::ParseFailed(err.to_string()),
+            match parser.failure_wire() {
+                Some((offset, expected)) => {
+                    let before = &input[..offset.min(input.len())];
+                    let line = before.matches('\n').count() + 1;
+                    let column = offset - before.rfind('\n').map(|i| i + 1).unwrap_or(0) + 1;
+                    let ranked = parser
+                        .failure_ranks()
+                        .iter()
+                        .map(|(p, labels)| (*p, labels.clone()))
+                        .collect();
+                    PargError::ParseWire {
+                        offset,
+                        line,
+                        column,
+                        expected,
+                        ranked,
+                    }
+                }
+                None => PargError::ParseFailed(err.to_string()),
+            }
         })?;
         let shaped = to_parslet_compatible(&raw, &mut arena, input);
         Ok(ast_to_value(&shaped, &arena, input))

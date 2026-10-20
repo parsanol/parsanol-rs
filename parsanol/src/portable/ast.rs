@@ -275,6 +275,26 @@ impl ParseError {
         ParseError::Failed { position }
     }
 
+    /// Whether this error aborts the parse as a whole rather than
+    /// describing a failed branch.
+    ///
+    /// Resource limits, runtime aborts, and internal errors are not
+    /// branch outcomes: combinators must propagate them instead of
+    /// treating them as "this alternative did not match". Callers that
+    /// render failures (artifact wire errors, CLIs) must likewise report
+    /// the abort itself, never a synthesized syntax expectation.
+    pub fn is_abort(&self) -> bool {
+        matches!(
+            self,
+            ParseError::InvalidGrammar { .. }
+                | ParseError::Internal { .. }
+                | ParseError::InputTooLarge { .. }
+                | ParseError::RecursionLimitExceeded { .. }
+                | ParseError::TimeoutExceeded { .. }
+                | ParseError::MemoryLimitExceeded { .. }
+        )
+    }
+
     /// Add source position information to error message
     pub fn format_with_position(&self, input: &str) -> String {
         match self {
@@ -748,5 +768,41 @@ mod tests {
     fn test_parse_error_is_std_error() {
         let err = ParseError::Failed { position: 0 };
         let _: &dyn std::error::Error = &err; // Should compile
+    }
+
+    #[test]
+    fn resource_and_runtime_errors_are_aborts() {
+        for error in [
+            ParseError::InvalidGrammar {
+                reason: "custom".into(),
+            },
+            ParseError::Internal {
+                message: "boom".into(),
+            },
+            ParseError::InputTooLarge {
+                input_size: 2,
+                max_size: 1,
+            },
+            ParseError::RecursionLimitExceeded {
+                depth: 10,
+                max_depth: 10,
+            },
+            ParseError::TimeoutExceeded {
+                elapsed_ms: 2,
+                timeout_ms: 1,
+            },
+            ParseError::MemoryLimitExceeded {
+                used_bytes: 2,
+                max_bytes: 1,
+            },
+        ] {
+            assert!(error.is_abort(), "{error:?} must abort the parse");
+        }
+        assert!(!ParseError::Failed { position: 0 }.is_abort());
+        assert!(!ParseError::Incomplete {
+            expected: 1,
+            actual: 0
+        }
+        .is_abort());
     }
 }
