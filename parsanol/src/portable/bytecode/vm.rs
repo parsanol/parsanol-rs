@@ -17,6 +17,15 @@ use std::time::Instant;
 /// Maximum capture stack depth
 const MAX_CAPTURE_DEPTH: usize = 100_000;
 
+/// An open repetition: its iteration count, where the last counted
+/// iteration ended, and whether that iteration consumed nothing.
+#[derive(Debug, Clone, Copy)]
+struct RepRegister {
+    count: u32,
+    last_end: usize,
+    stalled: bool,
+}
+
 /// VM configuration options
 #[derive(Debug, Clone)]
 pub struct VMConfig {
@@ -145,7 +154,7 @@ pub struct BytecodeVM<'a> {
     value_stack: Vec<AstNode>,
 
     /// Repetition registers: iteration counts anchoring BuildRep
-    rep_registers: Vec<u32>,
+    rep_registers: Vec<RepRegister>,
 
     /// Recorded captures: (name table index, start, length)
     recorded_captures: Vec<(u32, u32, u32)>,
@@ -652,6 +661,17 @@ impl<'a> BytecodeVM<'a> {
             }
 
             Instruction::PartialCommit { offset } => {
+                // An iteration that consumed nothing would repeat forever:
+                // like the tree-walker, count it once (its RepCount ran)
+                // and leave the loop, which ends at this instruction.
+                if self
+                    .backtrack_stack
+                    .last()
+                    .is_some_and(|frame| frame.position == self.position)
+                {
+                    self.backtrack_stack.pop();
+                    return Ok(ExecutionResult::Continue);
+                }
                 // Update the choice point with current position and the
                 // completed iterations' side effects, so a later failure
                 // keeps them and only discards the failing iteration.
@@ -1115,19 +1135,33 @@ impl<'a> BytecodeVM<'a> {
             }
 
             Instruction::RepOpen => {
-                self.rep_registers.push(0);
+                self.rep_registers.push(RepRegister {
+                    count: 0,
+                    last_end: self.position,
+                    stalled: false,
+                });
                 Ok(ExecutionResult::Continue)
             }
 
             Instruction::RepCount => {
-                if let Some(count) = self.rep_registers.last_mut() {
-                    *count += 1;
+                if let Some(reg) = self.rep_registers.last_mut() {
+                    let progressed = self.position != reg.last_end;
+                    if !progressed && reg.stalled {
+                        // The tree-walker stops after the first iteration
+                        // that consumes nothing; this one repeats it, so
+                        // it is not counted and its value is dropped.
+                        self.value_stack.pop();
+                    } else {
+                        reg.count += 1;
+                        reg.last_end = self.position;
+                        reg.stalled = !progressed;
+                    }
                 }
                 Ok(ExecutionResult::Continue)
             }
 
             Instruction::BuildRep { maybe } => {
-                let n = self.rep_registers.pop().unwrap_or(0) as usize;
+                let n = self.rep_registers.pop().map_or(0, |reg| reg.count) as usize;
                 if self.value_stack.len() < n {
                     return Err(ParseError::Internal {
                         message: format!("BuildRep underflow: need {n} values"),
