@@ -323,11 +323,6 @@ fn verify_checksum(envelope: &Value) -> Result<(), PargError> {
     Ok(())
 }
 
-/// Canonical JSON, byte-compatible with the Ruby compiler's
-/// `JSON.generate` of its key-sorted payload: object keys sorted, no
-/// whitespace, short escapes for `\b \t \n \f \r " \`, lowercase `\u00xx`
-/// for other control characters, raw UTF-8 otherwise, and floats rendered
-/// by [`ruby_json_float`].
 /// Render an `f64` the way Ruby's JSON gem does: the shortest round-trip
 /// digits, decimal notation for decimal exponents -9..=14, scientific
 /// notation (`d.ddde+NN`, sign always, exponent unpadded) outside that
@@ -388,7 +383,7 @@ pub(crate) fn ruby_json_float(value: f64) -> String {
 /// `JSON.generate` of its key-sorted payload: object keys sorted, no
 /// whitespace, short escapes for `\b \t \n \f \r " \`, lowercase `\u00xx`
 /// for other control characters, raw UTF-8 otherwise, and floats rendered
-/// by [`ruby_json_float`].
+/// with the B6 float form (see `ruby_json_float`).
 pub fn canonical_json(value: &Value) -> Result<String, PargError> {
     let mut out = String::new();
     write_canonical(value, &mut out)?;
