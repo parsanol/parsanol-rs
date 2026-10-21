@@ -412,3 +412,57 @@ fn splice_path_engages_on_repetition_spine_documents() {
         "the splice path never engaged"
     );
 }
+
+#[test]
+fn splice_engagement_holds_as_the_document_grows() {
+    // rs#258: the next plan's body chain used to come from memo
+    // entries. Repetition-body outcomes spanning a trivia drain are
+    // never memoized (the drain replays side effects the memo cannot),
+    // so the stored body-entry set thinned out as the document grew
+    // and engagement collapsed past ~800 pairs. The chain now comes
+    // from the root repetition's own iteration trace, which is exact
+    // at every size.
+    let grammar = kv_grammar();
+    for pairs in [500usize, 1200, 2000] {
+        let mut session = IncrementalParser::new(&grammar);
+        let mut input = kv_corpus(pairs);
+        session.parse_retained(&input).expect("initial parse");
+
+        let edits = 3u32;
+        for step in 0..edits {
+            // Tail edit: every prefix item is retention-eligible and
+            // the splice must engage on EVERY edit, including the
+            // first (the initial parse now records the trace too).
+            let offset = input.len() - 2;
+            let digit = char::from(b'0' + ((step + 1) % 10) as u8);
+            let mut next = input.clone();
+            next.replace_range(offset..offset + 1, &digit.to_string());
+            input = next;
+
+            let result = session
+                .parse_with_edit_retained(&input, Edit::replace(offset, 1, 1))
+                .unwrap_or_else(|error| {
+                    panic!("{pairs} pairs, edit {step}: retained reparse failed: {error:?}")
+                });
+
+            let (ref_arena, reference) = full_reparse(&grammar, &input);
+            assert_same_outcome(
+                step,
+                offset,
+                2,
+                session.retained_arena(),
+                Ok(&result.ast),
+                &ref_arena,
+                reference.as_ref().map_err(|e| format!("{e:?}")),
+            );
+        }
+
+        assert_eq!(
+            session.spliced_parses(),
+            edits as usize,
+            "{pairs} pairs: splice engagement regressed to {}/{}",
+            session.spliced_parses(),
+            edits
+        );
+    }
+}

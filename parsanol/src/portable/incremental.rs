@@ -324,6 +324,10 @@ pub struct IncrementalParser<'a> {
     /// coordinates, collected during the last retention pass.
     last_root: Option<AstNode>,
     body_chain: Vec<(u32, u32)>,
+    /// The root repetition's iteration bounds from the most recent
+    /// parse, staged here because the parser is consumed (into_cache)
+    /// before the chain assignment below.
+    last_spine_trace: Vec<(u32, u32)>,
     spliced_parses: usize,
 
     /// Previous input length (for position translation)
@@ -347,6 +351,7 @@ impl<'a> IncrementalParser<'a> {
             dirty_tracker: DirtyRegionTracker::new(),
             last_root: None,
             body_chain: Vec::new(),
+            last_spine_trace: Vec::new(),
             spliced_parses: 0,
             prev_input_len: 0,
         }
@@ -364,6 +369,7 @@ impl<'a> IncrementalParser<'a> {
             dirty_tracker: DirtyRegionTracker::new(),
             last_root: None,
             body_chain: Vec::new(),
+            last_spine_trace: Vec::new(),
             spliced_parses: 0,
             prev_input_len: 0,
         }
@@ -645,6 +651,19 @@ impl<'a> IncrementalParser<'a> {
             }
         };
 
+        // The repetition-spine body (root Repetition, optionally behind
+        // one Named) — none only when the grammar has no spine. The
+        // splice path parses its suffix; every parse records the root
+        // repetition's iteration bounds for the next plan.
+        let spine_body = match self.grammar.get_atom(root_atom as usize) {
+            Some(Atom::Repetition { atom, .. }) => Some(*atom),
+            Some(Atom::Named { atom, .. }) => match self.grammar.get_atom(*atom) {
+                Some(Atom::Repetition { atom, .. }) => Some(*atom),
+                _ => None,
+            },
+            _ => None,
+        };
+
         self.output_arena.set_input(input.to_owned());
 
         // Graft source: the previous root's items (same persistent arena
@@ -710,6 +729,16 @@ impl<'a> IncrementalParser<'a> {
             &mut self.output_arena,
             std::mem::take(&mut self.cache),
         );
+        // The root repetition records its iteration bounds directly
+        // (rs#258): repetition-body memo entries cannot serve the next
+        // splice plan, because outcomes spanning a trivia drain are
+        // never stored, so the cache's body-entry set silently thins
+        // out as the document grows. One (start, end) pair per root
+        // iteration is exact at O(count) cost. The watch keys on the
+        // spine starting at byte 0 (the splice shape's own premise);
+        // a root offset by an entry wrapper's leading trivia simply
+        // keeps the full-parse fallback.
+        parser.spine_watch = spine_body.map(|b| (b, 0));
 
         // The splice: parse ONLY the suffix iterations of the body atom
         // from the last intact item boundary; rebuild the root by
@@ -735,6 +764,7 @@ impl<'a> IncrementalParser<'a> {
         }
         let mut spliced: Option<(&str, Vec<AstNode>)> = None;
         let mut root_name: Option<String> = None;
+        let mut splice_k = 0usize;
         if let (
             Some((body, _, tag, name, _)),
             Some((splice_pos, k, max)),
@@ -748,6 +778,7 @@ impl<'a> IncrementalParser<'a> {
                     RepetitionTag::Repetition => ":repetition",
                 };
                 let mut suffix: Vec<AstNode> = Vec::new();
+                let mut suffix_bounds: Vec<(u32, u32)> = Vec::new();
                 let mut s_pos = *splice_pos;
                 loop {
                     if let Some(mx) = max {
@@ -758,6 +789,7 @@ impl<'a> IncrementalParser<'a> {
                     match parser.try_atom_impl(*body, s_pos, false) {
                         Ok(r) => {
                             let zero_width = r.end_pos == s_pos;
+                            suffix_bounds.push((s_pos as u32, r.end_pos as u32));
                             suffix.push(r.value.clone());
                             s_pos = r.end_pos;
                             // Same no-progress rule as the repetition
@@ -784,11 +816,16 @@ impl<'a> IncrementalParser<'a> {
                     let mut items: Vec<AstNode> =
                         prev_items.iter().take(k + 1).skip(1).cloned().collect();
                     items.extend(suffix);
+                    splice_k = *k;
+                    // The next plan's chain: the untouched prefix keeps
+                    // its recorded bounds; the suffix items start fresh.
+                    self.last_spine_trace = suffix_bounds;
                     spliced = Some((tag_str, items));
                 }
             }
         }
 
+        let was_spliced = spliced.is_some();
         let result = match spliced {
             Some((tag_str, items)) => {
                 // Consume the parser FIRST so the arena borrow ends,
@@ -813,6 +850,7 @@ impl<'a> IncrementalParser<'a> {
             }
             None => {
                 let r = parser.parse();
+                self.last_spine_trace = std::mem::take(&mut parser.spine_trace);
                 self.cache = parser.into_cache();
                 r
             }
@@ -825,18 +863,18 @@ impl<'a> IncrementalParser<'a> {
         // snapshot, which exempts them from arena-generation checks).
         // Failures stay never-retained, exactly like the snapshot
         // tier.
-        // Collect the repetition-body item boundaries for the NEXT
-        // splice chain walk (one pass, alongside retention).
-        if let Some((body, _, _, _, _)) = splice.as_ref() {
-            let body = *body as u16;
-            let mut next_chain: Vec<(u32, u32)> = self
-                .cache
-                .entries()
-                .filter(|e| e.success && e.atom_id == body)
-                .map(|e| (e.pos, e.end_pos))
-                .collect();
-            next_chain.sort_unstable();
+        // The repetition-body item boundaries for the NEXT splice plan
+        // come straight from the root repetition's trace (full parses)
+        // or from the grafted prefix plus the suffix bounds (splices):
+        // the memo cache cannot serve this, because outcomes spanning
+        // a trivia drain are never stored, so its body-entry set
+        // silently thins out as the document grows (rs#258).
+        if was_spliced {
+            let mut next_chain: Vec<(u32, u32)> = chain.iter().take(splice_k).cloned().collect();
+            next_chain.append(&mut self.last_spine_trace);
             self.body_chain = next_chain;
+        } else if spine_body.is_some() {
+            self.body_chain = std::mem::take(&mut self.last_spine_trace);
         }
         self.cache.retain_snapshot_adopt(
             |entry| {
