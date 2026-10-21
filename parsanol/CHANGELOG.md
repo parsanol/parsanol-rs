@@ -73,6 +73,12 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- Release v0.18.12 by @[object]
+- Float canonical form: the Ruby JSON number text (B6) ([#267](https://github.com/parsanol/parsanol-rs/pull/267)) by @[object]
+- Shape test phase + repetition flatten parity by @[object]
+
+### Other
+
 - Float canonical form: the Ruby JSON number text (B6) ([#267](https://github.com/parsanol/parsanol-rs/pull/267)) by @[object]
 - Shape test phase + repetition flatten parity by @[object]
 
