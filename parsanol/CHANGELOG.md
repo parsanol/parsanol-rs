@@ -73,6 +73,11 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- Float canonical form: the Ruby JSON number text (B6) ([#267](https://github.com/parsanol/parsanol-rs/pull/267)) by @[object]
+- Shape test phase + repetition flatten parity by @[object]
+
+### Other
+
 - Optional nil capture, array bindings, boolean cast by @[object]
 - Merge pull request #261 from parsanol/fix/resource-abort-diagnostics by @[object]
 - Artifact errors: report resource aborts instead of phantom syntax by @[object]
