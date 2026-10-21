@@ -236,6 +236,14 @@ pub struct PortableParser<'a> {
     /// change, which is the soundness the dense-cache skip existed
     /// for.
     dyn_cache: std::collections::HashMap<(u32, u16, u64, bool), CacheEntry>,
+    /// Incremental splice support (rs#258): when set to `(atom_id, pos)`,
+    /// the general repetition loop over that atom from that start
+    /// position records each iteration's `(start, end)` into
+    /// `spine_trace`. The retained session reads the trace after a
+    /// parse — repetition-body memo entries cannot serve this, because
+    /// outcomes spanning a trivia drain are never stored.
+    pub(crate) spine_watch: Option<(usize, usize)>,
+    pub(crate) spine_trace: Vec<(u32, u32)>,
     /// Injected-trivia nesting depth (rs#172): failures inside trivia
     /// atoms are not recorded.
     trivia_depth: u32,
@@ -389,6 +397,8 @@ impl<'a> PortableParser<'a> {
             governor,
             capture_state: CaptureState::new(),
             dyn_cache: std::collections::HashMap::new(),
+            spine_watch: None,
+            spine_trace: Vec::new(),
             trivia_depth: 0,
             pending_trivia: Vec::new(),
             trivia_drained: false,
@@ -434,6 +444,8 @@ impl<'a> PortableParser<'a> {
             governor,
             capture_state: CaptureState::new(),
             dyn_cache: std::collections::HashMap::new(),
+            spine_watch: None,
+            spine_trace: Vec::new(),
             trivia_depth: 0,
             pending_trivia: Vec::new(),
             trivia_drained: false,
@@ -1514,6 +1526,10 @@ impl<'a> PortableParser<'a> {
         let mut count = 0;
         let mut items: Vec<AstNode> = Vec::with_capacity(min.clamp(8, 64));
         let input_len = self.input.len();
+        let spine_watched = self.spine_watch == Some((atom_id, pos));
+        if spine_watched {
+            self.spine_trace.clear();
+        }
 
         // The whole repetition owns its captures: below-min failure
         // discards them, and each optional iteration that fails to
@@ -1530,6 +1546,10 @@ impl<'a> PortableParser<'a> {
                     Ok(result) => {
                         self.capture_state.commit_scope();
                         let progressed = result.end_pos != current_pos;
+                        if spine_watched {
+                            self.spine_trace
+                                .push((current_pos as u32, result.end_pos as u32));
+                        }
                         items.push(result.value);
                         current_pos = result.end_pos;
                         count += 1;
@@ -1563,6 +1583,10 @@ impl<'a> PortableParser<'a> {
                         // unbounded bodies) are rejected at compile time;
                         // this is the engine's last line of defense.
                         let progressed = result.end_pos != current_pos;
+                        if spine_watched {
+                            self.spine_trace
+                                .push((current_pos as u32, result.end_pos as u32));
+                        }
                         items.push(result.value);
                         current_pos = result.end_pos;
                         count += 1;
