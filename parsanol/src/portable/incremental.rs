@@ -870,8 +870,7 @@ impl<'a> IncrementalParser<'a> {
         // a trivia drain are never stored, so its body-entry set
         // silently thins out as the document grows (rs#258).
         if was_spliced {
-            let mut next_chain: Vec<(u32, u32)> =
-                chain.iter().take(splice_k).cloned().collect();
+            let mut next_chain: Vec<(u32, u32)> = chain.iter().take(splice_k).cloned().collect();
             next_chain.extend(self.last_spine_trace.drain(..));
             self.body_chain = next_chain;
         } else if spine_body.is_some() {
