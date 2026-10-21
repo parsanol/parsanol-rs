@@ -11,7 +11,7 @@ use super::bindings::{is_leaf, leaf_scalar};
 use super::{PargArtifact, PargError};
 use crate::portable::ast::AstNode;
 use crate::portable::capture_state::CaptureValue;
-use crate::portable::grammar::RepetitionTag;
+use crate::portable::grammar::{Atom, RepetitionTag};
 use crate::portable::parslet_transform::to_parslet_compatible;
 use crate::portable::{AstArena, Grammar, PortableParser};
 
@@ -115,6 +115,10 @@ fn capture_wire(value: &CaptureValue, input: &str) -> Value {
     }
 }
 
+/// Resync rounds per recovery (R2): bounded so recovery stays linear
+/// in the input even on pathological skip distance.
+const MAX_RESYNCS: usize = 8;
+
 /// The recovery envelope for a failed parse: the captures committed
 /// before the failure plus the failure wire. Captures of the failing
 /// branch may be present — this is best-effort data, annotated as such
@@ -129,6 +133,7 @@ fn recovery_shape(
     arena: &mut AstArena,
     partial: Option<(usize, Vec<AstNode>, RepetitionTag)>,
     root_is_named: Option<String>,
+    resyncs: Vec<Value>,
 ) -> Value {
     let _ = entry;
     let mut captures = serde_json::Map::new();
@@ -181,6 +186,7 @@ fn recovery_shape(
         "ok": false, "captures": captures, "error": error,
         "consumed_upto": consumed_upto,
         "partial": partial_value,
+        "resyncs": resyncs,
     })
 }
 
@@ -261,11 +267,68 @@ impl PargArtifact {
                 journaling.set_track_max_end(true);
                 journaling.set_collect_partial(true);
                 let _ = journaling.parse();
-                let partial = journaling.take_partial_stash();
+                let mut partial = journaling.take_partial_stash();
                 let journal: Vec<(String, CaptureValue)> =
                     journaling.capture_state().journal().to_vec();
                 let consumed_upto = journaling.max_end_pos();
                 let failure_wire = journaling.failure_wire();
+                // R2 (TODO.sota/1), inferred resync — no grammar
+                // addition: from the failure, scan forward for the next
+                // byte offset where a spine iteration matches; the
+                // skipped span becomes an error annotation and parsing
+                // continues. Bounded (MAX_RESYNCS rounds, each must
+                // advance) so recovery stays linear in the input.
+                let spine_body = match grammar.get_atom(grammar.root) {
+                    Some(Atom::Repetition { atom, .. }) => Some(*atom),
+                    Some(Atom::Named { atom, .. }) => match grammar.get_atom(*atom) {
+                        Some(Atom::Repetition { atom, .. }) => Some(*atom),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                let mut resyncs: Vec<Value> = Vec::new();
+                if let (Some(body), Some((end, items, tag))) = (spine_body, partial.as_mut()) {
+                    let _ = tag;
+                    let mut cursor = *end;
+                    for _ in 0..MAX_RESYNCS {
+                        // Scan for the next viable iteration start.
+                        let mut found = None;
+                        let mut scan = cursor;
+                        while scan < input.len() {
+                            if let Ok(r) = journaling.try_atom_impl(body, scan, false) {
+                                if r.end_pos > scan {
+                                    found = Some((scan, r.end_pos, r.value.clone()));
+                                    break;
+                                }
+                            }
+                            scan += 1;
+                        }
+                        let Some((skip_start, resume, item)) = found else {
+                            break;
+                        };
+                        resyncs.push(serde_json::json!({
+                            "offset": cursor,
+                            "skipped": &input[cursor..skip_start],
+                            "resumed_at": skip_start,
+                        }));
+                        items.push(item);
+                        // Continue the run from the recovered item's end.
+                        cursor = resume;
+                        loop {
+                            match journaling.try_atom_impl(body, cursor, false) {
+                                Ok(r) if r.end_pos > cursor => {
+                                    items.push(r.value.clone());
+                                    cursor = r.end_pos;
+                                }
+                                _ => break,
+                            }
+                        }
+                        if cursor >= input.len() {
+                            break;
+                        }
+                    }
+                    *end = cursor;
+                }
                 // The entry shape is wrapped under the root rule's
                 // name (the shape contract), so the partial wraps the
                 // same way.
@@ -280,6 +343,7 @@ impl PargArtifact {
                     &mut arena2,
                     partial,
                     root_is_named,
+                    resyncs,
                 ))
             }
         }

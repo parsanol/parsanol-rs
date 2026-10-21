@@ -140,3 +140,23 @@ fn partial_matches_the_ruby_engine_on_the_shared_corpus_artifact() {
     assert_eq!(items[1]["v"]["value"], Value::String("2".into()));
     assert_eq!(recovered["error"]["offset"], Value::from(11));
 }
+
+#[test]
+fn resync_recovers_later_items_and_annotates_the_skip() {
+    // R2: garbage between complete pairs is skipped and annotated; the
+    // items after the garbage join the partial tree.
+    let artifact = kv_artifact();
+    let recovered = artifact
+        .parse_shape_recovering("main", "a=1;b=2;###garbage###c=3;d=4;")
+        .expect("recovery call succeeds");
+    assert_eq!(recovered["ok"], Value::Bool(false));
+    let items = recovered["partial"]["document"].as_array().expect("items");
+    assert_eq!(items.len(), 4, "all four pairs recovered: {items:?}");
+    assert_eq!(items[2]["k"]["value"], Value::String("c".into()));
+    assert_eq!(items[3]["v"]["value"], Value::String("4".into()));
+    let resyncs = recovered["resyncs"].as_array().expect("resyncs array");
+    assert_eq!(resyncs.len(), 1);
+    assert_eq!(resyncs[0]["skipped"], Value::String("###garbage###".into()));
+    assert_eq!(resyncs[0]["offset"], Value::from(8));
+    assert_eq!(resyncs[0]["resumed_at"], Value::from(21));
+}
