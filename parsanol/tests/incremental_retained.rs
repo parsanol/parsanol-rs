@@ -436,7 +436,7 @@ fn splice_engagement_holds_as_the_document_grows() {
             let offset = input.len() - 2;
             let digit = char::from(b'0' + ((step + 1) % 10) as u8);
             let mut next = input.clone();
-            next.replace_range(offset..offset + 1, &(digit as char).to_string());
+            next.replace_range(offset..offset + 1, &digit.to_string());
             input = next;
 
             let result = session
