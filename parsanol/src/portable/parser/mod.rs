@@ -2329,7 +2329,7 @@ impl<'a> PortableParser<'a> {
         // call, atom JSON, grammar rebuild) and replays the recorded
         // capture writes — no context materialization at all.
         if let Some((fragment, root, writes)) =
-            super::dynamic::cached_fragment(callback_id, pos, &self.capture_state)
+            super::dynamic::cached_fragment(callback_id, pos, &self.capture_state, self.input)
         {
             for (name, value) in writes {
                 let cv = match value {
@@ -2397,6 +2397,7 @@ impl<'a> PortableParser<'a> {
                 callback_id,
                 pos,
                 &self.capture_state,
+                self.input,
                 temp_grammar,
                 temp_atom_id,
                 writes,

@@ -920,6 +920,7 @@ impl<'a> BytecodeVM<'a> {
                         *callback_id,
                         self.position,
                         &self.capture_state,
+                        self.input_str,
                     ) {
                         Some((g, _root, writes)) => {
                             for (name, value) in writes {
@@ -987,6 +988,7 @@ impl<'a> BytecodeVM<'a> {
                                 *callback_id,
                                 self.position,
                                 &self.capture_state,
+                                self.input_str,
                                 resolved.clone(),
                                 root,
                                 writes,
@@ -1008,6 +1010,7 @@ impl<'a> BytecodeVM<'a> {
                     *callback_id,
                     self.position,
                     &self.capture_state,
+                    self.input_str,
                     arena_tag,
                 ) {
                     if outcome.ok {
@@ -1052,6 +1055,7 @@ impl<'a> BytecodeVM<'a> {
                             *callback_id,
                             start_pos,
                             &self.capture_state,
+                            self.input_str,
                             crate::portable::dynamic::DynamicOutcome {
                                 end_pos: result.end_pos,
                                 value: value.clone(),
@@ -1068,6 +1072,7 @@ impl<'a> BytecodeVM<'a> {
                             *callback_id,
                             start_pos,
                             &self.capture_state,
+                            self.input_str,
                             crate::portable::dynamic::DynamicOutcome {
                                 end_pos: self.position,
                                 value: crate::portable::ast::AstNode::Nil,

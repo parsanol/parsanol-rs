@@ -511,6 +511,10 @@ pub fn cached_fragment(
     callback_id: u64,
     pos: usize,
     captures: &CaptureState,
+    // Retained for signature compatibility (rs#270: the capture
+    // signature no longer hashes the input text — the capture state's
+    // incremental content hash covers the observable inputs).
+    _input: &str,
 ) -> Option<FragmentHit> {
     let input_hash = INPUT_HASH.with(|c| c.get());
     let key = (callback_id, pos, capture_signature(captures) ^ input_hash);
@@ -538,6 +542,8 @@ pub fn store_dispatch_fragment(
     callback_id: u64,
     pos: usize,
     captures: &CaptureState,
+    // Retained for signature compatibility (see cached_fragment).
+    _input: &str,
     grammar: super::grammar::Grammar,
     root: usize,
     writes: Vec<(String, WriteValue)>,
@@ -570,6 +576,8 @@ pub fn cached_dynamic_outcome(
     callback_id: u64,
     pos: usize,
     captures: &CaptureState,
+    // Retained for signature compatibility (see cached_fragment).
+    _input: &str,
     arena_tag: usize,
 ) -> Option<DynamicOutcome> {
     let input_hash = INPUT_HASH.with(|c| c.get());
@@ -588,6 +596,8 @@ pub fn store_dynamic_outcome(
     callback_id: u64,
     pos: usize,
     captures: &CaptureState,
+    // Retained for signature compatibility (see cached_fragment).
+    _input: &str,
     outcome: DynamicOutcome,
 ) {
     let input_hash = INPUT_HASH.with(|c| c.get());
