@@ -266,13 +266,10 @@ impl PargArtifact {
                     journaling.capture_state().journal().to_vec();
                 let consumed_upto = journaling.max_end_pos();
                 let failure_wire = journaling.failure_wire();
-                let root_is_named =
-                    grammar
-                        .get_atom(grammar.root)
-                        .and_then(|atom| match atom {
-                            Atom::Named { name, .. } => Some(name.clone()),
-                            _ => None,
-                        });
+                let root_is_named = grammar.get_atom(grammar.root).and_then(|atom| match atom {
+                    Atom::Named { name, .. } => Some(name.clone()),
+                    _ => None,
+                });
                 drop(journaling);
                 Ok(recovery_shape(
                     entry,
