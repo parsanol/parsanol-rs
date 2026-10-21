@@ -1,0 +1,23 @@
+## Semantics: C9, C2, C3, C7, K1, A1, A4, M0
+grammar ConformanceLeftRecArith version "1.0.0" {
+  ## Direct left recursion folded at compile time: `*` binds tighter
+  ## than `+`, both left-associative (the ANTLR 4 rewrite, C9).
+  expr = expr ( "*" expr ) as mul / expr ( "+" expr ) as add / term
+  term = ( 1*%x30-39 ) as num
+  top = ( expr ) as expr
+
+  entry top: top
+
+  test top {
+    shape "1+2*3" { expr: [ { num: "1" },
+      { add: [ { num: "2" }, { mul: { num: "3" } } ] } ] }
+    shape "1*2+3" { expr: [ { num: "1" },
+      { mul: { num: "2" } }, { add: { num: "3" } } ] }
+    shape "1+2+3" { expr: [ { num: "1" },
+      { add: { num: "2" } }, { add: { num: "3" } } ] }
+    shape "1*2*3" { expr: [ { num: "1" },
+      { mul: { num: "2" } }, { mul: { num: "3" } } ] }
+    reject "+1"
+    reject "1+"
+  }
+}
