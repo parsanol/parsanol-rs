@@ -1,0 +1,19 @@
+## Semantics: B2, B3, B6, K1, C1, A1, A3, E3, M0
+grammar ConformanceBindingsFloat version "1.0.0" {
+  ## Float cast from captured text; float expectations ride the artifact
+  ## checksum through the B6 canonical float form.
+  number = ( [ "-" ] 1*%x30-39 "." 1*%x30-39 ) as score
+
+  bindings number {
+    score -> score (float)
+  }
+
+  entry main: number
+
+  test main {
+    example "1.5" { score: 1.5 }
+    example "2.0" { score: 2.0 }
+    example "-2.5" { score: -2.5 }
+    reject "1."
+  }
+}

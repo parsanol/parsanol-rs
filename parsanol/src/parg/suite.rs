@@ -72,6 +72,12 @@ pub(crate) fn ast_to_value(
 /// recurses. Value-compatible with Ruby's `Bindings.canonical`.
 pub(crate) fn canonical(value: &Value) -> Value {
     match value {
+        Value::Number(number) if number.is_f64() => {
+            // B6 float canonical form: the Ruby JSON number text (see
+            // ruby_json_float), so float expectations and bound floats
+            // compare identically on every engine.
+            Value::String(super::ruby_json_float(number.as_f64().unwrap()))
+        }
         Value::Array(items) => Value::Array(items.iter().map(canonical).collect()),
         Value::Object(_) if is_leaf(value) => leaf_scalar(value).clone(),
         Value::Object(object) => Value::Object(
