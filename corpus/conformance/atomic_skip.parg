@@ -1,0 +1,36 @@
+## Semantics: C8, S1, S5
+grammar ConformanceAtomic version "1.0.0" {
+  ## Whitespace between tokens.
+  trivia = 1*" "
+  ## Non-atomic: trivia injects before every terminal, so the rule's
+  ## own sequence may split across trivia, and the entry receives
+  ## leading/trailing skip wrappers (S5).
+  loose = ( "a" "b" "c" ) as abc
+  ## Atomic: the body builds without injection entirely — it matches
+  ## contiguously, and as an entry it receives no skip wrapper (C8).
+  atomic tight = ( "a" "b" "c" ) as abc
+
+  skip = trivia
+
+  entry loose: loose
+  entry tight: tight
+
+  test loose {
+    accept "abc"
+    accept "a bc"
+    accept "ab c"
+    accept " abc"
+    accept "abc "
+    capture "abc" { abc: "abc" }
+    reject "abx"
+  }
+
+  test tight {
+    accept "abc"
+    reject "a bc"
+    reject "ab c"
+    reject " abc"
+    reject "abc "
+    reject "abx"
+  }
+}
