@@ -73,6 +73,12 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- Release v0.18.16 by @[object]
+- Cold parse: kill the capture-state quadratic (rs#270) ([#279](https://github.com/parsanol/parsanol-rs/pull/279)) by @[object]
+- Inferred resync (TODO.sota/1 R2, no grammar addition) ([#280](https://github.com/parsanol/parsanol-rs/pull/280)) by @[object]
+
+### Other
+
 - Cold parse: kill the capture-state quadratic (rs#270) ([#279](https://github.com/parsanol/parsanol-rs/pull/279)) by @[object]
 - Inferred resync (TODO.sota/1 R2, no grammar addition) ([#280](https://github.com/parsanol/parsanol-rs/pull/280)) by @[object]
 
