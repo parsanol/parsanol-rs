@@ -1233,10 +1233,12 @@ impl<'a> PortableParser<'a> {
         self.partial_stash.take()
     }
 
-    /// Stash a repetition's matched prefix on a failure path, keeping
-    /// the one that reaches furthest into the input.
-    fn stash_partial(&mut self, end: usize, items: &[AstNode], tag: RepetitionTag) {
-        if !self.collect_partial {
+    /// Stash a ROOT-LEVEL repetition's matched prefix on a failure
+    /// path (`start == 0`: the MVP scope is the root-level partial
+    /// tree — inner repetitions win on depth but are not roots), and
+    /// only when it reaches further than the current stash.
+    fn stash_partial(&mut self, start: usize, end: usize, items: &[AstNode], tag: RepetitionTag) {
+        if !self.collect_partial || start != 0 {
             return;
         }
         let better = match &self.partial_stash {
@@ -1606,7 +1608,7 @@ impl<'a> PortableParser<'a> {
                     }
                     Err(_) => {
                         self.capture_state.pop_scope();
-                        self.stash_partial(current_pos, &items, tag);
+                        self.stash_partial(pos, current_pos, &items, tag);
                         break;
                     }
                 }
@@ -1644,7 +1646,7 @@ impl<'a> PortableParser<'a> {
                     }
                     Err(_) => {
                         self.capture_state.pop_scope();
-                        self.stash_partial(current_pos, &items, tag);
+                        self.stash_partial(pos, current_pos, &items, tag);
                         break;
                     }
                 }
@@ -1653,7 +1655,7 @@ impl<'a> PortableParser<'a> {
 
         if count < min {
             self.capture_state.pop_scope();
-            self.stash_partial(current_pos, &items, tag);
+            self.stash_partial(pos, current_pos, &items, tag);
             return Err(ParseError::Failed { position: pos });
         }
         self.capture_state.commit_scope();
@@ -1662,7 +1664,7 @@ impl<'a> PortableParser<'a> {
         // leaves input unparsed fails entirely (so root-level
         // alternatives re-try their later branches).
         if consume_all && current_pos != input_len {
-            self.stash_partial(current_pos, &items, tag);
+            self.stash_partial(pos, current_pos, &items, tag);
             return Err(ParseError::Failed { position: pos });
         }
 

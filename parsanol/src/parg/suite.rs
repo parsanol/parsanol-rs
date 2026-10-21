@@ -11,7 +11,7 @@ use super::bindings::{is_leaf, leaf_scalar};
 use super::{PargArtifact, PargError};
 use crate::portable::ast::AstNode;
 use crate::portable::capture_state::CaptureValue;
-use crate::portable::grammar::{Atom, RepetitionTag};
+use crate::portable::grammar::RepetitionTag;
 use crate::portable::parslet_transform::to_parslet_compatible;
 use crate::portable::{AstArena, Grammar, PortableParser};
 
@@ -266,10 +266,10 @@ impl PargArtifact {
                     journaling.capture_state().journal().to_vec();
                 let consumed_upto = journaling.max_end_pos();
                 let failure_wire = journaling.failure_wire();
-                let root_is_named = grammar.get_atom(grammar.root).and_then(|atom| match atom {
-                    Atom::Named { name, .. } => Some(name.clone()),
-                    _ => None,
-                });
+                // The entry shape is wrapped under the root rule's
+                // name (the shape contract), so the partial wraps the
+                // same way.
+                let root_is_named = self.entry_root(entry).map(str::to_string).ok();
                 drop(journaling);
                 Ok(recovery_shape(
                     entry,
