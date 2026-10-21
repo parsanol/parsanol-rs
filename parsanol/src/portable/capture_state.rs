@@ -269,6 +269,23 @@ pub struct CaptureState {
     /// Memo keys for dynamic-dependent atoms carry this so a cached
     /// outcome can never replay across a capture-state change.
     version: u64,
+    /// Incremental CONTENT hash (rs#270): XOR of every visible capture's
+    /// fingerprint, maintained O(1) per store/restore so the dynamic-memo
+    /// key is O(1) to read instead of a full walk of the visible set per
+    /// dynamic-atom attempt — that walk made cold parses quadratic on
+    /// capture-heavy documents.
+    ///
+    /// A capture's fingerprint covers the name, the value's
+    /// input-independent identity (span offset+length, literal bytes, or
+    /// opaque handle), and the subtree fingerprint when present.
+    /// XOR-combining strong 64-bit fingerprints has the same collision
+    /// class the u64 signature already had; restores XOR the old
+    /// fingerprint back out, so backtracking converges to the same hash
+    /// exactly as it converges to the same content (the rs#174
+    /// soundness argument, now over fingerprints instead of names).
+    content_hash: u64,
+    /// The per-capture fingerprints backing `content_hash`.
+    capture_fps: AHashMap<String, u64>,
     /// Recovery journal (TODO.sota/1): when enabled, every `store`
     /// observation is appended here and NEVER rolled back — the
     /// generational undo log empties the visible store on the failing
@@ -301,6 +318,8 @@ impl CaptureState {
             scope_stack: Vec::with_capacity(16),
             depth: 0,
             version: 0,
+            content_hash: 0,
+            capture_fps: AHashMap::with_capacity(capacity),
             journaling: false,
             journal: Vec::new(),
         }
@@ -338,6 +357,7 @@ impl CaptureState {
         if let Some(old_value) = self.captures.get(name).cloned() {
             // Shadowing an existing capture
             let old_node = self.nodes.remove(name);
+            self.fp_swap(name, &value, 0);
             self.captures.insert(name.to_string(), value);
             self.capture_order
                 .push(CaptureEntry::Shadow(name.to_string(), old_value, old_node));
@@ -346,6 +366,7 @@ impl CaptureState {
         } else {
             // New capture
             self.nodes.remove(name);
+            self.fp_swap(name, &value, 0);
             self.captures.insert(name.to_string(), value);
             self.capture_order.push(CaptureEntry::New(name.to_string()));
             self.version = self.version.wrapping_add(1);
@@ -370,6 +391,8 @@ impl CaptureState {
             journal: Vec::new(),
             depth: 0,
             version: self.version,
+            content_hash: self.content_hash,
+            capture_fps: self.capture_fps.clone(),
         }
     }
 
@@ -377,6 +400,62 @@ impl CaptureState {
     #[inline]
     pub fn version(&self) -> u64 {
         self.version
+    }
+
+    /// The content fingerprint of one visible capture: the name plus
+    /// the value's input-independent identity (span offset+length for
+    /// input-backed values, the bytes for literals, the handle for
+    /// opaque atom values) plus the subtree fingerprint when present.
+    fn capture_fp(name: &str, value: &CaptureValue, node_fp: u64) -> u64 {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for b in name.as_bytes() {
+            h ^= *b as u64;
+            h = h.wrapping_mul(0x1000_0000_01B3);
+        }
+        match value {
+            CaptureValue::Span { offset, length } => {
+                h ^= *offset as u64;
+                h = h.wrapping_mul(0x1000_0000_01B3);
+                h ^= *length as u64;
+                h = h.wrapping_mul(0x1000_0000_01B3);
+            }
+            CaptureValue::Text(t) => {
+                for b in t.as_bytes() {
+                    h ^= *b as u64;
+                    h = h.wrapping_mul(0x1000_0000_01B3);
+                }
+            }
+            CaptureValue::Opaque { handle } => {
+                h ^= *handle;
+                h = h.wrapping_mul(0x1000_0000_01B3);
+            }
+        }
+        h ^= node_fp;
+        h.wrapping_mul(0x1000_0000_01B3)
+    }
+
+    /// Swap one capture's fingerprint into/out of the content hash.
+    fn fp_swap(&mut self, name: &str, value: &CaptureValue, node_fp: u64) {
+        let fp = Self::capture_fp(name, value, node_fp);
+        let old = self.capture_fps.insert(name.to_string(), fp);
+        if let Some(previous) = old {
+            self.content_hash ^= previous;
+        }
+        self.content_hash ^= fp;
+    }
+
+    /// Drop one capture's fingerprint from the content hash.
+    fn fp_remove(&mut self, name: &str) {
+        if let Some(previous) = self.capture_fps.remove(name) {
+            self.content_hash ^= previous;
+        }
+    }
+
+    /// The visible-content hash for dynamic-memo keys (rs#270): O(1)
+    /// to read, maintained incrementally by every store/restore.
+    #[inline]
+    pub fn content_hash(&self) -> u64 {
+        self.content_hash
     }
 
     /// Store a named capture together with its parsed subtree
@@ -399,6 +478,8 @@ impl CaptureState {
                 fingerprint,
             },
         );
+        self.fp_swap(name, &value, fingerprint);
+        self.version = self.version.wrapping_add(1);
         if let Some(old_value) = self.captures.get(name).cloned() {
             self.captures.insert(name.to_string(), value);
             self.capture_order
@@ -527,11 +608,15 @@ impl CaptureState {
                 self.version = self.version.wrapping_add(1);
                 match entry {
                     CaptureEntry::New(name) => {
+                        self.fp_remove(&name);
                         self.captures.remove(&name);
                         self.nodes.remove(&name);
                     }
                     CaptureEntry::Shadow(name, old_value, old_node) => {
-                        // Restore the shadowed value
+                        // Restore the shadowed value (its fingerprint
+                        // goes back into the content hash)
+                        let node_fp = old_node.as_ref().map(|n| n.fingerprint).unwrap_or(0);
+                        self.fp_swap(&name, &old_value, node_fp);
                         self.captures.insert(name.clone(), old_value);
                         match old_node {
                             Some(node) => {
@@ -577,10 +662,13 @@ impl CaptureState {
                 self.version = self.version.wrapping_add(1);
                 match entry {
                     CaptureEntry::New(name) => {
+                        self.fp_remove(&name);
                         self.captures.remove(&name);
                         self.nodes.remove(&name);
                     }
                     CaptureEntry::Shadow(name, old_value, old_node) => {
+                        let node_fp = old_node.as_ref().map(|n| n.fingerprint).unwrap_or(0);
+                        self.fp_swap(&name, &old_value, node_fp);
                         self.captures.insert(name.clone(), old_value);
                         match old_node {
                             Some(node) => {
@@ -606,6 +694,8 @@ impl CaptureState {
         self.capture_order.clear();
         self.scope_stack.clear();
         self.depth = 0;
+        self.content_hash = 0;
+        self.capture_fps.clear();
     }
 
     /// Distinct visible capture names (map keys; order unspecified).

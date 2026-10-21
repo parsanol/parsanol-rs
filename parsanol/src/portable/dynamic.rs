@@ -481,46 +481,19 @@ pub fn begin_parse(input: &str) {
     clear_capture_writes();
 }
 
-pub(crate) fn capture_signature(captures: &CaptureState, input: &str) -> u64 {
-    let mut h: u64 = 0x9e37_79b9_7f4a_7c15;
-    let mut names: Vec<&String> = captures.visible_names().collect();
-    names.sort();
-    for name in names {
-        if let Some(value) = captures.get(name) {
-            h ^= name.len() as u64;
-            h = h.wrapping_mul(0x1000_0000_01B3);
-            for b in name.as_bytes() {
-                h ^= *b as u64;
-                h = h.wrapping_mul(0x1000_0000_01B3);
-            }
-            let text = value.get_text(input);
-            h ^= text.len() as u64;
-            h = h.wrapping_mul(0x1000_0000_01B3);
-            for b in text.as_bytes() {
-                h ^= *b as u64;
-                h = h.wrapping_mul(0x1000_0000_01B3);
-            }
-        }
-    }
-    // Capture subtrees participate in the signature: a block that
-    // reads a tree (capture semantics) can resolve differently for
-    // the same texts but different subtrees.
-    let mut node_sigs: Vec<(String, u64)> = captures
-        .node_fingerprints()
-        .map(|(name, fp)| (name.clone(), fp))
-        .collect();
-    node_sigs.sort();
-    for (name, fp) in node_sigs {
-        h ^= name.len() as u64;
-        h = h.wrapping_mul(0x1000_0000_01B3);
-        for b in name.as_bytes() {
-            h ^= *b as u64;
-            h = h.wrapping_mul(0x1000_0000_01B3);
-        }
-        h ^= fp;
-        h = h.wrapping_mul(0x1000_0000_01B3);
-    }
-    h
+/// The dynamic-memo key's capture-state signature (rs#174, rs#270).
+///
+/// O(1): the CaptureState maintains the visible-content hash
+/// incrementally — every store/shadow/restore XORs the capture's
+/// fingerprint (name + input-independent value identity + subtree
+/// fingerprint) in or out — so a dynamic-atom attempt no longer walks
+/// the whole visible set (that walk made cold parses quadratic on
+/// capture-heavy documents: O(visible) per attempt, O(attempts) per
+/// parse). Restores XOR the old fingerprint back out, so backtracking
+/// converges to the same hash exactly as it converges to the same
+/// content — the rs#174 soundness argument, now over fingerprints.
+pub(crate) fn capture_signature(captures: &CaptureState) -> u64 {
+    captures.content_hash()
 }
 
 /// A dispatch-cache hit: the fragment grammar, its root atom, and
@@ -538,21 +511,16 @@ pub fn cached_fragment(
     callback_id: u64,
     pos: usize,
     captures: &CaptureState,
-    input: &str,
 ) -> Option<FragmentHit> {
     let input_hash = INPUT_HASH.with(|c| c.get());
-    let key = (
-        callback_id,
-        pos,
-        capture_signature(captures, input) ^ input_hash,
-    );
+    let key = (callback_id, pos, capture_signature(captures) ^ input_hash);
     let trace = std::env::var("PARSANOL_CACHE_TRACE").is_ok();
     if trace {
         eprintln!(
             "CACHE-LOOKUP cb={} pos={} sig={:016x} hit={}",
             callback_id,
             pos,
-            capture_signature(captures, input) ^ input_hash,
+            capture_signature(captures) ^ input_hash,
             DISPATCH_CACHE.with(|c| c.borrow().contains_key(&key))
         );
     }
@@ -570,17 +538,12 @@ pub fn store_dispatch_fragment(
     callback_id: u64,
     pos: usize,
     captures: &CaptureState,
-    input: &str,
     grammar: super::grammar::Grammar,
     root: usize,
     writes: Vec<(String, WriteValue)>,
 ) -> std::sync::Arc<super::grammar::Grammar> {
     let input_hash = INPUT_HASH.with(|c| c.get());
-    let key = (
-        callback_id,
-        pos,
-        capture_signature(captures, input) ^ input_hash,
-    );
+    let key = (callback_id, pos, capture_signature(captures) ^ input_hash);
     let arc = std::sync::Arc::new(grammar);
     DISPATCH_CACHE.with(|c| {
         let mut cache = c.borrow_mut();
@@ -607,15 +570,10 @@ pub fn cached_dynamic_outcome(
     callback_id: u64,
     pos: usize,
     captures: &CaptureState,
-    input: &str,
     arena_tag: usize,
 ) -> Option<DynamicOutcome> {
     let input_hash = INPUT_HASH.with(|c| c.get());
-    let key = (
-        callback_id,
-        pos,
-        capture_signature(captures, input) ^ input_hash,
-    );
+    let key = (callback_id, pos, capture_signature(captures) ^ input_hash);
     DISPATCH_CACHE.with(|c| {
         c.borrow()
             .get(&key)
@@ -630,15 +588,10 @@ pub fn store_dynamic_outcome(
     callback_id: u64,
     pos: usize,
     captures: &CaptureState,
-    input: &str,
     outcome: DynamicOutcome,
 ) {
     let input_hash = INPUT_HASH.with(|c| c.get());
-    let key = (
-        callback_id,
-        pos,
-        capture_signature(captures, input) ^ input_hash,
-    );
+    let key = (callback_id, pos, capture_signature(captures) ^ input_hash);
     DISPATCH_CACHE.with(|c| {
         if let Some(fragment) = c.borrow_mut().get_mut(&key) {
             fragment.outcome = Some(outcome);

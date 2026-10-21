@@ -835,7 +835,7 @@ impl<'a> PortableParser<'a> {
             // captures are indistinguishable to a deterministic block,
             // so replay is sound — the same argument as the
             // dispatch-outcome cache below (rs#184).
-            let capture_fp = super::dynamic::capture_signature(&self.capture_state, self.input);
+            let capture_fp = super::dynamic::capture_signature(&self.capture_state);
             let key = (pos as u32, atom_id as u16, capture_fp, consume_all);
             if self.dyn_cache.len() > 2_000_000 {
                 self.dyn_cache.clear();
@@ -2125,7 +2125,11 @@ impl<'a> PortableParser<'a> {
         Ok(ParseResult {
             value: result.value,
             end_pos: result.end_pos,
-            capture_state: Some(self.capture_state.clone()),
+            // rs#270: intermediate results carry no capture-state
+            // clone — a full CaptureState clone per composite result
+            // made cold parses quadratic on capture-heavy documents.
+            // Consumers read the parser's state after the parse.
+            capture_state: None,
         })
     }
 
@@ -2146,7 +2150,7 @@ impl<'a> PortableParser<'a> {
             Ok(ParseResult {
                 value: AstNode::Nil,
                 end_pos: pos + len,
-                capture_state: Some(self.capture_state.clone()),
+                capture_state: None, // rs#270: no per-result state clone
             })
         } else {
             self.note_failure(pos, format!("state({slot})"));
@@ -2232,11 +2236,13 @@ impl<'a> PortableParser<'a> {
         self.capture_state
             .store_with_node(name, capture_value, node_value, fingerprint);
 
-        // Return result with capture state
+        // rs#270: intermediate results carry no capture-state clone
+        // (a full clone per capture atom made cold parses quadratic);
+        // consumers read the parser's state after the parse.
         Ok(ParseResult {
             value: result.value,
             end_pos: result.end_pos,
-            capture_state: Some(self.capture_state.clone()),
+            capture_state: None,
         })
     }
 
@@ -2260,11 +2266,10 @@ impl<'a> PortableParser<'a> {
         // Pop the scope (discards inner captures)
         self.capture_state.pop_scope();
 
-        // Return result with remaining capture state
         result.map(|r| ParseResult {
             value: r.value,
             end_pos: r.end_pos,
-            capture_state: Some(self.capture_state.clone()),
+            capture_state: None, // rs#270: no per-result state clone
         })
     }
 
@@ -2293,7 +2298,7 @@ impl<'a> PortableParser<'a> {
         // counter key would miss on every attempt (the table-grammar
         // blowup). Two states with identical visible captures are
         // indistinguishable to a deterministic block.
-        let capture_fp = super::dynamic::capture_signature(&self.capture_state, self.input);
+        let capture_fp = super::dynamic::capture_signature(&self.capture_state);
         let outcome_key = (callback_id, pos, capture_fp);
         if std::env::var("PARSANOL_CACHE_TRACE").is_ok() {
             eprintln!(
@@ -2324,7 +2329,7 @@ impl<'a> PortableParser<'a> {
         // call, atom JSON, grammar rebuild) and replays the recorded
         // capture writes — no context materialization at all.
         if let Some((fragment, root, writes)) =
-            super::dynamic::cached_fragment(callback_id, pos, &self.capture_state, self.input)
+            super::dynamic::cached_fragment(callback_id, pos, &self.capture_state)
         {
             for (name, value) in writes {
                 let cv = match value {
@@ -2392,7 +2397,6 @@ impl<'a> PortableParser<'a> {
                 callback_id,
                 pos,
                 &self.capture_state,
-                self.input,
                 temp_grammar,
                 temp_atom_id,
                 writes,
