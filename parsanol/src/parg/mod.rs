@@ -99,6 +99,9 @@ pub enum PargError {
         /// The mismatch description.
         detail: String,
     },
+    /// Never constructed since floats were allowed to canonicalize (B6);
+    /// kept so matchers written against 0.18.11 keep compiling.
+    FloatInCanonicalJson,
 }
 
 impl fmt::Display for PargError {
@@ -146,6 +149,9 @@ impl fmt::Display for PargError {
                 write!(f, "expected the input to be rejected")
             }
             PargError::CaptureMismatch { detail, .. } => write!(f, "{detail}"),
+            PargError::FloatInCanonicalJson => {
+                write!(f, "floats are canonicalized, not refused")
+            }
             PargError::Io(err) => write!(f, "PARG artifact could not be read: {err}"),
         }
     }
