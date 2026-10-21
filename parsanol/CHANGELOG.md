@@ -73,6 +73,11 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- Release v0.18.13 by @[object]
+- Source the splice chain from the repetition trace (rs#258) ([#271](https://github.com/parsanol/parsanol-rs/pull/271)) by @[object]
+
+### Other
+
 - Source the splice chain from the repetition trace (rs#258) ([#271](https://github.com/parsanol/parsanol-rs/pull/271)) by @[object]
 
 ### Other
