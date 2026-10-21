@@ -9,7 +9,9 @@ use serde_json::Value;
 
 use super::bindings::{is_leaf, leaf_scalar};
 use super::{PargArtifact, PargError};
+use crate::portable::ast::AstNode;
 use crate::portable::capture_state::CaptureValue;
+use crate::portable::grammar::{Atom, RepetitionTag};
 use crate::portable::parslet_transform::to_parslet_compatible;
 use crate::portable::{AstArena, Grammar, PortableParser};
 
@@ -117,10 +119,20 @@ fn capture_wire(value: &CaptureValue, input: &str) -> Value {
 /// before the failure plus the failure wire. Captures of the failing
 /// branch may be present — this is best-effort data, annotated as such
 /// by the `ok: false` marker.
-fn recovery_shape(entry: &str, parser: &PortableParser, input: &str) -> Value {
+#[allow(clippy::too_many_arguments)]
+fn recovery_shape(
+    entry: &str,
+    journal: &[(String, CaptureValue)],
+    consumed_upto: usize,
+    failure_wire: Option<(usize, Vec<String>)>,
+    input: &str,
+    arena: &mut AstArena,
+    partial: Option<(usize, Vec<AstNode>, RepetitionTag)>,
+    root_is_named: Option<String>,
+) -> Value {
     let _ = entry;
     let mut captures = serde_json::Map::new();
-    for (name, value) in parser.capture_state().journal() {
+    for (name, value) in journal {
         // Journal order is capture order — an array per name preserves
         // the per-iteration narrative a rep of same-named captures
         // leaves behind.
@@ -131,7 +143,7 @@ fn recovery_shape(entry: &str, parser: &PortableParser, input: &str) -> Value {
             items.push(capture_wire(value, input));
         }
     }
-    let error = match parser.failure_wire() {
+    let error = match failure_wire {
         Some((offset, expected)) => {
             let before = &input[..offset.min(input.len())];
             let line = before.matches('\n').count() + 1;
@@ -142,9 +154,33 @@ fn recovery_shape(entry: &str, parser: &PortableParser, input: &str) -> Value {
         }
         None => serde_json::json!({ "offset": input.len(), "expected": [] }),
     };
+    // R1.5: the deepest repetition prefix the failed parse matched,
+    // shaped exactly like the root would have been (tagged array, Named
+    // wrapper when the root rule is named). Null when nothing matched.
+    let partial_value = partial.map(|(_end, items, tag)| {
+        let tag_str = match tag {
+            RepetitionTag::Maybe => ":maybe",
+            RepetitionTag::Repetition => ":repetition",
+        };
+        let (pool, len) = arena.store_tagged_array(tag_str, &items);
+        let mut node = AstNode::Array {
+            pool_index: pool,
+            length: len,
+        };
+        if let Some(name) = root_is_named {
+            let (hp, hl) = arena.store_hash(&[(name.as_str(), node)]);
+            node = AstNode::Hash {
+                pool_index: hp,
+                length: hl,
+            };
+        }
+        let shaped = to_parslet_compatible(&node, arena, input);
+        Some(ast_to_value(&shaped, arena, input))
+    });
     serde_json::json!({
         "ok": false, "captures": captures, "error": error,
-        "consumed_upto": parser.max_end_pos()
+        "consumed_upto": consumed_upto,
+        "partial": partial_value,
     })
 }
 
@@ -223,8 +259,28 @@ impl PargArtifact {
                 let mut journaling = PortableParser::new(&grammar, input, &mut arena2);
                 journaling.capture_state_mut().set_journaling(true);
                 journaling.set_track_max_end(true);
+                journaling.set_collect_partial(true);
                 let _ = journaling.parse();
-                Ok(recovery_shape(entry, &journaling, input))
+                let partial = journaling.take_partial_stash();
+                let journal: Vec<(String, CaptureValue)> =
+                    journaling.capture_state().journal().to_vec();
+                let consumed_upto = journaling.max_end_pos();
+                let failure_wire = journaling.failure_wire();
+                let root_is_named = grammar.get_atom(grammar.root).and_then(|atom| match atom {
+                    Atom::Named { name, .. } => Some(name.clone()),
+                    _ => None,
+                });
+                drop(journaling);
+                Ok(recovery_shape(
+                    entry,
+                    &journal,
+                    consumed_upto,
+                    failure_wire,
+                    input,
+                    &mut arena2,
+                    partial,
+                    root_is_named,
+                ))
             }
         }
     }
