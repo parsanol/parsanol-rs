@@ -289,6 +289,20 @@ impl PargArtifact {
                             });
                         }
                     }
+                    if kind == "shape" {
+                        // Whole-tree assertion: the expectation is the
+                        // canonical flattened tree, not a capture map. This
+                        // is the phase that can observe repetition flattening
+                        // and sequence merge laws.
+                        let expected = canonical(object.get("expect").unwrap_or(&Value::Null));
+                        let actual = canonical(&shape);
+                        if actual != expected {
+                            return Err(PargError::CaptureMismatch {
+                                input: input.to_string(),
+                                detail: format!("expected shape {expected:?}, got {actual:?}"),
+                            });
+                        }
+                    }
                     if kind == "capture" {
                         let Some(expect) = object.get("expect").and_then(Value::as_object) else {
                             return Ok(());
