@@ -51,9 +51,6 @@ pub enum PargError {
         /// The checksum recomputed over the canonical payload.
         computed: String,
     },
-    /// A float was found where the canonical form requires an integer;
-    /// Ruby and Rust disagree on float formatting, so floats are refused.
-    FloatInCanonicalJson,
     /// Filesystem access failed.
     Io(std::io::Error),
     /// A binding references an undeclared preprocess step.
@@ -149,12 +146,6 @@ impl fmt::Display for PargError {
                 write!(f, "expected the input to be rejected")
             }
             PargError::CaptureMismatch { detail, .. } => write!(f, "{detail}"),
-            PargError::FloatInCanonicalJson => {
-                write!(
-                    f,
-                    "PARG artifact contains a float, which has no canonical form"
-                )
-            }
             PargError::Io(err) => write!(f, "PARG artifact could not be read: {err}"),
         }
     }
@@ -335,7 +326,69 @@ fn verify_checksum(envelope: &Value) -> Result<(), PargError> {
 /// Canonical JSON, byte-compatible with the Ruby compiler's
 /// `JSON.generate` of its key-sorted payload: object keys sorted, no
 /// whitespace, short escapes for `\b \t \n \f \r " \`, lowercase `\u00xx`
-/// for other control characters, raw UTF-8 otherwise.
+/// for other control characters, raw UTF-8 otherwise, and floats rendered
+/// by [`ruby_json_float`].
+/// Render an `f64` the way Ruby's JSON gem does: the shortest round-trip
+/// digits, decimal notation for decimal exponents -9..=14, scientific
+/// notation (`d.ddde+NN`, sign always, exponent unpadded) outside that
+/// range, and no trailing-`.0` stripping (2.0 stays `2.0`, 1e15 is
+/// `1e+15`). This is the B6 canonical float form; it makes checksums and
+/// expectations byte-identical with the reference compiler.
+pub(crate) fn ruby_json_float(value: f64) -> String {
+    if value == 0.0 {
+        return if value.is_sign_negative() {
+            "-0.0"
+        } else {
+            "0.0"
+        }
+        .to_string();
+    }
+
+    let sign = if value < 0.0 { "-" } else { "" };
+    // Shortest round-trip digits: raise precision until parsing recovers
+    // the exact value (16 significant digits always suffice for f64).
+    let (digits, exponent) = (0..=17)
+        .map(|precision| format!("{value:.precision$e}"))
+        .find(|text| text.parse::<f64>() == Ok(value))
+        .map(|text| {
+            let (mantissa, exp) = text.split_once('e').expect("scientific form");
+            let digits: String = mantissa.chars().filter(|c| c.is_ascii_digit()).collect();
+            let digits = digits.trim_end_matches('0');
+            let digits = if digits.is_empty() { "0" } else { digits };
+            (digits.to_string(), exp.parse::<i32>().expect("exponent"))
+        })
+        .expect("at least 17 digits always round-trips");
+
+    if !(-9..=14).contains(&exponent) {
+        let head = digits[..1].to_string();
+        let tail = &digits[1..];
+        let mantissa = if tail.is_empty() {
+            head
+        } else {
+            format!("{head}.{tail}")
+        };
+        return format!("{sign}{mantissa}e{exponent:+03}");
+    }
+
+    if exponent >= 0 {
+        let point = exponent as usize + 1;
+        if point >= digits.len() {
+            let zeros = "0".repeat(point - digits.len());
+            format!("{sign}{digits}{zeros}.0")
+        } else {
+            format!("{sign}{}.{}", &digits[..point], &digits[point..])
+        }
+    } else {
+        let zeros = "0".repeat((-exponent) as usize - 1);
+        format!("{sign}0.{zeros}{digits}")
+    }
+}
+
+/// Canonical JSON, byte-compatible with the Ruby compiler's
+/// `JSON.generate` of its key-sorted payload: object keys sorted, no
+/// whitespace, short escapes for `\b \t \n \f \r " \`, lowercase `\u00xx`
+/// for other control characters, raw UTF-8 otherwise, and floats rendered
+/// by [`ruby_json_float`].
 pub fn canonical_json(value: &Value) -> Result<String, PargError> {
     let mut out = String::new();
     write_canonical(value, &mut out)?;
@@ -349,9 +402,13 @@ fn write_canonical(value: &Value, out: &mut String) -> Result<(), PargError> {
         Value::Bool(false) => out.push_str("false"),
         Value::Number(number) => {
             if number.is_f64() {
-                return Err(PargError::FloatInCanonicalJson);
+                // B6 float canonical form: the shortest round-trip digits
+                // rendered with the Ruby JSON gem's rules, so checksums and
+                // expectations match the reference compiler byte for byte.
+                out.push_str(&ruby_json_float(number.as_f64().unwrap()));
+            } else {
+                out.push_str(&number.to_string());
             }
-            out.push_str(&number.to_string());
         }
         Value::String(text) => write_canonical_string(text, out),
         Value::Array(items) => {
@@ -414,4 +471,39 @@ pub fn checksum_hex(payload: &Value) -> Result<String, PargError> {
         write!(hex, "{byte:02x}").expect("writing to a String cannot fail");
     }
     Ok(format!("sha256:{hex}"))
+}
+
+#[cfg(test)]
+mod float_tests {
+    use super::ruby_json_float;
+
+    #[test]
+    fn floats_render_like_the_ruby_json_gem() {
+        // Ground truth: JSON.generate(v) on ruby 3.4 (JSON gem 2.x).
+        let cases: &[(f64, &str)] = &[
+            (0.1, "0.1"),
+            (1.5, "1.5"),
+            (2.0, "2.0"),
+            (100.0, "100.0"),
+            (-2.5, "-2.5"),
+            (-0.0, "-0.0"),
+            (0.0, "0.0"),
+            (0.0001, "0.0001"),
+            (1e-5, "0.00001"),
+            (1e-8, "0.00000001"),
+            (1.5e-10, "1.5e-10"),
+            (5e-324, "5e-324"),
+            (12345.6789, "12345.6789"),
+            (123456789012345.0, "123456789012345.0"),
+            (999999999999999.9, "999999999999999.9"),
+            (1e15, "1e+15"),
+            (1e16, "1e+16"),
+            (1e17, "1e+17"),
+            (1e300, "1e+300"),
+            (1.7976931348623157e308, "1.7976931348623157e+308"),
+        ];
+        for (value, text) in cases {
+            assert_eq!(&ruby_json_float(*value), *text, "value {value:?}");
+        }
+    }
 }
