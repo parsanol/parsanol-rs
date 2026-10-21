@@ -73,6 +73,10 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- Corpus + fix: the R1.5 partial differential input (recovery_kv) ([#277](https://github.com/parsanol/parsanol-rs/pull/277)) by @[object]
+
+### Other
+
 - Partial trees in the envelope (TODO.sota/1 R1.5) ([#274](https://github.com/parsanol/parsanol-rs/pull/274)) by @[object]
 
 ### Other
