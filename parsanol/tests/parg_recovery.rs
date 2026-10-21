@@ -72,9 +72,9 @@ fn truncated_input_yields_the_matched_prefix_as_a_shaped_tree() {
     assert_eq!(recovered["ok"], Value::Bool(false));
     // The third pair is missing its `;`: the partial tree carries the
     // two complete items, shaped exactly like the root would have been.
-    let items = recovered["partial"]["pairs"]
+    let items = recovered["partial"]["document"]
         .as_array()
-        .expect("partial root array under the root name");
+        .expect("partial root array under the entry root name");
     assert_eq!(items.len(), 2);
     // Leaves are the standard source-preserving slice wire objects.
     assert_eq!(items[0]["k"]["value"], Value::String("a".into()));
@@ -112,4 +112,31 @@ fn canonical_json_still_matches_the_ruby_reference_bytes() {
     let text = serde_json::to_string(&recovered).unwrap();
     let value: Value = serde_json::from_str(&text).unwrap();
     let _ = canonical_json(&value).expect("canonicalizes");
+}
+
+#[test]
+fn partial_matches_the_ruby_engine_on_the_shared_corpus_artifact() {
+    // The canonical-equality clause of the R1.5 acceptance: the same
+    // committed artifact (compiled by the Ruby reference compiler)
+    // recovers the same partial tree here and in the Ruby spec
+    // (spec/parsanol/parg/partial_recovery_spec.rb reads the identical
+    // source through PARG_CONFORMANCE_DIR).
+    let manifest = env!("CARGO_MANIFEST_DIR");
+    let path = format!("{manifest}/../corpus/conformance/recovery_kv.json");
+    let artifact =
+        PargArtifact::from_json(&std::fs::read_to_string(&path).expect("recovery_kv fixture"))
+            .expect("envelope must verify");
+    let recovered = artifact
+        .parse_shape_recovering("main", "a=1;b=2;c=3")
+        .expect("recovery call succeeds");
+    assert_eq!(recovered["ok"], Value::Bool(false));
+    let items = recovered["partial"]["document"]
+        .as_array()
+        .expect("partial items under the root rule name");
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0]["k"]["value"], Value::String("a".into()));
+    assert_eq!(items[0]["v"]["value"], Value::String("1".into()));
+    assert_eq!(items[1]["k"]["value"], Value::String("b".into()));
+    assert_eq!(items[1]["v"]["value"], Value::String("2".into()));
+    assert_eq!(recovered["error"]["offset"], Value::from(11));
 }
