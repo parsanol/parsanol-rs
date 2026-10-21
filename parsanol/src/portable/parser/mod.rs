@@ -204,6 +204,12 @@ pub struct PortableParser<'a> {
     /// the recovery pass sets it; normal parses pay nothing.
     track_max_end: bool,
     max_end_pos: usize,
+    /// Partial-tree recovery (TODO.sota/1 R1.5): the deepest repetition
+    /// prefix matched before a failure, stashed ONLY while
+    /// `collect_partial` is on (recovery passes). `(end_pos, items,
+    /// tag)` — the root-shape wrapping happens at the artifact layer.
+    collect_partial: bool,
+    partial_stash: Option<(usize, Vec<AstNode>, RepetitionTag)>,
     /// C4: ranked failures — up to MAX_RANKED_FAILURES distinct
     /// (position, labels) pairs, deepest first.
     ranked_failures: Vec<(usize, Vec<String>)>,
@@ -389,6 +395,8 @@ impl<'a> PortableParser<'a> {
             deepest_failure_pos: 0,
             track_max_end: false,
             max_end_pos: 0,
+            collect_partial: false,
+            partial_stash: None,
             ranked_failures: Vec::new(),
             has_failure: false,
             expected_labels: Vec::new(),
@@ -436,6 +444,8 @@ impl<'a> PortableParser<'a> {
             deepest_failure_pos: 0,
             track_max_end: false,
             max_end_pos: 0,
+            collect_partial: false,
+            partial_stash: None,
             ranked_failures: Vec::new(),
             has_failure: false,
             expected_labels: Vec::new(),
@@ -1206,6 +1216,38 @@ impl<'a> PortableParser<'a> {
         }
     }
 
+    /// Enable partial-tree collection for a recovery pass (TODO.sota/1
+    /// R1.5). Failure paths only — success paths never touch the stash.
+    #[inline]
+    pub fn set_collect_partial(&mut self, on: bool) {
+        self.collect_partial = on;
+        if !on {
+            self.partial_stash = None;
+        }
+    }
+
+    /// The deepest repetition prefix matched before the failure, as
+    /// `(end_pos, items, tag)` — valid only after a parse run with
+    /// [`Self::set_collect_partial`] enabled.
+    pub fn take_partial_stash(&mut self) -> Option<(usize, Vec<AstNode>, RepetitionTag)> {
+        self.partial_stash.take()
+    }
+
+    /// Stash a repetition's matched prefix on a failure path, keeping
+    /// the one that reaches furthest into the input.
+    fn stash_partial(&mut self, end: usize, items: &[AstNode], tag: RepetitionTag) {
+        if !self.collect_partial {
+            return;
+        }
+        let better = match &self.partial_stash {
+            Some((best_end, _, _)) => end > *best_end,
+            None => !items.is_empty(),
+        };
+        if better {
+            self.partial_stash = Some((end, items.to_vec(), tag));
+        }
+    }
+
     /// The furthest position any successful atom match ended (valid
     /// only while `track_max_end` was enabled for the parse).
     #[inline]
@@ -1564,6 +1606,7 @@ impl<'a> PortableParser<'a> {
                     }
                     Err(_) => {
                         self.capture_state.pop_scope();
+                        self.stash_partial(current_pos, &items, tag);
                         break;
                     }
                 }
@@ -1601,6 +1644,7 @@ impl<'a> PortableParser<'a> {
                     }
                     Err(_) => {
                         self.capture_state.pop_scope();
+                        self.stash_partial(current_pos, &items, tag);
                         break;
                     }
                 }
@@ -1609,6 +1653,7 @@ impl<'a> PortableParser<'a> {
 
         if count < min {
             self.capture_state.pop_scope();
+            self.stash_partial(current_pos, &items, tag);
             return Err(ParseError::Failed { position: pos });
         }
         self.capture_state.commit_scope();
@@ -1617,6 +1662,7 @@ impl<'a> PortableParser<'a> {
         // leaves input unparsed fails entirely (so root-level
         // alternatives re-try their later branches).
         if consume_all && current_pos != input_len {
+            self.stash_partial(current_pos, &items, tag);
             return Err(ParseError::Failed { position: pos });
         }
 
