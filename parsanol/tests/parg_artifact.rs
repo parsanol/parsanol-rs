@@ -76,10 +76,10 @@ fn canonical_json_round_trips_the_ruby_reference_bytes() {
 }
 
 #[test]
-fn canonical_json_refuses_floats() {
-    let value: serde_json::Value = serde_json::from_str("{\"x\":1.5}").unwrap();
-    assert!(matches!(
-        canonical_json(&value),
-        Err(PargError::FloatInCanonicalJson)
-    ));
+fn canonical_json_renders_floats_like_the_ruby_json_gem() {
+    // B6: floats canonicalize to the shortest round-trip digits in the
+    // JSON gem's notation, so a Ruby-baked envelope with float
+    // expectations verifies its checksum byte for byte.
+    let value: serde_json::Value = serde_json::from_str("{\"x\":1.5,\"y\":2.0}").unwrap();
+    assert_eq!(canonical_json(&value).unwrap(), "{\"x\":1.5,\"y\":2.0}");
 }
