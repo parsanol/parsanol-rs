@@ -73,6 +73,11 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- Release v0.18.18 by @[object]
+- Reference mode — the plain relation in the existing walker by @[object]
+
+### Other
+
 - Reference mode — the plain relation in the existing walker by @[object]
 
 ### Other
