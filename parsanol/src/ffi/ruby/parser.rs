@@ -365,6 +365,35 @@ pub fn parse_handle(handle: u64, input: RString) -> Result<Value, Error> {
     }
 }
 
+/// Parse with a registered grammar handle through the REFERENCE walker
+/// (TODO.sota/8 B1): no VM, no memo tables, no fused scans, no terminal
+/// fast paths — the plain recursive relation. Deliberately slow; the
+/// cross-engine differential fuzz runs it as an independent fifth path.
+///
+/// ```ruby
+/// result = Parsanol::Native._parse_handle_reference(handle, input)
+/// ```
+pub fn parse_handle_reference(handle: u64, input: RString) -> Result<Value, Error> {
+    let ruby = Ruby::get().unwrap();
+    let entry = get_handle_map().lock().unwrap().get(&handle).cloned();
+    let Some(entry) = entry else {
+        return Err(Error::new(
+            ruby.exception_arg_error(),
+            format!("unknown grammar handle: {}", handle),
+        ));
+    };
+
+    // SAFETY: same borrow discipline as parse_handle; dynamic grammars
+    // parse from an owned copy because Ruby code re-enters via the block.
+    let input_str: &str = unsafe { input.as_str()? };
+    if entry.has_dynamic {
+        let owned = input_str.to_string();
+        parse_with_reference(&ruby, &entry.grammar, &owned)
+    } else {
+        parse_with_reference(&ruby, &entry.grammar, input_str)
+    }
+}
+
 /// Parse with a registered grammar handle and return the parslet-shaped
 /// AST as a flat event stream: [[events...], [strings...]].
 ///
@@ -589,6 +618,30 @@ fn parse_with_grammar(
     // build; the batch path stays in the C-ABI tier where it is the
     // only option. The transformer heuristics on both paths are kept
     // in agreement by the shared differential corpus.
+    transform_ast(&collapsed, &arena, input, ruby)
+}
+
+/// The reference-walker half of [`parse_with_grammar`]: same shaping
+/// pipeline, plain recursive evaluation (B1).
+fn parse_with_reference(ruby: &Ruby, grammar: &Grammar, input: &str) -> Result<Value, Error> {
+    let mut arena = AstArena::for_input(input.len());
+    if !crate::portable::dynamic::in_dynamic_dispatch() {
+        crate::ffi::ruby::dynamic::reset_host_atoms();
+    }
+    let mut parser = PortableParser::new_reference(grammar, input, &mut arena);
+
+    let ast = match parser.parse() {
+        Ok(ast) => ast,
+        Err(e) => {
+            let diagnostics = parser.failure_diagnostics();
+            return Err(Error::new(
+                ruby.exception_runtime_error(),
+                native_failure_message(&e, diagnostics),
+            ));
+        }
+    };
+
+    let collapsed = crate::ffi::shared::collapse_ast(&ast, &mut arena);
     transform_ast(&collapsed, &arena, input, ruby)
 }
 

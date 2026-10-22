@@ -310,6 +310,14 @@ pub struct PortableParser<'a> {
     /// Per-atom dispatch counts (parsanol-rs#100 item 2): None until
     /// `enable_profiling`, then one counter per atom.
     dispatch_counts: Option<Box<[u64]>>,
+
+    /// Reference mode (TODO.sota/8 B1): the plain recursive relation —
+    /// no memo traffic, no fused scans, no terminal fast paths. A
+    /// reference parse MUST agree with the default walker (E1:
+    /// memoization and compilation are unobservable), which is what
+    /// makes it an independent differential path. Off by default; when
+    /// off it costs one predictable branch per atom dispatch.
+    reference: bool,
 }
 
 impl<'a> PortableParser<'a> {
@@ -326,6 +334,26 @@ impl<'a> PortableParser<'a> {
             DEFAULT_MAX_INPUT_SIZE,
             DEFAULT_MAX_RECURSION_DEPTH,
         )
+    }
+
+    /// Create a parser in reference mode (TODO.sota/8 B1): the plain
+    /// recursive relation with every unobservable optimization removed —
+    /// no memo tables, no fused repetition scans, no terminal fast
+    /// paths. Deliberately slower than `new`; the corpus replay and the
+    /// differential fuzz arbitrate engine behavior against it.
+    #[inline]
+    pub fn new_reference(grammar: &'a Grammar, input: &'a str, arena: &'a mut AstArena) -> Self {
+        if !super::dynamic::in_dynamic_dispatch() {
+            super::dynamic::begin_parse(input);
+        }
+        // A one-entry cache: nothing is ever stored (the reference gate
+        // returns before the cache), but `is_empty` sets the arena
+        // rollback flag, which keeps failed branches from leaking
+        // arena data.
+        let mut parser =
+            Self::with_cache_impl(grammar, input, arena, DenseCache::new(1), None, false);
+        parser.reference = true;
+        parser
     }
 
     /// Create a new parser with a pre-existing cache
@@ -419,6 +447,7 @@ impl<'a> PortableParser<'a> {
             snapshot_arena,
             snapshots_in_live,
             dispatch_counts: None,
+            reference: false,
         }
     }
 
@@ -468,6 +497,7 @@ impl<'a> PortableParser<'a> {
             snapshot_arena: None,
             snapshots_in_live: false,
             dispatch_counts: None,
+            reference: false,
         }
     }
 
@@ -798,6 +828,15 @@ impl<'a> PortableParser<'a> {
             counts[atom_id] += 1;
         }
         self.check_resources()?;
+
+        // Reference mode (TODO.sota/8 B1): the plain relation. Every
+        // memo table is bypassed — the dense cache, the capture-keyed
+        // dyn cache, and the dispatch-outcome cache below (which
+        // returns before reaching here for `Atom::Dynamic`). Only
+        // `parse_atom_uncached`'s atom evaluation runs.
+        if self.reference {
+            return self.parse_atom_uncached(atom_id, pos, consume_all);
+        }
 
         // Skip cache for atoms that don't benefit from memoization
         // (terminals, pass-through wrappers). This saves significant memory
@@ -1333,43 +1372,47 @@ impl<'a> PortableParser<'a> {
 
         let b = self.input_bytes[pos];
 
-        // Fast path for character classes
-        if let Some(char_pattern) = CharacterPattern::from_pattern(pattern) {
-            if char_pattern.matches(b) {
-                let char_len = match char_pattern {
-                    CharacterPattern::Any
-                    | CharacterPattern::NonDigit
-                    | CharacterPattern::NonSpace
-                    | CharacterPattern::NonWord => utf8_char_len(b),
-                    _ => 1,
-                };
-                return Ok(ParseResult {
-                    value: self.arena.input_ref(pos, char_len),
-                    end_pos: pos + char_len,
-                    capture_state: None,
-                });
-            } else {
-                self.note_failure(pos, pattern.to_string());
-                return Err(ParseError::Failed { position: pos });
-            }
-        }
-
-        // General pure-class fast path: any pattern whose HIR is a single
-        // Unicode class matches by direct membership test — the regex
-        // engine's lazy-DFA determinization is catastrophic when a
-        // repetition drives this per character.
-        if let Some(class) = regex_cache::get_or_decode_class(pattern) {
-            return match class.match_at(self.input_bytes, pos) {
-                Some(char_len) => Ok(ParseResult {
-                    value: self.arena.input_ref(pos, char_len),
-                    end_pos: pos + char_len,
-                    capture_state: None,
-                }),
-                None => {
+        // Fast path for character classes (B1: reference mode runs the
+        // plain regex evaluation below instead, so the fast classifier
+        // is itself under test).
+        if !self.reference {
+            if let Some(char_pattern) = CharacterPattern::from_pattern(pattern) {
+                if char_pattern.matches(b) {
+                    let char_len = match char_pattern {
+                        CharacterPattern::Any
+                        | CharacterPattern::NonDigit
+                        | CharacterPattern::NonSpace
+                        | CharacterPattern::NonWord => utf8_char_len(b),
+                        _ => 1,
+                    };
+                    return Ok(ParseResult {
+                        value: self.arena.input_ref(pos, char_len),
+                        end_pos: pos + char_len,
+                        capture_state: None,
+                    });
+                } else {
                     self.note_failure(pos, pattern.to_string());
-                    Err(ParseError::Failed { position: pos })
+                    return Err(ParseError::Failed { position: pos });
                 }
-            };
+            }
+
+            // General pure-class fast path: any pattern whose HIR is a single
+            // Unicode class matches by direct membership test — the regex
+            // engine's lazy-DFA determinization is catastrophic when a
+            // repetition drives this per character.
+            if let Some(class) = regex_cache::get_or_decode_class(pattern) {
+                return match class.match_at(self.input_bytes, pos) {
+                    Some(char_len) => Ok(ParseResult {
+                        value: self.arena.input_ref(pos, char_len),
+                        end_pos: pos + char_len,
+                        capture_state: None,
+                    }),
+                    None => {
+                        self.note_failure(pos, pattern.to_string());
+                        Err(ParseError::Failed { position: pos })
+                    }
+                };
+            }
         }
 
         // General case
@@ -1524,45 +1567,50 @@ impl<'a> PortableParser<'a> {
         pos: usize,
         consume_all: bool,
     ) -> Result<ParseResult, ParseError> {
-        // Check for SIMD optimization
-        if let Some(Atom::Re { pattern }) = self.grammar.get_atom(atom_id) {
-            if let Some(char_pattern) = CharacterPattern::from_pattern(pattern) {
-                let bulk_label = pattern.to_string();
-                return self
-                    .parse_repetition_bulk(
-                        pattern,
-                        char_pattern.predicate(),
-                        min,
-                        max,
-                        tag,
-                        pos,
-                        consume_all,
-                    )
-                    .map_err(|e| {
-                        if matches!(e, ParseError::Failed { .. }) {
-                            self.note_failure(pos, bulk_label.clone());
-                        }
-                        e
-                    });
+        // Reference mode (B1) runs the general loop below: the bulk and
+        // fused scans are optimizations whose tree equivalence is part
+        // of what the reference path exists to check.
+        if !self.reference {
+            // Check for SIMD optimization
+            if let Some(Atom::Re { pattern }) = self.grammar.get_atom(atom_id) {
+                if let Some(char_pattern) = CharacterPattern::from_pattern(pattern) {
+                    let bulk_label = pattern.to_string();
+                    return self
+                        .parse_repetition_bulk(
+                            pattern,
+                            char_pattern.predicate(),
+                            min,
+                            max,
+                            tag,
+                            pos,
+                            consume_all,
+                        )
+                        .map_err(|e| {
+                            if matches!(e, ParseError::Failed { .. }) {
+                                self.note_failure(pos, bulk_label.clone());
+                            }
+                            e
+                        });
+                }
             }
-        }
 
-        // Fused maximal-run scan for the quoted-string idiom: a repetition
-        // whose body is `Sequence[Lookahead(negative, delimiters), terminal]`
-        // (e.g. `1*(!("\" / "\\") any_char)`, one captured char per
-        // iteration). Running the full VM per char — dispatch, memo, failure
-        // bookkeeping — costs hundreds of ns/char for what is a byte test.
-        // The scan inlines the iteration: per position, a delimiter
-        // starts_with test and the terminal's match, building each
-        // iteration's tree with the same arena helpers the general loop's
-        // body uses, so the shape is identical. When the scan cannot
-        // satisfy `min`, fall through to the general loop: its failure
-        // bookkeeping (deepest-position labels) stays exact.
-        if let Some((delims, term)) = self.neg_scan_body(atom_id) {
-            if let Some(result) =
-                self.parse_neg_scan(&delims, &term, min, max, tag, pos, consume_all)
-            {
-                return result;
+            // Fused maximal-run scan for the quoted-string idiom: a repetition
+            // whose body is `Sequence[Lookahead(negative, delimiters), terminal]`
+            // (e.g. `1*(!("\" / "\\") any_char)`, one captured char per
+            // iteration). Running the full VM per char — dispatch, memo, failure
+            // bookkeeping — costs hundreds of ns/char for what is a byte test.
+            // The scan inlines the iteration: per position, a delimiter
+            // starts_with test and the terminal's match, building each
+            // iteration's tree with the same arena helpers the general loop's
+            // body uses, so the shape is identical. When the scan cannot
+            // satisfy `min`, fall through to the general loop: its failure
+            // bookkeeping (deepest-position labels) stays exact.
+            if let Some((delims, term)) = self.neg_scan_body(atom_id) {
+                if let Some(result) =
+                    self.parse_neg_scan(&delims, &term, min, max, tag, pos, consume_all)
+                {
+                    return result;
+                }
             }
         }
 
@@ -2300,49 +2348,54 @@ impl<'a> PortableParser<'a> {
         // indistinguishable to a deterministic block.
         let capture_fp = super::dynamic::capture_signature(&self.capture_state);
         let outcome_key = (callback_id, pos, capture_fp);
-        if std::env::var("PARSANOL_CACHE_TRACE").is_ok() {
-            eprintln!(
-                "OUTCOME-LOOKUP cb={} pos={} fp={:016x} hit={}",
-                callback_id,
-                pos,
-                capture_fp,
-                self.dynamic_outcomes.contains_key(&outcome_key)
-            );
-        }
-        if let Some(outcome) = self.dynamic_outcomes.get(&outcome_key) {
-            return match outcome {
-                Some((end_pos, value)) => {
-                    let value = value.clone();
-                    Ok(ParseResult {
-                        value,
-                        end_pos: *end_pos,
-                        capture_state: None,
-                    })
-                }
-                None => Err(ParseError::Failed { position: pos }),
-            };
-        }
 
-        // Dispatch cache (parsanol-ruby#80): a deterministic block's
-        // fragment is a pure function of (input, pos, captures) — the
-        // exact key below. A hit skips the host round-trip (block
-        // call, atom JSON, grammar rebuild) and replays the recorded
-        // capture writes — no context materialization at all.
-        if let Some((fragment, root, writes)) =
-            super::dynamic::cached_fragment(callback_id, pos, &self.capture_state, self.input)
-        {
-            for (name, value) in writes {
-                let cv = match value {
-                    super::dynamic::WriteValue::Text(t) => {
-                        super::capture_state::CaptureValue::text(t)
-                    }
-                    super::dynamic::WriteValue::Opaque(handle) => {
-                        super::capture_state::CaptureValue::opaque(handle)
-                    }
-                };
-                self.capture_state.store(&name, cv);
+        // B1 reference mode: dispatch caches are memoization too — the
+        // block runs every time, exactly as the semantics state.
+        if !self.reference {
+            if std::env::var("PARSANOL_CACHE_TRACE").is_ok() {
+                eprintln!(
+                    "OUTCOME-LOOKUP cb={} pos={} fp={:016x} hit={}",
+                    callback_id,
+                    pos,
+                    capture_fp,
+                    self.dynamic_outcomes.contains_key(&outcome_key)
+                );
             }
-            return self.parse_fragment(&fragment, root, pos);
+            if let Some(outcome) = self.dynamic_outcomes.get(&outcome_key) {
+                return match outcome {
+                    Some((end_pos, value)) => {
+                        let value = value.clone();
+                        Ok(ParseResult {
+                            value,
+                            end_pos: *end_pos,
+                            capture_state: None,
+                        })
+                    }
+                    None => Err(ParseError::Failed { position: pos }),
+                };
+            }
+
+            // Dispatch cache (parsanol-ruby#80): a deterministic block's
+            // fragment is a pure function of (input, pos, captures) — the
+            // exact key below. A hit skips the host round-trip (block
+            // call, atom JSON, grammar rebuild) and replays the recorded
+            // capture writes — no context materialization at all.
+            if let Some((fragment, root, writes)) =
+                super::dynamic::cached_fragment(callback_id, pos, &self.capture_state, self.input)
+            {
+                for (name, value) in writes {
+                    let cv = match value {
+                        super::dynamic::WriteValue::Text(t) => {
+                            super::capture_state::CaptureValue::text(t)
+                        }
+                        super::dynamic::WriteValue::Opaque(handle) => {
+                            super::capture_state::CaptureValue::opaque(handle)
+                        }
+                    };
+                    self.capture_state.store(&name, cv);
+                }
+                return self.parse_fragment(&fragment, root, pos);
+            }
         }
 
         // Create context for callback. Capture subtrees ride inside
@@ -2392,7 +2445,7 @@ impl<'a> PortableParser<'a> {
         // — a full copy of the registered grammar PER DISPATCH
         // POSITION; caching those retained megabytes per distinct
         // document (parsanol-ruby#84).
-        let result = if resolved_fragment {
+        let result = if resolved_fragment && !self.reference {
             let stored = super::dynamic::store_dispatch_fragment(
                 callback_id,
                 pos,
@@ -2406,17 +2459,19 @@ impl<'a> PortableParser<'a> {
         } else {
             self.parse_fragment(&temp_grammar, temp_atom_id, pos)
         };
-        match &result {
-            Ok(r) => {
-                self.dynamic_outcomes
-                    .insert(outcome_key, Some((r.end_pos, r.value.clone())));
-            }
-            Err(ParseError::RecursionLimitExceeded { .. }) => {}
-            Err(_) => {
-                if self.dynamic_outcomes.len() > 2_000_000 {
-                    self.dynamic_outcomes.clear();
+        if !self.reference {
+            match &result {
+                Ok(r) => {
+                    self.dynamic_outcomes
+                        .insert(outcome_key, Some((r.end_pos, r.value.clone())));
                 }
-                self.dynamic_outcomes.insert(outcome_key, None);
+                Err(ParseError::RecursionLimitExceeded { .. }) => {}
+                Err(_) => {
+                    if self.dynamic_outcomes.len() > 2_000_000 {
+                        self.dynamic_outcomes.clear();
+                    }
+                    self.dynamic_outcomes.insert(outcome_key, None);
+                }
             }
         }
         result
@@ -2433,7 +2488,11 @@ impl<'a> PortableParser<'a> {
         pos: usize,
     ) -> Result<ParseResult, ParseError> {
         let mut temp_arena = AstArena::for_input(self.input.len());
-        let mut temp_parser = PortableParser::new(temp_grammar, self.input, &mut temp_arena);
+        let mut temp_parser = if self.reference {
+            PortableParser::new_reference(temp_grammar, self.input, &mut temp_arena)
+        } else {
+            PortableParser::new(temp_grammar, self.input, &mut temp_arena)
+        };
         // Seed the fragment's visible capture state wholesale
         // (rs#174 round 2): the per-name store loop pushed two undo-log
         // entries per capture per boundary crossing, and the merge-back
