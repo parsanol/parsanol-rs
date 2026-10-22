@@ -289,42 +289,96 @@ impl PargArtifact {
                 let mut resyncs: Vec<Value> = Vec::new();
                 if let (Some(body), Some((end, items, tag))) = (spine_body, partial.as_mut()) {
                     let _ = tag;
+                    // Declared resync (`resync <rule> = <pattern>`, R2):
+                    // the pattern is baked into the entry; the skip spans
+                    // are exactly the pattern's matches — the author owns
+                    // them, deterministically. When no pattern is
+                    // declared, the inferred trial scan applies.
+                    let declared_grammar: Option<Grammar> = self
+                        .entry_value(entry, "resync")
+                        .cloned()
+                        .map(|value| serde_json::from_value::<Grammar>(value))
+                        .transpose()
+                        .ok()
+                        .flatten();
+                    // The pattern parser gets its own arena: the
+                    // journaling parser holds arena2 for the whole
+                    // recovery pass.
+                    let mut pattern_arena = AstArena::for_input(input.len().max(1 << 16));
+                    let mut pattern_parser = declared_grammar
+                        .as_ref()
+                        .map(|grammar| PortableParser::new(grammar, input, &mut pattern_arena));
                     let mut cursor = *end;
-                    for _ in 0..MAX_RESYNCS {
-                        // Scan for the next viable iteration start.
-                        let mut found = None;
-                        let mut scan = cursor;
-                        while scan < input.len() {
-                            if let Ok(r) = journaling.try_atom_impl(body, scan, false) {
-                                if r.end_pos > scan {
-                                    found = Some((scan, r.end_pos, r.value.clone()));
+                    'rounds: for _ in 0..MAX_RESYNCS {
+                        // An iteration may already be viable at the
+                        // cursor (e.g. right after a declared skip).
+                        if let Ok(r) = journaling.try_atom_impl(body, cursor, false) {
+                            if r.end_pos > cursor {
+                                items.push(r.value.clone());
+                                cursor = r.end_pos;
+                                loop {
+                                    match journaling.try_atom_impl(body, cursor, false) {
+                                        Ok(r) if r.end_pos > cursor => {
+                                            items.push(r.value.clone());
+                                            cursor = r.end_pos;
+                                        }
+                                        _ => break,
+                                    }
+                                }
+                                if cursor >= input.len() {
                                     break;
                                 }
                             }
-                            scan += 1;
                         }
-                        let Some((skip_start, resume, item)) = found else {
-                            break;
-                        };
-                        resyncs.push(serde_json::json!({
-                            "offset": cursor,
-                            "skipped": &input[cursor..skip_start],
-                            "resumed_at": skip_start,
-                        }));
-                        items.push(item);
-                        // Continue the run from the recovered item's end.
-                        cursor = resume;
-                        loop {
-                            match journaling.try_atom_impl(body, cursor, false) {
-                                Ok(r) if r.end_pos > cursor => {
-                                    items.push(r.value.clone());
-                                    cursor = r.end_pos;
+                        // Skip phase.
+                        if let Some(pattern) = pattern_parser.as_mut() {
+                            // Declared: scan for the next pattern match;
+                            // the whole match (gap + delimiter) is the
+                            // annotated error span.
+                            let mut scan = cursor;
+                            let mut found = None;
+                            while scan < input.len() {
+                                if let Ok(r) = pattern.parse_from_pos(scan) {
+                                    if r.end_pos > scan {
+                                        found = Some(r.end_pos);
+                                        break;
+                                    }
                                 }
-                                _ => break,
+                                scan += 1;
                             }
-                        }
-                        if cursor >= input.len() {
-                            break;
+                            let Some(resume) = found else {
+                                break 'rounds;
+                            };
+                            resyncs.push(serde_json::json!({
+                                "offset": cursor,
+                                "skipped": &input[cursor..resume],
+                                "resumed_at": resume,
+                            }));
+                            cursor = resume;
+                        } else {
+                            // Inferred: scan for the next viable
+                            // iteration start.
+                            let mut found = None;
+                            let mut scan = cursor;
+                            while scan < input.len() {
+                                if let Ok(r) = journaling.try_atom_impl(body, scan, false) {
+                                    if r.end_pos > scan {
+                                        found = Some((scan, r.end_pos, r.value.clone()));
+                                        break;
+                                    }
+                                }
+                                scan += 1;
+                            }
+                            let Some((skip_start, resume, item)) = found else {
+                                break 'rounds;
+                            };
+                            resyncs.push(serde_json::json!({
+                                "offset": cursor,
+                                "skipped": &input[cursor..skip_start],
+                                "resumed_at": skip_start,
+                            }));
+                            items.push(item);
+                            cursor = resume;
                         }
                     }
                     *end = cursor;
