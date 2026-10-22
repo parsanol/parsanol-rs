@@ -73,6 +73,11 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- Release v0.18.17 by @[object]
+- Declared resync — the baked pattern owns the spans (TODO.sota/1 R2) ([#283](https://github.com/parsanol/parsanol-rs/pull/283)) by @[object]
+
+### Other
+
 - Declared resync — the baked pattern owns the spans (TODO.sota/1 R2) ([#283](https://github.com/parsanol/parsanol-rs/pull/283)) by @[object]
 
 ### Other
