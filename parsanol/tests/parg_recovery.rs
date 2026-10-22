@@ -160,3 +160,28 @@ fn resync_recovers_later_items_and_annotates_the_skip() {
     assert_eq!(resyncs[0]["offset"], Value::from(8));
     assert_eq!(resyncs[0]["resumed_at"], Value::from(21));
 }
+
+#[test]
+fn declared_resync_yields_deterministic_author_owned_spans() {
+    // R2 declared form: the baked `resync` pattern owns the skip spans.
+    // The pattern consumes the junk run INCLUDING its ";" delimiter, so
+    // the recovery is deterministic regardless of where iterations
+    // could self-anchor.
+    let manifest = env!("CARGO_MANIFEST_DIR");
+    let path = format!("{manifest}/../corpus/conformance/recovery_resync_declared.json");
+    let artifact =
+        PargArtifact::from_json(&std::fs::read_to_string(&path).expect("declared resync fixture"))
+            .expect("envelope must verify");
+    let recovered = artifact
+        .parse_shape_recovering("main", "a=1;b=2;@@junk@@;c=3;d=4;")
+        .expect("recovery call succeeds");
+    assert_eq!(recovered["ok"], Value::Bool(false));
+    let items = recovered["partial"]["document"].as_array().expect("items");
+    assert_eq!(items.len(), 4, "all four pairs recovered: {items:?}");
+    assert_eq!(items[2]["k"]["value"], Value::String("c".into()));
+    let resyncs = recovered["resyncs"].as_array().expect("resyncs");
+    assert_eq!(resyncs.len(), 1);
+    assert_eq!(resyncs[0]["offset"], Value::from(8));
+    assert_eq!(resyncs[0]["skipped"], Value::String("@@junk@@;".into()));
+    assert_eq!(resyncs[0]["resumed_at"], Value::from(17));
+}

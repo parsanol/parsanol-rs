@@ -1,0 +1,15 @@
+## Semantics: E2 (recovery — R2 declared resync, deterministic spans)
+grammar RecoveryResync version "1.0.0" {
+  ## key = value ; pairs. Recovery for document skips deterministic
+  ## junk: any run of non-";" bytes ending at a ";" (the author owns
+  ## the spans — no trial scanning).
+  pair = ( 1*( %x61-7A / %x30-39 ) ) as k "=" ( 1*( %x30-39 ) ) as v ";"
+  document = 1*( pair )
+  resync document = 1*( %x00-3A / %x3C-FF ) ";"
+  entry main: document
+
+  test main {
+    accept "a=1;b=2;"
+    reject "a=1;b=2;@@junk@@;c=3;d=4;"
+  }
+}
