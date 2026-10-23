@@ -13,6 +13,7 @@
 use parsanol::ffi::c::{
     parsanol_c_last_error, parsanol_c_parse, parsanol_c_parse_len, parsanol_c_register,
     parsanol_c_release, parsanol_parg_error, parsanol_parg_free, parsanol_parg_parse,
+    parsanol_parg_parse_recovering,
 };
 
 #[cfg(test)]
