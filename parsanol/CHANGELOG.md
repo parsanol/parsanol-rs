@@ -73,6 +73,10 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- C ABI: recovery export, artifact-first dispatch, and the parsanol.h header for C/C++ by @[object]
+
+### Other
+
 - Reference mode — the plain relation in the existing walker by @[object]
 
 ### Other
