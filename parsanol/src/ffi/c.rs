@@ -692,8 +692,29 @@ enum Outcome {
     },
 }
 
-fn execute(grammar_json: &str, input: &str) -> Result<Outcome, String> {
-    let grammar: Grammar = Grammar::from_json(grammar_json).map_err(|e| e.to_string())?;
+fn execute(text: &str, input: &str) -> Result<Outcome, String> {
+    // Artifact-first: a full parsanol-tree/v2 envelope (checksum-verified)
+    // parses through the artifact's default entry; a bare portable grammar
+    // JSON keeps the historical behavior. One surface, both callers.
+    let probe: serde_json::Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
+    if probe.get("entries").is_some() {
+        let artifact = crate::parg::PargArtifact::from_json(text).map_err(|e| e.to_string())?;
+        let entry = artifact
+            .default_entry()
+            .or_else(|| artifact.entry_names().first().copied())
+            .ok_or_else(|| "envelope has no entries".to_string())?;
+        return match artifact.parse_shape(entry, input) {
+            Ok(value) => serde_json::to_string(&value)
+                .map(Outcome::Shape)
+                .map_err(|e| e.to_string()),
+            Err(crate::parg::PargError::ParseWire { offset, ranked, .. }) => {
+                Ok(Outcome::Failed { offset, ranked })
+            }
+            Err(e) => Err(e.to_string()),
+        };
+    }
+
+    let grammar: Grammar = serde_json::from_value(probe).map_err(|e| e.to_string())?;
     let mut arena = AstArena::for_input(input.len().max(1 << 12));
     let mut parser = PortableParser::new(&grammar, input, &mut arena);
     match parser.parse() {
@@ -772,6 +793,65 @@ pub unsafe extern "C" fn parsanol_parg_free(ptr: *mut c_char) {
     }
 }
 
+fn run_recovering(
+    envelope_json: *const c_char,
+    entry: *const c_char,
+    input: *const c_char,
+) -> Result<String, String> {
+    let envelope_json = unsafe { CStr::from_ptr(envelope_json) }
+        .to_str()
+        .map_err(|e| e.to_string())?;
+    // A null entry selects the artifact's default entry.
+    let entry = if entry.is_null() {
+        None
+    } else {
+        Some(
+            unsafe { CStr::from_ptr(entry) }
+                .to_str()
+                .map_err(|e| e.to_string())?,
+        )
+    };
+    let input = unsafe { CStr::from_ptr(input) }
+        .to_str()
+        .map_err(|e| e.to_string())?;
+
+    // The envelope is checksum-verified here, exactly like every other
+    // loader — the caller passes the artifact file's bytes unchanged.
+    let artifact =
+        crate::parg::PargArtifact::from_json(envelope_json).map_err(|e| e.to_string())?;
+    let resolved = match entry {
+        Some(name) => name.to_string(),
+        None => artifact
+            .default_entry()
+            .or_else(|| artifact.entry_names().first().copied())
+            .ok_or_else(|| "envelope has no entries".to_string())?
+            .to_string(),
+    };
+    let value = artifact
+        .parse_shape_recovering(&resolved, input)
+        .map_err(|e| e.to_string())?;
+    serde_json::to_string(&value).map_err(|e| e.to_string())
+}
+
+/// # Safety
+/// Arguments must be valid C strings (`entry` may be NULL for the artifact's
+/// default entry). Returns the recovery envelope JSON — `{ok, shape}` on
+/// success; `{ok:false, partial, error, resyncs, captures, consumed_upto}`
+/// on failure, byte-identical to the wasm `parseShapeRecovering` wire.
+/// Owned; free with `parsanol_parg_free`. The envelope JSON is
+/// checksum-verified before parsing.
+#[no_mangle]
+pub unsafe extern "C" fn parsanol_parg_parse_recovering(
+    envelope_json: *const c_char,
+    entry: *const c_char,
+    input: *const c_char,
+) -> *mut c_char {
+    match run_recovering(envelope_json, entry, input) {
+        Ok(json) => to_c(json),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -782,6 +862,68 @@ mod tests {
         let version = parsanol_version();
         let version_str = unsafe { CStr::from_ptr(version) }.to_str().unwrap();
         assert!(!version_str.is_empty());
+    }
+
+    /// A minimal checksum-valid envelope around one Str grammar.
+    fn minimal_envelope() -> String {
+        let envelope = serde_json::json!({
+            "shape": "parsanol-tree/v2",
+            "grammar": "Demo",
+            "version": "1.0.0",
+            "default_entry": "main",
+            "entries": {
+                "main": {
+                    "root": "main",
+                    "grammar": {"root": 0, "atoms": [{"Str": {"pattern": "ab"}}]}
+                }
+            }
+        });
+        let checksum = crate::parg::checksum_hex(&envelope).expect("checksum");
+        let mut payload = envelope;
+        payload["checksum"] = serde_json::Value::String(checksum);
+        payload.to_string()
+    }
+
+    #[test]
+    fn test_parg_parse_recovering_roundtrip() {
+        let envelope = CString::new(minimal_envelope()).unwrap();
+        let entry = CString::new("main").unwrap();
+
+        let input = CString::new("ab").unwrap();
+        let ok = unsafe {
+            parsanol_parg_parse_recovering(envelope.as_ptr(), entry.as_ptr(), input.as_ptr())
+        };
+        assert!(!ok.is_null());
+        let ok_str = unsafe { CStr::from_ptr(ok) }.to_string_lossy().into_owned();
+        assert!(ok_str.contains(r#""ok":true"#), "ok wire: {ok_str}");
+        unsafe { parsanol_parg_free(ok) };
+
+        // A NULL entry selects the default entry.
+        let ok_default = unsafe {
+            parsanol_parg_parse_recovering(envelope.as_ptr(), std::ptr::null(), input.as_ptr())
+        };
+        assert!(!ok_default.is_null());
+        unsafe { parsanol_parg_free(ok_default) };
+
+        let bad = CString::new("zz").unwrap();
+        let failed = unsafe {
+            parsanol_parg_parse_recovering(envelope.as_ptr(), entry.as_ptr(), bad.as_ptr())
+        };
+        assert!(!failed.is_null(), "recovery never fails hard");
+        let failed_str = unsafe { CStr::from_ptr(failed) }
+            .to_string_lossy()
+            .into_owned();
+        assert!(failed_str.contains(r#""ok":false"#), "wire: {failed_str}");
+        unsafe { parsanol_parg_free(failed) };
+
+        // A tampered envelope is rejected by the checksum gate.
+        let tampered =
+            CString::new(minimal_envelope().replace("parsanol-tree/v2", "parsanol-tree/v3"))
+                .unwrap();
+        assert!(unsafe {
+            parsanol_parg_parse_recovering(tampered.as_ptr(), entry.as_ptr(), input.as_ptr())
+        }
+        .is_null());
     }
 
     #[test]

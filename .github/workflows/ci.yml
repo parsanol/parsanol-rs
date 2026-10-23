@@ -137,6 +137,36 @@ jobs:
   # ============================================================================
   # Check Unused Dependencies
   # ============================================================================
+  # ============================================================================
+  # C / C++ ABI Smoke (examples/parg_parse.c|.cpp against include/parsanol.h)
+  # ============================================================================
+  c-abi:
+    name: C/C++ ABI Smoke
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build the cdylib
+        run: cargo build -p parsanol-ffi --release
+      - name: Compile and run the C consumer
+        run: |
+          cc parsanol-ffi/examples/parg_parse.c -I parsanol-ffi/include \
+            -o /tmp/parg_parse_c -L target/release -lparsanol
+          LD_LIBRARY_PATH=target/release /tmp/parg_parse_c \
+            corpus/conformance/recovery_resync_declared.json "a=1;b=2;" | tee /tmp/c.out
+          grep -q '"ok":true' /tmp/c.out
+          LD_LIBRARY_PATH=target/release /tmp/parg_parse_c \
+            corpus/conformance/recovery_resync_declared.json "a=1;b=2;@@junk@@;c=3;d=4;" | tee /tmp/c-fail.out
+          grep -q '"ok":false' /tmp/c-fail.out
+          grep -q '@@junk@@;' /tmp/c-fail.out
+      - name: Compile and run the C++ consumer
+        run: |
+          c++ -std=c++17 parsanol-ffi/examples/parg_parse.cpp -I parsanol-ffi/include \
+            -o /tmp/parg_parse_cpp -L target/release -lparsanol
+          LD_LIBRARY_PATH=target/release /tmp/parg_parse_cpp \
+            corpus/conformance/recovery_resync_declared.json "a=1;b=2;" | tee /tmp/cpp.out
+          grep -q '"ok":true' /tmp/cpp.out
+
   machete:
     name: Check Unused Dependencies
     runs-on: ubuntu-latest
