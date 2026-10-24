@@ -1,0 +1,20 @@
+## Semantics: U3 (rs#297) — general-category classes. %p{L} and
+## %p{Nd} compile to the regex category class; both engines carry the
+## tables and the fixture pins the agreement across scripts (Han,
+## Latin-1, Cyrillic, Arabic-Indic digits).
+grammar ConformanceUnicodeCategories version "1.0.0" {
+  ## Letters then decimal digits, per general category.
+  word = 1*%p{L} as word
+  code = 1*%p{Nd} as code
+  pair = word %x20 code
+
+  entry main: pair
+
+  test main {
+    accept "日本語 ٠١٢"
+    accept "café 012"
+    accept "ДОН 42"
+    reject "1x 12"
+    reject "café x"
+  }
+}
