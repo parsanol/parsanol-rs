@@ -73,6 +73,11 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- Release v0.18.21 by @[object]
+- Unicode-native U1: codepoint-exact any-repetition runs; VM backend consumes all by @[object]
+
+### Other
+
 - Unicode-native U1: codepoint-exact any-repetition runs; VM backend consumes all by @[object]
 
 ### Other
