@@ -1,0 +1,25 @@
+## Semantics: U2 (rs#297) — case-insensitive literals fold over Unicode
+## simple case folding, not just ASCII: the compile emits a fold regex
+## and every engine must agree on the folded match set. Latin-1 accents,
+## the Greek sigma family (all four sigmas fold together), and Cyrillic
+## pin the agreement; the plain-ASCII lookalike is the reject pin.
+grammar ConformanceUnicodeFold version "1.0.0" {
+  ## Fold-matching words in three scripts, space-separated.
+  latin = %i"café"
+  greek = %i"σοφος"
+  cyrillic = %i"дон"
+  name = ( latin / greek / cyrillic ) as name
+  names = name *( %x20 name )
+
+  entry main: names
+
+  test main {
+    accept "café σοφος дон"
+    accept "CAFÉ ΣΟΦΟΣ ДОН"
+    accept "Café Σοφος Дон"
+    accept "café ΣΟΦΟΣ дОн"
+    reject "cafe"
+    reject "CAFE"
+    reject "café x"
+  }
+}
