@@ -24,6 +24,7 @@ use sha2::{Digest, Sha256};
 
 pub mod bindings;
 pub mod derive;
+pub mod frontend;
 pub mod render;
 pub mod schema;
 pub mod suite;
