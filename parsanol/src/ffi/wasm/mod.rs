@@ -261,7 +261,10 @@ impl PargArtifactJs {
             .map_err(|_| JsValue::from_str("Failed to serialize bindings"))
     }
 
-    /// Parse and bind in one step.
+    /// Parse and bind in one step: the bound attribute hash as JSON.
+    ///
+    /// Returns `{}` when the entry declares no `bindings` block — the
+    /// parse succeeded, there was simply nothing to bind.
     #[wasm_bindgen(js_name = parseAndBind)]
     pub fn parse_and_bind(&self, entry: &str, input: &str) -> Result<JsString, JsValue> {
         let bound = self
@@ -308,9 +311,16 @@ extern "C" {
     fn log(s: &str);
 }
 
-/// Initialize function for WASM
-#[wasm_bindgen]
-pub fn init() {
+/// Install the panic hook (better panic messages in the console).
+///
+/// The glue's real bootstrap is the DEFAULT export —
+/// `__wbg_init(module_or_path?)` / `initSync` — which calls this on
+/// its way up; calling it directly is only needed outside the
+/// bootstrap. It is deliberately NOT named `init`: that name in the
+/// generated d.ts typed the bootstrap as `() => void` and hid the
+/// real signatures (rs#308).
+#[wasm_bindgen(js_name = setPanicHook)]
+pub fn set_panic_hook() {
     // Set up panic hook for better error messages
     #[cfg(feature = "console_error_panic_hook")]
     console_error_panic_hook::set_once();

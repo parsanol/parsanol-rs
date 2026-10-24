@@ -72,12 +72,67 @@ jobs:
             pkg.repository = { type: 'git', url: 'https://github.com/parsanol/parsanol-rs' };
             pkg.keywords = ['parser', 'peg', 'wasm', 'rust'];
             pkg.license = 'MIT';
-            pkg.files = ['parsanol_bg.wasm', 'parsanol_bg.wasm.d.ts', 'parsanol.js', 'parsanol.d.ts'];
+            pkg.files = ['parsanol_bg.wasm', 'parsanol_bg.wasm.d.ts', 'parsanol.js', 'parsanol.d.ts', 'README.md'];
             delete pkg.main;
             pkg.module = 'parsanol.js';
             pkg.types = 'parsanol.d.ts';
             pkg.exports = { '.': { types: './parsanol.d.ts', default: './parsanol.js' } };
             fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
+            // rs#308: the init surface is the DEFAULT export (async) and
+            // initSync; Node has no fetch for package paths, so the
+            // documented pattern is initSync with pre-read bytes. The
+            // pointer goes at the top of the d.ts and in a README (the
+            // package shipped neither).
+            const dts = fs.readFileSync('parsanol.d.ts', 'utf8');
+            fs.writeFileSync('parsanol.d.ts', [
+              '// Node usage: the default init fetches the wasm next to the module,',
+              '// which Node does not serve; use initSync with pre-read bytes:',
+              '//   import { initSync } from "./parsanol.js";',
+              '//   import { readFileSync } from "node:fs";',
+              '//   initSync({ module: readFileSync("./parsanol_bg.wasm") });',
+              '// The async bootstrap is the DEFAULT export (__wbg_init): Promise<InitOutput>.',
+              '// parseAndBind returns {} when the entry declares no bindings block.',
+              dts,
+            ].join('\n'));
+            const readme = [
+              '# @parsanol/wasm',
+              '',
+              'Parsanol PEG parser — WebAssembly bindings (checksummed',
+              'parsanol-tree/v2 artifacts; parse, shape, recovery, bindings,',
+              'schema types).',
+              '',
+              '## Browser',
+              '',
+              '```js',
+              'import init, { PargArtifactJs } from "@parsanol/wasm";',
+              'await init(); // fetches parsanol_bg.wasm next to the module',
+              'const parg = new PargArtifactJs(artifactJson);',
+              'const bound = parg.parseAndBind("identifier", "iso 12345");',
+              '```',
+              '',
+              '## Node',
+              '',
+              "The default init fetches relative to the module, which Node's",
+              'fetch does not serve; read the bytes and hand them to `initSync`',
+              '(plain `initSync(bytes)` works but warns as deprecated):',
+              '',
+              '```js',
+              'import { initSync, PargArtifactJs } from "@parsanol/wasm";',
+              'import { readFileSync } from "node:fs";',
+              '',
+              'initSync({ module: readFileSync("node_modules/@parsanol/wasm/parsanol_bg.wasm") });',
+              'const parg = new PargArtifactJs(artifactJson);',
+              '```',
+              '',
+              '## Notes',
+              '',
+              '- `parseAndBind` returns `{}` when the entry declares no',
+              '  `bindings` block — the parse succeeded, nothing was bound.',
+              '- The async bootstrap is the package DEFAULT export',
+              '  (`__wbg_init(module_or_path?)`); `setPanicHook` installs the',
+              '  panic hook directly and is called by the bootstrap.',
+            ].join('\n');
+            fs.writeFileSync('README.md', readme);
           "
 
       - name: Publish to npm
