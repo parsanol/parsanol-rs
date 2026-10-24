@@ -1760,8 +1760,27 @@ impl<'a> PortableParser<'a> {
         // comparison-shaped scan replaces the per-byte skip loop.
         let plan = scan_plan_for(pattern, predicate);
 
-        let end_pos = plan.scan_run_bytewise(self.input_bytes, pos);
-        let count = end_pos - pos;
+        // rs#297 U1: a run over multibyte input counts CODEPOINTS and
+        // its max clip lands on a char boundary — `.` matches a whole
+        // character (ruby parity), so min/max are iteration counts and
+        // no span may split a codepoint. scan_run steps whole characters
+        // when the class reaches non-ASCII and vectorizes otherwise.
+        let end_pos = plan.scan_run(self.input_bytes, pos);
+        let non_ascii = self.input_bytes[pos..end_pos].iter().any(|&b| b >= 0x80);
+        let (count, clipped_end) = if non_ascii {
+            let text = &self.input[pos..end_pos];
+            let clipped = match max {
+                Some(m) => text
+                    .char_indices()
+                    .nth(m)
+                    .map(|(offset, _)| pos + offset)
+                    .unwrap_or(end_pos),
+                None => end_pos,
+            };
+            (self.input[pos..clipped].chars().count(), clipped)
+        } else {
+            (end_pos - pos, end_pos)
+        };
 
         if count < min {
             return Err(ParseError::Failed { position: pos });
@@ -1769,12 +1788,18 @@ impl<'a> PortableParser<'a> {
 
         let actual_end = if let Some(max_count) = max {
             if count > max_count {
-                pos + max_count
+                // Clip to the max-th member; on the multibyte path the
+                // clip above already produced the boundary.
+                if non_ascii {
+                    clipped_end
+                } else {
+                    pos + max_count
+                }
             } else {
-                end_pos
+                clipped_end
             }
         } else {
-            end_pos
+            clipped_end
         };
 
         let actual_count = actual_end - pos;

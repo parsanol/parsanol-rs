@@ -3,6 +3,7 @@
 //! This module wraps the existing Bytecode VM parser to implement the
 //! [`ParsingBackend`] trait.
 
+use crate::portable::ast::ParseError;
 use crate::portable::backend::traits::{BackendCharacteristics, BackendResult, ParsingBackend};
 use crate::portable::bytecode::backend::{Backend as InnerBackend, Parser};
 use crate::portable::grammar::Grammar;
@@ -72,7 +73,18 @@ impl ParsingBackend for BytecodeBackend {
         };
 
         let mut parser = Parser::new(grammar.clone(), backend);
-        parser.parse(input).map(|result| result.value)
+        let result = parser.parse(input)?;
+        // Backend contract: a full-input parse, matching the packrat
+        // backend's `PortableParser::parse`. The VM's own run is a
+        // PARTIAL match (ordered choice reports its end position and
+        // may leave trailing input — pinned by the no-backtrack spec),
+        // so the backend gates consume-all here.
+        if result.end_pos != input.len() {
+            return Err(ParseError::Failed {
+                position: result.end_pos,
+            });
+        }
+        Ok(result.value)
     }
 
     fn name(&self) -> &'static str {

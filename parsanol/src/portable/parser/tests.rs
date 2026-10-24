@@ -1722,3 +1722,116 @@ fn test_capture_limit_rolls_back_captures_before_reuse() {
     assert!(parser.parse().is_ok());
     assert!(parser.capture_state().contains("temporary"));
 }
+
+#[test]
+fn unicode_any_repetition_counts_codepoints() {
+    // rs#297 U1: `.` matches a whole codepoint — min/max are iteration
+    // counts and no span may split a character. The bulk scan counted
+    // BYTES, so `2*.` accepted a single two-byte "é" and a max clip
+    // could end mid-codepoint.
+    use crate::portable::grammar::{Atom, RepetitionTag};
+
+    let build = |min: usize, max: Option<usize>| {
+        let mut grammar = Grammar::new();
+        let any = grammar.add_atom(Atom::Re {
+            pattern: ".".to_string(),
+        });
+        grammar.root = grammar.add_atom(Atom::Repetition {
+            atom: any,
+            min,
+            max,
+            tag: RepetitionTag::Repetition,
+        });
+        grammar
+    };
+
+    // min 2 over one two-byte character: a character, not two bytes.
+    let grammar = build(2, None);
+    let mut arena = AstArena::for_input(64);
+    let mut parser = PortableParser::new(&grammar, "é", &mut arena);
+    assert!(
+        parser.parse().is_err(),
+        "one codepoint cannot satisfy min 2"
+    );
+
+    // min 1, max 2 over "éa": the span covers both codepoints whole.
+    let grammar = build(1, Some(2));
+    let mut arena = AstArena::for_input(64);
+    let mut parser = PortableParser::new(&grammar, "éa", &mut arena);
+    let ast = parser.parse().expect("two codepoints satisfy 1*2");
+    let shaped = crate::portable::parslet_transform::to_parslet_compatible(&ast, &mut arena, "éa");
+    match shaped {
+        AstNode::StringRef { pool_index } => {
+            assert_eq!(arena.get_string(pool_index as usize), "éa");
+        }
+        AstNode::InputRef { offset, length } => {
+            assert_eq!(&"éa"[offset as usize..(offset + length) as usize], "éa");
+        }
+        other => panic!("expected text value, got {other:?}"),
+    }
+
+    // max clips on a char boundary: `1*2 "." "!"` over "日本!" keeps
+    // two codepoints and hands the third position to the literal.
+    let mut grammar = Grammar::new();
+    let any = grammar.add_atom(Atom::Re {
+        pattern: ".".to_string(),
+    });
+    let run = grammar.add_atom(Atom::Repetition {
+        atom: any,
+        min: 1,
+        max: Some(2),
+        tag: RepetitionTag::Repetition,
+    });
+    let bang = grammar.add_atom(Atom::Str {
+        pattern: "!".to_string(),
+    });
+    grammar.root = grammar.add_atom(Atom::Sequence {
+        atoms: vec![run, bang],
+    });
+    let mut arena = AstArena::for_input(64);
+    let mut parser = PortableParser::new(&grammar, "日本!", &mut arena);
+    let ast = parser.parse().expect("clip to two codepoints");
+    let shaped =
+        crate::portable::parslet_transform::to_parslet_compatible(&ast, &mut arena, "日本!");
+    let text = match shaped {
+        AstNode::StringRef { pool_index } => arena.get_string(pool_index as usize).to_string(),
+        AstNode::InputRef { offset, length } => {
+            "日本!"[offset as usize..(offset + length) as usize].to_string()
+        }
+        other => panic!("expected text value, got {other:?}"),
+    };
+    assert_eq!(text, "日本!");
+}
+
+#[test]
+fn unicode_any_repetition_agrees_with_the_vm() {
+    // Walker (bulk path) and bytecode VM must agree on multibyte runs.
+    use crate::portable::backend::{BytecodeBackend, ParsingBackend};
+    use crate::portable::grammar::{Atom, RepetitionTag};
+
+    let mut grammar = Grammar::new();
+    let any = grammar.add_atom(Atom::Re {
+        pattern: ".".to_string(),
+    });
+    grammar.root = grammar.add_atom(Atom::Repetition {
+        atom: any,
+        min: 2,
+        max: Some(3),
+        tag: RepetitionTag::Repetition,
+    });
+
+    for input in ["é", "éé", "één", "日本語x", "abc"] {
+        let mut arena = AstArena::for_input(input.len().max(64));
+        let walker = PortableParser::new(&grammar, input, &mut arena).parse();
+        let vm = BytecodeBackend::new().parse(&grammar, input);
+        assert_eq!(
+            walker.is_ok(),
+            vm.is_ok(),
+            "acceptance diverges on {input:?}"
+        );
+    }
+    // "é" is one codepoint: min 2 rejects, the byte count used to accept.
+    let mut arena = AstArena::for_input(64);
+    let mut parser = PortableParser::new(&grammar, "é", &mut arena);
+    assert!(parser.parse().is_err());
+}
