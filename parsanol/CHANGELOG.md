@@ -74,6 +74,10 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 ### Other
 
 - Release v0.18.19 by @[object]
+
+### Other
+
+- Release v0.18.19 by @[object]
 - C ABI: recovery export, artifact-first dispatch, and the parsanol.h header for C/C++ by @[object]
 
 ### Other
