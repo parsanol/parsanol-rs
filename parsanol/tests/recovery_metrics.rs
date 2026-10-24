@@ -93,7 +93,7 @@ struct Metrics {
 
 fn run_case(artifact: &PargArtifact, entry: &str, clean: &str, seeds: u64) -> Metrics {
     let clean_shape = artifact.parse_shape(entry, clean).ok();
-    let clean_captures = capture_names(clean_shape.as_ref());
+    let clean_nodes = capture_nodes(clean_shape.as_ref());
     let mut metrics = Metrics {
         recoverable: 0,
         total: 0,
@@ -129,31 +129,37 @@ fn run_case(artifact: &PargArtifact, entry: &str, clean: &str, seeds: u64) -> Me
                     .push(start.saturating_sub(failure) as usize);
             }
         }
-        let recovered_captures = capture_names(envelope.get("captures"));
-        if !clean_captures.is_empty() {
-            let kept = clean_captures
+        let recovered_nodes = capture_nodes(envelope.get("captures"));
+        if !clean_nodes.is_empty() {
+            let kept = clean_nodes
                 .iter()
-                .filter(|name| recovered_captures.contains(name))
+                .filter(|node| recovered_nodes.contains(node))
                 .count();
-            metrics.precision_sum += kept as f64 / clean_captures.len() as f64;
+            metrics.precision_sum += kept as f64 / clean_nodes.len() as f64;
             metrics.precision_n += 1;
         }
     }
     metrics
 }
 
-fn capture_names(value: Option<&Value>) -> Vec<String> {
-    let mut names = Vec::new();
+/// (capture-name, value-text) pairs — the NODE comparison for
+/// precision: a recovered node matches when the clean document has
+/// the same capture carrying the same text. Positions are ignored
+/// (corruption moves everything after the failure point).
+fn capture_nodes(value: Option<&Value>) -> Vec<(String, String)> {
+    let mut nodes = Vec::new();
     let Some(root) = value else {
-        return names;
+        return nodes;
     };
     let mut queue = vec![root];
     while let Some(node) = queue.pop() {
         match node {
             Value::Object(map) => {
                 for (key, child) in map {
-                    if key != "offset" && key != "length" && key != "line" && key != "column" {
-                        names.push(key.clone());
+                    if !matches!(key.as_str(), "offset" | "length" | "line" | "column") {
+                        if let Some(text) = child.as_str() {
+                            nodes.push((key.clone(), text.to_string()));
+                        }
                     }
                     queue.push(child);
                 }
@@ -162,9 +168,9 @@ fn capture_names(value: Option<&Value>) -> Vec<String> {
             _ => {}
         }
     }
-    names.sort();
-    names.dedup();
-    names
+    nodes.sort();
+    nodes.dedup();
+    nodes
 }
 
 #[test]
