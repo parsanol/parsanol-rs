@@ -1,0 +1,16 @@
+## Semantics: U1 (rs#297) — the quoted-string idiom over multibyte text:
+## the negated-class run advances by whole codepoints.
+grammar ConformanceUnicodeQuoted version "1.0.0" {
+  ## A quoted string whose body is any codepoints except quote/backslash.
+  quoted = "\"" *( !("\"" / "\\") ANY ) "\""
+
+  entry main: quoted
+
+  test main {
+    accept "\"日本語 中文\""
+    accept "\"emoji 🎉🚀 here\""
+    accept "\"ascii too\""
+    reject "\"unterminated"
+    reject "\"mixed ☃\" trailing"
+  }
+}
