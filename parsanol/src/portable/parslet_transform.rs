@@ -266,12 +266,18 @@ fn flatten_repetition(items: &[AstNode], arena: &mut AstArena, input: &str) -> A
     }
     let mut string_parts: Vec<String> = Vec::with_capacity(flat.len());
     let mut first_input_offset: Option<u32> = None;
+    let mut next_expected: Option<u32> = None;
+    let mut contiguous = true;
     for item in &flat {
         match item {
             AstNode::InputRef { offset, length } => {
                 if first_input_offset.is_none() {
                     first_input_offset = Some(*offset);
                 }
+                if next_expected.is_some_and(|expected| expected != *offset) {
+                    contiguous = false;
+                }
+                next_expected = Some(offset + length);
                 if let Some(s) = input.get(*offset as usize..(*offset + *length) as usize) {
                     string_parts.push(s.to_string());
                 }
@@ -279,13 +285,16 @@ fn flatten_repetition(items: &[AstNode], arena: &mut AstArena, input: &str) -> A
             AstNode::StringRef { pool_index } => {
                 let (s, _, _, _) = arena.get_string_parts(*pool_index as usize);
                 if !s.starts_with(':') {
+                    if !s.is_empty() {
+                        contiguous = false;
+                    }
                     string_parts.push(s.to_string());
                 }
             }
             _ => return store_array_node(&flat, arena),
         }
     }
-    join_string_parts(&string_parts, first_input_offset, arena)
+    join_string_parts(&string_parts, first_input_offset, contiguous, arena)
 }
 
 fn store_array_node(items: &[AstNode], arena: &mut AstArena) -> AstNode {
@@ -296,6 +305,7 @@ fn store_array_node(items: &[AstNode], arena: &mut AstArena) -> AstNode {
 fn join_string_parts(
     string_parts: &[String],
     first_input_offset: Option<u32>,
+    contiguous: bool,
     arena: &mut AstArena,
 ) -> AstNode {
     if string_parts.len() == 1 {
@@ -305,8 +315,14 @@ fn join_string_parts(
         return arena.intern_string(&string_parts[0]);
     }
     let joined: String = string_parts.concat();
-    let offset = first_input_offset.unwrap_or(0);
-    arena.intern_string_with_offset(&joined, offset)
+    // Only a consecutive input-slice run decodes exactly from the raw
+    // input; across a consumed-but-valueless gap (Ignore/Trivia) the
+    // offset-preserved InputRef would read the gap's bytes. Ruby keeps
+    // the concatenated string — ride the pool when in doubt.
+    match (contiguous, first_input_offset) {
+        (true, Some(offset)) => arena.intern_string_with_offset(&joined, offset),
+        _ => arena.intern_string(&joined),
+    }
 }
 
 /// Transform a single-key hash (the common case)
@@ -559,6 +575,8 @@ fn flatten_sequence(items: &[AstNode], arena: &mut AstArena, input: &str) -> Ast
     let mut merged_hash: Vec<(u32, AstNode)> = Vec::new();
     let mut string_parts: Vec<String> = Vec::new();
     let mut first_input_offset: Option<u32> = None;
+    let mut next_expected: Option<u32> = None;
+    let mut contiguous = true;
     let mut hash_count = 0;
     let mut total_items = 0;
 
@@ -582,6 +600,10 @@ fn flatten_sequence(items: &[AstNode], arena: &mut AstArena, input: &str) -> Ast
                 if first_input_offset.is_none() {
                     first_input_offset = Some(*offset);
                 }
+                if next_expected.is_some_and(|expected| expected != *offset) {
+                    contiguous = false;
+                }
+                next_expected = Some(offset + length);
                 // Get string from input
                 let start = *offset as usize;
                 let end = start + *length as usize;
@@ -661,10 +683,17 @@ fn flatten_sequence(items: &[AstNode], arena: &mut AstArena, input: &str) -> Ast
             }
             return arena.intern_string(&string_parts[0]);
         } else {
-            // Join strings with the correct input offset
+            // Join strings: an offset-preserved InputRef decodes as the
+            // raw input slice, so only a consecutive slice run can keep
+            // it — across a consumed-but-valueless gap the joined value
+            // must ride the pool (ruby keeps the concatenated string).
             let joined: String = string_parts.join("");
-            let offset = first_input_offset.unwrap_or(0);
-            return arena.intern_string_with_offset(&joined, offset);
+            match (contiguous, first_input_offset) {
+                (true, Some(offset)) => {
+                    return arena.intern_string_with_offset(&joined, offset);
+                }
+                _ => return arena.intern_string(&joined),
+            }
         }
     }
 
@@ -819,7 +848,26 @@ fn merge_fold_ruby(left: AstNode, right: AstNode, arena: &mut AstArena, input: &
                 (true, true) => {
                     let (ls, lo) = stringlike_text(l, arena, input);
                     let (rs, _) = stringlike_text(r, arena, input);
-                    arena.intern_string_with_offset(&format!("{ls}{rs}"), lo.unwrap())
+                    let joined = format!("{ls}{rs}");
+                    // Two slices merge zero-copy only when they are
+                    // contiguous: an InputRef decodes as the raw input
+                    // slice, so across a consumed-but-valueless gap
+                    // (Ignore/Trivia) it would read the gap's bytes and
+                    // lose the true value — ruby keeps the concatenated
+                    // string ("a" + "b" over trivia is "ab"@0). Ride the
+                    // string pool instead.
+                    let contiguous = match (&l, &r) {
+                        (
+                            AstNode::InputRef { offset, length, .. },
+                            AstNode::InputRef { offset: ro, .. },
+                        ) => offset + length == *ro,
+                        _ => false,
+                    };
+                    if contiguous {
+                        arena.intern_string_with_offset(&joined, lo.unwrap())
+                    } else {
+                        arena.intern_string(&joined)
+                    }
                 }
                 (true, false) => l.clone(),
                 (false, true) => r.clone(),
@@ -881,9 +929,80 @@ fn get_single_key(node: &AstNode, arena: &AstArena) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::portable::grammar::Grammar;
+    use crate::portable::grammar::{Atom, Grammar, RepetitionTag};
     use crate::portable::parser::PortableParser;
     use crate::portable::parser_dsl::{dynamic, re, ref_, seq, str, GrammarBuilder, ParsletExt};
+
+    #[test]
+    fn merged_text_across_trivia_keeps_the_true_value() {
+        // seq[Trivia(ws*), "a", Trivia(ws*), "b"] over "a b": ruby keeps
+        // the concatenated value "ab"@0 — the merged node must not decode
+        // as the raw input slice across the trivia gap (which reads "a ").
+        let mut grammar = Grammar::new();
+        let ws_re = grammar.add_atom(Atom::Re {
+            pattern: r"\s".to_string(),
+        });
+        let ws = grammar.add_atom(Atom::Repetition {
+            atom: ws_re,
+            min: 0,
+            max: None,
+            tag: RepetitionTag::Repetition,
+        });
+        let skip = grammar.add_atom(Atom::Trivia { atom: ws });
+        let a = grammar.add_atom(Atom::Str {
+            pattern: "a".to_string(),
+        });
+        let b = grammar.add_atom(Atom::Str {
+            pattern: "b".to_string(),
+        });
+        grammar.root = grammar.add_atom(Atom::Sequence {
+            atoms: vec![skip, a, skip, b],
+        });
+
+        let (result, arena) = parse_and_transform("a b", &grammar);
+        let text = match &result {
+            AstNode::StringRef { pool_index } => arena.get_string(*pool_index as usize).to_string(),
+            other => panic!("expected pooled string, got {other:?}"),
+        };
+        assert_eq!(text, "ab");
+    }
+
+    #[test]
+    fn joined_repetition_across_trivia_keeps_the_true_value() {
+        // rep(seq[Trivia(ws*), letter]) over "a b": iterations contribute
+        // non-contiguous slices "a" and "b"; the joined repetition value
+        // must read "ab", not the slice across the gap.
+        let mut grammar = Grammar::new();
+        let ws_re = grammar.add_atom(Atom::Re {
+            pattern: r"\s".to_string(),
+        });
+        let ws = grammar.add_atom(Atom::Repetition {
+            atom: ws_re,
+            min: 0,
+            max: None,
+            tag: RepetitionTag::Repetition,
+        });
+        let skip = grammar.add_atom(Atom::Trivia { atom: ws });
+        let letter = grammar.add_atom(Atom::Re {
+            pattern: "[a-z]".to_string(),
+        });
+        let body = grammar.add_atom(Atom::Sequence {
+            atoms: vec![skip, letter],
+        });
+        grammar.root = grammar.add_atom(Atom::Repetition {
+            atom: body,
+            min: 1,
+            max: None,
+            tag: RepetitionTag::Repetition,
+        });
+
+        let (result, arena) = parse_and_transform("a b", &grammar);
+        let text = match &result {
+            AstNode::StringRef { pool_index } => arena.get_string(*pool_index as usize).to_string(),
+            other => panic!("expected pooled string, got {other:?}"),
+        };
+        assert_eq!(text, "ab");
+    }
 
     fn parse_and_transform(input: &str, grammar: &Grammar) -> (AstNode, AstArena) {
         let mut arena = AstArena::for_input(input.len());
