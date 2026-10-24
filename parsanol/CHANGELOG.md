@@ -73,6 +73,12 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- Release v0.18.20 ([#295](https://github.com/parsanol/parsanol-rs/pull/295)) by @[object]
+- Fix merged-string decode across consumed-but-valueless gaps ([#296](https://github.com/parsanol/parsanol-rs/pull/296)) by @[object]
+- Release v0.18.19 by @[object]
+
+### Other
+
 - Release v0.18.19 by @[object]
 
 ### Other
