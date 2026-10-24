@@ -1,0 +1,17 @@
+## Semantics: U1 (rs#297) — `.` matches whole codepoints; min/max are
+## codepoint counts; no span may split a character.
+grammar ConformanceUnicodeAny version "1.0.0" {
+  ## A bounded run of any codepoints.
+  run = 2*4 ANY
+
+  entry main: run
+
+  test main {
+    accept "日本語"
+    accept "ab"
+    accept "日本語x"
+    reject "日"
+    reject "日本語x!"
+    shape "日本語x" "日本語x"
+  }
+}
