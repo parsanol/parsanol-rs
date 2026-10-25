@@ -10,7 +10,7 @@
 
 use super::parser::{Document, Node};
 use crate::portable::grammar::{Atom, Grammar, LookSpec, RepetitionTag};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// The Ruby compiler's builtin class table (ABNF core rules), mirrored
 /// verbatim — a builtin reference compiles to its class pattern unless
@@ -195,7 +195,9 @@ impl std::error::Error for CompileError {}
 /// filesystem.
 pub type Tables = BTreeMap<String, Vec<BTreeMap<String, String>>>;
 
-struct Compiler<'a> {
+/// The prepared compiler: expanded rules, lint findings, and the
+/// memoized rule trees behind the envelope assembly.
+pub struct Compiler<'a> {
     document: &'a Document,
     tables: &'a Tables,
     /// Owned rule copy: the left-recursion rewrite appends tier rules
@@ -214,6 +216,7 @@ struct Compiler<'a> {
     /// the (single, shared) skip wrapper object once — every
     /// injection site points at the same Trivia index.
     skip_wrap_index: Option<usize>,
+    order_warnings: Vec<String>,
     skip_exempt: Vec<String>,
     skip_markers: Vec<(String, String)>,
     atoms: Vec<Atom>,
@@ -235,6 +238,7 @@ impl<'a> Compiler<'a> {
             rule_indices: BTreeMap::new(),
             skip_wrap: None,
             skip_wrap_index: None,
+            order_warnings: Vec::new(),
             skip_exempt: Vec::new(),
             skip_markers: Vec::new(),
             atoms: Vec::new(),
@@ -242,7 +246,39 @@ impl<'a> Compiler<'a> {
         compiler.expand_left_recursion()?;
         compiler.skip_exempt = compiler.collect_skip_exempt();
         compiler.skip_markers = compiler.collect_skip_markers();
+        // The Ruby compile warms every rule (build errors surface even
+        // for entry-unreachable rules), then rejects on lint errors.
+        let names: Vec<String> = compiler.rules.iter().map(|(n, _)| n.clone()).collect();
+        for name in &names {
+            compiler.rule_tree(name)?;
+        }
+        let errors = compiler.alternatives_errors();
+        if !errors.is_empty() {
+            return Err(CompileError {
+                message: errors.join("\n"),
+            });
+        }
+        compiler.order_warnings = compiler.alternatives_order_warnings();
         Ok(compiler)
+    }
+
+    /// The envelope-carried order-dependence findings, in lint order.
+    pub fn order_warnings(&self) -> &[String] {
+        &self.order_warnings
+    }
+
+    /// One entry's portable grammar: the tree, flattened fresh (the
+    /// Ruby portable_json).
+    pub fn compile_entry_grammar(&mut self, rule: &str) -> Result<Grammar, CompileError> {
+        let tree = self.rule_tree(rule)?;
+        self.flatten(&tree)
+    }
+
+    /// A resync pattern as its own mini-grammar: raw match, no trivia
+    /// injection (the pattern delimits junk, it is not syntax).
+    pub fn compile_resync_grammar(&mut self, pattern: &Node) -> Result<Grammar, CompileError> {
+        let tree = self.build(pattern)?;
+        self.flatten(&tree)
     }
 
     /// The rule's atom tree: built once, wrapped with trivia injection
@@ -1059,6 +1095,334 @@ impl<'a> Compiler<'a> {
     }
 }
 
+/// A node first set: UTF-8 first bytes / class codepoints, plus the
+/// ANY and EPS markers (the Ruby compute_first convention).
+#[derive(Default, Clone)]
+struct FirstSet {
+    bytes: BTreeSet<u32>,
+    any: bool,
+    eps: bool,
+}
+
+impl FirstSet {
+    fn intersects(&self, other: &FirstSet) -> bool {
+        self.bytes.iter().any(|byte| other.bytes.contains(byte)) || (self.any && other.any)
+    }
+}
+
+impl<'a> Compiler<'a> {
+    /// The compiler's node-level first set (compute_first), the
+    /// order-lint's analysis substrate.
+    fn first_set(&self, node: &Node, stack: &mut Vec<String>) -> FirstSet {
+        match node.kind.as_str() {
+            "lit" => {
+                let text = node.text.as_deref().unwrap_or_default();
+                let mut set = FirstSet::default();
+                if text.is_empty() {
+                    set.eps = true;
+                    return set;
+                }
+                let Some(first) = text.chars().next() else {
+                    set.eps = true;
+                    return set;
+                };
+                let push_char = |out: &mut BTreeSet<u32>, ch: char| {
+                    let mut buffer = [0u8; 4];
+                    for byte in ch.encode_utf8(&mut buffer).bytes() {
+                        out.insert(byte as u32);
+                    }
+                };
+                push_char(&mut set.bytes, first);
+                if node.fold == Some(true) {
+                    for upper in first.to_uppercase() {
+                        push_char(&mut set.bytes, upper);
+                    }
+                    for lower in first.to_lowercase() {
+                        push_char(&mut set.bytes, lower);
+                    }
+                }
+                set
+            }
+            "class" => {
+                let ranges = node.ranges.as_deref().unwrap_or_default();
+                let total: u64 = ranges
+                    .iter()
+                    .map(|(lo, hi)| (*hi as u64).saturating_sub(*lo as u64) + 1)
+                    .sum();
+                let mut set = FirstSet::default();
+                if total > 256 {
+                    set.any = true;
+                    return set;
+                }
+                for (lo, hi) in ranges {
+                    for point in *lo..=*hi {
+                        set.bytes.insert(point);
+                    }
+                }
+                set
+            }
+            // Categories and unknown kinds are ANY.
+            "category" => FirstSet {
+                bytes: BTreeSet::new(),
+                any: true,
+                eps: false,
+            },
+            "seq" => {
+                let mut set = FirstSet::default();
+                let items = node.items.as_deref().unwrap_or_default();
+                let mut all_eps = true;
+                for item in items {
+                    let item_first = self.first_set(item, stack);
+                    set.bytes.extend(item_first.bytes.iter().copied());
+                    if item_first.any {
+                        set.any = true;
+                    }
+                    if item_first.any || !item_first.eps {
+                        all_eps = false;
+                        break;
+                    }
+                }
+                set.eps = all_eps && items.iter().all(|item| self.first_set(item, stack).eps);
+                set
+            }
+            "alt" => {
+                let mut set = FirstSet::default();
+                for branch in node.branches.as_deref().unwrap_or_default() {
+                    let branch_first = self.first_set(branch, stack);
+                    set.bytes.extend(branch_first.bytes.iter().copied());
+                    set.any |= branch_first.any;
+                    set.eps |= branch_first.eps;
+                }
+                set
+            }
+            "rep" => {
+                let mut set = node
+                    .child
+                    .as_deref()
+                    .map(|child| self.first_set(child, stack))
+                    .unwrap_or_default();
+                if node.min.unwrap_or(0) == 0 {
+                    set.eps = true;
+                }
+                set
+            }
+            "opt" => {
+                let mut set = node
+                    .child
+                    .as_deref()
+                    .map(|child| self.first_set(child, stack))
+                    .unwrap_or_default();
+                set.eps = true;
+                set
+            }
+            "pred" => {
+                // Behind-guards constrain nothing ahead; a negative
+                // lookahead cannot claim a first byte either.
+                if node.behind == Some(true) || node.positive != Some(true) {
+                    return FirstSet {
+                        bytes: BTreeSet::new(),
+                        any: true,
+                        eps: false,
+                    };
+                }
+                node.child
+                    .as_deref()
+                    .map(|child| self.first_set(child, stack))
+                    .unwrap_or_default()
+            }
+            "cap" => node
+                .child
+                .as_deref()
+                .map(|child| self.first_set(child, stack))
+                .unwrap_or_default(),
+            "ref" => {
+                let name = node.name.clone().unwrap_or_default();
+                if stack.contains(&name) {
+                    return FirstSet {
+                        bytes: BTreeSet::new(),
+                        any: true,
+                        eps: true,
+                    };
+                }
+                stack.push(name.clone());
+                let set = if let Some((_, rule)) = self.rules.iter().find(|(n, _)| *n == name) {
+                    self.first_set(rule, stack)
+                } else if let Some(ranges) = builtin_ranges(&name) {
+                    let class = Node {
+                        kind: "class".to_string(),
+                        ranges: Some(ranges),
+                        ..Node::default()
+                    };
+                    self.first_set(&class, stack)
+                } else {
+                    FirstSet {
+                        bytes: BTreeSet::new(),
+                        any: true,
+                        eps: false,
+                    }
+                };
+                stack.pop();
+                set
+            }
+            "table" => {
+                let table = node.table.clone().unwrap_or_default();
+                let column = node.column.clone().unwrap_or_default();
+                let mut set = FirstSet::default();
+                if let Some(rows) = self.tables.get(&table) {
+                    for value in rows.iter().filter_map(|row| row.get(&column)) {
+                        if let Some(first) = value.chars().next() {
+                            let mut buffer = [0u8; 4];
+                            for byte in first.encode_utf8(&mut buffer).bytes() {
+                                set.bytes.insert(byte as u32);
+                            }
+                        }
+                    }
+                }
+                set
+            }
+            _ => FirstSet {
+                bytes: BTreeSet::new(),
+                any: true,
+                eps: false,
+            },
+        }
+    }
+
+    fn node_eps(&self, node: &Node) -> bool {
+        self.first_set(node, &mut Vec::new()).eps
+    }
+
+    /// The Alternatives lint's errors: identical branches, literal
+    /// shadowing, and the nullable branch that shadows non-nullable
+    /// later branches (all compile rejections).
+    fn alternatives_errors(&self) -> Vec<String> {
+        let mut errors = Vec::new();
+        for (name, node) in &self.rules {
+            if node.kind != "alt" {
+                continue;
+            }
+            let branches = node.branches.as_deref().unwrap_or_default();
+            for (index, branch) in branches.iter().enumerate() {
+                if self.node_eps(branch) && index < branches.len() - 1 {
+                    let later = &branches[index + 1..];
+                    if !later.iter().all(|candidate| self.node_eps(candidate)) {
+                        errors.push(format!(
+                            "rule {name}: branch {} can match empty input and shadows all later branches",
+                            index + 1
+                        ));
+                    }
+                }
+                for (offset, later_branch) in branches[index + 1..].iter().enumerate() {
+                    let later_number = index + offset + 2;
+                    if let Some(error) =
+                        self.compare_branches(name, branch, index + 1, later_branch, later_number)
+                    {
+                        errors.push(error);
+                    }
+                }
+            }
+        }
+        errors
+    }
+
+    /// The Alternatives lint's envelope warnings: every ordered pair
+    /// whose order decides the match, in rule/pair order.
+    fn alternatives_order_warnings(&self) -> Vec<String> {
+        let mut warnings = Vec::new();
+        for (name, node) in &self.rules {
+            if node.kind != "alt" {
+                continue;
+            }
+            let branches = node.branches.as_deref().unwrap_or_default();
+            for (index, branch) in branches.iter().enumerate() {
+                for (offset, later_branch) in branches[index + 1..].iter().enumerate() {
+                    if let Some(warning) = self.order_warning(
+                        name,
+                        branch,
+                        index + 1,
+                        later_branch,
+                        index + offset + 2,
+                    ) {
+                        warnings.push(warning);
+                    }
+                }
+            }
+        }
+        warnings
+    }
+
+    fn compare_branches(
+        &self,
+        name: &str,
+        earlier: &Node,
+        earlier_number: usize,
+        later: &Node,
+        later_number: usize,
+    ) -> Option<String> {
+        if let (Some(earlier_lit), Some(later_lit)) =
+            (literal_string(earlier), literal_string(later))
+        {
+            if earlier_lit == later_lit {
+                return Some(format!(
+                    "rule {name}: branches {earlier_number} and {later_number} are identical"
+                ));
+            }
+            if later_lit.starts_with(&earlier_lit) {
+                return Some(format!(
+                    "rule {name}: branch {earlier_number} ({earlier_lit:?}) shadows branch {later_number} ({later_lit:?}) - reorder longest-first or the shorter always wins"
+                ));
+            }
+        }
+        None
+    }
+
+    fn order_warning(
+        &self,
+        name: &str,
+        earlier: &Node,
+        earlier_number: usize,
+        later: &Node,
+        later_number: usize,
+    ) -> Option<String> {
+        let mut stack = Vec::new();
+        let first_earlier = self.first_set(earlier, &mut stack);
+        let first_later = self.first_set(later, &mut stack);
+        if first_earlier.any || first_later.any {
+            return Some(format!(
+                "rule {name}: branches {earlier_number} and {later_number} are order-dependent (first set not statically known)"
+            ));
+        }
+        if !first_earlier.intersects(&first_later) {
+            return None;
+        }
+        Some(format!(
+            "rule {name}: branches {earlier_number} and {later_number} are order-dependent (shared first bytes; ordered choice is decisive)"
+        ))
+    }
+}
+
+/// The literal spelling of a node, when one exists (lit, or an
+/// all-literal sequence): the shadowing check's operand.
+fn literal_string(node: &Node) -> Option<String> {
+    match node.kind.as_str() {
+        "lit" => node.text.clone(),
+        "seq" => {
+            let items = node.items.as_deref().unwrap_or_default();
+            if items.iter().all(|child| child.kind == "lit") {
+                Some(
+                    items
+                        .iter()
+                        .filter_map(|child| child.text.clone())
+                        .collect(),
+                )
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
 /// Rule references inside a node, in order (the skip-exemption
 /// seed).
 fn collect_node_refs(node: &Node, names: &mut Vec<String>) {
@@ -1211,4 +1575,14 @@ pub fn compile_entry(
     tables: &Tables,
 ) -> Result<Grammar, CompileError> {
     compile_entry_with(document, entry, tables, &[])
+}
+
+/// The prepared compiler behind the envelope assembly: expanded,
+/// warmed, lints run.
+pub fn compiler_for<'a>(
+    document: &'a Document,
+    tables: &'a Tables,
+    atomic_rules: &[String],
+) -> Result<Compiler<'a>, CompileError> {
+    Compiler::new(document, tables, atomic_rules)
 }

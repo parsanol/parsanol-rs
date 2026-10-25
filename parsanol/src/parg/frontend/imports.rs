@@ -5,6 +5,7 @@
 //! preprocess steps. Cycles and missing files are compile errors. The
 //! artifact bakes the expansion: consumers never see imports.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use super::compile::CompileError;
@@ -12,12 +13,17 @@ use super::parser::{self, Document, Node};
 
 /// Merge every `use` declaration's source into +document+, in
 /// declaration order.
-pub fn merge(document: &mut Document, import_dirs: &[PathBuf]) -> Result<(), CompileError> {
-    merge_inner(document, import_dirs, &mut Vec::new())
+pub fn merge(
+    document: &mut Document,
+    docs: &mut BTreeMap<String, String>,
+    import_dirs: &[PathBuf],
+) -> Result<(), CompileError> {
+    merge_inner(document, docs, import_dirs, &mut Vec::new())
 }
 
 fn merge_inner(
     document: &mut Document,
+    docs: &mut BTreeMap<String, String>,
     import_dirs: &[PathBuf],
     merging: &mut Vec<String>,
 ) -> Result<(), CompileError> {
@@ -42,13 +48,14 @@ fn merge_inner(
         let text = std::fs::read_to_string(&source).map_err(|error| CompileError {
             message: format!("import `use {name}` unreadable: {error}"),
         })?;
-        let mut used = parser::parse(&text).map_err(|error| CompileError {
+        let parsed = parser::parse_grammar(&text).map_err(|error| CompileError {
             message: format!("import `use {name}` failed to parse: {error}"),
         })?;
+        let (mut used, mut used_docs) = (parsed.document, parsed.docs);
         merging.push(name.clone());
-        merge_inner(&mut used, import_dirs, merging)?;
+        merge_inner(&mut used, &mut used_docs, import_dirs, merging)?;
         merging.pop();
-        merge_used(document, &used, &format!("{name}."))?;
+        merge_used(document, docs, &used, &used_docs, &format!("{name}."))?;
     }
     document.uses.clear();
     Ok(())
@@ -71,7 +78,13 @@ fn find_file(name: &str, import_dirs: &[PathBuf]) -> Result<PathBuf, CompileErro
     })
 }
 
-fn merge_used(document: &mut Document, used: &Document, prefix: &str) -> Result<(), CompileError> {
+fn merge_used(
+    document: &mut Document,
+    docs: &mut BTreeMap<String, String>,
+    used: &Document,
+    used_docs: &BTreeMap<String, String>,
+    prefix: &str,
+) -> Result<(), CompileError> {
     for (name, node) in &used.rules {
         let qualified = format!("{prefix}{name}");
         if document
@@ -99,6 +112,9 @@ fn merge_used(document: &mut Document, used: &Document, prefix: &str) -> Result<
         document
             .preprocess
             .insert(format!("{prefix}{name}"), steps.clone());
+    }
+    for (rule, doc) in used_docs {
+        docs.insert(format!("{prefix}{rule}"), doc.clone());
     }
     // Tests re-key onto the prefixed entry when the used grammar has
     // exactly one (its tests implicitly rode it).
