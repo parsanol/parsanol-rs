@@ -1,0 +1,1 @@
+{"grammar_name":"ConformanceTable","version":"1.0.0","entries":{"main":"main"},"tests":[{"kind":"accept","entry":"main","input":"DIS","expect":{}},{"kind":"accept","entry":"main","input":"IS","expect":{}},{"kind":"reject","entry":"main","input":"XX","expect":{}}],"rules":{"main":{"kind":"cap","name":"abbr","child":{"kind":"table","table":"stages","column":"abbr"}}}}

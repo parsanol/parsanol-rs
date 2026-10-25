@@ -6,6 +6,8 @@
 //! `#` comments), same value derivations (`%x…` strips the `%x`, and
 //! so on), same CHARACTER-based offsets. The parity corpus
 //! (`parsanol/tests/fixtures/token_parity`) holds the Ruby streams.
+pub mod parser;
+pub use parser::{parse as parse_source, Document, ParseError};
 
 /// Lexical error: the offset (in characters) and the offending char.
 #[derive(Debug, Clone, PartialEq, Eq)]
