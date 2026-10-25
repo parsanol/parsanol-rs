@@ -7,6 +7,7 @@
 //! so on), same CHARACTER-based offsets. The parity corpus
 //! (`parsanol/tests/fixtures/token_parity`) holds the Ruby streams.
 pub mod compile;
+pub mod envelope;
 pub mod imports;
 pub mod parser;
 pub use parser::{parse as parse_source, Document, ParseError};

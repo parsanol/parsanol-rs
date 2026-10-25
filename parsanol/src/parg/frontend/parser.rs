@@ -330,18 +330,49 @@ impl From<LexError> for ParseError {
     }
 }
 
-/// Parse PARG source into the parity document.
-pub fn parse(source: &str) -> Result<Document, ParseError> {
-    Ok(parse_with_atomic(source)?.0)
+/// What the file parser produces: document, atomic names, docs.
+type ParsedFile = (Document, Vec<String>, BTreeMap<String, String>);
+
+/// The parse output that compiles from: the parity document plus the
+/// out-of-band facts the envelope and the compiler need (atomic rule
+/// names, the file's own entries, rule docs, and the source text).
+/// Fields live here rather than on the public `Document` — adding to
+/// an exhaustively-constructible pub struct is a semver major.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedSource {
+    /// The parity document.
+    pub document: Document,
+    /// `atomic NAME = …` rule names, in declaration order.
+    pub atomic_rules: Vec<String>,
+    /// The entries this file declared (import merging adds more).
+    pub own_entries: Vec<String>,
+    /// `##` doc comments by rule name (the LSP hover contract).
+    pub docs: BTreeMap<String, String>,
+    /// The verbatim source (the envelope carries it + its hash).
+    pub source: String,
 }
 
-/// Parse PARG source into the document plus its `atomic` rule names:
-/// they build without trivia injection and take no entry-boundary
-/// skips, so the compiler needs them alongside the document (a field
-/// on the public Document would break exhaustive literals).
-pub fn parse_with_atomic(source: &str) -> Result<(Document, Vec<String>), ParseError> {
+/// Parse PARG source into the parity document.
+pub fn parse(source: &str) -> Result<Document, ParseError> {
+    Ok(parse_grammar(source)?.document)
+}
+
+/// Parse PARG source into everything the compiler and envelope need.
+pub fn parse_grammar(source: &str) -> Result<ParsedSource, ParseError> {
     let tokens = lex(source)?;
-    Parser::new(tokens).file()
+    let (document, atomic_rules, docs) = Parser::new(tokens).file()?;
+    let own_entries = document
+        .entries
+        .iter()
+        .map(|(name, _)| name.clone())
+        .collect();
+    Ok(ParsedSource {
+        document,
+        atomic_rules,
+        own_entries,
+        docs,
+        source: source.to_string(),
+    })
 }
 
 struct Parser {
@@ -461,8 +492,9 @@ impl Parser {
         }
     }
 
-    fn file(&mut self) -> Result<(Document, Vec<String>), ParseError> {
+    fn file(&mut self) -> Result<ParsedFile, ParseError> {
         let mut document = Document::default();
+        let mut document_docs = BTreeMap::new();
         let mut atomic_rules = Vec::new();
         // Top-level items: `##` doc comments and `use` imports precede
         // the grammar block.
@@ -487,15 +519,23 @@ impl Parser {
         self.expect_keyword("version")?;
         document.version = unquote(&self.expect_string()?)?;
         self.expect_punct("{")?;
-        self.block(&mut document, &mut atomic_rules)?;
+        self.block(
+            &mut document,
+            &mut document_docs,
+            &mut atomic_rules,
+            &mut Vec::new(),
+        )?;
         self.skip_blank();
-        Ok((document, atomic_rules))
+        Ok((document, atomic_rules, document_docs))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn block(
         &mut self,
         document: &mut Document,
+        document_docs: &mut BTreeMap<String, String>,
         atomic_rules: &mut Vec<String>,
+        docs: &mut Vec<String>,
     ) -> Result<(), ParseError> {
         loop {
             self.skip_blank();
@@ -511,21 +551,48 @@ impl Parser {
                 }
                 TokenKind::Doc => {
                     self.bump();
+                    let stripped = token
+                        .value
+                        .strip_prefix("##")
+                        .unwrap_or(&token.value)
+                        .strip_prefix(' ')
+                        .unwrap_or(token.value.strip_prefix("##").unwrap_or(&token.value));
+                    docs.push(stripped.to_string());
                 }
                 TokenKind::Ident => match token.value.as_str() {
-                    "entry" => self.entry(document)?,
-                    "test" => self.test(document)?,
-                    "bindings" => self.bindings_block(document)?,
-                    "preprocess" => self.preprocess_block(document)?,
-                    "resync" => self.resync_rule(document)?,
+                    "entry" => {
+                        docs.clear();
+                        self.entry(document)?;
+                    }
+                    "test" => {
+                        docs.clear();
+                        self.test(document)?;
+                    }
+                    "bindings" => {
+                        docs.clear();
+                        self.bindings_block(document)?;
+                    }
+                    "preprocess" => {
+                        docs.clear();
+                        self.preprocess_block(document)?;
+                    }
+                    "resync" => {
+                        docs.clear();
+                        self.resync_rule(document)?;
+                    }
                     "render" | "derive" | "import" => {
                         // No corpus fixture exercises these; recognized
                         // and skipped.
                         self.skip_construct()?;
                     }
                     _ => {
-                        if let Some(atomic) = self.rule(document)? {
-                            atomic_rules.push(atomic);
+                        let (name, atomic) = self.rule(document)?;
+                        if !docs.is_empty() {
+                            document_docs.entry(name.clone()).or_insert(docs.join("\n"));
+                            docs.clear();
+                        }
+                        if atomic {
+                            atomic_rules.push(name);
                         }
                     }
                 },
@@ -896,7 +963,7 @@ impl Parser {
         }
     }
 
-    fn rule(&mut self, document: &mut Document) -> Result<Option<String>, ParseError> {
+    fn rule(&mut self, document: &mut Document) -> Result<(String, bool), ParseError> {
         let first = self.expect_ident()?;
         if self.is_punct("=") {
             self.pos += 1;
@@ -930,16 +997,16 @@ impl Parser {
                     document.skip_declaration = Some(Box::new(node));
                 }
                 self.accept_newline();
-                return Ok(None);
+                return Ok((first, false));
             }
-            self.rule_body(document, first)?;
-            return Ok(None);
+            self.rule_body(document, first.clone())?;
+            return Ok((first, false));
         }
         // `atomic NAME = …` — the keyword, then the real name.
         let name = self.expect_ident()?;
         self.expect_punct("=")?;
         self.rule_body(document, name.clone())?;
-        Ok(Some(name))
+        Ok((name, true))
     }
 
     fn rule_body(&mut self, document: &mut Document, name: String) -> Result<(), ParseError> {
