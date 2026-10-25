@@ -47,7 +47,12 @@ enum Kind {
     Duplicate,
 }
 
-const KINDS: [Kind; 4] = [Kind::Delete, Kind::Substitute, Kind::Insert, Kind::Duplicate];
+const KINDS: [Kind; 4] = [
+    Kind::Delete,
+    Kind::Substitute,
+    Kind::Insert,
+    Kind::Duplicate,
+];
 
 fn corrupt(input: &str, seed: u64, count: usize) -> String {
     let mut rng = Lcg(seed);
@@ -118,9 +123,10 @@ fn run_case(artifact: &PargArtifact, entry: &str, clean: &str, seeds: u64) -> Me
         let resyncs = envelope["resyncs"].as_array();
         if let Some(first) = resyncs.and_then(|spans| spans.first()) {
             metrics.recoverable += 1;
-            if let (Some(start), Some(failure)) =
-                (first["offset"].as_u64(), envelope["error"]["offset"].as_u64())
-            {
+            if let (Some(start), Some(failure)) = (
+                first["offset"].as_u64(),
+                envelope["error"]["offset"].as_u64(),
+            ) {
                 // The resync span can start before the reported deepest failure
                 // position (the wire reports the deepest, the policy may
                 // resume from an earlier spine iteration).
@@ -189,7 +195,10 @@ fn recovery_metrics_are_deterministic_and_resync_recovers() {
         };
         let envelope: Value = serde_json::from_str(&text).expect("artifact json");
         let artifact = PargArtifact::from_json(&text).expect("artifact loads");
-        let entry = envelope["default_entry"].as_str().expect("entry").to_string();
+        let entry = envelope["default_entry"]
+            .as_str()
+            .expect("entry")
+            .to_string();
         let clean = envelope["tests"]
             .as_array()
             .unwrap()
@@ -227,7 +236,11 @@ fn recovery_metrics_are_deterministic_and_resync_recovers() {
         };
         lines.push(format!(
             "{name}: recoverable {}/{} ({:.0}%), precision {:.2}, bytes-to-recovery median {}",
-            first.recoverable, first.total, fraction * 100.0, precision, median
+            first.recoverable,
+            first.total,
+            fraction * 100.0,
+            precision,
+            median
         ));
         // The declared-resync artifact declares a policy; corruption
         // must never leave it with zero recoveries.
