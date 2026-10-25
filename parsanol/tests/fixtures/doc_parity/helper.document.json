@@ -1,0 +1,1 @@
+{"grammar_name":"ConformanceHelper","version":"1.0.0","entries":{"code":"code"},"tests":[],"rules":{"code":{"kind":"cap","name":"code","child":{"kind":"rep","min":2,"max":2,"child":{"kind":"class","ranges":[[97,122]]}}}}}
