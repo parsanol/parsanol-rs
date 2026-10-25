@@ -297,10 +297,6 @@ pub struct Document {
     pub bindings: BTreeMap<String, Vec<Binding>>,
     /// `preprocess NAME { … }` sections, keyed by name.
     pub preprocess: BTreeMap<String, Vec<Step>>,
-    /// `atomic NAME = …` rules: they build without trivia injection
-    /// and take no entry-boundary skip wrappers.
-    #[serde(skip_serializing)]
-    pub atomic_rules: Vec<String>,
     /// `resync RULE = pattern` declarations, keyed by rule.
     pub resyncs: BTreeMap<String, Node>,
     /// Top-level `use NAME` imports.
@@ -336,6 +332,14 @@ impl From<LexError> for ParseError {
 
 /// Parse PARG source into the parity document.
 pub fn parse(source: &str) -> Result<Document, ParseError> {
+    Ok(parse_with_atomic(source)?.0)
+}
+
+/// Parse PARG source into the document plus its `atomic` rule names:
+/// they build without trivia injection and take no entry-boundary
+/// skips, so the compiler needs them alongside the document (a field
+/// on the public Document would break exhaustive literals).
+pub fn parse_with_atomic(source: &str) -> Result<(Document, Vec<String>), ParseError> {
     let tokens = lex(source)?;
     Parser::new(tokens).file()
 }
@@ -457,8 +461,9 @@ impl Parser {
         }
     }
 
-    fn file(&mut self) -> Result<Document, ParseError> {
+    fn file(&mut self) -> Result<(Document, Vec<String>), ParseError> {
         let mut document = Document::default();
+        let mut atomic_rules = Vec::new();
         // Top-level items: `##` doc comments and `use` imports precede
         // the grammar block.
         loop {
@@ -482,12 +487,16 @@ impl Parser {
         self.expect_keyword("version")?;
         document.version = unquote(&self.expect_string()?)?;
         self.expect_punct("{")?;
-        self.block(&mut document)?;
+        self.block(&mut document, &mut atomic_rules)?;
         self.skip_blank();
-        Ok(document)
+        Ok((document, atomic_rules))
     }
 
-    fn block(&mut self, document: &mut Document) -> Result<(), ParseError> {
+    fn block(
+        &mut self,
+        document: &mut Document,
+        atomic_rules: &mut Vec<String>,
+    ) -> Result<(), ParseError> {
         loop {
             self.skip_blank();
             let Some(token) = self.peek().cloned() else {
@@ -514,7 +523,11 @@ impl Parser {
                         // and skipped.
                         self.skip_construct()?;
                     }
-                    _ => self.rule(document)?,
+                    _ => {
+                        if let Some(atomic) = self.rule(document)? {
+                            atomic_rules.push(atomic);
+                        }
+                    }
                 },
                 _ => {
                     let previous = if self.pos >= 2 {
@@ -883,7 +896,7 @@ impl Parser {
         }
     }
 
-    fn rule(&mut self, document: &mut Document) -> Result<(), ParseError> {
+    fn rule(&mut self, document: &mut Document) -> Result<Option<String>, ParseError> {
         let first = self.expect_ident()?;
         if self.is_punct("=") {
             self.pos += 1;
@@ -917,15 +930,16 @@ impl Parser {
                     document.skip_declaration = Some(Box::new(node));
                 }
                 self.accept_newline();
-                return Ok(());
+                return Ok(None);
             }
-            return self.rule_body(document, first);
+            self.rule_body(document, first)?;
+            return Ok(None);
         }
         // `atomic NAME = …` — the keyword, then the real name.
         let name = self.expect_ident()?;
-        document.atomic_rules.push(name.clone());
         self.expect_punct("=")?;
-        self.rule_body(document, name)
+        self.rule_body(document, name.clone())?;
+        Ok(Some(name))
     }
 
     fn rule_body(&mut self, document: &mut Document, name: String) -> Result<(), ParseError> {

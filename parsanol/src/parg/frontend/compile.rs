@@ -220,12 +220,16 @@ struct Compiler<'a> {
 }
 
 impl<'a> Compiler<'a> {
-    fn new(document: &'a Document, tables: &'a Tables) -> Result<Self, CompileError> {
+    fn new(
+        document: &'a Document,
+        tables: &'a Tables,
+        atomic_rules: &[String],
+    ) -> Result<Self, CompileError> {
         let mut compiler = Compiler {
             document,
             tables,
             rules: document.rules.clone(),
-            atomic_rules: document.atomic_rules.clone(),
+            atomic_rules: atomic_rules.to_vec(),
             trees: BTreeMap::new(),
             building: Vec::new(),
             rule_indices: BTreeMap::new(),
@@ -1179,10 +1183,11 @@ fn substitute_refs(node: &Node, from: &str, to: &str) -> Node {
 /// Compile a document into the portable grammar for `entry` — the
 /// atoms stream and root the Ruby compiler's entry envelope carries
 /// (`{atoms, root}`; bindings ride the envelope separately).
-pub fn compile_entry(
+pub fn compile_entry_with(
     document: &Document,
     entry: &str,
     tables: &Tables,
+    atomic_rules: &[String],
 ) -> Result<Grammar, CompileError> {
     let rule = document
         .entries
@@ -1193,7 +1198,17 @@ pub fn compile_entry(
             message: format!("unknown entry {entry:?}"),
         })?;
 
-    let mut compiler = Compiler::new(document, tables)?;
+    let mut compiler = Compiler::new(document, tables, atomic_rules)?;
     let tree = compiler.rule_tree(&rule)?;
     compiler.flatten(&tree)
+}
+
+/// Compile without `atomic` rules — the pre-4b shape (none of the
+/// structural fixtures declare one).
+pub fn compile_entry(
+    document: &Document,
+    entry: &str,
+    tables: &Tables,
+) -> Result<Grammar, CompileError> {
+    compile_entry_with(document, entry, tables, &[])
 }

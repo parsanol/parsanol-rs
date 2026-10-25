@@ -1,6 +1,6 @@
 //! Cross-file imports (PN 1): `use <name>` at the top of a .parg file
-//! loads <name>.parg from an import directory, prefixes every rule
-//! with "<name>." (capture names are preserved — embedded grammars
+//! loads `<name>`.parg from an import directory, prefixes every rule
+//! with `"<name>."` (capture names are preserved — embedded grammars
 //! keep their capture contract), and merges entries, bindings, and
 //! preprocess steps. Cycles and missing files are compile errors. The
 //! artifact bakes the expansion: consumers never see imports.
