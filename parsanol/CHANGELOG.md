@@ -73,6 +73,10 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- PARG frontend slice 4a: the compiler, atom-stream parity with Ruby (rs#298) by @[object]
+
+### Other
+
 - PARG frontend slice 3: the full corpus parses, 35/35 documents identical (rs#298) by @[object]
 - PARG frontend slice 2: the parser, document parity with Ruby (rs#298) by @[object]
 - PARG frontend slice 1: the Rust lexer, token-parity with Ruby (rs#298) by @[object]
