@@ -16,7 +16,7 @@ use serde::Serialize;
 /// Serialization matches `node_to_h` in tools/dump_parg_document.rb
 /// EXACTLY: per-kind payload keys, in its order, with explicit nulls
 /// (rep's `max: null`) — the parity wire.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Node {
     /// The kind: lit / class / category / seq / alt / rep / opt / pred
     /// / cap / ref (the Ruby Node's names).
@@ -297,6 +297,10 @@ pub struct Document {
     pub bindings: BTreeMap<String, Vec<Binding>>,
     /// `preprocess NAME { … }` sections, keyed by name.
     pub preprocess: BTreeMap<String, Vec<Step>>,
+    /// `atomic NAME = …` rules: they build without trivia injection
+    /// and take no entry-boundary skip wrappers.
+    #[serde(skip_serializing)]
+    pub atomic_rules: Vec<String>,
     /// `resync RULE = pattern` declarations, keyed by rule.
     pub resyncs: BTreeMap<String, Node>,
     /// Top-level `use NAME` imports.
@@ -919,6 +923,7 @@ impl Parser {
         }
         // `atomic NAME = …` — the keyword, then the real name.
         let name = self.expect_ident()?;
+        document.atomic_rules.push(name.clone());
         self.expect_punct("=")?;
         self.rule_body(document, name)
     }

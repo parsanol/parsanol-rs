@@ -167,7 +167,7 @@ pub enum Atom {
         /// no marker record under this kind — the source-preserving
         /// mode. Optional: engines predating it deserialize fine and
         /// simply don't record whitespace units (documented caveat).
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         whitespace: Option<String>,
     },
 
