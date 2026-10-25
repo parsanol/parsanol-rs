@@ -73,6 +73,15 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- PARG frontend slice 3: the full corpus parses, 35/35 documents identical (rs#298) by @[object]
+- PARG frontend slice 2: the parser, document parity with Ruby (rs#298) by @[object]
+- PARG frontend slice 1: the Rust lexer, token-parity with Ruby (rs#298) by @[object]
+- Rename the init squatter, document the Node pattern (rs#308) by @[object]
+- Recovery precision: node-level matching replaces the name proxy (rs#304) by @[object]
+- Recovery quality harness: seeded, deterministic metrics (rs#304) by @[object]
+
+### Other
+
 - Unicode-native U1: codepoint-exact any-repetition runs; VM backend consumes all by @[object]
 
 ### Other
