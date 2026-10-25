@@ -7,6 +7,8 @@
 //! are slice 3: the parity test records those fixtures as
 //! expected-skips, never as silent passes.
 
+use std::collections::BTreeMap;
+
 use super::{lex, LexError, Token, TokenKind};
 use serde::Serialize;
 
@@ -190,6 +192,36 @@ fn unquote(quoted: &str) -> Result<String, ParseError> {
     Ok(out)
 }
 
+/// One binding: capture -> path, with its type/cardinality and the
+/// optional preprocess step name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Binding {
+    /// The `as` capture the binding reads.
+    pub capture: String,
+    /// The bound path (`name`, `name[].leaf`).
+    pub path: String,
+    /// The value type (string/integer/float/boolean).
+    #[serde(rename = "type")]
+    pub kind: String,
+    /// The cardinality (`0..1`, `0..*`, …).
+    pub card: Option<String>,
+    /// The preprocess step name, when declared.
+    pub preprocess: Option<String>,
+}
+
+/// One preprocess step (table_lookup in v1).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Step {
+    /// The step operation (`table_lookup` in v1).
+    pub op: String,
+    /// The table to read.
+    pub table: String,
+    /// The key column.
+    pub from: String,
+    /// The value column.
+    pub to: String,
+}
+
 /// One embedded test line: kind, its input, and the expectations.
 impl Serialize for Node {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
@@ -261,6 +293,18 @@ pub struct Document {
     /// Rules in declaration order (the Ruby hash preserves it).
     /// Rules in declaration order (the Ruby hash preserves it).
     pub rules: Vec<(String, Node)>,
+    /// `bindings RULE { … }` sections, keyed by rule.
+    pub bindings: BTreeMap<String, Vec<Binding>>,
+    /// `preprocess NAME { … }` sections, keyed by name.
+    pub preprocess: BTreeMap<String, Vec<Step>>,
+    /// `resync RULE = pattern` declarations, keyed by rule.
+    pub resyncs: BTreeMap<String, Node>,
+    /// Top-level `use NAME` imports.
+    pub uses: Vec<String>,
+    /// The `skip = …` declaration's expression, when present.
+    pub skip_declaration: Option<Box<Node>>,
+    /// The `capture:` name on the skip declaration, when present.
+    pub skip_capture: Option<String>,
 }
 
 /// A parse failure: what and (loosely) where.
@@ -378,6 +422,21 @@ impl Parser {
         }
     }
 
+    fn expect_arrow(&mut self) -> Result<(), ParseError> {
+        if self.peek().map(|t| t.kind) == Some(TokenKind::Arrow) {
+            self.pos += 1;
+            Ok(())
+        } else {
+            Err(ParseError {
+                message: format!(
+                    "expected \"->\", got {:?}",
+                    self.peek()
+                        .map(|t| (t.kind.as_ruby_name(), t.value.clone()))
+                ),
+            })
+        }
+    }
+
     fn expect_string(&mut self) -> Result<String, ParseError> {
         if self.peek().map(|t| t.kind) == Some(TokenKind::Str) {
             let value = self.peek().unwrap().value.clone();
@@ -396,13 +455,22 @@ impl Parser {
 
     fn file(&mut self) -> Result<Document, ParseError> {
         let mut document = Document::default();
-        // Top-level `##` doc comments precede the grammar block.
+        // Top-level items: `##` doc comments and `use` imports precede
+        // the grammar block.
         loop {
             self.skip_blank();
-            if self.peek().map(|t| t.kind) == Some(TokenKind::Doc) {
-                self.bump();
-            } else {
-                break;
+            match self.peek().map(|t| t.kind) {
+                Some(TokenKind::Doc) => {
+                    self.bump();
+                }
+                Some(TokenKind::Ident)
+                    if self.peek().map(|t| t.value.clone()) == Some("use".to_string()) =>
+                {
+                    self.bump();
+                    let name = self.expect_ident()?;
+                    document.uses.push(name);
+                }
+                _ => break,
             }
         }
         self.expect_keyword("grammar")?;
@@ -434,9 +502,12 @@ impl Parser {
                 TokenKind::Ident => match token.value.as_str() {
                     "entry" => self.entry(document)?,
                     "test" => self.test(document)?,
-                    "bindings" | "preprocess" | "resync" | "render" | "derive" | "import" => {
-                        // Slice-3 constructs: recognized, skipped, and
-                        // reported by the parity test as skips.
+                    "bindings" => self.bindings_block(document)?,
+                    "preprocess" => self.preprocess_block(document)?,
+                    "resync" => self.resync_rule(document)?,
+                    "render" | "derive" | "import" => {
+                        // No corpus fixture exercises these; recognized
+                        // and skipped.
                         self.skip_construct()?;
                     }
                     _ => self.rule(document)?,
@@ -662,6 +733,128 @@ impl Parser {
         }
     }
 
+    fn bindings_block(&mut self, document: &mut Document) -> Result<(), ParseError> {
+        self.bump(); // bindings
+        let rule = self.expect_ident()?;
+        self.expect_punct("{")?;
+        let mut list = Vec::new();
+        loop {
+            self.skip_blank();
+            if self.is_punct("}") {
+                self.pos += 1;
+                break;
+            }
+            let capture = self.expect_ident()?;
+            self.expect_arrow()?;
+            let path = self.path_string()?;
+            let mut binding = Binding {
+                capture,
+                path,
+                kind: "string".to_string(),
+                card: None,
+                preprocess: None,
+            };
+            if self.is_punct("(") {
+                self.pos += 1;
+                binding.kind = self.expect_ident()?;
+                if self.is_punct(",") {
+                    self.pos += 1;
+                    binding.card = Some(self.cardinality()?);
+                }
+                self.expect_punct(")")?;
+            }
+            if self.peek().map(|t| t.kind) == Some(TokenKind::Ident)
+                && self.peek().map(|t| t.value.clone()) == Some("preprocess".to_string())
+            {
+                self.bump();
+                self.expect_punct(":")?;
+                binding.preprocess = Some(self.expect_ident()?);
+            }
+            list.push(binding);
+        }
+        document.bindings.insert(rule, list);
+        Ok(())
+    }
+
+    /// A binding path: `name` with `.name` and `[]` segments, as text.
+    fn path_string(&mut self) -> Result<String, ParseError> {
+        let mut path = self.expect_ident()?;
+        loop {
+            if self.is_punct(".") {
+                self.pos += 1;
+                path.push('.');
+                path.push_str(&self.expect_ident()?);
+            } else if self.is_punct("[") {
+                self.pos += 1;
+                self.expect_punct("]")?;
+                path.push_str("[]");
+            } else {
+                break;
+            }
+        }
+        Ok(path)
+    }
+
+    fn cardinality(&mut self) -> Result<String, ParseError> {
+        let mut card = String::new();
+        loop {
+            match self.peek() {
+                Some(token) if token.kind == TokenKind::Num => {
+                    card.push_str(&token.value);
+                    self.pos += 1;
+                }
+                Some(token)
+                    if token.kind == TokenKind::Punct
+                        && (token.value == "." || token.value == "*") =>
+                {
+                    card.push_str(&token.value);
+                    self.pos += 1;
+                }
+                _ => break,
+            }
+        }
+        Ok(card)
+    }
+
+    fn preprocess_block(&mut self, document: &mut Document) -> Result<(), ParseError> {
+        self.bump(); // preprocess
+        let name = self.expect_ident()?;
+        self.expect_punct("{")?;
+        let mut steps = Vec::new();
+        loop {
+            self.skip_blank();
+            if self.is_punct("}") {
+                self.pos += 1;
+                break;
+            }
+            self.expect_keyword("table_lookup")?;
+            let table = self.expect_ident()?;
+            let from = self.expect_ident()?;
+            self.expect_arrow()?;
+            let to = self.expect_ident()?;
+            steps.push(Step {
+                op: "table_lookup".to_string(),
+                table,
+                from,
+                to,
+            });
+        }
+        document.preprocess.insert(name, steps);
+        Ok(())
+    }
+
+    fn resync_rule(&mut self, document: &mut Document) -> Result<(), ParseError> {
+        self.bump(); // resync
+        let rule = self.expect_ident()?;
+        self.expect_punct("=")?;
+        let pattern = self.line_expression()?.ok_or_else(|| ParseError {
+            message: "resync pattern is empty".to_string(),
+        })?;
+        document.resyncs.insert(rule, pattern);
+        self.accept_newline();
+        Ok(())
+    }
+
     /// Slice-3 constructs: skip to the matching closing brace.
     fn skip_construct(&mut self) -> Result<(), ParseError> {
         let mut depth = 0usize;
@@ -697,20 +890,29 @@ impl Parser {
             // semantics (injection, capture mode) are slice 3.
             if first == "skip" {
                 let body = self.line_expression()?;
-                self.accept_newline();
-                if let Some(Node {
-                    kind,
-                    name: Some(target),
-                    ..
-                }) = body.as_ref()
+                if self.peek().map(|t| t.kind) == Some(TokenKind::Ident)
+                    && self.peek().map(|t| t.value.clone()) == Some("capture".to_string())
+                    && self.peek_at(1).map(|t| t.value.clone()) == Some(":".to_string())
                 {
-                    if kind == "ref" {
-                        if let Some(index) = document.rules.iter().position(|(n, _)| n == target) {
-                            let rule = document.rules.remove(index);
-                            document.rules.push(rule);
+                    self.pos += 2;
+                    document.skip_capture = Some(self.expect_ident()?);
+                }
+                if let Some(node) = body {
+                    // The re-attach quirk: a skip REFERENCE moves its
+                    // rule to the end of the list (the Ruby wire).
+                    if node.kind == "ref" {
+                        if let Some(target) = &node.name {
+                            if let Some(index) =
+                                document.rules.iter().position(|(n, _)| n == target)
+                            {
+                                let rule = document.rules.remove(index);
+                                document.rules.push(rule);
+                            }
                         }
                     }
+                    document.skip_declaration = Some(Box::new(node));
                 }
+                self.accept_newline();
                 return Ok(());
             }
             return self.rule_body(document, first);
@@ -896,7 +1098,16 @@ impl Parser {
             }
             TokenKind::Ident => {
                 self.pos += 1;
-                Ok(Some(ref_node(token.value)))
+                let mut name = token.value;
+                // Qualified references: helper.code (use imports).
+                while self.is_punct(".")
+                    && self.peek_at(1).map(|t| t.kind) == Some(TokenKind::Ident)
+                {
+                    self.pos += 1;
+                    name.push('.');
+                    name.push_str(&self.expect_ident()?);
+                }
+                Ok(Some(ref_node(name)))
             }
             _ => Ok(None),
         }
@@ -937,9 +1148,15 @@ impl Parser {
     fn line_sequence(&mut self) -> Result<Node, ParseError> {
         let mut items = Vec::new();
         loop {
+            // `capture:` is the skip declaration's reserved suffix —
+            // it terminates the line like a newline (parsanol-ruby#152).
+            let capture_suffix = self.peek().map(|t| t.kind) == Some(TokenKind::Ident)
+                && self.peek().map(|t| t.value.clone()) == Some("capture".to_string())
+                && self.peek_at(1).map(|t| t.value.clone()) == Some(":".to_string());
             if self.peek().map(|t| t.kind) == Some(TokenKind::Newline)
                 || self.is_punct("/")
                 || self.is_punct("}")
+                || capture_suffix
             {
                 break;
             }
@@ -1069,7 +1286,16 @@ impl Parser {
             }
             TokenKind::Ident => {
                 self.pos += 1;
-                Ok(Some(ref_node(token.value)))
+                let mut name = token.value;
+                // Qualified references: helper.code (use imports).
+                while self.is_punct(".")
+                    && self.peek_at(1).map(|t| t.kind) == Some(TokenKind::Ident)
+                {
+                    self.pos += 1;
+                    name.push('.');
+                    name.push_str(&self.expect_ident()?);
+                }
+                Ok(Some(ref_node(name)))
             }
             _ => Ok(None),
         }

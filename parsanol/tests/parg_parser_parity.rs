@@ -13,17 +13,6 @@ fn fixture_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/doc_parity")
 }
 
-/// Slice-3 fixtures: their grammars use constructs the slice-2 parser
-/// deliberately does not cover (table expressions, `use` imports with
-/// dotted references, the skip `capture:` suffix, declared resync).
-/// Each becomes a slice-3 item; none may fail silently.
-const SKIPPED: &[(&str, &str)] = &[
-    ("preprocess_table", "table expressions (alt from_table)"),
-    ("imports", "use imports + dotted references"),
-    ("trivia_capture", "the skip capture: suffix"),
-    ("recovery_resync_declared", "the declared resync line"),
-];
-
 #[test]
 fn rust_parser_matches_the_ruby_documents() {
     let dir = fixture_dir();
@@ -38,7 +27,6 @@ fn rust_parser_matches_the_ruby_documents() {
     fixtures.sort();
 
     let mut compared = 0usize;
-    let mut skipped = 0usize;
     for path in &fixtures {
         let name = path
             .file_stem()
@@ -46,11 +34,6 @@ fn rust_parser_matches_the_ruby_documents() {
             .to_str()
             .unwrap()
             .replace(".document", "");
-        if let Some((_, reason)) = SKIPPED.iter().find(|(skip, _)| *skip == name) {
-            skipped += 1;
-            eprintln!("skip: {name} — {reason}");
-            continue;
-        }
 
         let raw = std::fs::read_to_string(path).expect("fixture readable");
         let fixture: Value = serde_json::from_str(&raw).expect("fixture json");
@@ -131,6 +114,6 @@ fn rust_parser_matches_the_ruby_documents() {
         }
         compared += 1;
     }
-    assert!(compared >= 25, "parity corpus shrank: {compared} fixtures");
-    eprintln!("parser parity: {compared} compared, {skipped} slice-3 skips");
+    assert!(compared >= 35, "parity corpus shrank: {compared} fixtures");
+    eprintln!("parser parity: {compared} documents identical");
 }
