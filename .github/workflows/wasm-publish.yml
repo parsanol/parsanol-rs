@@ -94,8 +94,10 @@ jobs:
               '// parseAndBind returns {} when the entry declares no bindings block.',
               dts,
             ].join('\n'));
-            cp ../tools/wasm-README.md README.md
           "
+          # The README ships as a committed template (rs#308's Node
+          # pattern) — copied in, backtick-safe outside node -e.
+          cp ../tools/wasm-README.md wasm/README.md
 
       - name: Publish to npm
         run: cd wasm && npm publish --access public
