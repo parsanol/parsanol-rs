@@ -44,5 +44,17 @@ File.write(out_path, JSON.generate(
     { "kind" => test.kind, "entry" => test.entry, "input" => test.input, "expect" => test.expect }
   end,
   "rules" => document.rules.transform_values { |node| node_to_h(node) },
+  "bindings" => document.bindings.transform_values do |list|
+    list.map do |binding|
+      { "capture" => binding.capture, "path" => binding.path, "type" => binding.type,
+        "card" => binding.card, "preprocess" => binding.preprocess }
+    end
+  end,
+  "preprocess" => document.preprocess,
+  "resyncs" => document.resyncs.transform_values { |node| node_to_h(node) },
+  "uses" => document.uses,
+  "skip_declaration" => document.skip_declaration ? node_to_h(document.skip_declaration) : nil,
+  "skip_capture" => document.skip_capture_key&.to_s,
+  "own_entries" => document.own_entries,
 ))
 puts "#{source_path}: #{document.rules.size} rules, #{document.entries.size} entries"
