@@ -7,6 +7,8 @@ extend-exclude = ["target/", ".git/", "parsanol/tests/fixtures/"]
 
 # Custom words that typos should ignore
 [default.extend-words]
+# Unicode general-category codes (U3): Nd = decimal digit.
+Nd = "Nd"
 # Project-specific terms
 parsanol = "parsanol"
 Parsanol = "Parsanol"
