@@ -53,9 +53,9 @@ fn rust_compiler_matches_the_ruby_atom_streams() {
 
         let source_path = dir.join(format!("{name}.parg"));
         let source = std::fs::read_to_string(&source_path).expect("source readable");
-        let mut document =
-            parser::parse(&source).unwrap_or_else(|err| panic!("{name}: rust parse failed: {err}"));
-        imports::merge(&mut document, &[dir.clone()])
+        let (mut document, atomic_rules) = parser::parse_with_atomic(&source)
+            .unwrap_or_else(|err| panic!("{name}: rust parse failed: {err}"));
+        imports::merge(&mut document, std::slice::from_ref(&dir))
             .unwrap_or_else(|err| panic!("{name}: import merge failed: {err}"));
         let artifact: Value =
             serde_json::from_str(&std::fs::read_to_string(path).expect("artifact")).expect("json");
@@ -99,7 +99,7 @@ fn rust_compiler_matches_the_ruby_atom_streams() {
                         .collect()
                 })
                 .unwrap_or_default();
-            let grammar = compile::compile_entry(&document, &entry, &tables)
+            let grammar = compile::compile_entry_with(&document, entry, &tables, &atomic_rules)
                 .unwrap_or_else(|err| panic!("{name}/{entry}: rust compile failed: {err}"));
             let got = serde_json::to_value(&grammar).expect("grammar serializes");
 
