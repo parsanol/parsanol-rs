@@ -224,14 +224,6 @@ pub struct Compiler<'a> {
 }
 
 impl<'a> Compiler<'a> {
-    fn new(
-        document: &'a Document,
-        tables: &'a Tables,
-        atomic_rules: &[String],
-    ) -> Result<Self, CompileError> {
-        Self::new_mode(document, tables, atomic_rules, None)
-    }
-
     fn new_mode(
         document: &'a Document,
         tables: &'a Tables,
@@ -1697,8 +1689,7 @@ pub fn compile_entry_mode(
             message: format!("unknown entry {entry:?}"),
         })?;
 
-    let mut compiler =
-        Compiler::new_mode(document, tables, atomic_rules, mode)?;
+    let mut compiler = Compiler::new_mode(document, tables, atomic_rules, mode)?;
     let tree = compiler.rule_tree(&rule)?;
     compiler.flatten(&tree)
 }
