@@ -195,6 +195,18 @@ fn ast_to_js(node: &AstNode, arena: &AstArena, input: &str) -> JsValue {
 /// A verified PARG artifact exposed to JavaScript: checksum-verified load,
 /// native parse, bindings application, embedded-suite runs and the
 /// binding-requirements schema (PN 2/4).
+/// Compile PARG source to a checksummed artifact — the playground's
+/// compiler-in-the-browser (site#19). Single-file grammars: `use`
+/// imports have no filesystem here and reject with the merge error.
+#[wasm_bindgen(js_name = compileSource)]
+pub fn compile_source(source: &str) -> Result<String, JsValue> {
+    serde_json::to_string(
+        &crate::parg::frontend::envelope::compile_source(source)
+            .map_err(|e| JsValue::from_str(&e))?,
+    )
+    .map_err(|_| JsValue::from_str("Failed to serialize artifact"))
+}
+
 #[wasm_bindgen]
 pub struct PargArtifactJs {
     artifact: PargArtifact,
