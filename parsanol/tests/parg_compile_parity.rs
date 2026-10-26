@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 
 use parsanol::parg::frontend::parser;
 use parsanol::parg::frontend::{compile, envelope, imports};
+use parsanol::parg::PargArtifact;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
@@ -331,4 +332,38 @@ fn rust_parses_every_flavor_source() {
     );
     assert!(parsed >= 45, "flavor corpus shrank: {parsed}");
     eprintln!("flavor parse coverage: {parsed} sources parse");
+}
+/// The browser compiler's engine, natively: source -> checksummed
+/// artifact -> the artifact loader -> parse. The wasm `compileSource`
+/// export delegates to this exact path (site#19).
+#[test]
+fn compile_source_round_trips_through_the_artifact_loader() {
+    let dir = corpus_dir();
+    for name in ["skip_trivia", "leftrec_arith", "unicode_fold"] {
+        let source = std::fs::read_to_string(dir.join(format!("{name}.parg")))
+            .expect("source")
+            .replace("\r\n", "\n");
+        let artifact = envelope::compile_source(&source)
+            .unwrap_or_else(|err| panic!("{name}: compile failed: {err}"));
+        let text = serde_json::to_string(&artifact).expect("serialize");
+        let loaded = PargArtifact::from_json(&text)
+            .unwrap_or_else(|err| panic!("{name}: artifact rejected: {err}"));
+        let entry = artifact["default_entry"].as_str().expect("default entry");
+        let accept = artifact["tests"]
+            .as_array()
+            .and_then(|tests| {
+                tests
+                    .iter()
+                    .find(|test| test["kind"] == "accept" || test["kind"] == "shape")
+                    .and_then(|test| test["input"].as_str())
+            })
+            .unwrap_or_else(|| panic!("{name}: no accept case"));
+        let shape = loaded
+            .parse_shape(entry, accept)
+            .unwrap_or_else(|err| panic!("{name}: parse failed: {err}"));
+        // The shape's top level is the root capture's value: an object
+        // for named roots, an array for anonymous sequences — the
+        // contract is "not the null the failed parse returns".
+        assert!(!shape.is_null(), "{name}: shape emitted");
+    }
 }

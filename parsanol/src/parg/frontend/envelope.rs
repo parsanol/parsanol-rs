@@ -9,7 +9,9 @@ use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
 use super::compile::{self, CompileError, Tables};
-use super::parser::{Document, Node, ParsedSource};
+use super::imports;
+use super::parser::{self, Document, Node, ParsedSource};
+use crate::parg::checksum_hex;
 
 /// Assemble the full envelope a Ruby compile would emit (minus
 /// `checksum` and `compiler_version`).
@@ -93,6 +95,30 @@ pub fn build(
         envelope["skip"] = skip_source(document.skip_declaration.as_deref());
     }
     Ok(envelope)
+}
+
+/// Compile PARG source to a complete checksummed artifact envelope —
+/// the compiler-in-the-browser's engine (site#19) and the native
+/// round-trip tests' shared path. Single-file grammars: `use` imports
+/// have no filesystem here and reject with the merge error. The
+/// checksum covers this crate's version stamp, so the artifact is
+/// self-consistent and honestly provenance-stamped.
+pub fn compile_source(source: &str) -> Result<Value, String> {
+    let mut parsed = parser::parse_grammar(source).map_err(|e| e.to_string())?;
+    imports::merge(&mut parsed.document, &[]).map_err(|e| e.to_string())?;
+    let mut value = build(&parsed, &Tables::default(), None).map_err(|e| e.to_string())?;
+    if let Some(obj) = value.as_object_mut() {
+        obj.remove("checksum");
+        obj.insert(
+            "compiler_version".to_string(),
+            Value::String(env!("CARGO_PKG_VERSION").to_string()),
+        );
+    }
+    let checksum = checksum_hex(&value).map_err(|e| e.to_string())?;
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert("checksum".to_string(), Value::String(checksum));
+    }
+    Ok(value)
 }
 
 fn source_hash(source: &str) -> String {
