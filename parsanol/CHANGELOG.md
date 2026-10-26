@@ -73,6 +73,22 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- Release v0.19.2 by @[object]
+- Restore the PargArtifactJs docs my insertion displaced by @[object]
+- The wasm compiler: compileSource (site#19 seam) by @[object]
+- Imports normalize CRLF at the read boundary (docs bake LF) by @[object]
+- Normalize CRLF fixture reads (the envelope compares LF contracts) by @[object]
+- Flavor-source parse coverage: 47/47 (rs#298 closeout) by @[object]
+- Publish the recovery-quality metric (rs#304) by @[object]
+- Resync scans from the spine boundary, not the failure offset by @[object]
+- Keep the slice-4b API surface (semver), merge returns the docs map by @[object]
+- PARG frontend slice 4c: lint output + envelope parity (rs#298) by @[object]
+- Keep atomic rules out of the public Document (semver-clean) by @[object]
+- Cargo fmt by @[object]
+- PARG frontend slice 4b: trivia injection, leftrec tiers, imports (rs#298) by @[object]
+
+### Other
+
 - Restore the PargArtifactJs docs my insertion displaced by @[object]
 - The wasm compiler: compileSource (site#19 seam) by @[object]
 - Imports normalize CRLF at the read boundary (docs bake LF) by @[object]
