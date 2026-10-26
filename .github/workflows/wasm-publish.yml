@@ -76,7 +76,10 @@ jobs:
             delete pkg.main;
             pkg.module = 'parsanol.js';
             pkg.types = 'parsanol.d.ts';
-            pkg.exports = { '.': { types: './parsanol.d.ts', default: './parsanol.js' } };
+            pkg.exports = {
+              '.': { types: './parsanol.d.ts', default: './parsanol.js' },
+              './package.json': './package.json',
+            };
             fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
             // rs#308: the init surface is the DEFAULT export (async) and
             // initSync; Node has no fetch for package paths, so the
