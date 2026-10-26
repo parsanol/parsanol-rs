@@ -1784,6 +1784,12 @@ cargo build --examples
 cargo test -- --ignored
 ```
 
+# Recovery Quality
+
+Recovery is a published, engine-identical metric — seeded corruption
+streams, converged counts, twin harnesses as a standing parity gate.
+See [docs/RECOVERY.md](docs/RECOVERY.md).
+
 # Release Process
 
 This project uses [release-plz](https://release-plz.dev/) for automated releases.
