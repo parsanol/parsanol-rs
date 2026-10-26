@@ -46,9 +46,13 @@ fn merge_inner(
             });
         }
         let source = find_file(&name, import_dirs)?;
-        let text = std::fs::read_to_string(&source).map_err(|error| CompileError {
-            message: format!("import `use {name}` unreadable: {error}"),
-        })?;
+        // The wire is LF: a CRLF checkout's imports normalize at the
+        // read boundary, or their docs bake \r remnants.
+        let text = std::fs::read_to_string(&source)
+            .map_err(|error| CompileError {
+                message: format!("import `use {name}` unreadable: {error}"),
+            })?
+            .replace("\r\n", "\n");
         let parsed = parser::parse_grammar(&text).map_err(|error| CompileError {
             message: format!("import `use {name}` failed to parse: {error}"),
         })?;
