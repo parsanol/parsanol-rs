@@ -357,6 +357,11 @@ pub fn parse(source: &str) -> Result<Document, ParseError> {
     Ok(parse_grammar(source)?.document)
 }
 
+/// The document plus its `atomic` rule names (the slice-4b shape).
+pub fn parse_with_atomic(source: &str) -> Result<(Document, Vec<String>), ParseError> {
+    parse_grammar(source).map(|parsed| (parsed.document, parsed.atomic_rules))
+}
+
 /// Parse PARG source into everything the compiler and envelope need.
 pub fn parse_grammar(source: &str) -> Result<ParsedSource, ParseError> {
     let tokens = lex(source)?;
