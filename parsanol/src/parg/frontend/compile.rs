@@ -217,6 +217,7 @@ pub struct Compiler<'a> {
     /// injection site points at the same Trivia index.
     skip_wrap_index: Option<usize>,
     order_warnings: Vec<String>,
+    modern: bool,
     skip_exempt: Vec<String>,
     skip_markers: Vec<(String, String)>,
     atoms: Vec<Atom>,
@@ -227,6 +228,15 @@ impl<'a> Compiler<'a> {
         document: &'a Document,
         tables: &'a Tables,
         atomic_rules: &[String],
+    ) -> Result<Self, CompileError> {
+        Self::new_mode(document, tables, atomic_rules, None)
+    }
+
+    fn new_mode(
+        document: &'a Document,
+        tables: &'a Tables,
+        atomic_rules: &[String],
+        mode: Option<&str>,
     ) -> Result<Self, CompileError> {
         let mut compiler = Compiler {
             document,
@@ -239,6 +249,7 @@ impl<'a> Compiler<'a> {
             skip_wrap: None,
             skip_wrap_index: None,
             order_warnings: Vec::new(),
+            modern: mode == Some("modern"),
             skip_exempt: Vec::new(),
             skip_markers: Vec::new(),
             atoms: Vec::new(),
@@ -316,8 +327,115 @@ impl<'a> Compiler<'a> {
         } else {
             tree
         };
+        // Modern mode (ruby#304) wraps LAST — the guide's spec table:
+        // trivia atoms are in place first, so the pass sees the final
+        // tree. Mirrors the Ruby compiler's atom_for order. The
+        // unwrapped tree inserts BEFORE the wrap: the wrap's capture
+        // probes resolve rule references, and a mutual-reference
+        // grammar must hit the cache, not rebuild.
+        self.trees.insert(name.to_string(), tree.clone());
+        let tree = if self.modern {
+            self.wrap_uncaptured(tree)?
+        } else {
+            tree
+        };
         self.trees.insert(name.to_string(), tree.clone());
         Ok(tree)
+    }
+
+    /// Modern mode (ruby#304, the #315 spec): every rule reference
+    /// whose flattening surfaces no capture is wrapped in
+    /// Named(rule_name). Composites recurse; authored captures and
+    /// trivia subtrees are untouched.
+    fn wrap_uncaptured(&mut self, node: INode) -> Result<INode, CompileError> {
+        Ok(match node {
+            INode::Named { .. } => node,
+            INode::Entity { rule } => {
+                let produces = self.produces_capture(&INode::Entity { rule: rule.clone() })?;
+                if produces {
+                    INode::Entity { rule }
+                } else {
+                    INode::Named {
+                        name: rule.clone(),
+                        child: Box::new(INode::Entity { rule }),
+                    }
+                }
+            }
+            INode::Seq(items) => {
+                let out = items
+                    .into_iter()
+                    .map(|child| self.wrap_uncaptured(child))
+                    .collect::<Result<Vec<_>, _>>()?;
+                INode::Seq(out)
+            }
+            INode::Alt(branches) => {
+                let out = branches
+                    .into_iter()
+                    .map(|branch| self.wrap_uncaptured(branch))
+                    .collect::<Result<Vec<_>, _>>()?;
+                INode::Alt(out)
+            }
+            INode::Rep {
+                child,
+                min,
+                max,
+                maybe,
+            } => INode::Rep {
+                child: Box::new(self.wrap_uncaptured(*child)?),
+                min,
+                max,
+                maybe,
+            },
+            other => other,
+        })
+    }
+
+    /// Whether the tree surfaces any Named capture: a wrapped entity
+    /// (its rule's tree root is Named) counts; entity references
+    /// resolve through their rule trees with a visited set.
+    fn produces_capture(&mut self, node: &INode) -> Result<bool, CompileError> {
+        let mut visited = Vec::new();
+        self.produces_capture_walk(node, &mut visited)
+    }
+
+    fn produces_capture_walk(
+        &mut self,
+        node: &INode,
+        visited: &mut Vec<String>,
+    ) -> Result<bool, CompileError> {
+        Ok(match node {
+            INode::Named { .. } => true,
+            INode::Entity { rule } => {
+                if visited.contains(rule) {
+                    return Ok(false);
+                }
+                visited.push(rule.clone());
+                let tree = self.rule_tree(rule)?;
+                self.produces_capture_walk(&tree, visited)?
+            }
+            INode::Seq(items) => {
+                let mut any = false;
+                for child in items {
+                    if self.produces_capture_walk(child, visited)? {
+                        any = true;
+                        break;
+                    }
+                }
+                any
+            }
+            INode::Alt(branches) => {
+                let mut any = false;
+                for child in branches {
+                    if self.produces_capture_walk(child, visited)? {
+                        any = true;
+                        break;
+                    }
+                }
+                any
+            }
+            INode::Rep { child, .. } => self.produces_capture_walk(child, visited)?,
+            _ => false,
+        })
     }
 
     /// The skip declaration's references, closed transitively: those
@@ -1563,11 +1681,12 @@ fn substitute_refs(node: &Node, from: &str, to: &str) -> Node {
 /// Compile a document into the portable grammar for `entry` — the
 /// atoms stream and root the Ruby compiler's entry envelope carries
 /// (`{atoms, root}`; bindings ride the envelope separately).
-pub fn compile_entry_with(
+pub fn compile_entry_mode(
     document: &Document,
     entry: &str,
     tables: &Tables,
     atomic_rules: &[String],
+    mode: Option<&str>,
 ) -> Result<Grammar, CompileError> {
     let rule = document
         .entries
@@ -1578,9 +1697,21 @@ pub fn compile_entry_with(
             message: format!("unknown entry {entry:?}"),
         })?;
 
-    let mut compiler = Compiler::new(document, tables, atomic_rules)?;
+    let mut compiler =
+        Compiler::new_mode(document, tables, atomic_rules, mode)?;
     let tree = compiler.rule_tree(&rule)?;
     compiler.flatten(&tree)
+}
+
+/// The pre-modern shape (no capture mode): none of the structural
+/// fixtures declare one.
+pub fn compile_entry_with(
+    document: &Document,
+    entry: &str,
+    tables: &Tables,
+    atomic_rules: &[String],
+) -> Result<Grammar, CompileError> {
+    compile_entry_mode(document, entry, tables, atomic_rules, None)
 }
 
 /// Compile without `atomic` rules — the pre-4b shape (none of the
@@ -1600,5 +1731,16 @@ pub fn compiler_for<'a>(
     tables: &'a Tables,
     atomic_rules: &[String],
 ) -> Result<Compiler<'a>, CompileError> {
-    Compiler::new(document, tables, atomic_rules)
+    compiler_for_mode(document, tables, atomic_rules, None)
+}
+
+/// The prepared compiler with the header's capture mode (ruby#304's
+/// `mode "modern"`); none is the classic dialect.
+pub fn compiler_for_mode<'a>(
+    document: &'a Document,
+    tables: &'a Tables,
+    atomic_rules: &[String],
+    mode: Option<&str>,
+) -> Result<Compiler<'a>, CompileError> {
+    Compiler::new_mode(document, tables, atomic_rules, mode)
 }
