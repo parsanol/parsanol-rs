@@ -1015,18 +1015,31 @@ impl Parser {
     }
 
     fn rule_body(&mut self, document: &mut Document, name: String) -> Result<(), ParseError> {
-        let line = self.line_expression()?;
-        self.accept_newline();
-        self.skip_blank();
-        let node = if self.is_punct("{") {
+        // Brace bodies (ruby#302): `name = { ... }` is
+        // self-delimiting. The brace may also sit on the next line:
+        // `name =` NL `{`. Peek past the newline; restore when it is
+        // not a brace so line-mode error behavior is untouched (the
+        // Ruby parser's exact order).
+        let mut brace = self.is_punct("{");
+        if !brace {
+            let saved = self.pos;
+            self.accept_newline();
+            self.skip_blank();
+            if self.is_punct("{") {
+                brace = true;
+            } else {
+                self.pos = saved;
+            }
+        }
+        let node = if brace {
             self.pos += 1;
             let body = self.brace_choice()?;
             self.expect_punct("}")?;
-            match line {
-                Some(existing) => seq(vec![existing, body]),
-                None => body,
-            }
+            body
         } else {
+            let line = self.line_expression()?;
+            self.accept_newline();
+            self.skip_blank();
             line.ok_or_else(|| ParseError {
                 message: format!("rule {name:?} has an empty body"),
             })?
@@ -1116,9 +1129,15 @@ impl Parser {
                     message: format!("bad repetition {}", self.peek().unwrap().value),
                 })?;
             self.pos += 1;
-            self.expect_punct("*")?;
-            let max = self.optional_number()?;
-            return Ok(Some((min, max)));
+            // A bare `<n>` prefix is the RFC 5234 exact form: `2digit`
+            // is exactly two (the ABNF importer emits it). The `*`
+            // spelling is the open/range form.
+            if self.is_punct("*") {
+                self.pos += 1;
+                let max = self.optional_number()?;
+                return Ok(Some((min, max)));
+            }
+            return Ok(Some((min, Some(min))));
         }
         if self.is_punct("*") {
             self.pos += 1;
@@ -1257,8 +1276,9 @@ impl Parser {
             }
         }
         if items.is_empty() {
+            let offset = self.peek().map(|t| t.offset).unwrap_or(usize::MAX);
             return Err(ParseError {
-                message: "empty line".to_string(),
+                message: format!("empty line (at char offset {offset})"),
             });
         }
         Ok(if items.len() == 1 {
@@ -1291,8 +1311,14 @@ impl Parser {
                     message: format!("bad repetition {}", token.value),
                 })?;
                 self.pos += 1;
-                self.expect_punct("*")?;
-                let max = self.optional_number()?;
+                // A bare `<n>` prefix is the RFC 5234 exact form: `2digit`
+                // is exactly two (the ABNF importer emits it).
+                let max = if self.is_punct("*") {
+                    self.pos += 1;
+                    self.optional_number()?
+                } else {
+                    Some(min)
+                };
                 // `1*X as n` captures the WHOLE repetition.
                 let child = self.line_primary()?.ok_or_else(|| ParseError {
                     message: "repetition needs a target".to_string(),

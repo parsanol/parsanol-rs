@@ -1372,6 +1372,14 @@ impl<'a> Compiler<'a> {
                     "rule {name}: branch {earlier_number} ({earlier_lit:?}) shadows branch {later_number} ({later_lit:?}) - reorder longest-first or the shorter always wins"
                 ));
             }
+            // A case-insensitive earlier literal matches every casing
+            // the later literal could: the later branch is dead (the
+            // same class as the prefix shadow above).
+            if earlier.fold == Some(true) && later_lit.eq_ignore_ascii_case(&earlier_lit) {
+                return Some(format!(
+                    "rule {name}: branch {later_number} ({later_lit:?}) can never match - branch {earlier_number} is case-insensitive and already matches {earlier_lit:?} in every casing"
+                ));
+            }
         }
         None
     }
@@ -1384,6 +1392,14 @@ impl<'a> Compiler<'a> {
         later: &Node,
         later_number: usize,
     ) -> Option<String> {
+        if self
+            .compare_branches(name, earlier, earlier_number, later, later_number)
+            .is_some()
+        {
+            // The pair is claimed by an error (identical, shadowed, or
+            // case-shadowed) — the envelope carries no warning for it.
+            return None;
+        }
         let mut stack = Vec::new();
         let first_earlier = self.first_set(earlier, &mut stack);
         let first_later = self.first_set(later, &mut stack);

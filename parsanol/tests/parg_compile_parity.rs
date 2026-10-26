@@ -179,21 +179,47 @@ fn rust_envelope_matches_the_ruby_artifacts() {
 /// across the flavor corpus (33 flavors carry non-empty lists).
 #[test]
 fn rust_order_warnings_match_the_ruby_flavor_corpus() {
-    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let artifacts = manifest
-        .ancestors()
-        .map(|ancestor| {
-            ancestor
-                .join("pubid")
-                .join("pubid-grammar")
-                .join("artifacts")
-        })
-        .find(|candidate| candidate.is_dir());
-    let Some(artifacts) = artifacts else {
-        eprintln!("skip: no sibling pubid-grammar checkout");
-        return;
+    let artifacts = match std::env::var("PARG_ARTIFACT_DIR") {
+        Ok(dir) => PathBuf::from(dir),
+        Err(_) => {
+            let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+            match manifest
+                .ancestors()
+                .map(|ancestor| {
+                    ancestor
+                        .join("pubid")
+                        .join("pubid-grammar")
+                        .join("artifacts")
+                })
+                .find(|candidate| candidate.is_dir())
+            {
+                Some(dir) => dir,
+                None => {
+                    eprintln!("skip: no sibling pubid-grammar checkout");
+                    return;
+                }
+            }
+        }
     };
     let entries = std::fs::read_dir(&artifacts).expect("artifacts dir");
+    // An ambient sibling predating the artifact re-bake (pubid-grammar
+    // #61) carries pre-lint-change order_warnings: its adobe.json is
+    // still at the 1.3.93 bake. Pinned dirs (CI) and re-baked siblings
+    // assert fully; stale ambient siblings skip with guidance (the
+    // parg_corpus stale-sibling pattern).
+    let sibling_is_stale = std::env::var("PARG_ARTIFACT_DIR").is_err()
+        && serde_json::from_str::<Value>(
+            &std::fs::read_to_string(artifacts.join("adobe.json")).expect("adobe artifact"),
+        )
+        .expect("adobe json")["compiler_version"]
+            .as_str()
+            == Some("1.3.93");
+    if sibling_is_stale {
+        eprintln!(
+            "skip: the sibling pubid-grammar checkout predates the re-bake (adobe.json is 1.3.93); refresh the checkout or set PARG_ARTIFACT_DIR"
+        );
+        return;
+    }
     let mut checked = 0usize;
     let mut warning_carrying = 0usize;
     let mut unparsable: Vec<String> = Vec::new();
@@ -257,4 +283,48 @@ fn rust_order_warnings_match_the_ruby_flavor_corpus() {
         "order_warnings parity: {checked} flavors identical ({warning_carrying} carrying warnings); unparsable: {:?}",
         unparsable
     );
+}
+
+/// The flavor-source parse coverage gate (rs#298 closeout): every
+/// pubid-grammar flavor source parses with the Rust frontend.
+#[test]
+fn rust_parses_every_flavor_source() {
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let grammars = manifest
+        .ancestors()
+        .map(|ancestor| {
+            ancestor
+                .join("pubid")
+                .join("pubid-grammar")
+                .join("grammars")
+        })
+        .find(|candidate| candidate.is_dir());
+    let Some(grammars) = grammars else {
+        eprintln!("skip: no sibling pubid-grammar checkout");
+        return;
+    };
+    let mut parsed = 0usize;
+    let mut failures = Vec::new();
+    let mut sources: Vec<PathBuf> = std::fs::read_dir(&grammars)
+        .expect("grammars dir")
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "parg"))
+        .collect();
+    sources.sort();
+    for path in &sources {
+        let name = path.file_stem().unwrap().to_str().unwrap().to_string();
+        let source = std::fs::read_to_string(path).expect("grammar readable");
+        match parser::parse_grammar(&source) {
+            Ok(_) => parsed += 1,
+            Err(err) => failures.push(format!("{name}: {}", err.message)),
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "flavor sources the frontend cannot parse yet:\n{}",
+        failures.join("\n")
+    );
+    assert!(parsed >= 45, "flavor corpus shrank: {parsed}");
+    eprintln!("flavor parse coverage: {parsed} sources parse");
 }
