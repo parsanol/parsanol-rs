@@ -84,12 +84,10 @@ fn rust_compiler_matches_the_ruby_atom_streams() {
         let source = std::fs::read_to_string(&source_path).expect("source readable");
         let mut parsed = parser::parse_grammar(&source)
             .unwrap_or_else(|err| panic!("{name}: rust parse failed: {err}"));
-        imports::merge(
-            &mut parsed.document,
-            &mut parsed.docs,
-            std::slice::from_ref(&dir),
-        )
-        .unwrap_or_else(|err| panic!("{name}: import merge failed: {err}"));
+        parsed.docs.extend(
+            imports::merge(&mut parsed.document, std::slice::from_ref(&dir))
+                .unwrap_or_else(|err| panic!("{name}: import merge failed: {err}")),
+        );
         let artifact: Value =
             serde_json::from_str(&std::fs::read_to_string(path).expect("artifact")).expect("json");
         // Support grammars (shared helpers) ship no default entry —
@@ -151,12 +149,10 @@ fn rust_envelope_matches_the_ruby_artifacts() {
         let source = std::fs::read_to_string(dir.join(format!("{name}.parg"))).expect("source");
         let mut parsed = parser::parse_grammar(&source)
             .unwrap_or_else(|err| panic!("{name}: rust parse failed: {err}"));
-        imports::merge(
-            &mut parsed.document,
-            &mut parsed.docs,
-            std::slice::from_ref(&dir),
-        )
-        .unwrap_or_else(|err| panic!("{name}: import merge failed: {err}"));
+        parsed.docs.extend(
+            imports::merge(&mut parsed.document, std::slice::from_ref(&dir))
+                .unwrap_or_else(|err| panic!("{name}: import merge failed: {err}")),
+        );
         let tables = artifact_tables(&artifact);
         let got = envelope::build(&parsed, &tables, None)
             .unwrap_or_else(|err| panic!("{name}: rust envelope failed: {err}"));
@@ -200,7 +196,7 @@ fn rust_order_warnings_match_the_ruby_flavor_corpus() {
     let entries = std::fs::read_dir(&artifacts).expect("artifacts dir");
     let mut checked = 0usize;
     let mut warning_carrying = 0usize;
-    let mut unparseable: Vec<String> = Vec::new();
+    let mut unparsable: Vec<String> = Vec::new();
     let mut paths: Vec<PathBuf> = entries
         .flatten()
         .map(|entry| entry.path())
@@ -224,12 +220,14 @@ fn rust_order_warnings_match_the_ruby_flavor_corpus() {
         // conformance corpus; flavors it cannot parse yet are the
         // visible worklist, listed here.
         let Ok(mut parsed) = parser::parse_grammar(source) else {
-            unparseable.push(name.clone());
+            unparsable.push(name.clone());
             continue;
         };
         let grammars = artifacts.parent().expect("repo root").join("grammars");
-        imports::merge(&mut parsed.document, &mut parsed.docs, &[grammars])
-            .unwrap_or_else(|err| panic!("{name}: import merge failed: {err}"));
+        parsed.docs.extend(
+            imports::merge(&mut parsed.document, &[grammars])
+                .unwrap_or_else(|err| panic!("{name}: import merge failed: {err}")),
+        );
         let tables = artifact_tables(&artifact);
         let compiler = compile::compiler_for(&parsed.document, &tables, &parsed.atomic_rules)
             .unwrap_or_else(|err| panic!("{name}: rust compile failed: {err}"));
@@ -256,7 +254,7 @@ fn rust_order_warnings_match_the_ruby_flavor_corpus() {
         "warning-carrying coverage shrank: {warning_carrying}"
     );
     eprintln!(
-        "order_warnings parity: {checked} flavors identical ({warning_carrying} carrying warnings); unparseable: {:?}",
-        unparseable
+        "order_warnings parity: {checked} flavors identical ({warning_carrying} carrying warnings); unparsable: {:?}",
+        unparsable
     );
 }

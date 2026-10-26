@@ -15,10 +15,11 @@ use super::parser::{self, Document, Node};
 /// declaration order.
 pub fn merge(
     document: &mut Document,
-    docs: &mut BTreeMap<String, String>,
     import_dirs: &[PathBuf],
-) -> Result<(), CompileError> {
-    merge_inner(document, docs, import_dirs, &mut Vec::new())
+) -> Result<BTreeMap<String, String>, CompileError> {
+    let mut docs = BTreeMap::new();
+    merge_inner(document, &mut docs, import_dirs, &mut Vec::new())?;
+    Ok(docs)
 }
 
 fn merge_inner(
