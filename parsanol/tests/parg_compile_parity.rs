@@ -146,7 +146,11 @@ fn rust_envelope_matches_the_ruby_artifacts() {
         let artifact: Value =
             serde_json::from_str(&std::fs::read_to_string(path).expect("artifact json"))
                 .expect("json");
-        let source = std::fs::read_to_string(dir.join(format!("{name}.parg"))).expect("source");
+        // Normalize CRLF checkouts (Windows): the envelope's source,
+        // docs, and hashes are LF (the Ruby bake's form).
+        let source = std::fs::read_to_string(dir.join(format!("{name}.parg")))
+            .expect("source")
+            .replace("\r\n", "\n");
         let mut parsed = parser::parse_grammar(&source)
             .unwrap_or_else(|err| panic!("{name}: rust parse failed: {err}"));
         parsed.docs.extend(
