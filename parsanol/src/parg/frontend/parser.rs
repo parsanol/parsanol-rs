@@ -331,7 +331,12 @@ impl From<LexError> for ParseError {
 }
 
 /// What the file parser produces: document, atomic names, docs.
-type ParsedFile = (Document, Vec<String>, BTreeMap<String, String>);
+type ParsedFile = (
+    Document,
+    Vec<String>,
+    BTreeMap<String, String>,
+    Option<String>,
+);
 
 /// The parse output that compiles from: the parity document plus the
 /// out-of-band facts the envelope and the compiler need (atomic rule
@@ -350,6 +355,9 @@ pub struct ParsedSource {
     pub docs: BTreeMap<String, String>,
     /// The verbatim source (the envelope carries it + its hash).
     pub source: String,
+    /// The header's `mode` declaration (`"modern"` — ruby#304); none
+    /// for classic grammars.
+    pub mode: Option<String>,
 }
 
 /// Parse PARG source into the parity document.
@@ -365,7 +373,7 @@ pub fn parse_with_atomic(source: &str) -> Result<(Document, Vec<String>), ParseE
 /// Parse PARG source into everything the compiler and envelope need.
 pub fn parse_grammar(source: &str) -> Result<ParsedSource, ParseError> {
     let tokens = lex(source)?;
-    let (document, atomic_rules, docs) = Parser::new(tokens).file()?;
+    let (document, atomic_rules, docs, mode) = Parser::new(tokens).file()?;
     let own_entries = document
         .entries
         .iter()
@@ -377,6 +385,7 @@ pub fn parse_grammar(source: &str) -> Result<ParsedSource, ParseError> {
         own_entries,
         docs,
         source: source.to_string(),
+        mode: mode.into_iter().next(),
     })
 }
 
@@ -501,6 +510,7 @@ impl Parser {
         let mut document = Document::default();
         let mut document_docs = BTreeMap::new();
         let mut atomic_rules = Vec::new();
+        let mut mode = None;
         // Top-level items: `##` doc comments and `use` imports precede
         // the grammar block.
         loop {
@@ -523,6 +533,23 @@ impl Parser {
         document.grammar_name = self.expect_ident()?;
         self.expect_keyword("version")?;
         document.version = unquote(&self.expect_string()?)?;
+        // `mode "modern"` — the opt-in capture dialect (ruby#304).
+        // The spelling is the owner's pending decision; the mechanism
+        // is fully specified (#315) and keyed off this one token.
+        if self.peek().map(|t| t.kind) == Some(TokenKind::Ident)
+            && self.peek().map(|t| t.value.clone()) == Some("mode".to_string())
+        {
+            self.expect_keyword("mode")?;
+            let value = unquote(&self.expect_string()?)?;
+            if value != "modern" {
+                return Err(ParseError {
+                    message: format!(
+                        "unknown mode {value:?} -- the supported mode is \"modern\""
+                    ),
+                });
+            }
+            mode = Some(value);
+        }
         self.expect_punct("{")?;
         self.block(
             &mut document,
@@ -531,7 +558,7 @@ impl Parser {
             &mut Vec::new(),
         )?;
         self.skip_blank();
-        Ok((document, atomic_rules, document_docs))
+        Ok((document, atomic_rules, document_docs, mode))
     }
 
     #[allow(clippy::too_many_arguments)]

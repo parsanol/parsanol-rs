@@ -21,7 +21,8 @@ pub fn build(
     bindings: Option<Value>,
 ) -> Result<Value, CompileError> {
     let document = &parsed.document;
-    let mut compiler = compile::compiler_for(document, tables, &parsed.atomic_rules)?;
+    let mut compiler =
+        compile::compiler_for_mode(document, tables, &parsed.atomic_rules, parsed.mode.as_deref())?;
 
     let mut entries = Map::new();
     for (name, rule) in &document.entries {
@@ -91,6 +92,12 @@ pub fn build(
         "source": parsed.source,
         "source_hash": source_hash(&parsed.source),
     });
+    if let Some(mode) = &parsed.mode {
+        // ruby#304: the opt-in capture dialect. Field-less artifacts
+        // are classic; the value names the mode consumers read before
+        // parsing.
+        envelope["mode"] = Value::String(mode.clone());
+    }
     if document.skip_declaration.is_some() {
         envelope["skip"] = skip_source(document.skip_declaration.as_deref());
     }

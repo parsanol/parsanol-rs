@@ -107,7 +107,13 @@ fn rust_compiler_matches_the_ruby_atom_streams() {
         let tables = artifact_tables(&artifact);
         for entry in &entries {
             let grammar =
-                compile::compile_entry_with(&parsed.document, entry, &tables, &parsed.atomic_rules)
+                compile::compile_entry_mode(
+                    &parsed.document,
+                    entry,
+                    &tables,
+                    &parsed.atomic_rules,
+                    parsed.mode.as_deref(),
+                )
                     .unwrap_or_else(|err| panic!("{name}/{entry}: rust compile failed: {err}"));
             let got = serde_json::to_value(&grammar).expect("grammar serializes");
 
