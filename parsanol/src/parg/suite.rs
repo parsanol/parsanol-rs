@@ -287,8 +287,24 @@ impl PargArtifact {
                     _ => None,
                 };
                 let mut resyncs: Vec<Value> = Vec::new();
-                if let (Some(body), Some((end, items, tag))) = (spine_body, partial.as_mut()) {
-                    let _ = tag;
+                // The spine boundary, not the failure offset, anchors
+                // the resync scan: junk frequently lies BEFORE the
+                // deepest failure (the failed iteration consumed its
+                // own prefix), so a scan from the failure offset can
+                // never match it. With no matched prefix the boundary
+                // is 0 - a declared pattern is usable from the start
+                // (rs#304 Gap B, the ruby engine's convergence twin).
+                if let Some(body) = spine_body {
+                    let stash_was_empty = partial.is_none();
+                    let mut fresh_items: Vec<AstNode> = Vec::new();
+                    let mut cursor = match partial.as_ref() {
+                        Some((end, _, _)) => *end,
+                        None => 0,
+                    };
+                    let items: &mut Vec<AstNode> = match partial.as_mut() {
+                        Some((_, items, _)) => items,
+                        None => &mut fresh_items,
+                    };
                     // Declared resync (`resync <rule> = <pattern>`, R2):
                     // the pattern is baked into the entry; the skip spans
                     // are exactly the pattern's matches — the author owns
@@ -308,7 +324,6 @@ impl PargArtifact {
                     let mut pattern_parser = declared_grammar
                         .as_ref()
                         .map(|grammar| PortableParser::new(grammar, input, &mut pattern_arena));
-                    let mut cursor = *end;
                     'rounds: for _ in 0..MAX_RESYNCS {
                         // An iteration may already be viable at the
                         // cursor (e.g. right after a declared skip).
@@ -381,7 +396,12 @@ impl PargArtifact {
                             cursor = resume;
                         }
                     }
-                    *end = cursor;
+                    if let Some((end, _, _)) = partial.as_mut() {
+                        *end = cursor;
+                    }
+                    if stash_was_empty && !fresh_items.is_empty() {
+                        partial = Some((cursor, fresh_items, RepetitionTag::Repetition));
+                    }
                 }
                 // The entry shape is wrapped under the root rule's
                 // name (the shape contract), so the partial wraps the
