@@ -40,6 +40,32 @@ whenever the parse fails (rs#304 slice 3, the convergence train):
 | recovery_resync_declared | 58/64 (91%) | 1.00 |
 | recovery_kv (inferred) | 33/64 (52%) | 1.00 |
 
+## The comparative columns (rs#304)
+
+The same seeded corruption stream, the same kv language, measured per
+tool. parslet and pest have no recovery: the parse aborts at the first
+violation — 0/64 by construction, the property that motivated parsanol.
+tree-sitter's always-on GLR recovery is measured with its own parser
+(`tools/tree_sitter_recovery_column.py`, the generated kv grammar,
+`tree-sitter parse`):
+
+| tool | recovery policy | recoverable | precision |
+|---|---|---|---|
+| **parsanol, declared resync** | author-owned spans, byte-identical across engines | 58/64 (91%) | **1.00** |
+| parsanol, inferred | trial scan | 33/64 (52%) | 1.00 |
+| tree-sitter 0.27 | always-on GLR resync | **62/64 (97%)** | 0.66 |
+| parslet | none — abort | 0/64 | — |
+| pest | none — abort | 0/64 | — |
+
+The honest reading: tree-sitter recovers slightly more often and
+mangles a third of the recovered trees (its ERROR nodes swallow or
+reshape the neighboring pairs — precision 0.66). parsanol's declared
+policy recovers 91% with exact fidelity: the recovered trees contain
+only clean nodes, the junk spans are the author's declared pattern
+consumed deterministically, and the same numbers reproduce on every
+engine — which is also what makes the recovery language exportable to
+constrained decoders (ruby#321's escape grammars).
+
 Reproduce:
 
 ```bash
