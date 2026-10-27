@@ -73,6 +73,11 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- Release v0.19.5 by @[object]
+- Wire columns are character counts, not bytes (Slice parity) by @[object]
+
+### Other
+
 - Wire columns are character counts, not bytes (Slice parity) by @[object]
 
 ### Other
