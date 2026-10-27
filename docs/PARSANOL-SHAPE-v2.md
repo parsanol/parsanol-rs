@@ -54,3 +54,21 @@ Loaders reject an artifact whose `shape` field is not exactly
 `"parsanol-tree/v2"` with an error naming this contract. Deep tree
 validation (beyond kind checking) remains the differential test suites'
 job; the loader's check is a version negotiation, not a schema walk.
+
+## Capture emission (ruby#353)
+
+The envelope's `emission` field declares the capture-emission level the
+artifact's trees were frozen against:
+
+- **1** — the 1.3.108 implicit-capture emission (artifacts baked before
+  1.3.109; the field is absent and loaders read it as 1);
+- **2** — the current explicit emission (guard/marker/delimiter nodes
+  appear as captures).
+
+Loaders reject a level above their own runtime's (the trees would carry
+nodes this engine never emits) and warn below it: parsing works, but
+frozen tree comparisons differ — re-bake or pin the engine. The field
+rides the checksum, and both compilers stamp the same constant, so the
+cross-engine parity gates assert it in both directions. Emission moves
+are breaking for tree-freezing consumers and ride minor versions at
+most — never patches.
