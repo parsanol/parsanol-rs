@@ -104,6 +104,9 @@ pub fn build_mode(
     // ruby#304: the envelope always names the capture dialect —
     // consumers read the tree-shape contract before parsing.
     envelope["mode"] = Value::String(mode.unwrap_or("v2").to_string());
+    // ruby#353: the capture-emission level the trees were frozen
+    // against (must match the ruby compiler's Artifact::EMISSION_VERSION).
+    envelope["emission"] = Value::from(crate::parg::EMISSION_VERSION);
     if document.skip_declaration.is_some() {
         envelope["skip"] = skip_source(document.skip_declaration.as_deref());
     }
