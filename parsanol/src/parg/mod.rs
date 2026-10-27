@@ -213,7 +213,10 @@ impl PargArtifact {
         }
         // ruby#353: absent field = the pre-1.3.109 emission. A level
         // above this runtime's can't replay its frozen trees here.
-        let emission = envelope.get("emission").and_then(Value::as_u64).unwrap_or(1);
+        let emission = envelope
+            .get("emission")
+            .and_then(Value::as_u64)
+            .unwrap_or(1);
         if emission as u32 > EMISSION_VERSION {
             return Err(PargError::InvalidEnvelope(
                 "artifact declares a capture emission above this runtime's — upgrade parsanol",
