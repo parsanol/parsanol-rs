@@ -1,5 +1,5 @@
 ## Semantics: C8, S1, S5
-grammar ConformanceAtomic version "1.0.0" {
+grammar ConformanceAtomic version "1.0.0" mode "v1" {
   ## Whitespace between tokens.
   trivia = 1*" "
   ## Non-atomic: trivia injects before every terminal, so the rule's

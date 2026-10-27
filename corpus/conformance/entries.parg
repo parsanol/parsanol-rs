@@ -1,5 +1,5 @@
 ## Semantics: C7, T3, C3, K1, A1, A2, M0
-grammar ConformanceEntries version "1.0.0" {
+grammar ConformanceEntries version "1.0.0" mode "v1" {
   ## Two entries over one rule set; every test names its entry.
   word = 1*%x61-7A as word
   num = 1*%x30-39 as num

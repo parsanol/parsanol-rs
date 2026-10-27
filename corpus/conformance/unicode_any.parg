@@ -1,6 +1,6 @@
 ## Semantics: U1 (rs#297) — `.` matches whole codepoints; min/max are
 ## codepoint counts; no span may split a character.
-grammar ConformanceUnicodeAny version "1.0.0" {
+grammar ConformanceUnicodeAny version "1.0.0" mode "v1" {
   ## A bounded run of any codepoints.
   run = 2*4 ANY
 

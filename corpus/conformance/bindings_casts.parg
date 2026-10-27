@@ -1,5 +1,5 @@
 ## Semantics: B2, B3, K1, C1, A1, A3, M0
-grammar ConformanceBindingsCasts version "1.0.0" {
+grammar ConformanceBindingsCasts version "1.0.0" mode "v1" {
   ## Boolean cast from captured text.
   flag = ( %x74 %x72 %x75 %x65 ) / ( %x66 %x61 %x6C %x73 %x65 )
   main = ( flag ) as enabled

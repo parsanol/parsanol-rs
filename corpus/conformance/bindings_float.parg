@@ -1,5 +1,5 @@
 ## Semantics: B2, B3, B6, K1, C1, A1, A3, E3, M0
-grammar ConformanceBindingsFloat version "1.0.0" {
+grammar ConformanceBindingsFloat version "1.0.0" mode "v1" {
   ## Float cast from captured text; float expectations ride the artifact
   ## checksum through the B6 canonical float form.
   number = ( [ "-" ] 1*%x30-39 "." 1*%x30-39 ) as score

@@ -241,7 +241,7 @@ impl<'a> Compiler<'a> {
             skip_wrap: None,
             skip_wrap_index: None,
             order_warnings: Vec::new(),
-            modern: mode != Some("classic"),
+            modern: mode != Some("v1"),
             skip_exempt: Vec::new(),
             skip_markers: Vec::new(),
             atoms: Vec::new(),
@@ -1726,7 +1726,7 @@ pub fn compiler_for<'a>(
 }
 
 /// The prepared compiler with the header's capture mode (ruby#304's
-/// `mode`); `"classic"` is the legacy dialect; the default (none or
+/// `mode`); `"v1"` is the legacy dialect; the default (none or
 /// "v2") is fully named trees.
 pub fn compiler_for_mode<'a>(
     document: &'a Document,

@@ -1,5 +1,5 @@
 ## Semantics: V1, V3, C1, C3, K1, A1, A2, M0
-grammar ConformanceMergeArray version "1.0.0" {
+grammar ConformanceMergeArray version "1.0.0" mode "v1" {
   ## A repetition (array value) followed by a capture hoists into one array.
   main = ( 1*( "a" as x ) ) ( "b" as y )
 

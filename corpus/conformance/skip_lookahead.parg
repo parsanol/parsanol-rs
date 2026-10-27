@@ -1,5 +1,5 @@
 ## Semantics: C5, S1, S4, S5, S6, T1, M0, A1
-grammar ConformanceSkipLookahead version "1.0.0" {
+grammar ConformanceSkipLookahead version "1.0.0" mode "v1" {
   ## Whitespace trivia.
   trivia = 1*" "
   ## A guard that inspects the RAW byte after "a": trivia is not injected
