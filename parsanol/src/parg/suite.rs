@@ -15,6 +15,21 @@ use crate::portable::grammar::{Atom, RepetitionTag};
 use crate::portable::parslet_transform::to_parslet_compatible;
 use crate::portable::{AstArena, Grammar, PortableParser};
 
+/// The wire's line/column at a byte offset: line counts newlines,
+/// column counts CHARACTERS since the last one — the guide's Slice
+/// contract (offsets stay bytes; the Ruby engine's slice.rb is the
+/// reference arithmetic).
+fn line_column(input: &str, offset: usize) -> (usize, usize) {
+    let offset = offset.min(input.len());
+    let before = &input[..offset];
+    let line = before.matches('\n').count() + 1;
+    let tail = match before.rfind('\n') {
+        Some(index) => &before[index + 1..],
+        None => before,
+    };
+    (line, tail.chars().count() + 1)
+}
+
 pub(crate) fn ast_to_value(
     node: &crate::portable::ast::AstNode,
     arena: &AstArena,
@@ -35,11 +50,10 @@ pub(crate) fn ast_to_value(
             let offset = *offset as usize;
             let length = *length as usize;
             let value = input.get(offset..offset + length).unwrap_or_default();
-            let before = &input[..offset.min(input.len())];
-            let line = before.matches('\n').count() + 1;
-            let column = offset - before.rfind('\n').map(|index| index + 1).unwrap_or(0) + 1;
-            // Wire contract (Slice parity): offset/column are byte
-            // positions, length is the character count (content.size).
+            let (line, column) = line_column(input, offset);
+            // Wire contract (Slice parity): offsets are byte positions,
+            // line/column are character counts, length is the
+            // character count (content.size).
             serde_json::json!({
                 "value": value,
                 "line": line,
@@ -102,9 +116,7 @@ fn capture_wire(value: &CaptureValue, input: &str) -> Value {
             let offset = *offset;
             let length = *length;
             let text = input.get(offset..offset + length).unwrap_or_default();
-            let before = &input[..offset.min(input.len())];
-            let line = before.matches('\n').count() + 1;
-            let column = offset - before.rfind('\n').map(|i| i + 1).unwrap_or(0) + 1;
+            let (line, column) = line_column(input, offset);
             serde_json::json!({
                 "value": text, "line": line, "column": column,
                 "offset": offset, "length": text.chars().count()
@@ -150,9 +162,7 @@ fn recovery_shape(
     }
     let error = match failure_wire {
         Some((offset, expected)) => {
-            let before = &input[..offset.min(input.len())];
-            let line = before.matches('\n').count() + 1;
-            let column = offset - before.rfind('\n').map(|i| i + 1).unwrap_or(0) + 1;
+            let (line, column) = line_column(input, offset);
             serde_json::json!({
                 "offset": offset, "line": line, "column": column, "expected": expected
             })
@@ -208,9 +218,7 @@ impl PargArtifact {
             }
             match parser.failure_wire() {
                 Some((offset, expected)) => {
-                    let before = &input[..offset.min(input.len())];
-                    let line = before.matches('\n').count() + 1;
-                    let column = offset - before.rfind('\n').map(|i| i + 1).unwrap_or(0) + 1;
+                    let (line, column) = line_column(input, offset);
                     let ranked = parser
                         .failure_ranks()
                         .iter()
