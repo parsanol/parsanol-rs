@@ -73,6 +73,12 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- Fmt by @[object]
+- The emission stamp: envelopes declare the capture-emission level (ruby#353) by @[object]
+- Whitespace-glue rules are exempt from the v2 wrap (ruby#352) by @[object]
+
+### Other
+
 - Wire columns are character counts, not bytes (Slice parity) by @[object]
 
 ### Other
