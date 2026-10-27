@@ -344,6 +344,13 @@ jobs:
           tool: cargo-llvm-cov
 
       - name: Generate coverage report
+        env:
+          # The instrumented drop glue for arena types can end up
+          # referenced-but-unemitted once rust-lld is the linux default
+          # linker (undefined drop_glue symbols at test link time).
+          # link-dead-code keeps it emitted; coverage is not the
+          # warnings gate.
+          RUSTFLAGS: -C link-dead-code=yes
         run: |
           cargo llvm-cov --no-default-features --features "logging,parallel" --lcov --output-path lcov.info
 
