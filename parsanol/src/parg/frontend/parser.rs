@@ -355,14 +355,20 @@ pub struct ParsedSource {
     pub docs: BTreeMap<String, String>,
     /// The verbatim source (the envelope carries it + its hash).
     pub source: String,
-    /// The header's `mode` declaration (`"modern"` — ruby#304); none
-    /// for classic grammars.
-    pub mode: Option<String>,
 }
 
 /// Parse PARG source into the parity document.
 pub fn parse(source: &str) -> Result<Document, ParseError> {
     Ok(parse_grammar(source)?.document)
+}
+
+/// Parse PARG source into everything the compiler and envelope need,
+/// plus the header's `mode` declaration (ruby#304: `"modern"`; none
+/// for classic grammars). The mode rides beside the parse output —
+/// a field on the public ParsedSource would break exhaustive
+/// literals (semver major).
+pub fn parse_grammar_with_mode(source: &str) -> Result<(ParsedSource, Option<String>), ParseError> {
+    parse_grammar_mode(source)
 }
 
 /// The document plus its `atomic` rule names (the slice-4b shape).
@@ -372,6 +378,14 @@ pub fn parse_with_atomic(source: &str) -> Result<(Document, Vec<String>), ParseE
 
 /// Parse PARG source into everything the compiler and envelope need.
 pub fn parse_grammar(source: &str) -> Result<ParsedSource, ParseError> {
+    Ok(parse_grammar_mode(source)?.0)
+}
+
+/// The mode-bearing inner parse (the public variants shape their own
+/// returns).
+pub(crate) fn parse_grammar_mode(
+    source: &str,
+) -> Result<(ParsedSource, Option<String>), ParseError> {
     let tokens = lex(source)?;
     let (document, atomic_rules, docs, mode) = Parser::new(tokens).file()?;
     let own_entries = document
@@ -379,14 +393,16 @@ pub fn parse_grammar(source: &str) -> Result<ParsedSource, ParseError> {
         .iter()
         .map(|(name, _)| name.clone())
         .collect();
-    Ok(ParsedSource {
-        document,
-        atomic_rules,
-        own_entries,
-        docs,
-        source: source.to_string(),
-        mode: mode.into_iter().next(),
-    })
+    Ok((
+        ParsedSource {
+            document,
+            atomic_rules,
+            own_entries,
+            docs,
+            source: source.to_string(),
+        },
+        mode,
+    ))
 }
 
 struct Parser {
@@ -543,9 +559,7 @@ impl Parser {
             let value = unquote(&self.expect_string()?)?;
             if value != "modern" {
                 return Err(ParseError {
-                    message: format!(
-                        "unknown mode {value:?} -- the supported mode is \"modern\""
-                    ),
+                    message: format!("unknown mode {value:?} -- the supported mode is \"modern\""),
                 });
             }
             mode = Some(value);

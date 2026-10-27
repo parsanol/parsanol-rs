@@ -20,9 +20,18 @@ pub fn build(
     tables: &Tables,
     bindings: Option<Value>,
 ) -> Result<Value, CompileError> {
+    build_mode(parsed, tables, bindings, None)
+}
+
+/// The envelope with the header's capture mode (ruby#304).
+pub fn build_mode(
+    parsed: &ParsedSource,
+    tables: &Tables,
+    bindings: Option<Value>,
+    mode: Option<&str>,
+) -> Result<Value, CompileError> {
     let document = &parsed.document;
-    let mut compiler =
-        compile::compiler_for_mode(document, tables, &parsed.atomic_rules, parsed.mode.as_deref())?;
+    let mut compiler = compile::compiler_for_mode(document, tables, &parsed.atomic_rules, mode)?;
 
     let mut entries = Map::new();
     for (name, rule) in &document.entries {
@@ -92,11 +101,11 @@ pub fn build(
         "source": parsed.source,
         "source_hash": source_hash(&parsed.source),
     });
-    if let Some(mode) = &parsed.mode {
+    if let Some(mode) = mode {
         // ruby#304: the opt-in capture dialect. Field-less artifacts
         // are classic; the value names the mode consumers read before
         // parsing.
-        envelope["mode"] = Value::String(mode.clone());
+        envelope["mode"] = Value::String(mode.to_string());
     }
     if document.skip_declaration.is_some() {
         envelope["skip"] = skip_source(document.skip_declaration.as_deref());
@@ -111,9 +120,10 @@ pub fn build(
 /// checksum covers this crate's version stamp, so the artifact is
 /// self-consistent and honestly provenance-stamped.
 pub fn compile_source(source: &str) -> Result<Value, String> {
-    let mut parsed = parser::parse_grammar(source).map_err(|e| e.to_string())?;
+    let (mut parsed, mode) = parser::parse_grammar_mode(source).map_err(|e| e.to_string())?;
     imports::merge(&mut parsed.document, &[]).map_err(|e| e.to_string())?;
-    let mut value = build(&parsed, &Tables::default(), None).map_err(|e| e.to_string())?;
+    let mut value = build_mode(&parsed, &Tables::default(), None, mode.as_deref())
+        .map_err(|e| e.to_string())?;
     if let Some(obj) = value.as_object_mut() {
         obj.remove("checksum");
         obj.insert(

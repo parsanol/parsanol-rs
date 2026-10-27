@@ -83,7 +83,7 @@ fn rust_compiler_matches_the_ruby_atom_streams() {
 
         let source_path = dir.join(format!("{name}.parg"));
         let source = std::fs::read_to_string(&source_path).expect("source readable");
-        let mut parsed = parser::parse_grammar(&source)
+        let (mut parsed, mode) = parser::parse_grammar_with_mode(&source)
             .unwrap_or_else(|err| panic!("{name}: rust parse failed: {err}"));
         parsed.docs.extend(
             imports::merge(&mut parsed.document, std::slice::from_ref(&dir))
@@ -106,15 +106,14 @@ fn rust_compiler_matches_the_ruby_atom_streams() {
         };
         let tables = artifact_tables(&artifact);
         for entry in &entries {
-            let grammar =
-                compile::compile_entry_mode(
-                    &parsed.document,
-                    entry,
-                    &tables,
-                    &parsed.atomic_rules,
-                    parsed.mode.as_deref(),
-                )
-                    .unwrap_or_else(|err| panic!("{name}/{entry}: rust compile failed: {err}"));
+            let grammar = compile::compile_entry_mode(
+                &parsed.document,
+                entry,
+                &tables,
+                &parsed.atomic_rules,
+                mode.as_deref(),
+            )
+            .unwrap_or_else(|err| panic!("{name}/{entry}: rust compile failed: {err}"));
             let got = serde_json::to_value(&grammar).expect("grammar serializes");
 
             let want = &artifact["entries"][entry]["grammar"];
@@ -158,14 +157,14 @@ fn rust_envelope_matches_the_ruby_artifacts() {
         let source = std::fs::read_to_string(dir.join(format!("{name}.parg")))
             .expect("source")
             .replace("\r\n", "\n");
-        let mut parsed = parser::parse_grammar(&source)
+        let (mut parsed, mode) = parser::parse_grammar_with_mode(&source)
             .unwrap_or_else(|err| panic!("{name}: rust parse failed: {err}"));
         parsed.docs.extend(
             imports::merge(&mut parsed.document, std::slice::from_ref(&dir))
                 .unwrap_or_else(|err| panic!("{name}: import merge failed: {err}")),
         );
         let tables = artifact_tables(&artifact);
-        let got = envelope::build(&parsed, &tables, None)
+        let got = envelope::build_mode(&parsed, &tables, None, mode.as_deref())
             .unwrap_or_else(|err| panic!("{name}: rust envelope failed: {err}"));
 
         for (key, want) in artifact.as_object().expect("artifact object") {
