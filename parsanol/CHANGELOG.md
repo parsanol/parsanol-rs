@@ -73,6 +73,10 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- Wire columns are character counts, not bytes (Slice parity) by @[object]
+
+### Other
+
 - The v1 alias: YAML-style legacy spelling; the corpus re-baked on the stamped ruby by @[object]
 - The v2 default: the header, the wrap, the stamps, the pinned fixtures by @[object]
 - The U3 provenance stamp: unicode_tables rides the envelope (rs#297) by @[object]
