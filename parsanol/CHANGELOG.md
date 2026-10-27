@@ -73,6 +73,12 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- The mode rides beside the parse output, not on ParsedSource (semver) by @[object]
+- The classic-compiler wrapper was dead under feature combinations by @[object]
+- Modern mode: the header, the wrap pass, and the envelope field (ruby#304) by @[object]
+
+### Other
+
 - Restore the PargArtifactJs docs my insertion displaced by @[object]
 - The wasm compiler: compileSource (site#19 seam) by @[object]
 - Imports normalize CRLF at the read boundary (docs bake LF) by @[object]
