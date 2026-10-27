@@ -167,11 +167,9 @@ fn rust_envelope_matches_the_ruby_artifacts() {
         let got = envelope::build_mode(&parsed, &tables, None, mode.as_deref())
             .unwrap_or_else(|err| panic!("{name}: rust envelope failed: {err}"));
 
+        let engine_stamps = ["checksum", "compiler_version", "unicode_tables"];
         for (key, want) in artifact.as_object().expect("artifact object") {
-            if matches!(
-                key.as_str(),
-                "checksum" | "compiler_version" | "unicode_tables"
-            ) {
+            if engine_stamps.contains(&key.as_str()) {
                 // The engine's own stamps: the compiling engine names
                 // itself (and its Unicode table source) and the
                 // checksum covers the stamp.
@@ -183,6 +181,15 @@ fn rust_envelope_matches_the_ruby_artifacts() {
                 "{name}: envelope field {key:?} drifts\n  got:  {}\n  want: {}",
                 serde_json::to_string_pretty(got.get(key).unwrap_or(&Value::Null)).unwrap(),
                 serde_json::to_string_pretty(want).unwrap()
+            );
+        }
+        // The reverse direction: a semantic field the rust envelope
+        // carries that the ruby artifact lacks is drift too (the ruby
+        // bake would be missing, say, `emission`).
+        for key in got.as_object().expect("got object").keys() {
+            assert!(
+                artifact.get(key).is_some() || engine_stamps.contains(&key.as_str()),
+                "{name}: the rust envelope carries {key:?} but the ruby artifact does not"
             );
         }
         compared += 1;
