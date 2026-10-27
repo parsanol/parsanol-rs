@@ -73,6 +73,12 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- The v1 alias: YAML-style legacy spelling; the corpus re-baked on the stamped ruby by @[object]
+- The v2 default: the header, the wrap, the stamps, the pinned fixtures by @[object]
+- The U3 provenance stamp: unicode_tables rides the envelope (rs#297) by @[object]
+
+### Other
+
 - The mode rides beside the parse output, not on ParsedSource (semver) by @[object]
 - The classic-compiler wrapper was dead under feature combinations by @[object]
 - Modern mode: the header, the wrap pass, and the envelope field (ruby#304) by @[object]
