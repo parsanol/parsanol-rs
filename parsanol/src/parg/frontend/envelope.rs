@@ -101,12 +101,9 @@ pub fn build_mode(
         "source": parsed.source,
         "source_hash": source_hash(&parsed.source),
     });
-    if let Some(mode) = mode {
-        // ruby#304: the opt-in capture dialect. Field-less artifacts
-        // are classic; the value names the mode consumers read before
-        // parsing.
-        envelope["mode"] = Value::String(mode.to_string());
-    }
+    // ruby#304: the envelope always names the capture dialect —
+    // consumers read the tree-shape contract before parsing.
+    envelope["mode"] = Value::String(mode.unwrap_or("v2").to_string());
     if document.skip_declaration.is_some() {
         envelope["skip"] = skip_source(document.skip_declaration.as_deref());
     }

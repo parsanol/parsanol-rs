@@ -1,5 +1,5 @@
 ## Semantics: K5, S1, S2, S3, S4, S5, T1, T3, C3, C5, C7, K1, A1, A2, M0, E1
-grammar ConformanceTriviaCapture version "1.0.0" {
+grammar ConformanceTriviaCapture version "1.0.0" mode "classic" {
   ## Comment-shaped trivia in capture mode (parsanol-rs#172): a comment
   ## rides with the capture it precedes under `comments:`; whitespace is
   ## never recorded; captured bytes never join span captures. The
