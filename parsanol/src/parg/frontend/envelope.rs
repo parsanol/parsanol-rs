@@ -130,6 +130,15 @@ pub fn compile_source(source: &str) -> Result<Value, String> {
             "compiler_version".to_string(),
             Value::String(env!("CARGO_PKG_VERSION").to_string()),
         );
+        // The U3 provenance stamp (rs#297): the regex crate's UCD
+        // tables are pinned transitively by this parsanol version's
+        // lockfile. An engine-specific stamp, checksummed here and
+        // excluded from the cross-engine parity set like
+        // compiler_version.
+        obj.insert(
+            "unicode_tables".to_string(),
+            Value::String(format!("regex (parsanol {})", env!("CARGO_PKG_VERSION"))),
+        );
     }
     let checksum = checksum_hex(&value).map_err(|e| e.to_string())?;
     if let Some(obj) = value.as_object_mut() {

@@ -168,7 +168,13 @@ fn rust_envelope_matches_the_ruby_artifacts() {
             .unwrap_or_else(|err| panic!("{name}: rust envelope failed: {err}"));
 
         for (key, want) in artifact.as_object().expect("artifact object") {
-            if key == "checksum" || key == "compiler_version" {
+            if matches!(
+                key.as_str(),
+                "checksum" | "compiler_version" | "unicode_tables"
+            ) {
+                // The engine's own stamps: the compiling engine names
+                // itself (and its Unicode table source) and the
+                // checksum covers the stamp.
                 continue;
             }
             assert_eq!(
