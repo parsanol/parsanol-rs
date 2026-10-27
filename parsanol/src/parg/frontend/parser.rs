@@ -549,17 +549,21 @@ impl Parser {
         document.grammar_name = self.expect_ident()?;
         self.expect_keyword("version")?;
         document.version = unquote(&self.expect_string()?)?;
-        // `mode "modern"` — the opt-in capture dialect (ruby#304).
-        // The spelling is the owner's pending decision; the mechanism
-        // is fully specified (#315) and keyed off this one token.
+        // `mode` — the capture dialect (ruby#304). THE DEFAULT IS
+        // "v2": fully named trees. `mode "classic"` preserves the
+        // legacy shape for grammars that pin it. Acceptance never
+        // changes — only tree shape — and baked artifacts are
+        // unaffected (they do not recompile).
         if self.peek().map(|t| t.kind) == Some(TokenKind::Ident)
             && self.peek().map(|t| t.value.clone()) == Some("mode".to_string())
         {
             self.expect_keyword("mode")?;
             let value = unquote(&self.expect_string()?)?;
-            if value != "modern" {
+            if !matches!(value.as_str(), "v2" | "classic") {
                 return Err(ParseError {
-                    message: format!("unknown mode {value:?} -- the supported mode is \"modern\""),
+                    message: format!(
+                        "unknown mode {value:?} -- supported modes are \"v2\" (default) and \"classic\""
+                    ),
                 });
             }
             mode = Some(value);

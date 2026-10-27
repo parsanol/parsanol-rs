@@ -241,7 +241,7 @@ impl<'a> Compiler<'a> {
             skip_wrap: None,
             skip_wrap_index: None,
             order_warnings: Vec::new(),
-            modern: mode == Some("modern"),
+            modern: mode != Some("classic"),
             skip_exempt: Vec::new(),
             skip_markers: Vec::new(),
             atoms: Vec::new(),
@@ -1694,7 +1694,7 @@ pub fn compile_entry_mode(
     compiler.flatten(&tree)
 }
 
-/// The pre-modern shape (no capture mode): none of the structural
+/// The classic shape (no capture wrapping): none of the structural
 /// fixtures declare one.
 pub fn compile_entry_with(
     document: &Document,
@@ -1726,7 +1726,8 @@ pub fn compiler_for<'a>(
 }
 
 /// The prepared compiler with the header's capture mode (ruby#304's
-/// `mode "modern"`); none is the classic dialect.
+/// `mode`); `"classic"` is the legacy dialect; the default (none or
+/// "v2") is fully named trees.
 pub fn compiler_for_mode<'a>(
     document: &'a Document,
     tables: &'a Tables,
