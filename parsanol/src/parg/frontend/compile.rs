@@ -343,13 +343,25 @@ impl<'a> Compiler<'a> {
         Ok(match node {
             INode::Named { .. } => node,
             INode::Entity { rule } => {
-                let produces = self.produces_capture(&INode::Entity { rule: rule.clone() })?;
-                if produces {
+                // A rule that can only match whitespace is glue, not a
+                // semantic capture (ruby#352): wrapping it named every
+                // gap in the tree and broke consumers that fold
+                // captures into parameters. Conservative: the rule's
+                // body is literals (through seq/alt/rep composition)
+                // and every literal trims to empty.
+                let mut seen = std::collections::BTreeMap::new();
+                seen.insert(rule.clone(), true);
+                if self.trivia_only(&rule, &mut seen)? {
                     INode::Entity { rule }
                 } else {
-                    INode::Named {
-                        name: rule.clone(),
-                        child: Box::new(INode::Entity { rule }),
+                    let produces = self.produces_capture(&INode::Entity { rule: rule.clone() })?;
+                    if produces {
+                        INode::Entity { rule }
+                    } else {
+                        INode::Named {
+                            name: rule.clone(),
+                            child: Box::new(INode::Entity { rule }),
+                        }
                     }
                 }
             }
@@ -379,6 +391,46 @@ impl<'a> Compiler<'a> {
                 maybe,
             },
             other => other,
+        })
+    }
+
+    /// Whether the named rule's body is provably whitespace-only:
+    /// literals trim to empty; seq/alt compose the verdict (all
+    /// branches), rep descends; references resolve through the rule
+    /// trees with a cycle set; anything else disqualifies.
+    fn trivia_only(
+        &mut self,
+        name: &str,
+        seen: &mut std::collections::BTreeMap<String, bool>,
+    ) -> Result<bool, CompileError> {
+        let tree = self.rule_tree(name)?;
+        self.trivia_walk(&tree, seen)
+    }
+
+    fn trivia_walk(
+        &mut self,
+        node: &INode,
+        seen: &mut std::collections::BTreeMap<String, bool>,
+    ) -> Result<bool, CompileError> {
+        Ok(match node {
+            INode::Str(text) => text.trim().is_empty(),
+            INode::Seq(items) | INode::Alt(items) => {
+                for item in items {
+                    if !self.trivia_walk(item, seen)? {
+                        return Ok(false);
+                    }
+                }
+                true
+            }
+            INode::Rep { child, .. } => self.trivia_walk(child, seen)?,
+            INode::Entity { rule } => {
+                if seen.contains_key(rule) {
+                    return Ok(false);
+                }
+                seen.insert(rule.clone(), true);
+                self.trivia_only(rule, seen)?
+            }
+            _ => false,
         })
     }
 
