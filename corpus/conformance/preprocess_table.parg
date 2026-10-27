@@ -1,5 +1,5 @@
 ## Semantics: D1, D2, B5, B3, M0, A1
-grammar ConformanceTable version "1.0.0" {
+grammar ConformanceTable version "1.0.0" mode "v1" {
   ## A stage abbreviation resolved through the stages table.
   main = alt from_table "stages" column "abbr" as abbr
 

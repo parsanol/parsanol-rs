@@ -1,5 +1,5 @@
 ## Semantics: V3, C3, K1, A1, A2, M0
-grammar ConformanceRepeatFlatten version "1.0.0" {
+grammar ConformanceRepeatFlatten version "1.0.0" mode "v1" {
   ## Mixed repetition: hash iterations survive, bare text is dropped;
   ## an all-text repetition concatenates instead.
   main = 1*( ( 1*%x61-7A ) as word / ";" )

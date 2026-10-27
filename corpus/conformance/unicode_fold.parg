@@ -3,7 +3,7 @@
 ## and every engine must agree on the folded match set. Latin-1 accents,
 ## the Greek sigma family (all four sigmas fold together), and Cyrillic
 ## pin the agreement; the plain-ASCII lookalike is the reject pin.
-grammar ConformanceUnicodeFold version "1.0.0" {
+grammar ConformanceUnicodeFold version "1.0.0" mode "v1" {
   ## Fold-matching words in three scripts, space-separated.
   latin = %i"café"
   greek = %i"σοφος"

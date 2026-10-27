@@ -1,5 +1,5 @@
 ## Semantics: I1
-grammar ConformanceHelper version "1.0.0" {
+grammar ConformanceHelper version "1.0.0" mode "v1" {
   ## A two-letter code, captured for qualified reference.
   code = 2*2(%x61-7A) as code
 

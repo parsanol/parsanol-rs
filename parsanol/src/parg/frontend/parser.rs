@@ -550,23 +550,25 @@ impl Parser {
         self.expect_keyword("version")?;
         document.version = unquote(&self.expect_string()?)?;
         // `mode` — the capture dialect (ruby#304). THE DEFAULT IS
-        // "v2": fully named trees. `mode "classic"` preserves the
-        // legacy shape for grammars that pin it. Acceptance never
-        // changes — only tree shape — and baked artifacts are
-        // unaffected (they do not recompile).
+        // "v2": fully named trees. `mode "v1"` pins the legacy shape,
+        // YAML-version-directive style; `mode "classic"` is accepted
+        // as a deprecated alias for "v1". The mode is canonicalized
+        // here — everything downstream only ever sees "v1"/"v2".
+        // Acceptance never changes — only tree shape — and baked
+        // artifacts are unaffected (they do not recompile).
         if self.peek().map(|t| t.kind) == Some(TokenKind::Ident)
             && self.peek().map(|t| t.value.clone()) == Some("mode".to_string())
         {
             self.expect_keyword("mode")?;
             let value = unquote(&self.expect_string()?)?;
-            if !matches!(value.as_str(), "v2" | "classic") {
+            if !matches!(value.as_str(), "v2" | "v1" | "classic") {
                 return Err(ParseError {
                     message: format!(
-                        "unknown mode {value:?} -- supported modes are \"v2\" (default) and \"classic\""
+                        "unknown mode {value:?} -- supported modes are \"v2\" (default) and \"v1\" (legacy)"
                     ),
                 });
             }
-            mode = Some(value);
+            mode = Some(if value == "v2" { "v2" } else { "v1" }.to_string());
         }
         self.expect_punct("{")?;
         self.block(

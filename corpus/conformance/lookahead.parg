@@ -1,5 +1,5 @@
 ## Semantics: T1, C1, C5, C7, M0, A1
-grammar ConformanceLookahead version "1.0.0" {
+grammar ConformanceLookahead version "1.0.0" mode "v1" {
   ## A key: letters not followed by an equals sign.
   plain = 1*%x61-7A !"="
   ## A key followed by a value.

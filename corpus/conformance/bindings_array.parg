@@ -1,5 +1,5 @@
 ## Semantics: B1, B2, B3, B4, C3, K1, A1, A3, M0
-grammar ConformanceBindingsArray version "1.0.0" {
+grammar ConformanceBindingsArray version "1.0.0" mode "v1" {
   ## Comma-separated integers bound as an array of objects.
   item = 1*%x30-39 as n
   main = item *( "," item )
