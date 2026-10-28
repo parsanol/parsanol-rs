@@ -564,7 +564,7 @@ impl Parser {
             if !matches!(value.as_str(), "v2" | "v1" | "classic") {
                 return Err(ParseError {
                     message: format!(
-                        "unknown mode {value:?} -- supported modes are \"v2\" (default) and \"v1\" (legacy)"
+                        "unknown mode {value:?} -- supported modes are \"v1\" (default) and \"v2\" (named trees)"
                     ),
                 });
             }
