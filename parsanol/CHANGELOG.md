@@ -74,6 +74,16 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 ### Other
 
 - Fmt by @[object]
+- The pre-0.19.7 emission names ride as deprecated shims (the semver gate) by @[object]
+- The probe's fixture artifacts (the tests reference them) by @[object]
+- The envelope field is edition; the header keyword is edition (mode = the deprecated alias); language_version removed by @[object]
+- The vm probe rides; the envelope rename completes on the rs side by @[object]
+- The default capture mode is v1; v2 is opt-in (the owner's reversal) by @[object]
+- The rs#334 rep-prefix repro (rs main rejects both shapes) by @[object]
+
+### Other
+
+- Fmt by @[object]
 - The emission stamp: envelopes declare the capture-emission level (ruby#353) by @[object]
 - Whitespace-glue rules are exempt from the v2 wrap (ruby#352) by @[object]
 
