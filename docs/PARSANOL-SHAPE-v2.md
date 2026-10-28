@@ -55,20 +55,23 @@ Loaders reject an artifact whose `shape` field is not exactly
 validation (beyond kind checking) remains the differential test suites'
 job; the loader's check is a version negotiation, not a schema walk.
 
-## Capture emission (ruby#353)
+## Language version (ruby#353)
 
-The envelope's `emission` field declares the capture-emission level the
-artifact's trees were frozen against:
+The envelope's `language_version` field declares the PARG
+language-semantics level the artifact's trees were frozen against:
 
-- **1** — the 1.3.108 implicit-capture emission (artifacts baked before
-  1.3.109; the field is absent and loaders read it as 1);
-- **2** — the current explicit emission (guard/marker/delimiter nodes
+- **1** — the 1.3.108 implicit-capture semantics (artifacts baked
+  before 1.3.109; the field is absent and loaders read it as 1);
+- **2** — the current explicit semantics (guard/marker/delimiter nodes
   appear as captures).
 
 Loaders reject a level above their own runtime's (the trees would carry
 nodes this engine never emits) and warn below it: parsing works, but
 frozen tree comparisons differ — re-bake or pin the engine. The field
 rides the checksum, and both compilers stamp the same constant, so the
-cross-engine parity gates assert it in both directions. Emission moves
-are breaking for tree-freezing consumers and ride minor versions at
-most — never patches.
+cross-engine parity gates assert it in both directions.
+Language-semantics moves are breaking for tree-freezing consumers and
+ride minor versions at most — never patches. (`language_version` names
+the SEMANTICS level of tree shapes; it is distinct from the envelope's
+`version` field — the grammar's own semver — and from the wire family
+`shape: parsanol-tree/v2`.)
