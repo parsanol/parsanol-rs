@@ -166,7 +166,10 @@ pub const SUPPORTED_SHAPE: &str = "parsanol-tree/v2";
 
 /// The pre-0.19.7 name of the edition level (the numeric form of
 /// edition "v2"): kept for the 0.19.6 callers.
-#[deprecated(since = "0.19.7", note = "use the artifact's `edition()` (the string form)")]
+#[deprecated(
+    since = "0.19.7",
+    note = "use the artifact's `edition()` (the string form)"
+)]
 pub const EMISSION_VERSION: u32 = 2;
 
 /// A verified PARG artifact envelope.
@@ -239,7 +242,11 @@ impl PargArtifact {
     /// `emission`): edition "v2" -> 2, "v1" (absent field) -> 1.
     #[deprecated(since = "0.19.7", note = "renamed to `edition()` (the string form)")]
     pub fn emission(&self) -> u32 {
-        if self.edition() == "v2" { 2 } else { 1 }
+        if self.edition() == "v2" {
+            2
+        } else {
+            1
+        }
     }
 
     /// Parse and verify an envelope from a file.
