@@ -1,0 +1,27 @@
+## rs#334: a repetition whose iteration consumes an operator and then
+## fails inside its trailing operand must ROLL the iteration back —
+## operator-suffixed trailing junk stays junk on every engine, and a
+## multi-character case-insensitive operator matches its full length.
+grammar RepPrefix version "1.0.0" {
+  ws = 1*( %x20 / %x09 )
+  pq = *ws
+  alpha = %x41-5A / %x61-7A
+  name = 1*( alpha / %x30-39 / %x5F ) as variable
+  primary = ( %x54 / %x46 ) 1*( alpha ) as literal / name / ( "(" pq or pq ")" )
+  not = ( ( %x21 ) / %i"NOT" pq ) pq primary / pq primary
+  and = not *( pq ( %i"AND" ) pq not )
+  or = and *( pq ( %i"OR" ) pq and )
+  top = pq or pq
+
+  entry main: top
+
+  test {
+    accept "a AND b"
+    accept "a OR NOT b"
+    accept "!(a AND b) OR TRUE"
+    accept "x1 AND x2 AND (x3 OR x4)"
+    reject "a AND"
+    reject "AND a"
+    reject "a AND (b"
+  }
+}
