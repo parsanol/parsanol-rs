@@ -549,22 +549,24 @@ impl Parser {
         document.grammar_name = self.expect_ident()?;
         self.expect_keyword("version")?;
         document.version = unquote(&self.expect_string()?)?;
-        // `mode` — the capture dialect (ruby#304). THE DEFAULT IS
-        // "v2": fully named trees. `mode "v1"` pins the legacy shape,
-        // YAML-version-directive style; `mode "classic"` is accepted
-        // as a deprecated alias for "v1". The mode is canonicalized
-        // here — everything downstream only ever sees "v1"/"v2".
-        // Acceptance never changes — only tree shape — and baked
-        // artifacts are unaffected (they do not recompile).
+        // `edition` — the language edition (ruby#304, ruby#357's
+        // consolidation; Rust's Cargo.toml `edition` is the model):
+        // the author declares, per grammar, which tree semantics the
+        // grammar means. THE DEFAULT IS "v1" (the legacy shapes — the
+        // owner's 2026-10-28 reversal). "v2" = fully named trees +
+        // explicit spans. `mode` remains accepted as a deprecated
+        // alias for the keyword. The edition is canonicalized here —
+        // everything downstream only ever sees "v1"/"v2".
+        let keyword = self.peek().map(|t| t.value.clone());
         if self.peek().map(|t| t.kind) == Some(TokenKind::Ident)
-            && self.peek().map(|t| t.value.clone()) == Some("mode".to_string())
+            && matches!(keyword.as_deref(), Some("edition") | Some("mode"))
         {
-            self.expect_keyword("mode")?;
+            self.bump();
             let value = unquote(&self.expect_string()?)?;
             if !matches!(value.as_str(), "v2" | "v1" | "classic") {
                 return Err(ParseError {
                     message: format!(
-                        "unknown mode {value:?} -- supported modes are \"v1\" (default) and \"v2\" (named trees)"
+                        "unknown edition {value:?} -- supported editions are \"v1\" (default) and \"v2\" (named trees)"
                     ),
                 });
             }

@@ -164,11 +164,6 @@ impl std::error::Error for PargError {}
 /// artifact is refused loudly at load, never parsed with wrong semantics.
 pub const SUPPORTED_SHAPE: &str = "parsanol-tree/v2";
 
-/// The PARG language-semantics level this runtime emits (ruby#353):
-/// 1 = the 1.3.108 implicit-capture shapes; 2 = the explicit
-/// end_guard/marker/hyphen nodes. Absent envelope field = 1.
-pub const LANGUAGE_VERSION: u32 = 2;
-
 /// A verified PARG artifact envelope.
 ///
 /// The checksum is verified at load time; a `PargArtifact` value never
@@ -213,26 +208,26 @@ impl PargArtifact {
         }
         // ruby#353: absent field = the pre-1.3.109 emission. A level
         // above this runtime's can't replay its frozen trees here.
-        let language_version = envelope
-            .get("language_version")
-            .and_then(Value::as_u64)
-            .unwrap_or(1);
-        if language_version as u32 > LANGUAGE_VERSION {
+        // ruby#357's consolidation: one axis, `edition`, values v1/v2.
+        let edition = envelope
+            .get("edition")
+            .and_then(Value::as_str)
+            .unwrap_or("v1");
+        if !matches!(edition, "v1" | "v2") {
             return Err(PargError::InvalidEnvelope(
-                "artifact declares a language_version above this runtime's — upgrade parsanol",
+                "artifact declares an edition this runtime does not know",
             ));
         }
         verify_checksum(&envelope)?;
         Ok(Self { envelope })
     }
 
-    /// The PARG language-semantics level the artifact's trees carry
-    /// (ruby#353).
-    pub fn language_version(&self) -> u32 {
+    /// The language edition the artifact's trees carry (ruby#357).
+    pub fn edition(&self) -> &str {
         self.envelope
-            .get("language_version")
-            .and_then(Value::as_u64)
-            .unwrap_or(1) as u32
+            .get("edition")
+            .and_then(Value::as_str)
+            .unwrap_or("v1")
     }
 
     /// Parse and verify an envelope from a file.
