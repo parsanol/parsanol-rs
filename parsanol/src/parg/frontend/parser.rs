@@ -522,6 +522,34 @@ impl Parser {
         }
     }
 
+    /// The header's edition spellings: the bare numbers are canonical
+    /// (Rust's Cargo.toml model); the quoted forms stay accepted as
+    /// aliases for grammars written before the numeric surface.
+    /// Returns the canonical level, "v1"/"v2" — everything downstream
+    /// sees only those.
+    fn edition_value(&mut self) -> Result<String, ParseError> {
+        let raw = match self.peek().map(|t| t.kind) {
+            Some(TokenKind::Num) => self.bump().expect("peeked").value,
+            Some(TokenKind::Str) => unquote(&self.bump().expect("peeked").value)?,
+            _ => {
+                return Err(ParseError {
+                    message: "edition must be a number (1 or 2) or a quoted alias \
+                              (\"v1\", \"v2\", \"classic\")"
+                        .to_string(),
+                })
+            }
+        };
+        match raw.as_str() {
+            "1" | "v1" | "classic" => Ok("v1".to_string()),
+            "2" | "v2" => Ok("v2".to_string()),
+            other => Err(ParseError {
+                message: format!(
+                    "unknown edition {other:?} -- supported editions are 1 (default) and 2 (named trees)"
+                ),
+            }),
+        }
+    }
+
     fn file(&mut self) -> Result<ParsedFile, ParseError> {
         let mut document = Document::default();
         let mut document_docs = BTreeMap::new();
@@ -552,8 +580,8 @@ impl Parser {
         // `edition` — the language edition (ruby#304, ruby#357's
         // consolidation; Rust's Cargo.toml `edition` is the model):
         // the author declares, per grammar, which tree semantics the
-        // grammar means. THE DEFAULT IS "v1" (the legacy shapes — the
-        // owner's 2026-10-28 reversal). "v2" = fully named trees +
+        // grammar means. THE DEFAULT IS 1 (the legacy shapes — the
+        // owner's 2026-10-28 reversal). 2 = fully named trees +
         // explicit spans. `mode` remains accepted as a deprecated
         // alias for the keyword. The edition is canonicalized here —
         // everything downstream only ever sees "v1"/"v2".
@@ -562,15 +590,7 @@ impl Parser {
             && matches!(keyword.as_deref(), Some("edition") | Some("mode"))
         {
             self.bump();
-            let value = unquote(&self.expect_string()?)?;
-            if !matches!(value.as_str(), "v2" | "v1" | "classic") {
-                return Err(ParseError {
-                    message: format!(
-                        "unknown edition {value:?} -- supported editions are \"v1\" (default) and \"v2\" (named trees)"
-                    ),
-                });
-            }
-            mode = Some(if value == "v2" { "v2" } else { "v1" }.to_string());
+            mode = Some(self.edition_value()?);
         }
         self.expect_punct("{")?;
         self.block(

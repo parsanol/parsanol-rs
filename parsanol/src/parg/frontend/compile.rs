@@ -83,6 +83,105 @@ fn escape_codepoint(code: u32) -> String {
     }
 }
 
+/// A class matches only whitespace when every codepoint it admits
+/// strips to empty — the same verdict `INode::Str` gets (ruby#352).
+fn whitespace_class(pattern: &str) -> bool {
+    // Compiled classes are the dialect `class_pattern` emits: bracket
+    // bodies of literal chars, `\t\n\v\f\r`, `\xHH`, `\uHHHH` and
+    // `\u{...}`, plus ranges between them. Anything else disqualifies.
+    let Some(body) = pattern
+        .strip_prefix('[')
+        .and_then(|rest| rest.strip_suffix(']'))
+    else {
+        return false;
+    };
+    if body.is_empty() || body.starts_with('^') {
+        return false;
+    }
+    match class_ranges(body) {
+        Some(ranges) => ranges.iter().all(|&(lo, hi)| whitespace_range(lo, hi)),
+        None => false,
+    }
+}
+
+const WHITESPACE_CODEPOINTS: [u32; 7] = [0x00, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x20];
+
+fn whitespace_range(lo: u32, hi: u32) -> bool {
+    if lo > hi {
+        return false;
+    }
+    let union = WHITESPACE_CODEPOINTS
+        .iter()
+        .filter(|&&code| code >= lo && code <= hi)
+        .count();
+    union == (hi - lo + 1) as usize
+}
+
+fn class_ranges(body: &str) -> Option<Vec<(u32, u32)>> {
+    let chars: Vec<char> = body.chars().collect();
+    let mut slots: Vec<(u32, u32)> = Vec::new();
+    let mut pending_range = false;
+    let mut index = 0usize;
+    while index < chars.len() {
+        if chars[index] == '-' && !pending_range && !slots.is_empty() {
+            pending_range = true;
+            index += 1;
+            continue;
+        }
+        let (code, next) = class_token(&chars, index)?;
+        if pending_range {
+            let previous = slots.pop()?;
+            slots.push((previous.0.min(code), previous.1.max(code)));
+            pending_range = false;
+        } else {
+            slots.push((code, code));
+        }
+        index = next;
+    }
+    if pending_range {
+        return None;
+    }
+    Some(slots)
+}
+
+fn class_token(chars: &[char], index: usize) -> Option<(u32, usize)> {
+    let ch = *chars.get(index)?;
+    if ch != '\\' {
+        return Some((ch as u32, index + 1));
+    }
+    let escaped = *chars.get(index + 1)?;
+    match escaped {
+        'x' => hex_token(chars, index + 2, 2),
+        'u' => {
+            if chars.get(index + 2) == Some(&'{') {
+                let close = chars[index + 3..].iter().position(|&c| c == '}')? + index + 3;
+                let hex: String = chars[index + 3..close].iter().collect();
+                let code = u32::from_str_radix(&hex, 16).ok()?;
+                Some((code, close + 1))
+            } else {
+                hex_token(chars, index + 2, 4)
+            }
+        }
+        't' => Some((0x09, index + 2)),
+        'n' => Some((0x0A, index + 2)),
+        'v' => Some((0x0B, index + 2)),
+        'f' => Some((0x0C, index + 2)),
+        'r' => Some((0x0D, index + 2)),
+        other => Some((other as u32, index + 2)),
+    }
+}
+
+fn hex_token(chars: &[char], start: usize, length: usize) -> Option<(u32, usize)> {
+    if start + length > chars.len() {
+        return None;
+    }
+    let hex: String = chars[start..start + length].iter().collect();
+    if !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some((u32::from_str_radix(&hex, 16).ok()?, start + length))
+}
+
 /// Ruby's `Regexp.escape` for the `(?i:…)` fold form.
 fn regexp_escape(text: &str) -> String {
     let mut out = String::new();
@@ -358,8 +457,9 @@ impl<'a> Compiler<'a> {
                 // semantic capture (ruby#352): wrapping it named every
                 // gap in the tree and broke consumers that fold
                 // captures into parameters. Conservative: the rule's
-                // body is literals (through seq/alt/rep composition)
-                // and every literal trims to empty.
+                // body is literals or whitespace-only character classes
+                // (through seq/alt/rep composition) and every member
+                // strips to empty.
                 let mut seen = std::collections::BTreeMap::new();
                 seen.insert(rule.clone(), true);
                 if self.trivia_only(&rule, &mut seen)? {
@@ -406,9 +506,10 @@ impl<'a> Compiler<'a> {
     }
 
     /// Whether the named rule's body is provably whitespace-only:
-    /// literals trim to empty; seq/alt compose the verdict (all
-    /// branches), rep descends; references resolve through the rule
-    /// trees with a cycle set; anything else disqualifies.
+    /// literals trim to empty, character classes are whitespace-only;
+    /// seq/alt compose the verdict (all branches), rep descends;
+    /// references resolve through the rule trees with a cycle set;
+    /// anything else disqualifies.
     fn trivia_only(
         &mut self,
         name: &str,
@@ -425,6 +526,7 @@ impl<'a> Compiler<'a> {
     ) -> Result<bool, CompileError> {
         Ok(match node {
             INode::Str(text) => text.trim().is_empty(),
+            INode::Re(pattern) => whitespace_class(pattern),
             INode::Seq(items) | INode::Alt(items) => {
                 for item in items {
                     if !self.trivia_walk(item, seen)? {
@@ -1851,4 +1953,22 @@ pub fn compiler_for_mode<'a>(
     mode: Option<&str>,
 ) -> Result<Compiler<'a>, CompileError> {
     Compiler::new_mode(document, tables, atomic_rules, mode)
+}
+
+#[cfg(test)]
+mod whitespace_class_tests {
+    use super::whitespace_class;
+
+    #[test]
+    fn exempts_only_whitespace_classes() {
+        assert!(whitespace_class("[ ]"));
+        assert!(whitespace_class("[\\x09]"));
+        assert!(whitespace_class("[ ]"));
+        assert!(whitespace_class("[\\x09-\\x0d]"));
+        assert!(whitespace_class("[ \\t]"));
+        assert!(!whitespace_class("[\\x30-\\x39]"));
+        assert!(!whitespace_class("[^ ]"));
+        assert!(!whitespace_class("(?i:abc)"));
+        assert!(!whitespace_class("[a-z]"));
+    }
 }

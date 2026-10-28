@@ -175,6 +175,20 @@ fn rust_envelope_matches_the_ruby_artifacts() {
                 // checksum covers the stamp.
                 continue;
             }
+            if key == "edition" {
+                // Artifacts baked before the numeric surface spell the
+                // edition "v1"/"v2"; the levels are the same, so both
+                // sides normalize (the field still gates parity).
+                assert_eq!(
+                    parsanol::parg::normalize_edition(got.get("edition")),
+                    parsanol::parg::normalize_edition(Some(want)),
+                    "{name}: edition level drifts\n  got:  {got}\n  want: {want}",
+                    got =
+                        serde_json::to_string(got.get("edition").unwrap_or(&Value::Null)).unwrap(),
+                    want = serde_json::to_string(want).unwrap(),
+                );
+                continue;
+            }
             assert_eq!(
                 got.get(key),
                 Some(want),
@@ -384,4 +398,120 @@ fn compile_source_round_trips_through_the_artifact_loader() {
         // contract is "not the null the failed parse returns".
         assert!(!shape.is_null(), "{name}: shape emitted");
     }
+}
+
+/// The numeric edition surface (ruby#357's mirror): the header takes
+/// bare integers (canonical) and the legacy quoted aliases; the
+/// envelope records the integer level.
+#[test]
+fn header_edition_spellings_canonicalize() {
+    let body = "  entry main: main\n  main = \"x\"\n";
+    let cases = [
+        ("edition 2", "v2"),
+        ("edition 1", "v1"),
+        ("edition \"v2\"", "v2"),
+        ("edition \"v1\"", "v1"),
+        ("edition \"classic\"", "v1"),
+        ("mode \"v2\"", "v2"),
+    ];
+    for (header, want) in cases {
+        let source = format!("grammar E version \"1.0.0\" {header} {{\n{body}}}\n");
+        let (_, mode) = parser::parse_grammar_with_mode(&source)
+            .unwrap_or_else(|err| panic!("{header}: parse failed: {err}"));
+        assert_eq!(mode.as_deref(), Some(want), "header {header}");
+    }
+
+    // No declaration = the default level, unpinned.
+    let source = format!("grammar E version \"1.0.0\" {{\n{body}}}\n");
+    let (_, mode) = parser::parse_grammar_with_mode(&source).unwrap();
+    assert_eq!(mode, None);
+
+    for header in ["edition 3", "edition \"future\"", "edition"] {
+        let source = format!("grammar E version \"1.0.0\" {header} {{\n{body}}}\n");
+        assert!(
+            parser::parse_grammar_with_mode(&source).is_err(),
+            "header {header:?} must be rejected"
+        );
+    }
+}
+
+#[test]
+fn the_envelope_records_the_edition_as_an_integer() {
+    for (header, want) in [("edition 2", 2u8), ("edition 1", 1), ("", 1)] {
+        let source = format!(
+            "grammar E version \"1.0.0\" {header} {{\n  entry main: main\n  main = \"x\"\n}}\n"
+        );
+        let (mut parsed, mode) = parser::parse_grammar_with_mode(&source)
+            .unwrap_or_else(|err| panic!("{header:?}: parse failed: {err}"));
+        imports::merge(&mut parsed.document, &[]).expect("merge");
+        let envelope =
+            envelope::build_mode(&parsed, &compile::Tables::default(), None, mode.as_deref())
+                .unwrap_or_else(|err| panic!("{header:?}: compile failed: {err}"));
+        assert_eq!(
+            envelope["edition"],
+            serde_json::json!(want),
+            "header {header:?}"
+        );
+    }
+}
+
+/// The edition-2 wrap exempts whitespace-only character classes too
+/// (ruby#352): `%x20`-style rules compile to `Re("[ … ]")` patterns,
+/// and only-Str detection named every gap in the tree.
+#[test]
+fn whitespace_classes_stay_glue_in_edition_2() {
+    let source = concat!(
+        "grammar G version \"1.0.0\" edition 2 {\n",
+        "  entry main: main\n",
+        "  ws = %x20 / %x09\n",
+        "  padding = 1*ws\n",
+        "  gap = %x09-0D / %x20\n",
+        "  main = word padding word2 gap word3\n",
+        "  word = 1*( %x61-7A )\n",
+        "  word2 = 1*( %x61-7A )\n",
+        "  word3 = 1*( %x61-7A )\n",
+        "}\n",
+    );
+    let names = named_atoms(source, "main");
+    assert!(!names.iter().any(|n| n == "ws"), "names: {names:?}");
+    assert!(!names.iter().any(|n| n == "padding"), "names: {names:?}");
+    assert!(!names.iter().any(|n| n == "gap"), "names: {names:?}");
+    assert!(names.iter().any(|n| n == "word"), "names: {names:?}");
+
+    // A class admitting non-whitespace stays named.
+    let source = concat!(
+        "grammar G version \"1.0.0\" edition 2 {\n",
+        "  entry main: main\n",
+        "  digit = %x30-39\n",
+        "  main = digit \"x\"\n",
+        "}\n",
+    );
+    let names = named_atoms(source, "main");
+    assert!(names.iter().any(|n| n == "digit"), "names: {names:?}");
+}
+
+fn named_atoms(source: &str, entry: &str) -> Vec<String> {
+    let (mut parsed, mode) =
+        parser::parse_grammar_with_mode(source).unwrap_or_else(|err| panic!("parse failed: {err}"));
+    imports::merge(&mut parsed.document, &[]).expect("merge");
+    let grammar = compile::compile_entry_mode(
+        &parsed.document,
+        entry,
+        &compile::Tables::default(),
+        &parsed.atomic_rules,
+        mode.as_deref(),
+    )
+    .unwrap_or_else(|err| panic!("compile failed: {err}"));
+    let value = serde_json::to_value(&grammar).expect("serialize");
+    value["atoms"]
+        .as_array()
+        .expect("atom stream")
+        .iter()
+        .filter_map(|atom| {
+            atom.get("Named")
+                .and_then(|named| named.get("name"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .collect()
 }

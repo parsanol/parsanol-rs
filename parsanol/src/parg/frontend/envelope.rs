@@ -101,11 +101,14 @@ pub fn build_mode(
         "source": parsed.source,
         "source_hash": source_hash(&parsed.source),
     });
-    // ruby#304; the default is v1 (the owner's reversal, 2026-10-28:
+    // ruby#304; the default is 1 (the owner's reversal, 2026-10-28:
     // runtime compiles of unpinned sources must keep the legacy shapes —
-    // the pubid fleet froze against them). v2 stays opt-in via the
-    // header; the envelope always names the dialect.
-    envelope["edition"] = Value::String(mode.unwrap_or("v1").to_string());
+    // the pubid fleet froze against them). Edition 2 stays opt-in via
+    // the header; the envelope always names the edition. The numeric
+    // form is canonical (ruby#357): the loader keeps the legacy quoted
+    // spellings readable, but new artifacts carry the integer.
+    let edition: u8 = if mode == Some("v2") { 2 } else { 1 };
+    envelope["edition"] = Value::from(edition);
     if document.skip_declaration.is_some() {
         envelope["skip"] = skip_source(document.skip_declaration.as_deref());
     }
