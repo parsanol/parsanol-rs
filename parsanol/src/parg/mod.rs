@@ -164,6 +164,11 @@ impl std::error::Error for PargError {}
 /// artifact is refused loudly at load, never parsed with wrong semantics.
 pub const SUPPORTED_SHAPE: &str = "parsanol-tree/v2";
 
+/// The pre-0.19.7 name of the edition level (the numeric form of
+/// edition "v2"): kept for the 0.19.6 callers.
+#[deprecated(since = "0.19.7", note = "use the artifact's `edition()` (the string form)")]
+pub const EMISSION_VERSION: u32 = 2;
+
 /// A verified PARG artifact envelope.
 ///
 /// The checksum is verified at load time; a `PargArtifact` value never
@@ -228,6 +233,13 @@ impl PargArtifact {
             .get("edition")
             .and_then(Value::as_str)
             .unwrap_or("v1")
+    }
+
+    /// The edition as the numeric level (the pre-0.19.7 name
+    /// `emission`): edition "v2" -> 2, "v1" (absent field) -> 1.
+    #[deprecated(since = "0.19.7", note = "renamed to `edition()` (the string form)")]
+    pub fn emission(&self) -> u32 {
+        if self.edition() == "v2" { 2 } else { 1 }
     }
 
     /// Parse and verify an envelope from a file.
