@@ -106,9 +106,10 @@ pub fn build_mode(
     // the pubid fleet froze against them). v2 stays opt-in via the
     // header; the envelope always names the dialect.
     envelope["mode"] = Value::String(mode.unwrap_or("v1").to_string());
-    // ruby#353: the capture-emission level the trees were frozen
-    // against (must match the ruby compiler's Artifact::EMISSION_VERSION).
-    envelope["emission"] = Value::from(crate::parg::EMISSION_VERSION);
+    // ruby#353: the PARG language-semantics level the trees were
+    // frozen against (must match the ruby compiler's
+    // Artifact::LANGUAGE_VERSION).
+    envelope["language_version"] = Value::from(crate::parg::LANGUAGE_VERSION);
     if document.skip_declaration.is_some() {
         envelope["skip"] = skip_source(document.skip_declaration.as_deref());
     }

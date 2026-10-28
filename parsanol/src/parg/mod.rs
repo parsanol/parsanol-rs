@@ -164,10 +164,10 @@ impl std::error::Error for PargError {}
 /// artifact is refused loudly at load, never parsed with wrong semantics.
 pub const SUPPORTED_SHAPE: &str = "parsanol-tree/v2";
 
-/// The capture-emission level this runtime emits (ruby#353): 1 = the
-/// 1.3.108 implicit-capture emission; 2 = the explicit
+/// The PARG language-semantics level this runtime emits (ruby#353):
+/// 1 = the 1.3.108 implicit-capture shapes; 2 = the explicit
 /// end_guard/marker/hyphen nodes. Absent envelope field = 1.
-pub const EMISSION_VERSION: u32 = 2;
+pub const LANGUAGE_VERSION: u32 = 2;
 
 /// A verified PARG artifact envelope.
 ///
@@ -213,23 +213,24 @@ impl PargArtifact {
         }
         // ruby#353: absent field = the pre-1.3.109 emission. A level
         // above this runtime's can't replay its frozen trees here.
-        let emission = envelope
-            .get("emission")
+        let language_version = envelope
+            .get("language_version")
             .and_then(Value::as_u64)
             .unwrap_or(1);
-        if emission as u32 > EMISSION_VERSION {
+        if language_version as u32 > LANGUAGE_VERSION {
             return Err(PargError::InvalidEnvelope(
-                "artifact declares a capture emission above this runtime's — upgrade parsanol",
+                "artifact declares a language_version above this runtime's — upgrade parsanol",
             ));
         }
         verify_checksum(&envelope)?;
         Ok(Self { envelope })
     }
 
-    /// The capture-emission level the artifact's trees carry (ruby#353).
-    pub fn emission(&self) -> u32 {
+    /// The PARG language-semantics level the artifact's trees carry
+    /// (ruby#353).
+    pub fn language_version(&self) -> u32 {
         self.envelope
-            .get("emission")
+            .get("language_version")
             .and_then(Value::as_u64)
             .unwrap_or(1) as u32
     }

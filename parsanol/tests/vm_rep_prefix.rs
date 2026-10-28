@@ -8,7 +8,11 @@ use parsanol::PargArtifact;
 
 #[test]
 fn rep_iteration_rolls_back_on_failure() {
-    let text = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures_bool334.json")).expect("artifact");
+    let text = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures_pci334.json"
+    ))
+    .expect("artifact");
     let artifact = PargArtifact::from_json(&text).expect("artifact loads");
     assert!(
         artifact.parse_shape("main", "a AND").is_err(),
