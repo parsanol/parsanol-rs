@@ -105,11 +105,7 @@ pub fn build_mode(
     // runtime compiles of unpinned sources must keep the legacy shapes —
     // the pubid fleet froze against them). v2 stays opt-in via the
     // header; the envelope always names the dialect.
-    envelope["mode"] = Value::String(mode.unwrap_or("v1").to_string());
-    // ruby#353: the PARG language-semantics level the trees were
-    // frozen against (must match the ruby compiler's
-    // Artifact::LANGUAGE_VERSION).
-    envelope["language_version"] = Value::from(crate::parg::LANGUAGE_VERSION);
+    envelope["edition"] = Value::String(mode.unwrap_or("v1").to_string());
     if document.skip_declaration.is_some() {
         envelope["skip"] = skip_source(document.skip_declaration.as_deref());
     }
