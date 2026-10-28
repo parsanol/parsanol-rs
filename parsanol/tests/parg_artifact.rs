@@ -83,3 +83,48 @@ fn canonical_json_renders_floats_like_the_ruby_json_gem() {
     let value: serde_json::Value = serde_json::from_str("{\"x\":1.5,\"y\":2.0}").unwrap();
     assert_eq!(canonical_json(&value).unwrap(), "{\"x\":1.5,\"y\":2.0}");
 }
+
+/// The numeric edition surface (ruby#357): integers are canonical; the
+/// quoted v-forms stay loadable so artifacts baked before the numeric
+/// surface remain readable. Absent = edition 1.
+#[test]
+fn normalizes_every_edition_spelling_that_has_shipped() {
+    for (spelling, level) in [
+        (serde_json::json!(1), 1u8),
+        (serde_json::json!("1"), 1),
+        (serde_json::json!("v1"), 1),
+        (serde_json::json!("classic"), 1),
+        (serde_json::json!(2), 2),
+        (serde_json::json!("2"), 2),
+        (serde_json::json!("v2"), 2),
+        (serde_json::json!(null), 1),
+    ] {
+        let artifact = resign_with_edition(&spelling)
+            .unwrap_or_else(|err| panic!("spelling {spelling}: load failed: {err:?}"));
+        assert_eq!(
+            artifact.edition(),
+            level,
+            "spelling {spelling} must normalize to level {level}"
+        );
+    }
+}
+
+#[test]
+fn rejects_an_edition_this_runtime_does_not_know() {
+    for spelling in [serde_json::json!(3), serde_json::json!("future")] {
+        match resign_with_edition(&spelling) {
+            Err(PargError::InvalidEnvelope(_)) => {}
+            other => panic!("spelling {spelling}: expected InvalidEnvelope, got {other:?}"),
+        }
+    }
+}
+
+/// Re-sign the fixture with the given edition spelling and load it.
+fn resign_with_edition(spelling: &serde_json::Value) -> Result<PargArtifact, PargError> {
+    let mut value: serde_json::Value = serde_json::from_str(FIXTURE).unwrap();
+    value["edition"] = spelling.clone();
+    value.as_object_mut().unwrap().remove("checksum");
+    let computed = parsanol::parg::checksum_hex(&value).unwrap();
+    value["checksum"] = serde_json::Value::String(computed);
+    PargArtifact::from_json(&serde_json::to_string(&value).unwrap())
+}

@@ -164,12 +164,9 @@ impl std::error::Error for PargError {}
 /// artifact is refused loudly at load, never parsed with wrong semantics.
 pub const SUPPORTED_SHAPE: &str = "parsanol-tree/v2";
 
-/// The pre-0.19.7 name of the edition level (the numeric form of
-/// edition "v2"): kept for the 0.19.6 callers.
-#[deprecated(
-    since = "0.19.7",
-    note = "use the artifact's `edition()` (the string form)"
-)]
+/// The pre-0.19.7 name of the edition level (edition 2): kept for the
+/// 0.19.6 callers.
+#[deprecated(since = "0.19.7", note = "use the artifact's `edition()`")]
 pub const EMISSION_VERSION: u32 = 2;
 
 /// A verified PARG artifact envelope.
@@ -179,6 +176,27 @@ pub const EMISSION_VERSION: u32 = 2;
 #[derive(Debug, Clone)]
 pub struct PargArtifact {
     envelope: Value,
+}
+
+/// The spellings that have shipped: the numeric form is canonical,
+/// and the legacy quoted forms stay loadable so artifacts baked
+/// before the numeric surface remain readable. Absent = edition 1.
+/// Public so the parity gates normalize both sides the same way.
+pub fn normalize_edition(value: Option<&Value>) -> Option<u8> {
+    match value {
+        None | Some(Value::Null) => Some(1),
+        Some(Value::Number(n)) => match n.as_u64() {
+            Some(1) => Some(1),
+            Some(2) => Some(2),
+            _ => None,
+        },
+        Some(Value::String(s)) => match s.as_str() {
+            "1" | "v1" | "classic" => Some(1),
+            "2" | "v2" => Some(2),
+            _ => None,
+        },
+        Some(_) => None,
+    }
 }
 
 fn collect_terminals(atoms: &[Value], terms: &mut Vec<String>) {
@@ -214,39 +232,30 @@ impl PargArtifact {
         if shape != SUPPORTED_SHAPE {
             return Err(PargError::UnsupportedShape(shape.to_string()));
         }
-        // ruby#353: absent field = the pre-1.3.109 emission. A level
+        // ruby#353: absent field = the pre-1.3.109 artifacts. A level
         // above this runtime's can't replay its frozen trees here.
-        // ruby#357's consolidation: one axis, `edition`, values v1/v2.
-        let edition = envelope
-            .get("edition")
-            .and_then(Value::as_str)
-            .unwrap_or("v1");
-        if !matches!(edition, "v1" | "v2") {
-            return Err(PargError::InvalidEnvelope(
-                "artifact declares an edition this runtime does not know",
-            ));
-        }
+        // ruby#357's consolidation: one axis, `edition`, levels 1/2.
+        // The numeric form is canonical; the quoted v-forms stay
+        // loadable so artifacts baked before the numeric surface
+        // remain readable.
+        normalize_edition(envelope.get("edition")).ok_or(PargError::InvalidEnvelope(
+            "artifact declares an edition this runtime does not know",
+        ))?;
         verify_checksum(&envelope)?;
         Ok(Self { envelope })
     }
 
-    /// The language edition the artifact's trees carry (ruby#357).
-    pub fn edition(&self) -> &str {
-        self.envelope
-            .get("edition")
-            .and_then(Value::as_str)
-            .unwrap_or("v1")
+    /// The language edition the artifact's trees carry (ruby#357):
+    /// 1 = the legacy shapes, 2 = fully named trees. Legacy artifacts
+    /// that spell the field "v2" (or omit it) normalize here.
+    pub fn edition(&self) -> u8 {
+        normalize_edition(self.envelope.get("edition")).unwrap_or(1)
     }
 
-    /// The edition as the numeric level (the pre-0.19.7 name
-    /// `emission`): edition "v2" -> 2, "v1" (absent field) -> 1.
-    #[deprecated(since = "0.19.7", note = "renamed to `edition()` (the string form)")]
+    /// The edition level (the pre-0.19.7 name `emission`).
+    #[deprecated(since = "0.19.7", note = "renamed to `edition()`")]
     pub fn emission(&self) -> u32 {
-        if self.edition() == "v2" {
-            2
-        } else {
-            1
-        }
+        u32::from(self.edition())
     }
 
     /// Parse and verify an envelope from a file.
