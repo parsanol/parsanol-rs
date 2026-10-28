@@ -73,6 +73,11 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- Numeric capture editions + whitespace-class glue (the rs mirror) by @[object]
+- Compile mutually recursive grammars: the wire walker mirrors the serializer's identity memo (rs#334) by @[object]
+
+### Other
+
 - Fmt by @[object]
 - The pre-0.19.7 emission names ride as deprecated shims (the semver gate) by @[object]
 - The probe's fixture artifacts (the tests reference them) by @[object]
