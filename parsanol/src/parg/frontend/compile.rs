@@ -241,7 +241,7 @@ impl<'a> Compiler<'a> {
             skip_wrap: None,
             skip_wrap_index: None,
             order_warnings: Vec::new(),
-            modern: mode != Some("v1"),
+            modern: mode == Some("v2"),
             skip_exempt: Vec::new(),
             skip_markers: Vec::new(),
             atoms: Vec::new(),
