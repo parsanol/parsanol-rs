@@ -207,10 +207,18 @@ pub struct Compiler<'a> {
     /// Rule name → injected tree (the Ruby atom_for cache).
     trees: BTreeMap<String, INode>,
     building: Vec<String>,
-    /// Rule name → top atom index (the Ruby serializer's memo: the
-    /// first reference emits the subtree, later references point at
-    /// it).
+    /// Rule name → emitted body atom index (the Ruby serializer's
+    /// object memo: a COMPLETED body is shared; a body still being
+    /// serialized is duplicated, exactly like the Ruby).
     rule_indices: BTreeMap<String, usize>,
+    /// (owner rule, node's structural path inside that body) → emitted
+    /// atom. The Ruby serializer memoizes every atom object, so a
+    /// completed subtree is shared while a subtree still on the
+    /// serialization stack is emitted again; a body's structure is
+    /// fixed, so the path stands in for the object identity the Ruby
+    /// uses (rs#334: this is what lets a mutually recursive grammar
+    /// terminate byte-identically).
+    atom_ids: BTreeMap<(String, Vec<u32>), usize>,
     skip_wrap: Option<INode>,
     /// The memoized wrapper's emitted index: the Ruby wire serializes
     /// the (single, shared) skip wrapper object once — every
@@ -238,6 +246,7 @@ impl<'a> Compiler<'a> {
             trees: BTreeMap::new(),
             building: Vec::new(),
             rule_indices: BTreeMap::new(),
+            atom_ids: BTreeMap::new(),
             skip_wrap: None,
             skip_wrap_index: None,
             order_warnings: Vec::new(),
@@ -274,14 +283,16 @@ impl<'a> Compiler<'a> {
     /// Ruby portable_json).
     pub fn compile_entry_grammar(&mut self, rule: &str) -> Result<Grammar, CompileError> {
         let tree = self.rule_tree(rule)?;
-        self.flatten(&tree)
+        self.flatten(&tree, rule)
     }
 
     /// A resync pattern as its own mini-grammar: raw match, no trivia
     /// injection (the pattern delimits junk, it is not syntax).
     pub fn compile_resync_grammar(&mut self, pattern: &Node) -> Result<Grammar, CompileError> {
         let tree = self.build(pattern)?;
-        self.flatten(&tree)
+        // A resync pattern is not a rule; the owner is only the entity
+        // memo's namespace, and resync patterns carry no references.
+        self.flatten(&tree, "@resync")
     }
 
     /// The rule's atom tree: built once, wrapped with trivia injection
@@ -1148,11 +1159,13 @@ impl<'a> Compiler<'a> {
     /// The pre-order walk to the wire: the Entity emits at its own
     /// slot with a forward target index; the skip wrapper duplicates
     /// at every injection site (the Ruby wire duplicates it too).
-    fn flatten(&mut self, tree: &INode) -> Result<Grammar, CompileError> {
+    fn flatten(&mut self, tree: &INode, owner: &str) -> Result<Grammar, CompileError> {
         self.atoms.clear();
         self.rule_indices.clear();
+        self.atom_ids.clear();
         self.skip_wrap_index = None;
-        let root = self.walk(tree)?;
+        let mut path = Vec::new();
+        let root = self.walk(tree, owner, &mut path)?;
         Ok(Grammar {
             atoms: std::mem::take(&mut self.atoms),
             root,
@@ -1165,7 +1178,49 @@ impl<'a> Compiler<'a> {
         self.atoms.len() - 1
     }
 
-    fn walk(&mut self, node: &INode) -> Result<usize, CompileError> {
+    /// Resolve a rule reference to its body atom. A body still being
+    /// walked has no index yet, so re-entry emits a duplicate — the
+    /// Ruby serializer's behavior for mutually recursive grammars
+    /// (its object memo is filled only on completion). That is what
+    /// bounds the recursion: the duplicate's already-emitted atoms
+    /// hit their memo entries (rs#334).
+    fn walk_rule(&mut self, rule: &str) -> Result<usize, CompileError> {
+        if let Some(&index) = self.rule_indices.get(rule) {
+            return Ok(index);
+        }
+        let tree = self.rule_tree(rule)?;
+        let mut path = Vec::new();
+        let index = self.walk(&tree, rule, &mut path)?;
+        self.rule_indices.insert(rule.to_string(), index);
+        Ok(index)
+    }
+
+    fn walk(
+        &mut self,
+        node: &INode,
+        owner: &str,
+        path: &mut Vec<u32>,
+    ) -> Result<usize, CompileError> {
+        let key = (owner.to_string(), path.clone());
+        if let Some(&index) = self.atom_ids.get(&key) {
+            return Ok(index);
+        }
+        let index = self.walk_new(node, owner, path, &key)?;
+        self.atom_ids.insert(key, index);
+        Ok(index)
+    }
+
+    /// Emit the node's atom. Children are keyed by their structural
+    /// path inside the body, so a memo hit on one child cannot shift
+    /// the identity of its later siblings (the Ruby keys on object
+    /// identity, which is positional in the same way).
+    fn walk_new(
+        &mut self,
+        node: &INode,
+        owner: &str,
+        path: &mut Vec<u32>,
+        key: &(String, Vec<u32>),
+    ) -> Result<usize, CompileError> {
         Ok(match node {
             INode::Str(text) => self.push(Atom::Str {
                 pattern: text.clone(),
@@ -1174,17 +1229,21 @@ impl<'a> Compiler<'a> {
                 pattern: pattern.clone(),
             }),
             INode::Seq(items) => {
-                let indices = items
-                    .iter()
-                    .map(|child| self.walk(child))
-                    .collect::<Result<Vec<_>, _>>()?;
+                let mut indices = Vec::with_capacity(items.len());
+                for (position, child) in items.iter().enumerate() {
+                    path.push(position as u32);
+                    indices.push(self.walk(child, owner, path)?);
+                    path.pop();
+                }
                 self.push(Atom::Sequence { atoms: indices })
             }
             INode::Alt(branches) => {
-                let indices = branches
-                    .iter()
-                    .map(|child| self.walk(child))
-                    .collect::<Result<Vec<_>, _>>()?;
+                let mut indices = Vec::with_capacity(branches.len());
+                for (position, child) in branches.iter().enumerate() {
+                    path.push(position as u32);
+                    indices.push(self.walk(child, owner, path)?);
+                    path.pop();
+                }
                 self.push(Atom::Alternative { atoms: indices })
             }
             INode::Rep {
@@ -1193,7 +1252,9 @@ impl<'a> Compiler<'a> {
                 max,
                 maybe,
             } => {
-                let child = self.walk(child)?;
+                path.push(0);
+                let child = self.walk(child, owner, path)?;
+                path.pop();
                 self.push(Atom::Repetition {
                     atom: child,
                     min: *min as usize,
@@ -1206,7 +1267,9 @@ impl<'a> Compiler<'a> {
                 })
             }
             INode::Lookahead { child, positive } => {
-                let child = self.walk(child)?;
+                path.push(0);
+                let child = self.walk(child, owner, path)?;
+                path.pop();
                 self.push(Atom::Lookahead {
                     atom: child,
                     positive: *positive,
@@ -1217,22 +1280,21 @@ impl<'a> Compiler<'a> {
                 positive: *positive,
             }),
             INode::Named { name, child } => {
-                let child = self.walk(child)?;
+                path.push(0);
+                let child = self.walk(child, owner, path)?;
+                path.pop();
                 self.push(Atom::Named {
                     name: name.clone(),
                     atom: child,
                 })
             }
             INode::Entity { rule } => {
+                // The Ruby serializer reserves the Entity atom BEFORE
+                // resolving the rule, so a cycle closes on the reserved
+                // slot instead of recursing forever.
                 let slot = self.push(Atom::Entity { atom: usize::MAX });
-                let target = if let Some(&index) = self.rule_indices.get(rule) {
-                    index
-                } else {
-                    let tree = self.rule_tree(rule)?;
-                    let index = self.walk(&tree)?;
-                    self.rule_indices.insert(rule.clone(), index);
-                    index
-                };
+                self.atom_ids.insert(key.clone(), slot);
+                let target = self.walk_rule(rule)?;
                 self.atoms[slot] = Atom::Entity { atom: target };
                 slot
             }
@@ -1240,7 +1302,9 @@ impl<'a> Compiler<'a> {
                 if let Some(index) = self.skip_wrap_index {
                     return Ok(index);
                 }
-                let inner = self.walk(inner)?;
+                path.push(0);
+                let inner = self.walk(inner, owner, path)?;
+                path.pop();
                 let index = if self.document.skip_capture.is_some() {
                     self.push(Atom::TriviaCapture {
                         atom: inner,
@@ -1743,7 +1807,7 @@ pub fn compile_entry_mode(
 
     let mut compiler = Compiler::new_mode(document, tables, atomic_rules, mode)?;
     let tree = compiler.rule_tree(&rule)?;
-    compiler.flatten(&tree)
+    compiler.flatten(&tree, &rule)
 }
 
 /// The classic shape (no capture wrapping): none of the structural
