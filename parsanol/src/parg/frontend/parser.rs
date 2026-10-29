@@ -305,10 +305,6 @@ pub struct Document {
     pub skip_declaration: Option<Box<Node>>,
     /// The `capture:` name on the skip declaration, when present.
     pub skip_capture: Option<String>,
-    /// `glue <rule> [<rule>…]` names (parsanol-ruby#364): rules whose
-    /// references edition 2 never wraps. Crate-internal: the compiler
-    /// consumes it; the public surface is the grammar source itself.
-    pub(crate) glue_rules: Vec<String>,
 }
 
 /// A parse failure: what and (loosely) where.
@@ -334,12 +330,16 @@ impl From<LexError> for ParseError {
     }
 }
 
-/// What the file parser produces: document, atomic names, docs.
+/// What the file parser produces: document, atomic names, docs, mode,
+/// glue names. Glue rides the private tuple (never a public struct):
+/// adding to an exhaustively-constructible pub struct is a semver
+/// major, and the declaration is compile-time-only (ruby#364).
 type ParsedFile = (
     Document,
     Vec<String>,
     BTreeMap<String, String>,
     Option<String>,
+    Vec<String>,
 );
 
 /// The parse output that compiles from: the parity document plus the
@@ -375,6 +375,16 @@ pub fn parse_grammar_with_mode(source: &str) -> Result<(ParsedSource, Option<Str
     parse_grammar_mode(source)
 }
 
+/// The glue-carrying parse (parsanol-ruby#364): the declared glue
+/// names ride the tuple for the same reason mode does — a field on
+/// the public structs is a semver major, and the declaration is
+/// compile-time-only.
+pub fn parse_grammar_with_glue(
+    source: &str,
+) -> Result<(ParsedSource, Option<String>, Vec<String>), ParseError> {
+    parse_grammar_mode_glue(source)
+}
+
 /// The document plus its `atomic` rule names (the slice-4b shape).
 pub fn parse_with_atomic(source: &str) -> Result<(Document, Vec<String>), ParseError> {
     parse_grammar(source).map(|parsed| (parsed.document, parsed.atomic_rules))
@@ -390,8 +400,18 @@ pub fn parse_grammar(source: &str) -> Result<ParsedSource, ParseError> {
 pub(crate) fn parse_grammar_mode(
     source: &str,
 ) -> Result<(ParsedSource, Option<String>), ParseError> {
+    parse_grammar_mode_glue(source).map(|(parsed, mode, _glue_rules)| (parsed, mode))
+}
+
+/// The glue-carrying parse (parsanol-ruby#364): the glue names ride
+/// the tuple for the same reason mode does — a field on the public
+/// structs is a semver major, and the declaration is compile-time-only
+/// (the artifact's atoms are ordinary either way).
+pub(crate) fn parse_grammar_mode_glue(
+    source: &str,
+) -> Result<(ParsedSource, Option<String>, Vec<String>), ParseError> {
     let tokens = lex(source)?;
-    let (document, atomic_rules, docs, mode) = Parser::new(tokens).file()?;
+    let (document, atomic_rules, docs, mode, glue_rules) = Parser::new(tokens).file()?;
     let own_entries = document
         .entries
         .iter()
@@ -406,6 +426,7 @@ pub(crate) fn parse_grammar_mode(
             source: source.to_string(),
         },
         mode,
+        glue_rules,
     ))
 }
 
@@ -558,6 +579,7 @@ impl Parser {
         let mut document = Document::default();
         let mut document_docs = BTreeMap::new();
         let mut atomic_rules = Vec::new();
+        let mut glue_rules = Vec::new();
         let mut mode = None;
         // Top-level items: `##` doc comments and `use` imports precede
         // the grammar block.
@@ -601,10 +623,11 @@ impl Parser {
             &mut document,
             &mut document_docs,
             &mut atomic_rules,
+            &mut glue_rules,
             &mut Vec::new(),
         )?;
         self.skip_blank();
-        Ok((document, atomic_rules, document_docs, mode))
+        Ok((document, atomic_rules, document_docs, mode, glue_rules))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -613,6 +636,7 @@ impl Parser {
         document: &mut Document,
         document_docs: &mut BTreeMap<String, String>,
         atomic_rules: &mut Vec<String>,
+        glue_rules: &mut Vec<String>,
         docs: &mut Vec<String>,
     ) -> Result<(), ParseError> {
         loop {
@@ -660,7 +684,7 @@ impl Parser {
                     }
                     "glue" => {
                         docs.clear();
-                        self.glue_rules(document)?;
+                        self.glue_names(glue_rules)?;
                     }
                     "render" | "derive" | "import" => {
                         // No corpus fixture exercises these; recognized
@@ -703,7 +727,7 @@ impl Parser {
     /// `glue <rule> [<rule>…]` (parsanol-ruby#364): names rules whose
     /// references edition 2 never wraps. Same-line names accumulate;
     /// the declaration may appear any number of times.
-    fn glue_rules(&mut self, document: &mut Document) -> Result<(), ParseError> {
+    fn glue_names(&mut self, glue_rules: &mut Vec<String>) -> Result<(), ParseError> {
         self.pos += 1; // the `glue` keyword
         let mut names = Vec::new();
         while matches!(self.peek().map(|t| t.kind), Some(TokenKind::Ident)) {
@@ -714,7 +738,7 @@ impl Parser {
                 message: "glue must name at least one rule".to_string(),
             });
         }
-        document.glue_rules.extend(names);
+        glue_rules.extend(names);
         Ok(())
     }
 

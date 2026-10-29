@@ -30,8 +30,23 @@ pub fn build_mode(
     bindings: Option<Value>,
     mode: Option<&str>,
 ) -> Result<Value, CompileError> {
+    build_mode_glue(parsed, tables, bindings, mode, &[])
+}
+
+/// The glue-carrying envelope (parsanol-ruby#364): the declared glue
+/// names ride a parameter, never a public struct field — adding to an
+/// exhaustively-constructible pub struct is a semver major, and the
+/// declaration is compile-time-only.
+pub fn build_mode_glue(
+    parsed: &ParsedSource,
+    tables: &Tables,
+    bindings: Option<Value>,
+    mode: Option<&str>,
+    glue_rules: &[String],
+) -> Result<Value, CompileError> {
     let document = &parsed.document;
-    let mut compiler = compile::compiler_for_mode(document, tables, &parsed.atomic_rules, mode)?;
+    let mut compiler =
+        compile::compiler_for_mode_glue(document, tables, &parsed.atomic_rules, mode, glue_rules)?;
 
     let mut entries = Map::new();
     for (name, rule) in &document.entries {
@@ -122,10 +137,17 @@ pub fn build_mode(
 /// checksum covers this crate's version stamp, so the artifact is
 /// self-consistent and honestly provenance-stamped.
 pub fn compile_source(source: &str) -> Result<Value, String> {
-    let (mut parsed, mode) = parser::parse_grammar_mode(source).map_err(|e| e.to_string())?;
+    let (mut parsed, mode, glue_rules) =
+        parser::parse_grammar_mode_glue(source).map_err(|e| e.to_string())?;
     imports::merge(&mut parsed.document, &[]).map_err(|e| e.to_string())?;
-    let mut value = build_mode(&parsed, &Tables::default(), None, mode.as_deref())
-        .map_err(|e| e.to_string())?;
+    let mut value = build_mode_glue(
+        &parsed,
+        &Tables::default(),
+        None,
+        mode.as_deref(),
+        &glue_rules,
+    )
+    .map_err(|e| e.to_string())?;
     if let Some(obj) = value.as_object_mut() {
         obj.remove("checksum");
         obj.insert(
