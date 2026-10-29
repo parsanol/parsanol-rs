@@ -339,6 +339,7 @@ impl<'a> Compiler<'a> {
         tables: &'a Tables,
         atomic_rules: &[String],
         mode: Option<&str>,
+        glue_rules: &[String],
     ) -> Result<Self, CompileError> {
         let mut compiler = Compiler {
             document,
@@ -353,7 +354,7 @@ impl<'a> Compiler<'a> {
             skip_wrap_index: None,
             order_warnings: Vec::new(),
             modern: mode == Some("v2"),
-            glue_rules: document.glue_rules.clone(),
+            glue_rules: glue_rules.to_vec(),
             skip_exempt: Vec::new(),
             skip_markers: Vec::new(),
             atoms: Vec::new(),
@@ -1922,7 +1923,31 @@ pub fn compile_entry_mode(
             message: format!("unknown entry {entry:?}"),
         })?;
 
-    let mut compiler = Compiler::new_mode(document, tables, atomic_rules, mode)?;
+    compile_entry_mode_glue(document, entry, tables, atomic_rules, mode, &[])
+}
+
+/// The glue-carrying entry compile (parsanol-ruby#364): the declared
+/// glue names ride a parameter, never a public struct field — adding
+/// to an exhaustively-constructible pub struct is a semver major, and
+/// the declaration is compile-time-only.
+pub fn compile_entry_mode_glue(
+    document: &Document,
+    entry: &str,
+    tables: &Tables,
+    atomic_rules: &[String],
+    mode: Option<&str>,
+    glue_rules: &[String],
+) -> Result<Grammar, CompileError> {
+    let rule = document
+        .entries
+        .iter()
+        .find(|(name, _)| name == entry)
+        .map(|(_, rule)| rule.clone())
+        .ok_or_else(|| CompileError {
+            message: format!("unknown entry {entry:?}"),
+        })?;
+
+    let mut compiler = Compiler::new_mode(document, tables, atomic_rules, mode, glue_rules)?;
     let tree = compiler.rule_tree(&rule)?;
     compiler.flatten(&tree, &rule)
 }
@@ -1967,7 +1992,18 @@ pub fn compiler_for_mode<'a>(
     atomic_rules: &[String],
     mode: Option<&str>,
 ) -> Result<Compiler<'a>, CompileError> {
-    Compiler::new_mode(document, tables, atomic_rules, mode)
+    compiler_for_mode_glue(document, tables, atomic_rules, mode, &[])
+}
+
+/// The glue-carrying prepared compiler (parsanol-ruby#364).
+pub fn compiler_for_mode_glue<'a>(
+    document: &'a Document,
+    tables: &'a Tables,
+    atomic_rules: &[String],
+    mode: Option<&str>,
+    glue_rules: &[String],
+) -> Result<Compiler<'a>, CompileError> {
+    Compiler::new_mode(document, tables, atomic_rules, mode, glue_rules)
 }
 
 #[cfg(test)]

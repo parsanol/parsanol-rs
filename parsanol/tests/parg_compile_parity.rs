@@ -531,7 +531,30 @@ fn glue_declaration_keeps_the_chain_anonymous() {
         "  main = \"a\" ws \"b\"\n",
         "}\n",
     );
-    let names = named_atoms(source, "main");
+    let (mut parsed, mode, glue_rules) =
+        parser::parse_grammar_with_glue(source).unwrap_or_else(|err| panic!("parse failed: {err}"));
+    imports::merge(&mut parsed.document, &[]).expect("merge");
+    let grammar = compile::compile_entry_mode_glue(
+        &parsed.document,
+        "main",
+        &compile::Tables::default(),
+        &parsed.atomic_rules,
+        mode.as_deref(),
+        &glue_rules,
+    )
+    .unwrap_or_else(|err| panic!("compile failed: {err}"));
+    let value = serde_json::to_value(&grammar).expect("serialize");
+    let names: Vec<String> = value["atoms"]
+        .as_array()
+        .expect("atom stream")
+        .iter()
+        .filter_map(|atom| {
+            atom.get("Named")
+                .and_then(|named| named.get("name"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .collect();
     assert!(!names.iter().any(|n| n == "ws"), "names: {names:?}");
     assert!(!names.iter().any(|n| n == "comment"), "names: {names:?}");
     assert!(!names.iter().any(|n| n == "any_char"), "names: {names:?}");
