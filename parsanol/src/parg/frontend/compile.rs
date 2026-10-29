@@ -1914,15 +1914,6 @@ pub fn compile_entry_mode(
     atomic_rules: &[String],
     mode: Option<&str>,
 ) -> Result<Grammar, CompileError> {
-    let rule = document
-        .entries
-        .iter()
-        .find(|(name, _)| name == entry)
-        .map(|(_, rule)| rule.clone())
-        .ok_or_else(|| CompileError {
-            message: format!("unknown entry {entry:?}"),
-        })?;
-
     compile_entry_mode_glue(document, entry, tables, atomic_rules, mode, &[])
 }
 
