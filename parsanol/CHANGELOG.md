@@ -73,6 +73,12 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- Release v0.19.11 by @[object]
+- Null captures bind nothing (ts#34) by @[object]
+- Release v0.19.10 by @[object]
+
+### Other
+
 - Null captures bind nothing (ts#34) by @[object]
 - Release v0.19.10 by @[object]
 
