@@ -306,8 +306,9 @@ pub struct Document {
     /// The `capture:` name on the skip declaration, when present.
     pub skip_capture: Option<String>,
     /// `glue <rule> [<rule>…]` names (parsanol-ruby#364): rules whose
-    /// references edition 2 never wraps.
-    pub glue_rules: Vec<String>,
+    /// references edition 2 never wraps. Crate-internal: the compiler
+    /// consumes it; the public surface is the grammar source itself.
+    pub(crate) glue_rules: Vec<String>,
 }
 
 /// A parse failure: what and (loosely) where.
