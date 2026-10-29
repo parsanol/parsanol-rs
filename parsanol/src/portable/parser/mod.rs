@@ -80,7 +80,28 @@ fn state_write_dependence(grammar: &Grammar) -> Vec<bool> {
     dependence_closure(grammar, |a| matches!(a, Atom::StateSet { .. }))
 }
 
+/// Capture writes are observable after their atom succeeds, but memo
+/// entries contain only the parsed value and end position. Replaying a
+/// capture-producing subtree after rollback would skip its writes. Scope
+/// and lookahead isolate those writes, so they stop this propagation and
+/// remain eligible for memoization themselves.
+fn capture_write_dependence(grammar: &Grammar) -> Vec<bool> {
+    dependence_closure_until(
+        grammar,
+        |a| matches!(a, Atom::Capture { .. }),
+        |a| matches!(a, Atom::Scope { .. } | Atom::Lookahead { .. }),
+    )
+}
+
 fn dependence_closure(grammar: &Grammar, is_seed: impl Fn(&Atom) -> bool) -> Vec<bool> {
+    dependence_closure_until(grammar, is_seed, |_| false)
+}
+
+fn dependence_closure_until(
+    grammar: &Grammar,
+    is_seed: impl Fn(&Atom) -> bool,
+    is_barrier: impl Fn(&Atom) -> bool,
+) -> Vec<bool> {
     let has_dynamic = grammar.atoms.iter().any(|a| is_seed(a));
     if !has_dynamic {
         return Vec::new();
@@ -89,6 +110,9 @@ fn dependence_closure(grammar: &Grammar, is_seed: impl Fn(&Atom) -> bool) -> Vec
     let n = grammar.atoms.len();
     let mut parents: Vec<Vec<usize>> = vec![Vec::new(); n];
     for (i, atom) in grammar.atoms.iter().enumerate() {
+        if is_barrier(atom) {
+            continue;
+        }
         let mut children = Vec::new();
         match atom {
             Atom::Sequence { atoms } | Atom::Alternative { atoms } => children.extend(atoms),
@@ -290,6 +314,11 @@ pub struct PortableParser<'a> {
     /// bypass the dyn cache entirely.
     state_write_dependent: Vec<bool>,
 
+    /// Capture-writing atoms and ancestors whose writes escape their
+    /// boundary. Re-execute these effects while pure children and
+    /// capture-isolating scopes retain their ordinary memoization.
+    capture_write_dependent: Vec<bool>,
+
     /// Rule-name index for state dispatch (parsanol-ruby#129):
     /// StateSwitch arms reference rules by name; the wire inlines
     /// rule bodies, so the resolution target is the Named atom
@@ -443,6 +472,7 @@ impl<'a> PortableParser<'a> {
             dbg_depth: 0,
             dynamic_dependent: dynamic_dependence(grammar),
             state_write_dependent: state_write_dependence(grammar),
+            capture_write_dependent: capture_write_dependence(grammar),
             named_atoms: named_atom_index(grammar),
             snapshot_arena,
             snapshots_in_live,
@@ -493,6 +523,7 @@ impl<'a> PortableParser<'a> {
             dbg_depth: 0,
             dynamic_dependent: dynamic_dependence(grammar),
             state_write_dependent: state_write_dependence(grammar),
+            capture_write_dependent: capture_write_dependence(grammar),
             named_atoms: named_atom_index(grammar),
             snapshot_arena: None,
             snapshots_in_live: false,
@@ -857,6 +888,20 @@ impl<'a> PortableParser<'a> {
             // (parsanol-ruby#185): the reader after it would see a
             // stale slot. No memo at all for these atoms.
             return self.parse_atom_uncached(atom_id, pos, consume_all);
+        }
+        if self
+            .capture_write_dependent
+            .get(atom_id)
+            .is_some_and(|&dep| dep)
+        {
+            // A cached value cannot replay capture writes removed by an
+            // earlier failed branch, scope, or lookahead. The pure inner
+            // value may still be memoized; only its effects must run again.
+            let result = self.parse_scoped_trivia_drain(atom_id, pos, consume_all);
+            if consume_all && result.as_ref().is_ok_and(|r| r.end_pos != self.input.len()) {
+                return Err(ParseError::Failed { position: pos });
+            }
+            return result;
         }
         if dynamic_dependent {
             // Capture-context-dependent (GH-76): memo keyed by the
