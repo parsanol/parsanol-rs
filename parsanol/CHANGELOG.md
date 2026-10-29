@@ -73,6 +73,13 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- Drop the dead entry lookup from the delegating compile by @[object]
+- Thread the glue names additively (the semver gate) by @[object]
+- Keep the glue field crate-internal by @[object]
+- The glue declaration: author-declared wrap exemptions (the rs mirror) by @[object]
+
+### Other
+
 - Numeric capture editions + whitespace-class glue (the rs mirror) by @[object]
 - Compile mutually recursive grammars: the wire walker mirrors the serializer's identity memo (rs#334) by @[object]
 
