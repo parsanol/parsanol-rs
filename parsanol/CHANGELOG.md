@@ -73,6 +73,10 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- Reapply capture writes when packrat branches are retried by @[object]
+
+### Other
+
 - Drop the dead entry lookup from the delegating compile by @[object]
 - Thread the glue names additively (the semver gate) by @[object]
 - Keep the glue field crate-internal by @[object]
