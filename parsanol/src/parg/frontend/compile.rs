@@ -325,6 +325,9 @@ pub struct Compiler<'a> {
     skip_wrap_index: Option<usize>,
     order_warnings: Vec<String>,
     modern: bool,
+    /// `glue` declared names (parsanol-ruby#364): references to them
+    /// never wrap, and their own bodies compile unwrapped.
+    glue_rules: Vec<String>,
     skip_exempt: Vec<String>,
     skip_markers: Vec<(String, String)>,
     atoms: Vec<Atom>,
@@ -350,6 +353,7 @@ impl<'a> Compiler<'a> {
             skip_wrap_index: None,
             order_warnings: Vec::new(),
             modern: mode == Some("v2"),
+            glue_rules: document.glue_rules.clone(),
             skip_exempt: Vec::new(),
             skip_markers: Vec::new(),
             atoms: Vec::new(),
@@ -436,13 +440,24 @@ impl<'a> Compiler<'a> {
         // probes resolve rule references, and a mutual-reference
         // grammar must hit the cache, not rebuild.
         self.trees.insert(name.to_string(), tree.clone());
-        let tree = if self.modern {
+        // A glue rule's own body compiles unwrapped (parsanol-ruby#364):
+        // the declaration means the tree never sees this subtree named,
+        // inside or out.
+        let tree = if self.modern && !self.glue_rule(name) {
             self.wrap_uncaptured(tree)?
         } else {
             tree
         };
         self.trees.insert(name.to_string(), tree.clone());
         Ok(tree)
+    }
+
+    /// The `glue` declaration's verdict (parsanol-ruby#364):
+    /// references to declared glue rules never wrap — the trivia
+    /// exemption's "glue never becomes a capture", author-declared
+    /// for rules that eat more than whitespace.
+    fn glue_rule(&self, name: &str) -> bool {
+        self.glue_rules.iter().any(|declared| declared == name)
     }
 
     /// Modern mode (ruby#304, the #315 spec): every rule reference
@@ -462,7 +477,7 @@ impl<'a> Compiler<'a> {
                 // strips to empty.
                 let mut seen = std::collections::BTreeMap::new();
                 seen.insert(rule.clone(), true);
-                if self.trivia_only(&rule, &mut seen)? {
+                if self.glue_rule(&rule) || self.trivia_only(&rule, &mut seen)? {
                     INode::Entity { rule }
                 } else {
                     let produces = self.produces_capture(&INode::Entity { rule: rule.clone() })?;

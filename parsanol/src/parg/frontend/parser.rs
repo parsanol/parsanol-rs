@@ -305,6 +305,9 @@ pub struct Document {
     pub skip_declaration: Option<Box<Node>>,
     /// The `capture:` name on the skip declaration, when present.
     pub skip_capture: Option<String>,
+    /// `glue <rule> [<rule>…]` names (parsanol-ruby#364): rules whose
+    /// references edition 2 never wraps.
+    pub glue_rules: Vec<String>,
 }
 
 /// A parse failure: what and (loosely) where.
@@ -654,6 +657,10 @@ impl Parser {
                         docs.clear();
                         self.resync_rule(document)?;
                     }
+                    "glue" => {
+                        docs.clear();
+                        self.glue_rules(document)?;
+                    }
                     "render" | "derive" | "import" => {
                         // No corpus fixture exercises these; recognized
                         // and skipped.
@@ -690,6 +697,24 @@ impl Parser {
                 }
             }
         }
+    }
+
+    /// `glue <rule> [<rule>…]` (parsanol-ruby#364): names rules whose
+    /// references edition 2 never wraps. Same-line names accumulate;
+    /// the declaration may appear any number of times.
+    fn glue_rules(&mut self, document: &mut Document) -> Result<(), ParseError> {
+        self.pos += 1; // the `glue` keyword
+        let mut names = Vec::new();
+        while matches!(self.peek().map(|t| t.kind), Some(TokenKind::Ident)) {
+            names.push(self.expect_ident()?);
+        }
+        if names.is_empty() {
+            return Err(ParseError {
+                message: "glue must name at least one rule".to_string(),
+            });
+        }
+        document.glue_rules.extend(names);
+        Ok(())
     }
 
     fn entry(&mut self, document: &mut Document) -> Result<(), ParseError> {
