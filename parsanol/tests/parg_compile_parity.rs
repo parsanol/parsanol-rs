@@ -515,3 +515,29 @@ fn named_atoms(source: &str, entry: &str) -> Vec<String> {
         })
         .collect()
 }
+
+/// The `glue` declaration (parsanol-ruby#364): declared rules never
+/// wrap — references to them stay bare and their own bodies compile
+/// unwrapped, so the whole glue chain stays anonymous.
+#[test]
+fn glue_declaration_keeps_the_chain_anonymous() {
+    let source = concat!(
+        "grammar G version \"1.0.0\" edition 2 {\n",
+        "  glue ws comment\n",
+        "  entry main: main\n",
+        "  ws = ( 1*\" \" ) / comment\n",
+        "  comment = \"//\" ( *( !%x0A any_char ) )\n",
+        "  any_char = %x00-10FFFF\n",
+        "  main = \"a\" ws \"b\"\n",
+        "}\n",
+    );
+    let names = named_atoms(source, "main");
+    assert!(!names.iter().any(|n| n == "ws"), "names: {names:?}");
+    assert!(!names.iter().any(|n| n == "comment"), "names: {names:?}");
+    assert!(!names.iter().any(|n| n == "any_char"), "names: {names:?}");
+
+    // A bare `glue` is a parse error, matching the Ruby parser.
+    let bare =
+        "grammar G version \"1.0.0\" edition 2 {\n  glue\n  entry main: main\n  main = \"a\"\n}\n";
+    assert!(parser::parse_grammar_with_mode(bare).is_err());
+}
