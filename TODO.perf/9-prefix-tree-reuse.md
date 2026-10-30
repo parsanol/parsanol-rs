@@ -116,3 +116,43 @@ and it is the "slot-local drops" follow-up this file already names:
 drop stale entries where they probe and fix only the touched cluster,
 never rebuilding the table per parse. Until that lands, the splice
 stays NON-default behind `parse_*_retained`.
+
+## Round 2026-10-30 (later): the retention path is second-order; the suffix reparse is the workload
+
+Implemented and measured the slot-remap retention (single compaction
+pass recording old->new indexes; sequential slot remap; shift-until-
+empty chain repair instead of the per-parse probe rebuild). Correct —
+the 40-edit gates and the full suite stayed green — and REPARITY:
+1.06x mean / 0.99x p95 on the interleaved bench, against the same-day
+baseline's 1.05x / 1.33x and the scan-fusion variant's 1.04x / 0.99x.
+Reverted per the TODO.perf/7 discipline.
+
+**What three instrument-corrected variants now agree on** (baseline /
+scan-fusion / slot-remap all within noise of each other): cache
+maintenance on the retained path — the pre-drop scan, the full slot
+rebuild, the input clone, the adoption pass — is SECOND-ORDER at
+911 KiB. The dominant term both tiers share is the SUFFIX REPARSE:
+the keystroke stream spreads edits across the whole document, and an
+edit at fraction f of the document forces a reparse of the (1-f)
+remainder in EITHER tier — the splice reuses the prefix, the snapshot
+tier's memo retention covers the same prefix, and both then parse the
+suffix. The measured ~1.0x ratio is the workload's shape, not an
+implementation gap.
+
+Consequences for the next round (open design questions, not
+scheduled):
+
+1. **The single-digit-ms target requires the suffix reparse to get
+   cheaper**, not the retention bookkeeping: either a right-spine
+   tree splice (reuse the suffix's unchanged TAIL as well — true
+   persistent trees, the original item-9 ask beyond prefix reuse),
+   or denser memoization of the suffix (item 7's negative was
+   measured on the pre-tree architecture and deserves a re-test
+   under the retained tier).
+2. **The bench should bucket latencies by edit position** (early /
+   mid / late thirds): end-of-document typing — the realistic editor
+   case — pays a tiny suffix in both tiers, so the tiers' difference
+   (if any) lives in the maintenance band, which the mean over
+   document-wide edits hides. Measure there before optimizing there.
+3. The retained tier stays NON-default: no regression measured, no
+   win measured.
