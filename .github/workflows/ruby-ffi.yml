@@ -44,3 +44,105 @@ jobs:
 
       - name: Check Ruby feature compiles
         run: cargo check --no-default-features --features ruby
+
+  compatibility-performance:
+    name: UnicodeMath compatibility performance
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      BUNDLE_PATH: ${{ github.workspace }}/vendor/bundle
+      PROFILE_TIMEOUT_SECONDS: '300'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+      - uses: actions/checkout@v7
+        with:
+          repository: parsanol/parsanol-ruby
+          ref: b844167ef489fdafb07f2f9c316641b255e0a0af
+          path: ruby-bridge
+      - uses: actions/checkout@v7
+        with:
+          repository: plurimath/plurimath
+          ref: ef0ab490ce7433d87a5b62a7dcc9cb328cb20ae6
+          submodules: true
+          path: consumer
+      - uses: actions/checkout@v7
+        with:
+          repository: plurimath/plurimath
+          ref: fef1b0419b3657b505038529233ecfe361d626a8
+          path: oracle
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            ruby-bridge -> target
+      - name: Profile the published backend and original Parslet grammar
+        working-directory: consumer
+        run: |
+          set -euo pipefail
+          sed -i 's/^gem "parsanol"$/gem "parsanol", "= 1.3.116"/' Gemfile
+          bundle install
+          PROFILE_ROOT="$PWD" PROFILE_MODE=native bundle exec ruby ../.github/scripts/profile_unicode_compatibility.rb > ../published-profile.jsonl
+          PROFILE_ROOT="$GITHUB_WORKSPACE/oracle" PROFILE_MODE=parslet bundle exec ruby ../.github/scripts/profile_unicode_compatibility.rb > ../parslet-profile.jsonl
+      - name: Compile the candidate extension against this Rust checkout
+        working-directory: ruby-bridge
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+          root = Path(os.environ['GITHUB_WORKSPACE'])
+          cargo = Path('Cargo.toml')
+          patches = '\n'.join(f'{name} = {{ path = "{root / name}" }}' for name in ['parsanol', 'parsanol-derive'])
+          cargo.write_text(cargo.read_text().replace('[patch.crates-io]', '[patch.crates-io]\n' + patches, 1))
+          PY
+          cargo update -p parsanol -p parsanol-derive
+          bundle install
+          bundle exec rake compile
+      - name: Profile and verify the candidate
+        working-directory: consumer
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+          gemfile = Path('Gemfile')
+          bridge = Path(os.environ['GITHUB_WORKSPACE']) / 'ruby-bridge'
+          gemfile.write_text(gemfile.read_text().replace('gem "parsanol", "= 1.3.116"', f'gem "parsanol", path: "{bridge}"', 1))
+          PY
+          bundle install
+          PROFILE_ROOT="$PWD" PROFILE_MODE=native PROFILE_EXPECT_GEM="$GITHUB_WORKSPACE/ruby-bridge" bundle exec ruby ../.github/scripts/profile_unicode_compatibility.rb > ../candidate-profile.jsonl
+          python3 - <<'PY'
+          from pathlib import Path
+          import json, statistics
+          profiles = {}
+          digests, outputs = set(), set()
+          for label in ['published', 'parslet', 'candidate']:
+              rows = [json.loads(line) for line in Path(f'../{label}-profile.jsonl').read_text().splitlines()]
+              samples = [row for row in rows if row['kind'] == 'sample']
+              assert len(samples) == 6, (label, 'incomplete profile')
+              digests.update(row['raw_sha256'] for row in samples)
+              outputs.update(row['latex'] for row in samples)
+              profiles[label] = {phase: statistics.median(row['parsing']['seconds'] for row in samples if row['lifecycle'] == phase) for phase in ['fresh', 'reused']}
+          assert len(digests) == len(outputs) == 1, 'tree or output changed'
+          Path('../performance-comparison.json').write_text(json.dumps(profiles, indent=2))
+          print(json.dumps(profiles))
+          assert profiles['candidate']['reused'] < profiles['published']['reused'] / 2, 'native regression not sufficiently reduced'
+          assert profiles['candidate']['reused'] <= profiles['parslet']['reused'], 'native still slower than the original Parslet grammar'
+          PY
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: unicode-compatibility-profiles
+          path: '*profile.jsonl'
+          if-no-files-found: warn
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: unicode-performance-comparison
+          path: performance-comparison.json
+          if-no-files-found: warn
