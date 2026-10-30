@@ -352,7 +352,10 @@ jobs:
           # warnings gate.
           RUSTFLAGS: -C link-dead-code=yes
         run: |
-          cargo llvm-cov --no-default-features --features "logging,parallel" --lcov --output-path lcov.info
+          # Keep native-target artifacts separate from host/proc-macro builds.
+          # Their unhashed cdylib/rlib filenames otherwise collide.
+          coverage_target=$(rustc -vV | sed -n 's/^host: //p')
+          cargo llvm-cov --target "$coverage_target" --no-default-features --features "logging,parallel" --lcov --output-path lcov.info
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v7
