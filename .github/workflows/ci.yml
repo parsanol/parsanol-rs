@@ -259,6 +259,10 @@ jobs:
       - name: Run tests
         run: cargo test --no-default-features --verbose
 
+      - name: Check recursive parsing on a 1 MiB release stack
+        if: startsWith(matrix.os, 'windows-')
+        run: cargo test -p parsanol --release --no-default-features portable::parser::stack_tests -- --nocapture
+
       - name: Build examples
         run: cargo build --examples --no-default-features
 
