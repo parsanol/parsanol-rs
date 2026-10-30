@@ -58,6 +58,40 @@ fn legacy_batch_diagnostics_match_scalar_replay_order_and_rank_eviction() {
 }
 
 #[test]
+fn legacy_owned_diagnostics_move_into_empty_frames_and_merge_into_existing_causes() {
+    for seed_count in [0, 4, 12] {
+        let mut grammar = Grammar::new();
+        grammar.root = literal(&mut grammar, "x");
+        let mut source_arena = AstArena::new();
+        let mut expected_arena = AstArena::new();
+        let mut actual_arena = AstArena::new();
+        let mut source = PortableParser::new(&grammar, "?", &mut source_arena);
+        let mut expected = PortableParser::new(&grammar, "?", &mut expected_arena);
+        let mut actual = PortableParser::new(&grammar, "?", &mut actual_arena);
+        for position in 0..seed_count {
+            expected.note_failure(position, "existing".into());
+            actual.note_failure(position, "existing".into());
+        }
+        for position in 0..10 {
+            for i in 0..256 {
+                source.note_failure(position, format!("label-{i}"));
+            }
+        }
+        let failure = source.take_legacy_failure();
+        let labels_ptr = failure.labels.as_ptr();
+        let ranks_ptr = failure.ranks.as_ptr();
+        expected.merge_legacy_failure(&failure);
+        actual.merge_owned_legacy_failure(failure);
+        assert_eq!(actual.failure_diagnostics(), expected.failure_diagnostics());
+        assert_eq!(actual.failure_ranks(), expected.failure_ranks());
+        if seed_count == 0 {
+            assert_eq!(actual.expected_labels.as_ptr(), labels_ptr);
+            assert_eq!(actual.ranked_failures.as_ptr(), ranks_ptr);
+        }
+    }
+}
+
+#[test]
 fn legacy_large_alternative_memo_replays_labels_and_discards_successful_causes() {
     let mut grammar = Grammar::new();
     let mut atoms: Vec<_> = (0..256)

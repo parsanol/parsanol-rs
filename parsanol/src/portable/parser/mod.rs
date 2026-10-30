@@ -975,7 +975,7 @@ impl<'a> PortableParser<'a> {
             let own_failure = self.take_legacy_failure();
             self.restore_legacy_failure(parent_failure);
             if matches!(&r, Err(ParseError::Failed { .. })) {
-                self.merge_legacy_failure(&own_failure);
+                self.merge_owned_legacy_failure(own_failure);
             }
         }
         if self.track_max_end {
@@ -1275,7 +1275,7 @@ impl<'a> PortableParser<'a> {
             } else {
                 let failure = entry.failure.clone();
                 if let Some(failure) = failure {
-                    self.merge_legacy_failure(&failure);
+                    self.merge_owned_legacy_failure(*failure);
                 }
                 Err(ParseError::Failed {
                     position: self.deepest_failure_pos,
@@ -1363,6 +1363,17 @@ impl<'a> PortableParser<'a> {
         self.has_failure = false;
         self.expected_labels.clear();
         self.ranked_failures.clear();
+    }
+
+    /// Application frames and memo entries already own canonical diagnostics.
+    /// An empty parent can take their buffers directly: replaying every label
+    /// cloned the same large cause set at each enclosing failed application.
+    fn merge_owned_legacy_failure(&mut self, failure: LegacyFailure) {
+        if !self.has_failure && self.ranked_failures.is_empty() {
+            self.restore_legacy_failure(failure);
+        } else {
+            self.merge_legacy_failure(&failure);
+        }
     }
 
     fn merge_legacy_failure(&mut self, failure: &LegacyFailure) {
