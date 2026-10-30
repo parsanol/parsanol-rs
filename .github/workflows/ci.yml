@@ -60,7 +60,7 @@ jobs:
           # corpus/ (.parg/.json, no code suffix) carries the conformance
           # gate: a corpus-only change must run the suite or the engine
           # gates never see it.
-          elif git diff --name-only HEAD^ HEAD | grep -qE '\.(rs|toml|lock)$|^corpus/'; then
+          elif git diff --name-only HEAD^ HEAD | grep -qE '\.(rs|toml|lock)$|^corpus/|^\.github/workflows/ci\.yml$'; then
             echo "should_run=true" >> $GITHUB_OUTPUT
           else
             echo "should_run=false" >> $GITHUB_OUTPUT
