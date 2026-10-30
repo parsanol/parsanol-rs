@@ -140,8 +140,31 @@ jobs:
         working-directory: consumer
         run: |
           set -euo pipefail
+          export GDB_ROOT="$RUNNER_TEMP/compatibility-gdb"
+          mkdir -p "$GDB_ROOT/packages"
+          python3 - <<'PY'
+          from pathlib import Path
+          import os, subprocess
+          root = Path(os.environ['GDB_ROOT'])
+          pending, seen = ['gdb'], set()
+          while pending:
+              package = pending.pop()
+              if package in seen:
+                  continue
+              seen.add(package)
+              status = subprocess.run(['dpkg-query', '-W', '-f=${db:Status-Status}', package], capture_output=True, text=True)
+              if status.returncode == 0 and status.stdout == 'installed':
+                  continue
+              subprocess.run(['apt-get', 'download', package], cwd=root / 'packages', check=True)
+              depends = subprocess.check_output(['apt-cache', 'depends', package], text=True)
+              pending.extend(line.split(':', 1)[1].strip() for line in depends.splitlines() if line.strip().startswith(('Depends:', 'PreDepends:')) and '<' not in line)
+          for package in (root / 'packages').glob('*.deb'):
+              subprocess.run(['dpkg-deb', '-x', str(package), str(root)], check=True)
+          PY
+          export LD_LIBRARY_PATH="$GDB_ROOT/usr/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
           PROFILE_ROOT="$PWD" PROFILE_EXPECT_GEM="$GITHUB_WORKSPACE/ruby-bridge" \
-            bundle exec gdb --batch -x ../.github/scripts/profile_unicode_stacks.gdb \
+            bundle exec "$GDB_ROOT/usr/bin/gdb" --data-directory="$GDB_ROOT/usr/share/gdb" \
+            --batch -x ../.github/scripts/profile_unicode_stacks.gdb \
             --args "$(ruby -rrbconfig -e 'print RbConfig.ruby')" \
             ../.github/scripts/profile_unicode_stacks.rb > ../candidate-stacks.log 2>&1
       - uses: actions/upload-artifact@v7
