@@ -156,3 +156,22 @@ scheduled):
    document-wide edits hides. Measure there before optimizing there.
 3. The retained tier stays NON-default: no regression measured, no
    win measured.
+
+## Round 2026-10-30 (final): the remap lands under the bucketed instrument
+
+The bucketed bench found the case the mean hid: end-of-document
+keystrokes pay ~150 ms of pure maintenance in both tiers, and there
+the slot-remap retention reproduces a ~15% win across runs (late band
+1.14x -> 1.18x/1.19x; the snapshot tier's late mean 166 -> 140 ms via
+the shared primitive). SHIPPED (perf/late-band-remap).
+
+Laws this arc burned in:
+
+1. Interleave the A/B legs — sequential legs minutes apart swing 2x
+   with host load.
+2. Bucket by edit position — a document-wide mean over the suffix
+   reparse can hide any maintenance-band win entirely.
+3. The maintenance band (~10^6-entry scans/rebuilds) is the retained
+   tier's remaining floor; the splice stays NON-default (no measured
+   mean-level win), but end-of-document typing — the realistic
+   editor case — is now measurably faster in both tiers.
