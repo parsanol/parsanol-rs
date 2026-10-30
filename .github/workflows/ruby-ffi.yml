@@ -153,7 +153,7 @@ jobs:
                   continue
               seen.add(package)
               status = subprocess.run(['dpkg-query', '-W', '-f=${db:Status-Status}', package], capture_output=True, text=True)
-              if status.returncode == 0 and status.stdout == 'installed':
+              if package != 'gdb' and status.returncode == 0 and status.stdout == 'installed':
                   continue
               subprocess.run(['apt-get', 'download', package], cwd=root / 'packages', check=True)
               depends = subprocess.check_output(['apt-cache', 'depends', package], text=True)
