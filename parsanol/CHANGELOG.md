@@ -73,6 +73,16 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- Null captures bind nothing (ts#34) by @[object]
+- Release v0.19.10 by @[object]
+
+### Other
+
+- Release v0.19.10 by @[object]
+- Reapply capture writes when packrat branches are retried by @[object]
+
+### Other
+
 - Reapply capture writes when packrat branches are retried by @[object]
 
 ### Other

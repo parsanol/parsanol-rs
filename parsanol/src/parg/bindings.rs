@@ -274,6 +274,12 @@ impl PargArtifact {
         let Some(value) = first_capture(captures, capture) else {
             return Ok(());
         };
+        // Ruby `return if value.nil?` (Bindings.assign_scalar): a
+        // capture that materialized as null (the absent-optional tree
+        // wire) binds nothing — the key is skipped, never cast to "".
+        if value.is_null() {
+            return Ok(());
+        }
         let finalized = self.finalize(binding, value)?;
         out.insert(leaf_key(&path), finalized);
         Ok(())
@@ -311,6 +317,11 @@ impl PargArtifact {
                 let Some(value) = captures.get(capture).and_then(|c| c.get(index)) else {
                     continue;
                 };
+                // Ruby `next if value.nil?` (Bindings.assign_array):
+                // null slots bind nothing in their element.
+                if value.is_null() {
+                    continue;
+                }
                 let finalized = self.finalize(binding, value.clone())?;
                 let path = binding
                     .get("path")

@@ -110,6 +110,51 @@ fn synthetic_array_and_preprocess_artifact() {
 }
 
 #[test]
+fn null_captures_bind_nothing() {
+    // ts#34 / jis amd_reaffirmed: `( ["R" (*"R")] ) as amd_reaffirmed`
+    // unmatched leaves `amd_reaffirmed: null` in the tree; Ruby's
+    // Bindings.assign_scalar (`return if value.nil?`) and
+    // assign_array (`next if value.nil?`) bind nothing for it —
+    // the key is skipped, never cast to "".
+    let envelope: Value = serde_json::json!({
+        "version": "0.0.0",
+        "shape": "parsanol-tree/v2",
+        "entries": {
+            "identifier": {
+                "root": "identifier",
+                "grammar": {},
+                "bindings": [
+                    { "capture": "year", "path": "year", "type": "string" },
+                    { "capture": "amd_reaffirmed", "path": "amd_reaffirmed", "type": "string" },
+                    { "capture": "part", "path": "parts[].part", "type": "string" }
+                ]
+            }
+        }
+    });
+    let mut envelope = envelope.as_object().unwrap().clone();
+    let checksum = parsanol::parg::checksum_hex(&Value::Object(envelope.clone())).unwrap();
+    envelope.insert("checksum".to_string(), Value::String(checksum));
+    let artifact = PargArtifact::from_json(&serde_json::to_string(&envelope).unwrap()).unwrap();
+
+    let shape: Value = serde_json::json!({
+        "year": { "value": "1997", "line": 1, "column": 12, "offset": 11, "length": 4 },
+        "amd_reaffirmed": Value::Null,
+        "parts": [
+            { "part": Value::Null },
+            { "part": { "value": "R", "line": 1, "column": 27, "offset": 26, "length": 1 } }
+        ]
+    });
+    let bound = artifact.apply_bindings("identifier", &shape).unwrap();
+    assert_eq!(
+        bound,
+        serde_json::json!({
+            "year": "1997",
+            "parts": [{}, { "part": "R" }]
+        })
+    );
+}
+
+#[test]
 fn unknown_preprocess_and_tables_raise() {
     let envelope: Value = serde_json::json!({
         "version": "0.0.0",

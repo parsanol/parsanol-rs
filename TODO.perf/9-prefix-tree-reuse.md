@@ -79,3 +79,40 @@ snapshot tier. The next lever is fusing the three per-parse cache
 scans (pre-drop retain, chain collect, post-retain) into one pass and
 dropping the per-parse input clone. Until then the splice stays
 NON-default behind `parse_*_retained`.
+
+## Round 2026-10-30: the instrument was lying; the scans are not the cost
+
+Attempted the "fuse the scans + drop the input clone" lever. The
+pre-parse retain became a lookup-time invalidation line (pre-parse
+entries at/after the cutoff answer misses and are removed on touch,
+with linear-probe cluster re-homing — insert never overwrites keys,
+so masking alone accumulates shadow duplicates) and the arena input
+spliced in place. All retained gates stayed green.
+
+Two measurement lessons, both expensive:
+
+1. **Sequential tier legs are unusable on a shared host.** The
+   retained-vs-snapshot ratio, measured with the snapshot leg minutes
+   before the retained leg, swung 0.59x -> 1.50x -> 1.97x -> 0.85x
+   across runs purely with the load (70-90). The bench now runs the
+   two tiers INTERLEAVED — one keystroke stream, two input copies,
+   both sessions parsing the same keystroke milliseconds apart — so
+   the ratio is the measured quantity.
+2. **Under the interleaved instrument the lever is PARITY.** Baseline
+   1.05x mean / 1.33x p95 vs the scan-fusion variant 1.04x / 0.99x
+   (911 KiB, 100 keystrokes, 89/100 spliced). The pre-parse
+   retain+rebuild and the whole-document clone are NOT the
+   per-keystroke cost; the attempted machinery was reverted per the
+   TODO.perf/7 discipline (unmeasured complexity does not ship). One
+   real pathology stays recorded: masking EVERY entry past the line
+   (not just pre-parse ones) measured 0.71x — spans crossing the edit
+   lost memoization and duplicated until the recycle thrashed.
+
+The dominant per-keystroke cost in BOTH tiers at 911 KiB is the
+post-parse `retain_snapshot_adopt` full pass — the retain scan, the
+per-entry adopt, and the FULL slot rebuild over ~10^6 entries —
+roughly 400 ms of the ~400 ms retained leg. That is the next lever,
+and it is the "slot-local drops" follow-up this file already names:
+drop stale entries where they probe and fix only the touched cluster,
+never rebuilding the table per parse. Until that lands, the splice
+stays NON-default behind `parse_*_retained`.
