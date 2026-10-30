@@ -60,7 +60,7 @@ jobs:
           # corpus/ (.parg/.json, no code suffix) carries the conformance
           # gate: a corpus-only change must run the suite or the engine
           # gates never see it.
-          elif git diff --name-only HEAD^ HEAD | grep -qE '\.(rs|toml|lock)$|^corpus/'; then
+          elif git diff --name-only HEAD^ HEAD | grep -qE '\.(rs|toml|lock)$|^corpus/|^\.github/workflows/ci\.yml$'; then
             echo "should_run=true" >> $GITHUB_OUTPUT
           else
             echo "should_run=false" >> $GITHUB_OUTPUT
@@ -259,6 +259,10 @@ jobs:
       - name: Run tests
         run: cargo test --no-default-features --verbose
 
+      - name: Check recursive parsing on a 1 MiB release stack
+        if: startsWith(matrix.os, 'windows-')
+        run: cargo test -p parsanol --release --no-default-features portable::parser::stack_tests -- --nocapture
+
       - name: Build examples
         run: cargo build --examples --no-default-features
 
@@ -352,7 +356,10 @@ jobs:
           # warnings gate.
           RUSTFLAGS: -C link-dead-code=yes
         run: |
-          cargo llvm-cov --no-default-features --features "logging,parallel" --lcov --output-path lcov.info
+          # Keep native-target artifacts separate from host/proc-macro builds.
+          # Their unhashed cdylib/rlib filenames otherwise collide.
+          coverage_target=$(rustc -vV | sed -n 's/^host: //p')
+          cargo llvm-cov --target "$coverage_target" --no-default-features --features "logging,parallel" --lcov --output-path lcov.info
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v7
