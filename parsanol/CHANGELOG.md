@@ -73,6 +73,17 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- Keep capture snapshots out of recursive parser results by @[object]
+- Revert "Keep legacy diagnostics out of strict recursive stack frames" by @[object]
+- Keep legacy diagnostics out of strict recursive stack frames by @[object]
+- Retain failure diagnostics across dynamic fragment parsing by @[object]
+- Preserve selected legacy failures and repetition memo outcomes by @[object]
+- Merge current main into the compatibility prototype by @[object]
+- Add opt-in Parslet prefix memo compatibility by @[object]
+- Interleave the retained-bench tiers; record the scan-fusion negative (TODO.perf/9) by @[object]
+
+### Other
+
 - Null captures bind nothing (ts#34) by @[object]
 - Release v0.19.10 by @[object]
 
