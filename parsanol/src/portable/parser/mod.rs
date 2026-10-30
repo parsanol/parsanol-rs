@@ -1367,10 +1367,53 @@ impl<'a> PortableParser<'a> {
 
     fn merge_legacy_failure(&mut self, failure: &LegacyFailure) {
         for (position, labels) in &failure.ranks {
-            for label in labels {
-                self.note_failure(*position, label.clone());
+            if labels.is_empty() {
+                continue;
+            }
+
+            if !self.has_failure || *position > self.deepest_failure_pos {
+                self.has_failure = true;
+                self.deepest_failure_pos = *position;
+                self.expected_labels.clear();
+            }
+            if *position == self.deepest_failure_pos {
+                Self::extend_failure_labels(&mut self.expected_labels, labels);
+            }
+            match self.ranked_failures.iter_mut().find(|(p, _)| p == position) {
+                Some((_, current)) => Self::extend_failure_labels(current, labels),
+                None => {
+                    let mut current = Vec::new();
+                    Self::extend_failure_labels(&mut current, labels);
+                    self.ranked_failures.push((*position, current));
+                    self.ranked_failures.sort_by_key(|a| std::cmp::Reverse(a.0));
+                    self.ranked_failures.truncate(MAX_RANKED_FAILURES);
+                }
             }
         }
+    }
+
+    /// Merge speculative causes in their original order. Replaying one label
+    /// at a time repeatedly scanned the growing vectors and cloned even labels
+    /// already present, making large alternative sets quadratic on success too.
+    fn extend_failure_labels(current: &mut Vec<String>, incoming: &[String]) {
+        if incoming.len() <= 8 {
+            for label in incoming {
+                if !current.contains(label) {
+                    current.push(label.clone());
+                }
+            }
+            return;
+        }
+
+        let mut seen: std::collections::HashSet<&str> =
+            current.iter().map(String::as_str).collect();
+        let additions: Vec<_> = incoming
+            .iter()
+            .filter(|label| seen.insert(label.as_str()))
+            .cloned()
+            .collect();
+        drop(seen);
+        current.extend(additions);
     }
 
     fn ensure_legacy_failure(&mut self, atom_id: usize, position: usize) {
