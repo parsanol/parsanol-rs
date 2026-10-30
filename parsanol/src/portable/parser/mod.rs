@@ -206,6 +206,46 @@ enum NegScanTerm {
     CharPat(CharacterPattern),
 }
 
+/// Selected failed-subtree diagnostics for opt-in Parslet execution.
+/// Successful applications discard their speculative child failures.
+#[derive(Clone, Default)]
+struct LegacyFailure {
+    position: usize,
+    present: bool,
+    labels: Vec<String>,
+    ranks: Vec<(usize, Vec<String>)>,
+}
+
+impl LegacyFailure {
+    fn memory_usage(&self) -> usize {
+        self.labels.capacity() * std::mem::size_of::<String>()
+            + self.labels.iter().map(String::capacity).sum::<usize>()
+            + self.ranks.capacity() * std::mem::size_of::<(usize, Vec<String>)>()
+            + self
+                .ranks
+                .iter()
+                .map(|(_, labels)| {
+                    labels.capacity() * std::mem::size_of::<String>()
+                        + labels.iter().map(String::capacity).sum::<usize>()
+                })
+                .sum::<usize>()
+    }
+}
+
+struct LegacyCacheEntry {
+    outcome: CacheEntry,
+    // Failures must replay their selected causes as well as acceptance.
+    failure: Option<Box<LegacyFailure>>,
+}
+
+impl LegacyCacheEntry {
+    fn payload_memory_usage(&self) -> usize {
+        self.failure.as_ref().map_or(0, |failure| {
+            std::mem::size_of::<LegacyFailure>() + failure.memory_usage()
+        })
+    }
+}
+
 /// The packrat tree-walking parser: evaluates the compiled grammar
 /// against the input with memoization, capture scopes and ranked
 /// failure tracking.
@@ -255,7 +295,8 @@ pub struct PortableParser<'a> {
     /// Eager legacy memo retained for this parser's lifetime. Recycling a
     /// prefix entry can change legacy ordered-choice results, so these
     /// entries use the parser's resource governor rather than eviction.
-    legacy_cache: std::collections::HashMap<(usize, usize), CacheEntry>,
+    legacy_cache: std::collections::HashMap<(usize, usize), LegacyCacheEntry>,
+    legacy_diagnostic_bytes: usize,
 
     // ========================================================================
     // Resource Management (delegated)
@@ -473,6 +514,7 @@ impl<'a> PortableParser<'a> {
             cache,
             compatibility: ParserCompatibility::Strict,
             legacy_cache: std::collections::HashMap::new(),
+            legacy_diagnostic_bytes: 0,
             governor,
             capture_state: CaptureState::new(),
             dyn_cache: std::collections::HashMap::new(),
@@ -527,6 +569,7 @@ impl<'a> PortableParser<'a> {
             cache,
             compatibility: ParserCompatibility::Strict,
             legacy_cache: std::collections::HashMap::new(),
+            legacy_diagnostic_bytes: 0,
             governor,
             capture_state: CaptureState::new(),
             dyn_cache: std::collections::HashMap::new(),
@@ -572,6 +615,7 @@ impl<'a> PortableParser<'a> {
         self.compatibility = compatibility;
         self.cache.clear();
         self.legacy_cache.clear();
+        self.legacy_diagnostic_bytes = 0;
         self.dyn_cache.clear();
         self.dynamic_outcomes.clear();
         self.capture_state = CaptureState::new();
@@ -603,13 +647,14 @@ impl<'a> PortableParser<'a> {
         // Include headroom for the hash table's load factor/control data.
         self.legacy_cache.capacity()
             * (std::mem::size_of::<(usize, usize)>()
-                + std::mem::size_of::<CacheEntry>()
+                + std::mem::size_of::<LegacyCacheEntry>()
                 + std::mem::size_of::<usize>())
             + if self.legacy_cache.capacity() == 0 {
                 0
             } else {
                 64
             }
+            + self.legacy_diagnostic_bytes
     }
 
     /// Extract the cache
@@ -913,7 +958,21 @@ impl<'a> PortableParser<'a> {
                 std::process::abort();
             }
         }
+        // Tree-style diagnostics follow only the selected failed subtree.
+        // The strict reporter deliberately retains its global deepest policy.
+        let parent_failure = (self.compatibility == ParserCompatibility::Parslet)
+            .then(|| self.take_legacy_failure());
         let r = self.try_atom_impl_inner(atom_id, pos, consume_all);
+        if let Some(parent_failure) = parent_failure {
+            if let Err(ParseError::Failed { position }) = &r {
+                self.ensure_legacy_failure(atom_id, *position);
+            }
+            let own_failure = self.take_legacy_failure();
+            self.restore_legacy_failure(parent_failure);
+            if matches!(&r, Err(ParseError::Failed { .. })) {
+                self.merge_legacy_failure(&own_failure);
+            }
+        }
         if self.track_max_end {
             if let Ok(result) = &r {
                 if result.end_pos > self.max_end_pos {
@@ -927,6 +986,7 @@ impl<'a> PortableParser<'a> {
             // were rolled back by the abort. A retry must execute those captures.
             self.cache.clear();
             self.legacy_cache.clear();
+            self.legacy_diagnostic_bytes = 0;
             self.dyn_cache.clear();
             self.dynamic_outcomes.clear();
         }
@@ -982,6 +1042,9 @@ impl<'a> PortableParser<'a> {
             // earlier failed branch, scope, or lookahead. The pure inner
             // value may still be memoized; only its effects must run again.
             let result = self.parse_scoped_trivia_drain(atom_id, pos, consume_all);
+            if self.compatibility == ParserCompatibility::Parslet {
+                return self.legacy_consumption_guard(result, consume_all);
+            }
             if consume_all && result.as_ref().is_ok_and(|r| r.end_pos != self.input.len()) {
                 return Err(ParseError::Failed { position: pos });
             }
@@ -998,10 +1061,7 @@ impl<'a> PortableParser<'a> {
                 )
             {
                 let result = self.parse_scoped_trivia_drain(atom_id, pos, consume_all);
-                if consume_all && result.as_ref().is_ok_and(|r| r.end_pos != self.input.len()) {
-                    return Err(ParseError::Failed { position: pos });
-                }
-                return result;
+                return self.legacy_consumption_guard(result, consume_all);
             }
             return self.try_atom_legacy(atom_id, pos, consume_all);
         }
@@ -1196,46 +1256,125 @@ impl<'a> PortableParser<'a> {
         consume_all: bool,
     ) -> Result<ParseResult, ParseError> {
         let key = (atom_id, pos);
-        let cached = self
-            .legacy_cache
-            .get(&key)
-            .copied()
-            .filter(|entry| !entry.success || entry.generation == self.arena.generation());
+        let cached = self.legacy_cache.get(&key).filter(|entry| {
+            !entry.outcome.success || entry.outcome.generation == self.arena.generation()
+        });
         let result = if let Some(entry) = cached {
-            if entry.success {
+            let outcome = entry.outcome;
+            if outcome.success {
                 Ok(ParseResult {
-                    value: entry.to_node(),
-                    end_pos: entry.end_pos as usize,
+                    value: outcome.to_node(),
+                    end_pos: outcome.end_pos as usize,
                     capture_state: None,
                 })
             } else {
-                Err(ParseError::Failed { position: pos })
+                let failure = entry.failure.clone();
+                if let Some(failure) = failure {
+                    self.merge_legacy_failure(&failure);
+                }
+                Err(ParseError::Failed {
+                    position: self.deepest_failure_pos,
+                })
             }
         } else {
             let result = self.parse_scoped_trivia_drain(atom_id, pos, consume_all);
-            match &result {
-                Ok(parsed) if !self.trivia_drained => {
-                    let entry = CacheEntry::from_node(
+            let entry = match &result {
+                Ok(parsed) if !self.trivia_drained => Some(LegacyCacheEntry {
+                    outcome: CacheEntry::from_node(
                         pos as u32,
                         atom_id as u16,
                         parsed.end_pos as u32,
                         &parsed.value,
                         self.arena.generation(),
-                    );
-                    self.legacy_cache.insert(key, entry);
+                    ),
+                    failure: None,
+                }),
+                Err(ParseError::Failed { position }) if !self.trivia_drained => {
+                    self.ensure_legacy_failure(atom_id, *position);
+                    Some(LegacyCacheEntry {
+                        outcome: CacheEntry::failure(pos as u32, atom_id as u16),
+                        failure: Some(Box::new(self.snapshot_legacy_failure())),
+                    })
                 }
-                Err(ParseError::Failed { .. }) if !self.trivia_drained => {
-                    self.legacy_cache
-                        .insert(key, CacheEntry::failure(pos as u32, atom_id as u16));
+                _ => None, // Runtime aborts and effect-spanning outcomes are not memoized.
+            };
+            if let Some(entry) = entry {
+                self.legacy_diagnostic_bytes += entry.payload_memory_usage();
+                if let Some(previous) = self.legacy_cache.insert(key, entry) {
+                    self.legacy_diagnostic_bytes -= previous.payload_memory_usage();
                 }
-                _ => {} // Runtime aborts and effect-spanning outcomes are not memoized.
             }
             result
         };
-        if consume_all && result.as_ref().is_ok_and(|r| r.end_pos != self.input.len()) {
-            return Err(ParseError::Failed { position: pos });
+        self.legacy_consumption_guard(result, consume_all)
+    }
+
+    fn legacy_consumption_guard(
+        &mut self,
+        result: Result<ParseResult, ParseError>,
+        consume_all: bool,
+    ) -> Result<ParseResult, ParseError> {
+        if let Ok(parsed) = &result {
+            if consume_all && parsed.end_pos != self.input.len() {
+                // Base#unconsumed_error points at the unconsumed suffix,
+                // and its raw success remains reusable as a prefix.
+                self.clear_legacy_failure();
+                self.note_failure(parsed.end_pos, "end of input".to_string());
+                return Err(ParseError::Failed {
+                    position: parsed.end_pos,
+                });
+            }
         }
         result
+    }
+
+    fn snapshot_legacy_failure(&self) -> LegacyFailure {
+        LegacyFailure {
+            position: self.deepest_failure_pos,
+            present: self.has_failure,
+            labels: self.expected_labels.clone(),
+            ranks: self.ranked_failures.clone(),
+        }
+    }
+
+    fn take_legacy_failure(&mut self) -> LegacyFailure {
+        LegacyFailure {
+            position: std::mem::take(&mut self.deepest_failure_pos),
+            present: std::mem::take(&mut self.has_failure),
+            labels: std::mem::take(&mut self.expected_labels),
+            ranks: std::mem::take(&mut self.ranked_failures),
+        }
+    }
+
+    fn restore_legacy_failure(&mut self, failure: LegacyFailure) {
+        self.deepest_failure_pos = failure.position;
+        self.has_failure = failure.present;
+        self.expected_labels = failure.labels;
+        self.ranked_failures = failure.ranks;
+    }
+
+    fn clear_legacy_failure(&mut self) {
+        self.deepest_failure_pos = 0;
+        self.has_failure = false;
+        self.expected_labels.clear();
+        self.ranked_failures.clear();
+    }
+
+    fn merge_legacy_failure(&mut self, failure: &LegacyFailure) {
+        for (position, labels) in &failure.ranks {
+            for label in labels {
+                self.note_failure(*position, label.clone());
+            }
+        }
+    }
+
+    fn ensure_legacy_failure(&mut self, atom_id: usize, position: usize) {
+        if !self.has_failure {
+            self.note_failure(
+                position,
+                self.describe_atom_failure(self.grammar.get_atom(atom_id), position),
+            );
+        }
     }
 
     /// Runs the uncached parse with the trivia-drain flag scoped to
@@ -1709,7 +1848,8 @@ impl<'a> PortableParser<'a> {
                             e,
                             ParseError::InvalidGrammar { .. }
                                 | ParseError::RecursionLimitExceeded { .. }
-                        ) =>
+                        ) || (self.compatibility == ParserCompatibility::Parslet
+                            && e.is_abort()) =>
                     {
                         // Runtime abort or resource limit: not a branch
                         // outcome. Propagating keeps the native pass
@@ -1743,7 +1883,8 @@ impl<'a> PortableParser<'a> {
                         e,
                         ParseError::InvalidGrammar { .. }
                             | ParseError::RecursionLimitExceeded { .. }
-                    ) =>
+                    ) || (self.compatibility == ParserCompatibility::Parslet
+                        && e.is_abort()) =>
                 {
                     self.capture_state.pop_scope();
                     return Err(e);
@@ -1848,7 +1989,11 @@ impl<'a> PortableParser<'a> {
                             break;
                         }
                     }
-                    Err(error @ ParseError::RecursionLimitExceeded { .. }) => {
+                    Err(error)
+                        if matches!(error, ParseError::RecursionLimitExceeded { .. })
+                            || (self.compatibility == ParserCompatibility::Parslet
+                                && error.is_abort()) =>
+                    {
                         self.capture_state.pop_scope();
                         self.capture_state.pop_scope();
                         return Err(error);
@@ -1886,7 +2031,11 @@ impl<'a> PortableParser<'a> {
                             break;
                         }
                     }
-                    Err(error @ ParseError::RecursionLimitExceeded { .. }) => {
+                    Err(error)
+                        if matches!(error, ParseError::RecursionLimitExceeded { .. })
+                            || (self.compatibility == ParserCompatibility::Parslet
+                                && error.is_abort()) =>
+                    {
                         self.capture_state.pop_scope();
                         self.capture_state.pop_scope();
                         return Err(error);
@@ -1910,7 +2059,9 @@ impl<'a> PortableParser<'a> {
         // consume_all mirrors Repetition#try_general: a repetition that
         // leaves input unparsed fails entirely (so root-level
         // alternatives re-try their later branches).
-        if consume_all && current_pos != input_len {
+        let legacy_bounded_success = self.compatibility == ParserCompatibility::Parslet
+            && max.is_some_and(|max_count| count >= max_count);
+        if consume_all && current_pos != input_len && !legacy_bounded_success {
             self.stash_partial(pos, current_pos, &items, tag);
             return Err(ParseError::Failed { position: pos });
         }
@@ -2332,6 +2483,11 @@ impl<'a> PortableParser<'a> {
         self.capture_state.try_push_scope()?;
         let inner = self.try_atom_impl(atom_id, pos, consume_all);
         self.capture_state.pop_scope();
+        if self.compatibility == ParserCompatibility::Parslet
+            && inner.as_ref().is_err_and(ParseError::is_abort)
+        {
+            return inner;
+        }
         if matches!(&inner, Err(ParseError::RecursionLimitExceeded { .. })) {
             return inner;
         }

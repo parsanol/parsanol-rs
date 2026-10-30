@@ -606,6 +606,21 @@ fn native_failure_message(e: &ParseError, diagnostics: Option<(usize, Vec<String
     e.to_string()
 }
 
+// Legacy consumers historically match this expected-set category. Keep the
+// existing native wire and byte-offset marker intact for strict/default calls.
+fn native_failure_message_for_compatibility(
+    error: &ParseError,
+    diagnostics: Option<(usize, Vec<String>)>,
+    compatibility: ParserCompatibility,
+) -> String {
+    let message = native_failure_message(error, diagnostics);
+    if compatibility == ParserCompatibility::Parslet && matches!(error, ParseError::Failed { .. }) {
+        message.replacen("Failed to match: expected ", "Expected ", 1)
+    } else {
+        message
+    }
+}
+
 fn parse_with_grammar(
     ruby: &Ruby,
     grammar: &Grammar,
@@ -680,7 +695,7 @@ fn parse_with_grammar_compatibility(
             let diagnostics = parser.failure_diagnostics();
             return Err(Error::new(
                 ruby.exception_runtime_error(),
-                native_failure_message(&e, diagnostics),
+                native_failure_message_for_compatibility(&e, diagnostics, compatibility),
             ));
         }
     };
