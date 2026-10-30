@@ -2897,7 +2897,15 @@ impl<'a> PortableParser<'a> {
         // comes back to the parent.
         temp_parser.pending_trivia = std::mem::take(&mut self.pending_trivia);
 
-        let result = temp_parser.try_atom_impl(temp_atom_id, pos, false)?;
+        let result = temp_parser.try_atom_impl(temp_atom_id, pos, false);
+        // Dynamic fragments evaluate against the full input, so their cause
+        // positions are already absolute byte offsets. Preserve those causes
+        // before an error crosses the parser boundary; otherwise the parent
+        // can report only an earlier failure outside the fragment. Strict
+        // retains speculative failures, while legacy's application frames
+        // discard them when the dynamic atom ultimately succeeds.
+        self.merge_legacy_failure(&temp_parser.take_legacy_failure());
+        let result = result?;
 
         // Merge captures from temp parser: replay only what the
         // fragment CHANGED relative to its seed (rs#174 round 2). The

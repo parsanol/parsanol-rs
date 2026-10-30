@@ -625,3 +625,111 @@ fn legacy_repetition_does_not_turn_an_unsupported_native_atom_into_success() {
     ));
     assert!(parser.legacy_cache.is_empty());
 }
+
+#[test]
+fn dynamic_fragment_failures_preserve_absolute_positions_and_expected_labels() {
+    use crate::portable::dynamic::{register_dynamic_callback, DynamicCallback, DynamicContext};
+    struct ClosingTag;
+    impl DynamicCallback for ClosingTag {
+        fn resolve(&self, _context: &DynamicContext) -> Option<Atom> {
+            None
+        }
+        fn resolve_fragment(&self, context: &DynamicContext) -> Option<(Grammar, usize)> {
+            let mut grammar = Grammar::new();
+            let open = literal(&mut grammar, "<");
+            let slash = literal(&mut grammar, "/");
+            let name = literal(&mut grammar, &context.get_capture_text("tag")?);
+            let close = literal(&mut grammar, ">");
+            let root = grammar.add_atom(Atom::Sequence {
+                atoms: vec![open, slash, name, close],
+            });
+            grammar.root = root;
+            Some((grammar, root))
+        }
+        fn description(&self) -> &str {
+            "captured closing tag"
+        }
+    }
+    for policy in [ParserCompatibility::Strict, ParserCompatibility::Parslet] {
+        for (prefix, expected) in [("", 6), ("α", 8), ("&#x3b1;", 13)] {
+            let mut grammar = Grammar::new();
+            let prefix_atom = literal(&mut grammar, prefix);
+            let open = literal(&mut grammar, "<");
+            let name = literal(&mut grammar, "i");
+            let capture = grammar.add_atom(Atom::Capture {
+                name: "tag".into(),
+                atom: name,
+            });
+            let text = literal(&mut grammar, ">a");
+            let dynamic = grammar.add_atom(Atom::Dynamic {
+                callback_id: register_dynamic_callback(Box::new(ClosingTag)),
+            });
+            grammar.root = grammar.add_atom(Atom::Sequence {
+                atoms: vec![prefix_atom, open, capture, text, dynamic],
+            });
+            let input = format!("{prefix}<i>a</b>");
+            let mut arena = AstArena::new();
+            let mut parser = PortableParser::new(&grammar, &input, &mut arena);
+            parser.set_compatibility(policy).unwrap();
+            for _ in 0..2 {
+                assert!(
+                    matches!(parser.parse(), Err(ParseError::Failed { position }) if position == expected)
+                );
+                let diagnostics = parser.failure_diagnostics().unwrap();
+                assert_eq!(diagnostics.0, expected);
+                assert!(diagnostics.1.iter().any(|label| label.contains('i')));
+            }
+        }
+    }
+}
+
+#[test]
+fn successful_dynamic_fragments_follow_the_selected_diagnostic_policy() {
+    use crate::portable::dynamic::{register_dynamic_callback, DynamicCallback, DynamicContext};
+    struct OptionalProbe;
+    impl DynamicCallback for OptionalProbe {
+        fn resolve(&self, _context: &DynamicContext) -> Option<Atom> {
+            None
+        }
+        fn resolve_fragment(&self, _context: &DynamicContext) -> Option<(Grammar, usize)> {
+            let mut grammar = Grammar::new();
+            let ab = literal(&mut grammar, "ab");
+            let missing = literal(&mut grammar, "c");
+            let probe = grammar.add_atom(Atom::Sequence {
+                atoms: vec![ab, missing],
+            });
+            let root = grammar.add_atom(Atom::Repetition {
+                atom: probe,
+                min: 0,
+                max: Some(1),
+                tag: RepetitionTag::Maybe,
+            });
+            grammar.root = root;
+            Some((grammar, root))
+        }
+        fn description(&self) -> &str {
+            "successful fragment with optional speculation"
+        }
+    }
+    for (policy, expected) in [
+        (ParserCompatibility::Strict, 2),
+        (ParserCompatibility::Parslet, 1),
+    ] {
+        let mut grammar = Grammar::new();
+        let dynamic = grammar.add_atom(Atom::Dynamic {
+            callback_id: register_dynamic_callback(Box::new(OptionalProbe)),
+        });
+        let a = literal(&mut grammar, "a");
+        let bang = literal(&mut grammar, "!");
+        grammar.root = grammar.add_atom(Atom::Sequence {
+            atoms: vec![dynamic, a, bang],
+        });
+        let mut arena = AstArena::new();
+        let mut parser = PortableParser::new(&grammar, "ab?", &mut arena);
+        parser.set_compatibility(policy).unwrap();
+        assert!(
+            matches!(parser.parse(), Err(ParseError::Failed { position }) if position == expected)
+        );
+        assert_eq!(parser.failure_diagnostics().unwrap().0, expected);
+    }
+}
