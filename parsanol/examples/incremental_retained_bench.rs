@@ -101,7 +101,12 @@ fn keystroke(input: &mut String, k: usize, line_count: usize) -> (usize, usize, 
 fn run_interleaved(
     document: &str,
     grammar: &Grammar,
-) -> (Vec<std::time::Duration>, Vec<std::time::Duration>, usize) {
+) -> (
+    Vec<std::time::Duration>,
+    Vec<std::time::Duration>,
+    Vec<f64>,
+    usize,
+) {
     // Interleaved A/B: one keystroke stream, TWO identical input
     // copies, both tier sessions parsing the SAME keystroke back to
     // back — the snapshot leg and the retained leg see the same host
@@ -125,10 +130,17 @@ fn run_interleaved(
 
     let mut snap_times = Vec::with_capacity(100);
     let mut ret_times = Vec::with_capacity(100);
+    // Edit-position fraction (0..=1) per keystroke: the mean over
+    // document-wide edits hides WHERE the tiers differ — the suffix
+    // reparse dominates early/mid edits for both, while late edits pay
+    // only the maintenance band.
+    let mut edit_fractions = Vec::with_capacity(100);
+    let doc_len = snap_input.len();
     let mut spliced = 0;
     for k in 0..100 {
         let (offset, old_len, new_len) = keystroke(&mut snap_input, k, line_count);
         let edit = Edit::replace(offset, old_len, new_len);
+        edit_fractions.push(offset as f64 / doc_len as f64);
         ret_input.replace_range(
             offset..offset + old_len,
             &snap_input[offset..offset + new_len],
@@ -167,7 +179,7 @@ fn run_interleaved(
             "retained tier tree mismatch at keystroke {k}"
         );
     }
-    (snap_times, ret_times, spliced)
+    (snap_times, ret_times, edit_fractions, spliced)
 }
 
 fn stats(
@@ -196,7 +208,7 @@ fn main() {
     // Warm both paths, then measure twice; report the second run to
     // reduce first-touch noise.
     for pass in 0..2 {
-        let (snapshot, retained, spliced) = run_interleaved(&document, &grammar);
+        let (snapshot, retained, fractions, spliced) = run_interleaved(&document, &grammar);
         if pass == 0 {
             continue;
         }
@@ -211,5 +223,37 @@ fn main() {
             sm.as_secs_f64() / rm.as_secs_f64(),
             sp95.as_secs_f64() / rp95.as_secs_f64()
         );
+
+        // Per-position buckets: early/mid/late thirds of the edit
+        // offset. The suffix reparse dominates early/mid for both
+        // tiers; a tier difference should appear in the late band,
+        // where the suffix is tiny and only the maintenance work
+        // differs.
+        for (name, lo, hi) in
+            [("early", 0.0, 1.0 / 3.0), ("mid", 1.0 / 3.0, 2.0 / 3.0), ("late", 2.0 / 3.0, 1.01)]
+        {
+            let s: Vec<_> = snapshot
+                .iter()
+                .zip(&fractions)
+                .filter(|(_, f)| **f >= lo && **f < hi)
+                .map(|(d, _)| *d)
+                .collect();
+            let r: Vec<_> = retained
+                .iter()
+                .zip(&fractions)
+                .filter(|(_, f)| **f >= lo && **f < hi)
+                .map(|(d, _)| *d)
+                .collect();
+            if s.is_empty() {
+                continue;
+            }
+            let smean: std::time::Duration = s.iter().sum::<std::time::Duration>() / s.len() as u32;
+            let rmean: std::time::Duration = r.iter().sum::<std::time::Duration>() / r.len() as u32;
+            println!(
+                "  {name:>5} band (n={}): snapshot mean {smean:.2?}  retained mean {rmean:.2?}  ({:.2}x)",
+                s.len(),
+                smean.as_secs_f64() / rmean.as_secs_f64()
+            );
+        }
     }
 }
