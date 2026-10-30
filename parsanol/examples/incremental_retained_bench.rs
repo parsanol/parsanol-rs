@@ -229,9 +229,11 @@ fn main() {
         // tiers; a tier difference should appear in the late band,
         // where the suffix is tiny and only the maintenance work
         // differs.
-        for (name, lo, hi) in
-            [("early", 0.0, 1.0 / 3.0), ("mid", 1.0 / 3.0, 2.0 / 3.0), ("late", 2.0 / 3.0, 1.01)]
-        {
+        for (name, lo, hi) in [
+            ("early", 0.0, 1.0 / 3.0),
+            ("mid", 1.0 / 3.0, 2.0 / 3.0),
+            ("late", 2.0 / 3.0, 1.01),
+        ] {
             let s: Vec<_> = snapshot
                 .iter()
                 .zip(&fractions)
