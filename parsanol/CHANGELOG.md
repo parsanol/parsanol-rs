@@ -73,6 +73,12 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- The remap lands under the bucketed instrument by @[object]
+- Remap slot indexes instead of re-hashing on retention (TODO.perf/9) by @[object]
+- Retained bench: per-edit-position latency buckets by @[object]
+
+### Other
+
 - Keep capture snapshots out of recursive parser results by @[object]
 - Revert "Keep legacy diagnostics out of strict recursive stack frames" by @[object]
 - Keep legacy diagnostics out of strict recursive stack frames by @[object]
