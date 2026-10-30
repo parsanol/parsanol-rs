@@ -58,7 +58,8 @@ use crate::ffi::ruby::cache::LruCache;
 use crate::ffi::shared::flatten_ast_to_u64;
 use crate::portable::bytecode::{parse_with_vm_capped, Program, VmCappedOutcome};
 use crate::portable::{
-    to_parslet_compatible, AstArena, Atom, DenseCache, Grammar, ParseError, PortableParser,
+    to_parslet_compatible, AstArena, Atom, DenseCache, Grammar, ParseError, ParserCompatibility,
+    PortableParser,
 };
 use magnus::{value::ReprValue, Error, RString, Ruby, Value};
 use std::collections::HashMap;
@@ -365,6 +366,62 @@ pub fn parse_handle(handle: u64, input: RString) -> Result<Value, Error> {
     }
 }
 
+/// Parse by registered handle with an explicit compatibility policy.
+///
+/// The ordinary handle entry point remains strict. Parslet compatibility
+/// uses the native packrat walker at every input size: the bytecode VM
+/// currently implements strict semantics only. This never calls Ruby's
+/// parser as a recovery path and never changes the handle's VM policy.
+/// The host must pass an explicit string policy and reject a missing seam
+/// rather than silently discard a requested compatibility policy.
+pub fn parse_handle_with_compatibility(
+    handle: u64,
+    input: RString,
+    compatibility: String,
+) -> Result<Value, Error> {
+    let ruby = Ruby::get().unwrap();
+    let policy = match compatibility.as_str() {
+        "strict" => return parse_handle(handle, input),
+        "parslet" => ParserCompatibility::Parslet,
+        _ => {
+            return Err(Error::new(
+                ruby.exception_arg_error(),
+                format!("unknown parsing compatibility: {compatibility}"),
+            ))
+        }
+    };
+    let entry = get_handle_map().lock().unwrap().get(&handle).cloned();
+    let Some(entry) = entry else {
+        return Err(Error::new(
+            ruby.exception_arg_error(),
+            format!("unknown grammar handle: {handle}"),
+        ));
+    };
+    // SAFETY: use the same borrow discipline as parse_handle. Dynamic
+    // callbacks can re-enter Ruby, so their input is copied before parsing.
+    let input_str: &str = unsafe { input.as_str()? };
+    if entry.has_dynamic {
+        let owned = input_str.to_string();
+        parse_with_grammar_compatibility(
+            &ruby,
+            &entry.grammar,
+            None,
+            &owned,
+            &entry.vm_disabled,
+            policy,
+        )
+    } else {
+        parse_with_grammar_compatibility(
+            &ruby,
+            &entry.grammar,
+            None,
+            input_str,
+            &entry.vm_disabled,
+            policy,
+        )
+    }
+}
+
 /// Parse with a registered grammar handle through the REFERENCE walker
 /// (TODO.sota/8 B1): no VM, no memo tables, no fused scans, no terminal
 /// fast paths — the plain recursive relation. Deliberately slow; the
@@ -549,6 +606,21 @@ fn native_failure_message(e: &ParseError, diagnostics: Option<(usize, Vec<String
     e.to_string()
 }
 
+// Legacy consumers historically match this expected-set category. Keep the
+// existing native wire and byte-offset marker intact for strict/default calls.
+fn native_failure_message_for_compatibility(
+    error: &ParseError,
+    diagnostics: Option<(usize, Vec<String>)>,
+    compatibility: ParserCompatibility,
+) -> String {
+    let message = native_failure_message(error, diagnostics);
+    if compatibility == ParserCompatibility::Parslet && matches!(error, ParseError::Failed { .. }) {
+        message.replacen("Failed to match: expected ", "Expected ", 1)
+    } else {
+        message
+    }
+}
+
 fn parse_with_grammar(
     ruby: &Ruby,
     grammar: &Grammar,
@@ -556,10 +628,28 @@ fn parse_with_grammar(
     input: &str,
     vm_disabled: &std::sync::atomic::AtomicBool,
 ) -> Result<Value, Error> {
+    parse_with_grammar_compatibility(
+        ruby,
+        grammar,
+        program,
+        input,
+        vm_disabled,
+        ParserCompatibility::Strict,
+    )
+}
+
+fn parse_with_grammar_compatibility(
+    ruby: &Ruby,
+    grammar: &Grammar,
+    program: Option<&Program>,
+    input: &str,
+    vm_disabled: &std::sync::atomic::AtomicBool,
+    compatibility: ParserCompatibility,
+) -> Result<Value, Error> {
     // Large inputs run on the precompiled bytecode VM (TODO.max-perf/4
     // phase 2): byte-identical trees per the differential gate, 2.76x
     // on 64 KB inputs.
-    if let Some(program) = program {
+    if let Some(program) = program.filter(|_| compatibility == ParserCompatibility::Strict) {
         if input.len() >= VM_INPUT_THRESHOLD {
             let mut arena = AstArena::for_input(input.len());
             arena.set_input(input.to_string());
@@ -595,6 +685,9 @@ fn parse_with_grammar(
         crate::ffi::ruby::dynamic::reset_host_atoms();
     }
     let mut parser = PortableParser::new(grammar, input, &mut arena);
+    parser
+        .set_compatibility(compatibility)
+        .map_err(|error| Error::new(ruby.exception_arg_error(), error.to_string()))?;
 
     let ast = match parser.parse() {
         Ok(ast) => ast,
@@ -602,7 +695,7 @@ fn parse_with_grammar(
             let diagnostics = parser.failure_diagnostics();
             return Err(Error::new(
                 ruby.exception_runtime_error(),
-                native_failure_message(&e, diagnostics),
+                native_failure_message_for_compatibility(&e, diagnostics, compatibility),
             ));
         }
     };
