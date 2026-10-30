@@ -98,53 +98,76 @@ fn keystroke(input: &mut String, k: usize, line_count: usize) -> (usize, usize, 
     (offset, old_len, new_line.len())
 }
 
-fn run_tier(retained: bool, document: &str, grammar: &Grammar) -> Vec<std::time::Duration> {
-    let mut input = document.to_owned();
-    let line_count = input.lines().count();
-    let mut session = IncrementalParser::owned(grammar.clone());
-    if retained {
-        session.parse_retained(&input).expect("initial parse");
-    } else {
+fn run_interleaved(
+    document: &str,
+    grammar: &Grammar,
+) -> (Vec<std::time::Duration>, Vec<std::time::Duration>, usize) {
+    // Interleaved A/B: one keystroke stream, TWO identical input
+    // copies, both tier sessions parsing the SAME keystroke back to
+    // back — the snapshot leg and the retained leg see the same host
+    // load within milliseconds of each other, so their ratio is the
+    // measured quantity (sequential legs minutes apart swing 2x on a
+    // shared host).
+    let mut snap_input = document.to_owned();
+    let mut ret_input = document.to_owned();
+    let line_count = snap_input.lines().count();
+    let mut snap_session = IncrementalParser::owned(grammar.clone());
+    let mut ret_session = IncrementalParser::owned(grammar.clone());
+    {
         let mut arena = AstArena::new();
-        session.parse(&input, &mut arena).expect("initial parse");
+        snap_session
+            .parse(&snap_input, &mut arena)
+            .expect("initial parse");
     }
+    ret_session
+        .parse_retained(&ret_input)
+        .expect("initial parse");
 
-    let mut latencies = Vec::with_capacity(100);
+    let mut snap_times = Vec::with_capacity(100);
+    let mut ret_times = Vec::with_capacity(100);
+    let mut spliced = 0;
     for k in 0..100 {
-        let (offset, old_len, new_len) = keystroke(&mut input, k, line_count);
+        let (offset, old_len, new_len) = keystroke(&mut snap_input, k, line_count);
         let edit = Edit::replace(offset, old_len, new_len);
+        ret_input.replace_range(
+            offset..offset + old_len,
+            &snap_input[offset..offset + new_len],
+        );
 
         let t = Instant::now();
-        if retained {
-            let result = session
-                .parse_with_edit_retained(&input, edit)
-                .expect("reparse");
-            let dt = t.elapsed();
-            let reference = full_flatten(grammar, &input);
-            let mut got = Vec::new();
-            flatten(&result.ast, session.retained_arena(), &input, &mut got);
-            assert_eq!(
-                got, reference,
-                "retained tier tree mismatch at keystroke {k}"
-            );
-            latencies.push(dt);
-        } else {
-            let mut arena = AstArena::new();
-            let result = session
-                .parse_with_edit(&input, &mut arena, edit)
-                .expect("reparse");
-            let dt = t.elapsed();
-            let reference = full_flatten(grammar, &input);
-            let mut got = Vec::new();
-            flatten(&result.ast, &arena, &input, &mut got);
-            assert_eq!(
-                got, reference,
-                "snapshot tier tree mismatch at keystroke {k}"
-            );
-            latencies.push(dt);
-        }
+        let mut arena = AstArena::new();
+        let snap_result = snap_session
+            .parse_with_edit(&snap_input, &mut arena, edit)
+            .expect("snapshot reparse");
+        snap_times.push(t.elapsed());
+        let reference = full_flatten(grammar, &snap_input);
+        let mut got = Vec::new();
+        flatten(&snap_result.ast, &arena, &snap_input, &mut got);
+        assert_eq!(
+            got, reference,
+            "snapshot tier tree mismatch at keystroke {k}"
+        );
+
+        let before = ret_session.spliced_parses();
+        let t = Instant::now();
+        let ret_result = ret_session
+            .parse_with_edit_retained(&ret_input, edit)
+            .expect("retained reparse");
+        ret_times.push(t.elapsed());
+        spliced += ret_session.spliced_parses() - before;
+        let mut got = Vec::new();
+        flatten(
+            &ret_result.ast,
+            ret_session.retained_arena(),
+            &ret_input,
+            &mut got,
+        );
+        assert_eq!(
+            got, reference,
+            "retained tier tree mismatch at keystroke {k}"
+        );
     }
-    latencies
+    (snap_times, ret_times, spliced)
 }
 
 fn stats(
@@ -166,22 +189,23 @@ fn main() {
     let grammar = kv_grammar();
     let document: String = (0..60_000).map(|i| format!("key{i}={}\n", i * 7)).collect();
     println!(
-        "document: {:.0} KiB, 100 keystrokes",
+        "document: {:.0} KiB, 100 interleaved keystrokes",
         document.len() as f64 / 1024.0
     );
 
     // Warm both paths, then measure twice; report the second run to
     // reduce first-touch noise.
     for pass in 0..2 {
-        let snapshot = run_tier(false, &document, &grammar);
-        let retained = run_tier(true, &document, &grammar);
+        let (snapshot, retained, spliced) = run_interleaved(&document, &grammar);
         if pass == 0 {
             continue;
         }
         let (sm, sp95, smax) = stats(&snapshot);
         let (rm, rp95, rmax) = stats(&retained);
         println!("snapshot tier: mean {sm:.2?}  p95 {sp95:.2?}  max {smax:.2?}");
-        println!("retained tier: mean {rm:.2?}  p95 {rp95:.2?}  max {rmax:.2?}");
+        println!(
+            "retained tier: mean {rm:.2?}  p95 {rp95:.2?}  max {rmax:.2?}  (spliced {spliced}/100)"
+        );
         println!(
             "retained speedup: {:.2}x mean, {:.2}x p95",
             sm.as_secs_f64() / rm.as_secs_f64(),
