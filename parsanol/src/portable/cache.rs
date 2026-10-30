@@ -533,36 +533,94 @@ impl DenseCache {
         F: FnMut(&CacheEntry) -> bool,
         A: FnMut(&AstNode) -> AstNode,
     {
-        self.entries.retain(|e| keep(e));
-        for entry in self.entries.iter_mut() {
-            if entry.is_snapshot() {
+        // One compaction pass does the keep-filter, the adoption, and
+        // the old-index -> new-index bookkeeping together. Re-hashing
+        // every survivor afterwards was the per-keystroke cost the
+        // late band isolates (TODO.perf/9: end-of-document edits pay
+        // ~150 ms of pure maintenance over ~10^6 entries): the
+        // survivors' home hashes never change here (adoption touches
+        // only node_data and the snapshot bit, never pos/atom_id), so
+        // the slots need only their INDEX VALUES remapped.
+        let old_len = self.entries.len();
+        let mut remap: Vec<i32> = Vec::with_capacity(old_len);
+        let mut write = 0usize;
+        for read in 0..old_len {
+            let mut entry = self.entries[read];
+            if !keep(&entry) {
+                remap.push(-1);
                 continue;
             }
-            let needs_adoption = matches!(
-                entry.to_node(),
-                AstNode::Array { .. } | AstNode::Hash { .. } | AstNode::StringRef { .. }
-            );
-            if needs_adoption {
-                let adopted = adopt(&entry.to_node());
-                let (a, b) = match adopted {
-                    AstNode::StringRef { pool_index } => (pool_index, 0),
-                    AstNode::Array { pool_index, length } => (pool_index, length),
-                    AstNode::Hash { pool_index, length } => (pool_index, length),
-                    _ => (entry.node_data_a, entry.node_data_b),
-                };
-                entry.make_snapshot(a, b);
+            if !entry.is_snapshot() {
+                let needs_adoption = matches!(
+                    entry.to_node(),
+                    AstNode::Array { .. } | AstNode::Hash { .. } | AstNode::StringRef { .. }
+                );
+                if needs_adoption {
+                    let adopted = adopt(&entry.to_node());
+                    let (a, b) = match adopted {
+                        AstNode::StringRef { pool_index } => (pool_index, 0),
+                        AstNode::Array { pool_index, length } => (pool_index, length),
+                        AstNode::Hash { pool_index, length } => (pool_index, length),
+                        _ => (entry.node_data_a, entry.node_data_b),
+                    };
+                    entry.make_snapshot(a, b);
+                }
+            }
+            self.entries[write] = entry;
+            remap.push(write as i32);
+            write += 1;
+        }
+        self.entries.truncate(write);
+
+        // Sequential slot remap: index values only, no hashing.
+        for slot in 0..self.capacity {
+            let idx = self.slots[slot];
+            if idx >= 0 {
+                self.slots[slot] = remap[idx as usize];
             }
         }
 
-        // Rebuild hash table
-        self.slots.fill(-1);
-        for (idx, entry) in self.entries.iter().enumerate() {
-            let slot = Self::hash_static(entry.pos, entry.atom_id, self.capacity);
-            let mut probe = slot;
-            while self.slots[probe] >= 0 {
-                probe = (probe + 1) & (self.capacity - 1);
+        // A dropped entry leaves a -1 hole that can cut a probe chain
+        // (a key whose home precedes the hole but whose entry sits
+        // beyond it would become unreachable). Shift the following
+        // cluster forward into the hole; the cluster is bounded by the
+        // load factor, so this is O(1) amortized per dropped entry.
+        for slot in 0..self.capacity {
+            if self.slots[slot] < 0 {
+                self.repair_hole(slot);
             }
-            self.slots[probe] = idx as i32;
+        }
+    }
+
+    /// Shift the linear-probe cluster following `hole` forward into
+    /// it, leaving a hole at the last moved position (the standard
+    /// open-addressing deletion rule). Entries are already compacted,
+    /// so the slot indexes are current.
+    fn repair_hole(&mut self, start: usize) {
+        let mut hole = start;
+        let mut probe = (hole + 1) & (self.capacity - 1);
+        while self.slots[probe] >= 0 {
+            let idx = self.slots[probe] as usize;
+            let (pos, atom_id, consume_all) = {
+                let entry = &self.entries[idx];
+                (entry.pos, entry.atom_id, entry.is_consume_all())
+            };
+            let key_atom = atom_id ^ if consume_all { 0x8000u16 } else { 0 };
+            let ideal = Self::hash_static(pos, key_atom, self.capacity);
+            // The entry can move into the vacated hole when the hole
+            // lies cyclically between its ideal home and its current
+            // slot.
+            let can_move = if ideal <= hole {
+                probe > hole || probe < ideal
+            } else {
+                probe > hole && probe < ideal
+            };
+            if can_move {
+                self.slots[hole] = self.slots[probe];
+                self.slots[probe] = -1;
+                hole = probe;
+            }
+            probe = (probe + 1) & (self.capacity - 1);
         }
     }
 
