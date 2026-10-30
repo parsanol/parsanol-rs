@@ -958,11 +958,21 @@ impl<'a> PortableParser<'a> {
                 std::process::abort();
             }
         }
-        let r = if self.compatibility == ParserCompatibility::Parslet {
-            self.try_atom_with_legacy_diagnostics(atom_id, pos, consume_all)
-        } else {
-            self.try_atom_impl_inner(atom_id, pos, consume_all)
-        };
+        // Tree-style diagnostics follow only the selected failed subtree.
+        // The strict reporter deliberately retains its global deepest policy.
+        let parent_failure = (self.compatibility == ParserCompatibility::Parslet)
+            .then(|| self.take_legacy_failure());
+        let r = self.try_atom_impl_inner(atom_id, pos, consume_all);
+        if let Some(parent_failure) = parent_failure {
+            if let Err(ParseError::Failed { position }) = &r {
+                self.ensure_legacy_failure(atom_id, *position);
+            }
+            let own_failure = self.take_legacy_failure();
+            self.restore_legacy_failure(parent_failure);
+            if matches!(&r, Err(ParseError::Failed { .. })) {
+                self.merge_legacy_failure(&own_failure);
+            }
+        }
         if self.track_max_end {
             if let Ok(result) = &r {
                 if result.end_pos > self.max_end_pos {
@@ -981,29 +991,6 @@ impl<'a> PortableParser<'a> {
             self.dynamic_outcomes.clear();
         }
         r
-    }
-
-    // Keep the two owned diagnostic snapshots out of the strict recursive
-    // frame. An unused legacy branch still reserves their stack slots when
-    // both policies share one function, exhausting small native stacks.
-    #[inline(never)]
-    fn try_atom_with_legacy_diagnostics(
-        &mut self,
-        atom_id: usize,
-        pos: usize,
-        consume_all: bool,
-    ) -> Result<ParseResult, ParseError> {
-        let parent_failure = self.take_legacy_failure();
-        let result = self.try_atom_impl_inner(atom_id, pos, consume_all);
-        if let Err(ParseError::Failed { position }) = &result {
-            self.ensure_legacy_failure(atom_id, *position);
-        }
-        let own_failure = self.take_legacy_failure();
-        self.restore_legacy_failure(parent_failure);
-        if matches!(&result, Err(ParseError::Failed { .. })) {
-            self.merge_legacy_failure(&own_failure);
-        }
-        result
     }
 
     fn try_atom_impl_inner(
