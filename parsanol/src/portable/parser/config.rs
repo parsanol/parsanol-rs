@@ -24,6 +24,21 @@ pub const DEFAULT_MAX_MEMORY: usize = 0;
 /// Check interval for timeout (number of parse operations between checks)
 pub const TIMEOUT_CHECK_INTERVAL: usize = 1000;
 
+/// Opt-in parsing compatibility for memoized packrat execution.
+///
+/// Strict is Parsanol's default: consume-all and prefix applications have
+/// separate memo namespaces. Parslet shares raw outcomes across that
+/// boundary, then rechecks consumption outside the memo. That historical
+/// policy can select a different tree for the same accepted input.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ParserCompatibility {
+    /// Preserve Parsanol's strict consume-all semantics.
+    #[default]
+    Strict,
+    /// Reproduce legacy prefix-memo ordering without changing defaults.
+    Parslet,
+}
+
 /// Parser configuration
 ///
 /// Holds all configurable parameters for parsing operations.

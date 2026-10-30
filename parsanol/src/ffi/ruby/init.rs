@@ -9,8 +9,8 @@ use super::parser::{
     cacheable_atom_count, clear_grammar_cache, grammar_cache_capacity, grammar_cache_size,
     incremental_parse, incremental_release, incremental_session, incremental_stats, is_available,
     optimized_atom_count, parse, parse_batch, parse_fresh, parse_handle, parse_handle_events,
-    parse_handle_prefix, parse_handle_reference, parse_with_builder, parse_with_stats,
-    register_grammar, release_grammar, set_cache_version,
+    parse_handle_prefix, parse_handle_reference, parse_handle_with_compatibility,
+    parse_with_builder, parse_with_stats, register_grammar, release_grammar, set_cache_version,
 };
 use crate::portable::dynamic::{
     clear_dynamic_callbacks, dynamic_callback_count, get_dynamic_callback_description,
@@ -120,6 +120,10 @@ pub fn init(ruby: &Ruby) -> Result<(), Error> {
     native_module.define_module_function("_incremental_parse", function!(incremental_parse, 5))?;
     native_module.define_module_function("_incremental_stats", function!(incremental_stats, 1))?;
     native_module.define_module_function("_parse_handle", function!(parse_handle, 2))?;
+    native_module.define_module_function(
+        "_parse_handle_with_compatibility",
+        function!(parse_handle_with_compatibility, 3),
+    )?;
 
     // B1 reference walker (TODO.sota/8): the plain recursive relation,
     // used by the cross-engine differential fuzz as its fifth path.

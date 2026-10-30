@@ -18,9 +18,13 @@ mod context;
 mod governor;
 
 #[cfg(test)]
+mod compatibility_tests;
+#[cfg(test)]
 mod tests;
 
-pub use config::{ParserConfig, DEFAULT_MAX_INPUT_SIZE, DEFAULT_MAX_RECURSION_DEPTH};
+pub use config::{
+    ParserCompatibility, ParserConfig, DEFAULT_MAX_INPUT_SIZE, DEFAULT_MAX_RECURSION_DEPTH,
+};
 pub use context::ParseContext;
 pub use governor::ResourceGovernor;
 
@@ -246,6 +250,12 @@ pub struct PortableParser<'a> {
 
     /// Packrat cache for memoization (inlined node data)
     cache: DenseCache,
+    /// Explicit legacy policy; strict remains the default.
+    compatibility: ParserCompatibility,
+    /// Eager legacy memo retained for this parser's lifetime. Recycling a
+    /// prefix entry can change legacy ordered-choice results, so these
+    /// entries use the parser's resource governor rather than eviction.
+    legacy_cache: std::collections::HashMap<(usize, usize), CacheEntry>,
 
     // ========================================================================
     // Resource Management (delegated)
@@ -301,6 +311,8 @@ pub struct PortableParser<'a> {
     /// This is set when the cache is effectively empty (no memoization),
     /// allowing safe cleanup of garbage from failed parse branches.
     rollback_on_failure: bool,
+    /// Restore the constructor's arena rollback policy on a mode switch.
+    strict_rollback_on_failure: bool,
 
     dbg_depth: u64,
 
@@ -459,6 +471,8 @@ impl<'a> PortableParser<'a> {
             expected_labels: Vec::new(),
             arena,
             cache,
+            compatibility: ParserCompatibility::Strict,
+            legacy_cache: std::collections::HashMap::new(),
             governor,
             capture_state: CaptureState::new(),
             dyn_cache: std::collections::HashMap::new(),
@@ -469,6 +483,7 @@ impl<'a> PortableParser<'a> {
             trivia_drained: false,
             dynamic_outcomes: std::collections::HashMap::new(),
             rollback_on_failure,
+            strict_rollback_on_failure: rollback_on_failure,
             dbg_depth: 0,
             dynamic_dependent: dynamic_dependence(grammar),
             state_write_dependent: state_write_dependence(grammar),
@@ -510,6 +525,8 @@ impl<'a> PortableParser<'a> {
             expected_labels: Vec::new(),
             arena,
             cache,
+            compatibility: ParserCompatibility::Strict,
+            legacy_cache: std::collections::HashMap::new(),
             governor,
             capture_state: CaptureState::new(),
             dyn_cache: std::collections::HashMap::new(),
@@ -520,6 +537,7 @@ impl<'a> PortableParser<'a> {
             trivia_drained: false,
             dynamic_outcomes: std::collections::HashMap::new(),
             rollback_on_failure: false,
+            strict_rollback_on_failure: false,
             dbg_depth: 0,
             dynamic_dependent: dynamic_dependence(grammar),
             state_write_dependent: state_write_dependence(grammar),
@@ -530,6 +548,68 @@ impl<'a> PortableParser<'a> {
             dispatch_counts: None,
             reference: false,
         }
+    }
+
+    /// Select an explicit memo compatibility policy before parsing.
+    ///
+    /// Changing policy clears memoized values/failures and accumulated
+    /// diagnostics and capture state, so a warmed strict result cannot leak
+    /// into a legacy application or vice versa. Select the policy before
+    /// seeding captures for a fragment. Legacy mode requires the memoized
+    /// packrat walker; a reference walker cannot reproduce memo ordering.
+    pub fn set_compatibility(
+        &mut self,
+        compatibility: ParserCompatibility,
+    ) -> Result<(), ParseError> {
+        if self.reference && compatibility == ParserCompatibility::Parslet {
+            return Err(ParseError::InvalidGrammar {
+                reason: "Parslet compatibility requires the memoized packrat walker".to_string(),
+            });
+        }
+        if self.compatibility == compatibility {
+            return Ok(());
+        }
+        self.compatibility = compatibility;
+        self.cache.clear();
+        self.legacy_cache.clear();
+        self.dyn_cache.clear();
+        self.dynamic_outcomes.clear();
+        self.capture_state = CaptureState::new();
+        self.deepest_failure_pos = 0;
+        self.has_failure = false;
+        self.expected_labels.clear();
+        self.ranked_failures.clear();
+        self.max_end_pos = 0;
+        self.partial_stash = None;
+        self.spine_trace.clear();
+        self.spine_watch = None;
+        self.pending_trivia.clear();
+        self.trivia_depth = 0;
+        self.trivia_drained = false;
+        self.rollback_on_failure = if compatibility == ParserCompatibility::Parslet {
+            false // Legacy memo values must survive failed alternatives.
+        } else {
+            self.strict_rollback_on_failure
+        };
+        Ok(())
+    }
+
+    /// The currently selected parsing compatibility policy.
+    pub fn compatibility(&self) -> ParserCompatibility {
+        self.compatibility
+    }
+
+    fn legacy_cache_memory_usage(&self) -> usize {
+        // Include headroom for the hash table's load factor/control data.
+        self.legacy_cache.capacity()
+            * (std::mem::size_of::<(usize, usize)>()
+                + std::mem::size_of::<CacheEntry>()
+                + std::mem::size_of::<usize>())
+            + if self.legacy_cache.capacity() == 0 {
+                0
+            } else {
+                64
+            }
     }
 
     /// Extract the cache
@@ -565,15 +645,16 @@ impl<'a> PortableParser<'a> {
     /// Get memory usage
     #[inline]
     pub fn memory_usage(&self) -> usize {
-        self.arena.memory_usage() + self.cache.memory_usage()
+        self.arena.memory_usage() + self.cache.memory_usage() + self.legacy_cache_memory_usage()
     }
 
-    /// Cache-only memory usage: the hard-bounded tier (see
-    /// `DenseCache::for_input`). The arena is reported by `memory_usage`
-    /// and is uncapped unless a memory governor limit is set.
+    /// Cache-only memory usage. The default dense tier is hard-bounded
+    /// (see `DenseCache::for_input`); opt-in legacy entries are retained
+    /// rather than evicted and count toward the memory governor limit.
+    /// The arena is reported separately by `memory_usage`.
     #[inline]
     pub fn cache_memory_usage(&self) -> usize {
-        self.cache.memory_usage()
+        self.cache.memory_usage() + self.legacy_cache_memory_usage()
     }
 
     /// Get a reference to the capture state
@@ -658,8 +739,10 @@ impl<'a> PortableParser<'a> {
     /// Check resources (timeout and memory)
     #[inline]
     fn check_resources(&mut self) -> Result<(), ParseError> {
-        self.governor
-            .check_resources_lazy(|| self.arena.memory_usage() + self.cache.memory_usage())
+        let legacy_memory = self.legacy_cache_memory_usage();
+        self.governor.check_resources_lazy(|| {
+            self.arena.memory_usage() + self.cache.memory_usage() + legacy_memory
+        })
     }
 
     // ========================================================================
@@ -843,6 +926,7 @@ impl<'a> PortableParser<'a> {
             // Successful children may have cached values before their captures
             // were rolled back by the abort. A retry must execute those captures.
             self.cache.clear();
+            self.legacy_cache.clear();
             self.dyn_cache.clear();
             self.dynamic_outcomes.clear();
         }
@@ -876,7 +960,7 @@ impl<'a> PortableParser<'a> {
         // Dynamic-dependent atoms are context-dependent: their outcome
         // varies with capture state, which the memo key ignores (GH-76).
         let dynamic_dependent = self.dynamic_dependent.get(atom_id).is_some_and(|&dep| dep);
-        if self.grammar.is_no_cache(atom_id) {
+        if self.compatibility == ParserCompatibility::Strict && self.grammar.is_no_cache(atom_id) {
             return self.parse_atom_uncached(atom_id, pos, consume_all);
         }
         if self
@@ -902,6 +986,24 @@ impl<'a> PortableParser<'a> {
                 return Err(ParseError::Failed { position: pos });
             }
             return result;
+        }
+        if self.compatibility == ParserCompatibility::Parslet {
+            // Capture/dynamic effects must execute rather than replay a
+            // value-only entry. Pure children still share the eager legacy
+            // memo. Scope itself is uncached in Parslet's protocol.
+            if dynamic_dependent
+                || matches!(
+                    self.grammar.get_atom(atom_id),
+                    Some(Atom::Scope { .. } | Atom::Named { .. } | Atom::Ignore { .. })
+                )
+            {
+                let result = self.parse_scoped_trivia_drain(atom_id, pos, consume_all);
+                if consume_all && result.as_ref().is_ok_and(|r| r.end_pos != self.input.len()) {
+                    return Err(ParseError::Failed { position: pos });
+                }
+                return result;
+            }
+            return self.try_atom_legacy(atom_id, pos, consume_all);
         }
         if dynamic_dependent {
             // Capture-context-dependent (GH-76): memo keyed by the
@@ -1082,6 +1184,58 @@ impl<'a> PortableParser<'a> {
                 Err(e)
             }
         }
+    }
+
+    /// Parslet-compatible raw-outcome memoization. The consumption check
+    /// deliberately runs after both cache lookup and raw outcome storage.
+    /// Incomplete success is not stored as a failed raw application.
+    fn try_atom_legacy(
+        &mut self,
+        atom_id: usize,
+        pos: usize,
+        consume_all: bool,
+    ) -> Result<ParseResult, ParseError> {
+        let key = (atom_id, pos);
+        let cached = self
+            .legacy_cache
+            .get(&key)
+            .copied()
+            .filter(|entry| !entry.success || entry.generation == self.arena.generation());
+        let result = if let Some(entry) = cached {
+            if entry.success {
+                Ok(ParseResult {
+                    value: entry.to_node(),
+                    end_pos: entry.end_pos as usize,
+                    capture_state: None,
+                })
+            } else {
+                Err(ParseError::Failed { position: pos })
+            }
+        } else {
+            let result = self.parse_scoped_trivia_drain(atom_id, pos, consume_all);
+            match &result {
+                Ok(parsed) if !self.trivia_drained => {
+                    let entry = CacheEntry::from_node(
+                        pos as u32,
+                        atom_id as u16,
+                        parsed.end_pos as u32,
+                        &parsed.value,
+                        self.arena.generation(),
+                    );
+                    self.legacy_cache.insert(key, entry);
+                }
+                Err(ParseError::Failed { .. }) if !self.trivia_drained => {
+                    self.legacy_cache
+                        .insert(key, CacheEntry::failure(pos as u32, atom_id as u16));
+                }
+                _ => {} // Runtime aborts and effect-spanning outcomes are not memoized.
+            }
+            result
+        };
+        if consume_all && result.as_ref().is_ok_and(|r| r.end_pos != self.input.len()) {
+            return Err(ParseError::Failed { position: pos });
+        }
+        result
     }
 
     /// Runs the uncached parse with the trivia-drain flag scoped to
@@ -1615,7 +1769,7 @@ impl<'a> PortableParser<'a> {
         // Reference mode (B1) runs the general loop below: the bulk and
         // fused scans are optimizations whose tree equivalence is part
         // of what the reference path exists to check.
-        if !self.reference {
+        if !self.reference && self.compatibility == ParserCompatibility::Strict {
             // Check for SIMD optimization
             if let Some(Atom::Re { pattern }) = self.grammar.get_atom(atom_id) {
                 if let Some(char_pattern) = CharacterPattern::from_pattern(pattern) {
@@ -2421,7 +2575,7 @@ impl<'a> PortableParser<'a> {
 
         // B1 reference mode: dispatch caches are memoization too — the
         // block runs every time, exactly as the semantics state.
-        if !self.reference {
+        if !self.reference && self.compatibility == ParserCompatibility::Strict {
             if std::env::var("PARSANOL_CACHE_TRACE").is_ok() {
                 eprintln!(
                     "OUTCOME-LOOKUP cb={} pos={} fp={:016x} hit={}",
@@ -2515,7 +2669,10 @@ impl<'a> PortableParser<'a> {
         // — a full copy of the registered grammar PER DISPATCH
         // POSITION; caching those retained megabytes per distinct
         // document (parsanol-ruby#84).
-        let result = if resolved_fragment && !self.reference {
+        let result = if resolved_fragment
+            && !self.reference
+            && self.compatibility == ParserCompatibility::Strict
+        {
             let stored = super::dynamic::store_dispatch_fragment(
                 callback_id,
                 pos,
@@ -2529,7 +2686,7 @@ impl<'a> PortableParser<'a> {
         } else {
             self.parse_fragment(&temp_grammar, temp_atom_id, pos)
         };
-        if !self.reference {
+        if !self.reference && self.compatibility == ParserCompatibility::Strict {
             match &result {
                 Ok(r) => {
                     self.dynamic_outcomes
@@ -2563,6 +2720,7 @@ impl<'a> PortableParser<'a> {
         } else {
             PortableParser::new(temp_grammar, self.input, &mut temp_arena)
         };
+        temp_parser.set_compatibility(self.compatibility)?;
         // Seed the fragment's visible capture state wholesale
         // (rs#174 round 2): the per-name store loop pushed two undo-log
         // entries per capture per boundary crossing, and the merge-back
