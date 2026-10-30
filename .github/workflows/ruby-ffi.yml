@@ -104,6 +104,7 @@ jobs:
           bundle install
           bundle exec rake compile
       - name: Profile and verify the candidate
+        id: candidate
         working-directory: consumer
         run: |
           set -euo pipefail
@@ -134,6 +135,21 @@ jobs:
           assert profiles['candidate']['reused'] < profiles['published']['reused'] / 2, 'native regression not sufficiently reduced'
           assert profiles['candidate']['reused'] <= profiles['parslet']['reused'], 'native still slower than the original Parslet grammar'
           PY
+      - name: Sample native stacks when the performance gate fails
+        if: failure() && steps.candidate.outcome == 'failure'
+        working-directory: consumer
+        run: |
+          set -euo pipefail
+          PROFILE_ROOT="$PWD" PROFILE_EXPECT_GEM="$GITHUB_WORKSPACE/ruby-bridge" \
+            bundle exec gdb --batch -x ../.github/scripts/profile_unicode_stacks.gdb \
+            --args "$(ruby -rrbconfig -e 'print RbConfig.ruby')" \
+            ../.github/scripts/profile_unicode_stacks.rb > ../candidate-stacks.log 2>&1
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: unicode-native-stacks
+          path: candidate-stacks.log
+          if-no-files-found: warn
       - uses: actions/upload-artifact@v7
         if: always()
         with:
