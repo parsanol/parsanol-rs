@@ -975,7 +975,7 @@ impl<'a> PortableParser<'a> {
             let own_failure = self.take_legacy_failure();
             self.restore_legacy_failure(parent_failure);
             if matches!(&r, Err(ParseError::Failed { .. })) {
-                self.merge_legacy_failure(&own_failure);
+                self.merge_owned_legacy_failure(own_failure);
             }
         }
         if self.track_max_end {
@@ -1275,7 +1275,7 @@ impl<'a> PortableParser<'a> {
             } else {
                 let failure = entry.failure.clone();
                 if let Some(failure) = failure {
-                    self.merge_legacy_failure(&failure);
+                    self.merge_owned_legacy_failure(*failure);
                 }
                 Err(ParseError::Failed {
                     position: self.deepest_failure_pos,
@@ -1365,12 +1365,66 @@ impl<'a> PortableParser<'a> {
         self.ranked_failures.clear();
     }
 
+    /// Application frames and memo entries already own canonical diagnostics.
+    /// An empty parent can take their buffers directly: replaying every label
+    /// cloned the same large cause set at each enclosing failed application.
+    fn merge_owned_legacy_failure(&mut self, failure: LegacyFailure) {
+        if !self.has_failure && self.ranked_failures.is_empty() {
+            self.restore_legacy_failure(failure);
+        } else {
+            self.merge_legacy_failure(&failure);
+        }
+    }
+
     fn merge_legacy_failure(&mut self, failure: &LegacyFailure) {
         for (position, labels) in &failure.ranks {
-            for label in labels {
-                self.note_failure(*position, label.clone());
+            if labels.is_empty() {
+                continue;
+            }
+
+            if !self.has_failure || *position > self.deepest_failure_pos {
+                self.has_failure = true;
+                self.deepest_failure_pos = *position;
+                self.expected_labels.clear();
+            }
+            if *position == self.deepest_failure_pos {
+                Self::extend_failure_labels(&mut self.expected_labels, labels);
+            }
+            match self.ranked_failures.iter_mut().find(|(p, _)| p == position) {
+                Some((_, current)) => Self::extend_failure_labels(current, labels),
+                None => {
+                    let mut current = Vec::new();
+                    Self::extend_failure_labels(&mut current, labels);
+                    self.ranked_failures.push((*position, current));
+                    self.ranked_failures.sort_by_key(|a| std::cmp::Reverse(a.0));
+                    self.ranked_failures.truncate(MAX_RANKED_FAILURES);
+                }
             }
         }
+    }
+
+    /// Merge speculative causes in their original order. Replaying one label
+    /// at a time repeatedly scanned the growing vectors and cloned even labels
+    /// already present, making large alternative sets quadratic on success too.
+    fn extend_failure_labels(current: &mut Vec<String>, incoming: &[String]) {
+        if incoming.len() <= 8 {
+            for label in incoming {
+                if !current.contains(label) {
+                    current.push(label.clone());
+                }
+            }
+            return;
+        }
+
+        let mut seen: std::collections::HashSet<&str> =
+            current.iter().map(String::as_str).collect();
+        let additions: Vec<_> = incoming
+            .iter()
+            .filter(|label| seen.insert(label.as_str()))
+            .cloned()
+            .collect();
+        drop(seen);
+        current.extend(additions);
     }
 
     fn ensure_legacy_failure(&mut self, atom_id: usize, position: usize) {

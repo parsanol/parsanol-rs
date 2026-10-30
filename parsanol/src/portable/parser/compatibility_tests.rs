@@ -16,6 +16,116 @@ fn named(grammar: &mut Grammar, atom: usize, name: &str) -> usize {
     })
 }
 
+#[test]
+fn legacy_batch_diagnostics_match_scalar_replay_order_and_rank_eviction() {
+    for seed_count in [0, 4, 12] {
+        let mut grammar = Grammar::new();
+        grammar.root = literal(&mut grammar, "x");
+        let mut expected_arena = AstArena::new();
+        let mut actual_arena = AstArena::new();
+        let mut expected = PortableParser::new(&grammar, "?", &mut expected_arena);
+        let mut actual = PortableParser::new(&grammar, "?", &mut actual_arena);
+        for position in 0..seed_count {
+            for label in ["existing", "shared", "existing"] {
+                expected.note_failure(position, label.into());
+                actual.note_failure(position, label.into());
+            }
+        }
+        let large: Vec<_> = (0..256)
+            .flat_map(|i| [format!("label-{i}"), "shared".into()])
+            .collect();
+        let failure = LegacyFailure {
+            ranks: vec![
+                (3, large.clone()),
+                (20, vec!["first".into(), "first".into(), "second".into()]),
+                (21, Vec::new()),
+                (4, vec!["shared".into(), "new".into()]),
+                (20, large),
+                (0, vec!["below-ranked-limit".into()]),
+            ],
+            ..Default::default()
+        };
+        // The previous scalar operation is the observable ordering contract.
+        for (position, labels) in &failure.ranks {
+            for label in labels {
+                expected.note_failure(*position, label.clone());
+            }
+        }
+        actual.merge_legacy_failure(&failure);
+        assert_eq!(actual.failure_diagnostics(), expected.failure_diagnostics());
+        assert_eq!(actual.failure_ranks(), expected.failure_ranks());
+    }
+}
+
+#[test]
+fn legacy_owned_diagnostics_move_into_empty_frames_and_merge_into_existing_causes() {
+    for seed_count in [0, 4, 12] {
+        let mut grammar = Grammar::new();
+        grammar.root = literal(&mut grammar, "x");
+        let mut source_arena = AstArena::new();
+        let mut expected_arena = AstArena::new();
+        let mut actual_arena = AstArena::new();
+        let mut source = PortableParser::new(&grammar, "?", &mut source_arena);
+        let mut expected = PortableParser::new(&grammar, "?", &mut expected_arena);
+        let mut actual = PortableParser::new(&grammar, "?", &mut actual_arena);
+        for position in 0..seed_count {
+            expected.note_failure(position, "existing".into());
+            actual.note_failure(position, "existing".into());
+        }
+        for position in 0..10 {
+            for i in 0..256 {
+                source.note_failure(position, format!("label-{i}"));
+            }
+        }
+        let failure = source.take_legacy_failure();
+        let labels_ptr = failure.labels.as_ptr();
+        let ranks_ptr = failure.ranks.as_ptr();
+        expected.merge_legacy_failure(&failure);
+        actual.merge_owned_legacy_failure(failure);
+        assert_eq!(actual.failure_diagnostics(), expected.failure_diagnostics());
+        assert_eq!(actual.failure_ranks(), expected.failure_ranks());
+        if seed_count == 0 {
+            assert_eq!(actual.expected_labels.as_ptr(), labels_ptr);
+            assert_eq!(actual.ranked_failures.as_ptr(), ranks_ptr);
+        }
+    }
+}
+
+#[test]
+fn legacy_large_alternative_memo_replays_labels_and_discards_successful_causes() {
+    let mut grammar = Grammar::new();
+    let mut atoms: Vec<_> = (0..256)
+        .map(|i| literal(&mut grammar, &format!("missing-{i}")))
+        .collect();
+    atoms.push(literal(&mut grammar, "x"));
+    let choice = grammar.add_atom(Atom::Alternative { atoms });
+    let shared = grammar.add_atom(Atom::Entity { atom: choice });
+    grammar.root = grammar.add_atom(Atom::Alternative {
+        atoms: vec![shared, shared],
+    });
+    let mut expected: Vec<_> = (0..256).map(|i| format!("'missing-{i}'")).collect();
+    expected.push("'x'".into());
+
+    let mut arena = AstArena::new();
+    let mut parser = PortableParser::new(&grammar, "?", &mut arena);
+    parser
+        .set_compatibility(ParserCompatibility::Parslet)
+        .unwrap();
+    for _ in 0..2 {
+        assert!(parser.parse().is_err());
+        assert_eq!(parser.failure_diagnostics(), Some((0, expected.clone())));
+        assert_eq!(parser.failure_ranks(), &[(0, expected.clone())]);
+    }
+
+    let mut arena = AstArena::new();
+    let mut parser = PortableParser::new(&grammar, "x", &mut arena);
+    parser
+        .set_compatibility(ParserCompatibility::Parslet)
+        .unwrap();
+    assert!(parser.parse().is_ok());
+    assert!(parser.failure_diagnostics().is_none());
+}
+
 fn choices(with_tail: bool) -> (Grammar, usize) {
     choices_with_tail_length(with_tail, 1)
 }
