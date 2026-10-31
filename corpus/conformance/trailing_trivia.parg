@@ -1,5 +1,5 @@
 ## Semantics: S1, S5, T1, C3, M0, A1
-grammar ConformanceTrailingTrivia version "1.0.0" mode "v1" {
+grammar ConformanceTrailingTrivia version "1.0.0" edition "v1" {
   ## Whitespace trivia.
   trivia = 1*" "
   ## A key followed by "="; trailing whitespace must be consumed by the

@@ -1,5 +1,5 @@
 ## Semantics: T1, C3, C4, K1, V2, V3, B1, B3, A1, A2, M0
-grammar ConformanceRepetition version "1.0.0" mode "v1" {
+grammar ConformanceRepetition version "1.0.0" edition "v1" {
   ## Exactly two letters, captured as one string.
   pair = 2*2(%x61-7A) as code
   ## An optional dash prefix, then the pair.

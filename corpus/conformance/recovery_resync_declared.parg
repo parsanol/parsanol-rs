@@ -1,5 +1,5 @@
 ## Semantics: E2 (recovery — R2 declared resync, deterministic spans)
-grammar RecoveryResync version "1.0.0" mode "v1" {
+grammar RecoveryResync version "1.0.0" edition "v1" {
   ## key = value ; pairs. Recovery for document skips deterministic
   ## junk: any run of non-";" bytes ending at a ";" (the author owns
   ## the spans — no trial scanning).

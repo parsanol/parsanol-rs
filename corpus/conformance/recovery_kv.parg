@@ -1,5 +1,5 @@
 ## Semantics: E2 (recovery — the R1.5 partial-tree differential input)
-grammar RecoveryKV version "1.0.0" mode "v1" {
+grammar RecoveryKV version "1.0.0" edition "v1" {
   ## key = value ; pairs
   pair = ( 1*( %x61-7A / %x30-39 ) ) as k "=" ( 1*( %x30-39 ) ) as v ";"
   document = 1*( pair )

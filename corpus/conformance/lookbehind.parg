@@ -1,5 +1,5 @@
 ## Semantics: T3, C5, C6, K1, V3, M0, A1, A2
-grammar ConformanceLookbehind version "1.0.0" mode "v1" {
+grammar ConformanceLookbehind version "1.0.0" edition "v1" {
   ## Emphasis: a star not preceded by a letter, content, star.
   emph = ( !< %x61-7A "*" 1*( !"*" ANY ) "*" ) as emph
   ## Words and emphasis.

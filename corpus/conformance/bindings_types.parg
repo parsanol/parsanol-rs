@@ -1,5 +1,5 @@
 ## Semantics: C3, K1, K2, B1, B2, B3, A1, A3, M0
-grammar ConformanceTypes version "1.0.0" mode "v1" {
+grammar ConformanceTypes version "1.0.0" edition "v1" {
   ## A year: four digits, cast to integer.
   main = 4*( %x30-39 ) as year
 

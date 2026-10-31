@@ -1,5 +1,5 @@
 ## Semantics: V1, C1, K1, A1, A2, M0
-grammar ConformanceMergeLaws version "1.0.0" mode "v1" {
+grammar ConformanceMergeLaws version "1.0.0" edition "v1" {
   ## Duplicate capture keys merge right-biased; text beside a map is dropped.
   main = ( "a" as k ) ( "b" as k ) "tail"
 

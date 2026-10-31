@@ -1,5 +1,5 @@
 ## Semantics: T2, T1, C1, M0, A1
-grammar ConformanceCasefoldUnicode version "1.0.0" mode "v1" {
+grammar ConformanceCasefoldUnicode version "1.0.0" edition "v1" {
   ## Case-insensitive literal with a non-ASCII letter.
   main = %i"é" %x21
 

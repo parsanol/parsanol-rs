@@ -1,5 +1,5 @@
 ## Semantics: C9, C2, C3, C7, K1, A1, A4, M0
-grammar ConformanceLeftRecArith version "1.0.0" mode "v1" {
+grammar ConformanceLeftRecArith version "1.0.0" edition "v1" {
   ## Direct left recursion folded at compile time: `*` binds tighter
   ## than `+`, both left-associative (the ANTLR 4 rewrite, C9).
   expr = expr ( "*" expr ) as mul / expr ( "+" expr ) as add / term

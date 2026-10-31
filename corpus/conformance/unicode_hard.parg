@@ -2,7 +2,7 @@
 ## emoji ZWJ sequences (multi-codepoint graphemes must match as one
 ## literal byte-run), RTL text (bidi is rendering-only; byte order is
 ## the contract), and astral-plane codepoints (4-byte UTF-8).
-grammar ConformanceUnicodeHard version "1.0.0" mode "v1" {
+grammar ConformanceUnicodeHard version "1.0.0" edition "v1" {
   ## ZWJ family emoji, an RTL run, and an astral-plane symbol.
   family = %x1F468 %x200D %x1F469 %x200D %x1F467 %x200D %x1F466
   shalom = %x5E9 %x5DC %x5D5 %x5DD
