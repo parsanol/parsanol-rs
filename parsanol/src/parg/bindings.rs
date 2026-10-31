@@ -367,6 +367,15 @@ impl PargArtifact {
         // identical when every instance fires every capture. Captures
         // outside any instance keep the legacy occurrence pairing.
         if let Some(instances) = group_instances(shape, prefix) {
+            // The occurrence path's `count == 0 → bind nothing`: a
+            // repetition that fired zero iterations (the tree carries
+            // `parts: []`) binds no key — the recorded native
+            // expectations and the pubid builders rely on the absent
+            // reading (rs#370, caught by the pubid corpus gate on the
+            // 0.10.x bump).
+            if instances.is_empty() {
+                return Ok(());
+            }
             let mut list: Vec<Value> = Vec::with_capacity(instances.len());
             for instance in instances {
                 let found = collect_captures(instance);
