@@ -73,6 +73,11 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- A zero-instance array binds nothing (rs#370) ([#371](https://github.com/parsanol/parsanol-rs/pull/371)) by @[object]
+- Remove the mode grammar-header keyword (owner ruling 2026-10-31) by @[object]
+
+### Other
+
 - Merge pull request #368 from parsanol/corpus/rebake-semantics-hash by @[object]
 - Re-bake the conformance corpus at parsanol 1.3.117; pin the cross-compiler semantics hash by @[object]
 - (any) reduces to the plain cross-engine shape (ruby#383); wasm semanticsHash reader (rs#366) by @[object]
