@@ -314,6 +314,17 @@ impl PargArtifactJs {
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
         Ok(JsString::from(crate::parg::schema::to_typescript(&schema)))
     }
+
+    /// The semantics hash (ruby#377): sha256 over the canonicalized
+    /// envelope minus the producer set — byte-stable across re-bakes
+    /// by a newer compiler when the grammar is unchanged. `undefined`
+    /// on artifacts baked before the field existed.
+    #[wasm_bindgen(js_name = semanticsHash)]
+    pub fn semantics_hash(&self) -> Option<JsString> {
+        self.artifact
+            .semantics_hash()
+            .map(|hash| JsString::from(hash.to_string()))
+    }
 }
 
 /// Initialize the WASM module

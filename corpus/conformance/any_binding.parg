@@ -1,0 +1,19 @@
+# Semantics: the (any) binding passthrough reduces to the ONE plain
+# shape on every engine (parsanol-ruby#383) — scalars and capture
+# leaves as their text, named groups as string-keyed plain hashes.
+grammar AnyBinding version "1.0.0" edition 2 {
+  word = 1*( %x41-5A / %x61-7A )
+  digit = %x30-39
+  dash = "-"
+  number = ( word ) as name
+  suffix = ( dash ( 1*( digit ) ) as num )
+  identifier = number suffix
+  entry identifier: identifier
+  bindings identifier {
+    name -> name (any)
+    num -> num (any)
+  }
+  test {
+    accept "ABC-12"
+  }
+}
