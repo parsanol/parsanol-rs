@@ -175,6 +175,21 @@ fn rust_envelope_matches_the_ruby_artifacts() {
                 // checksum covers the stamp.
                 continue;
             }
+            if key == "semantics_hash" {
+                // THE cross-compiler pin (ruby#377): the committed
+                // artifact is baked by the Ruby reference compiler, the
+                // `got` envelope by this crate — the two hashes may
+                // only agree if the canonical JSON and the producer
+                // exclusion set are identical on both sides.
+                assert_eq!(
+                    got.get(key),
+                    Some(want),
+                    "{name}: cross-compiler semantics hash drifts — \
+                     the canonical JSON or the producer exclusion set \
+                     diverges from the Ruby compiler (ruby#377)"
+                );
+                continue;
+            }
             if key == "edition" {
                 // Artifacts baked before the numeric surface spell the
                 // edition "v1"/"v2"; the levels are the same, so both
