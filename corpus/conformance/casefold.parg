@@ -1,5 +1,5 @@
 ## Semantics: T2, T1, C1, C3, K1, A1, A2, M0
-grammar ConformanceCasefold version "1.0.0" mode "v1" {
+grammar ConformanceCasefold version "1.0.0" edition "v1" {
   ## Case-insensitive keyword followed by a number.
   main = %i"select" " " ( 1*%x30-39 as number )
 

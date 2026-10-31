@@ -608,15 +608,27 @@ impl Parser {
         // the author declares, per grammar, which tree semantics the
         // grammar means. THE DEFAULT IS 1 (the legacy shapes — the
         // owner's 2026-10-28 reversal). 2 = fully named trees +
-        // explicit spans. `mode` remains accepted as a deprecated
-        // alias for the keyword. The edition is canonicalized here —
-        // everything downstream only ever sees "v1"/"v2".
+        // explicit spans. The edition is canonicalized here —
+        // everything downstream only ever sees "v1"/"v2". The
+        // pre-1.3.113 `mode` alias was removed (the owner's
+        // 2026-10-31 ruling): the header fails with the fix named.
         let keyword = self.peek().map(|t| t.value.clone());
-        if self.peek().map(|t| t.kind) == Some(TokenKind::Ident)
-            && matches!(keyword.as_deref(), Some("edition") | Some("mode"))
-        {
-            self.bump();
-            mode = Some(self.edition_value()?);
+        if self.peek().map(|t| t.kind) == Some(TokenKind::Ident) {
+            match keyword.as_deref() {
+                Some("edition") => {
+                    self.bump();
+                    mode = Some(self.edition_value()?);
+                }
+                Some("mode") => {
+                    return Err(ParseError {
+                        message: "the grammar header keyword is edition; mode (the \
+                                  pre-1.3.113 alias) was removed — write edition \"v1\" \
+                                  or edition \"v2\""
+                            .to_string(),
+                    });
+                }
+                _ => {}
+            }
         }
         self.expect_punct("{")?;
         self.block(

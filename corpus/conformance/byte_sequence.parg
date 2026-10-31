@@ -1,5 +1,5 @@
 ## Semantics: T4, T3, C3, M0, A1
-grammar ConformanceByteSequence version "1.0.0" mode "v1" {
+grammar ConformanceByteSequence version "1.0.0" edition "v1" {
   ## CRLF, then exactly two ASCII digits.
   main = %x0D.0A 2*2( %x30-39 )
 
