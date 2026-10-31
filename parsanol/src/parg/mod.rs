@@ -289,6 +289,14 @@ impl PargArtifact {
         self.envelope.get("checksum").and_then(Value::as_str)
     }
 
+    /// The semantics hash (ruby#377): sha256 over the canonicalized
+    /// envelope minus the producer set — stable across re-bakes by a
+    /// newer compiler when the grammar's behavior is unchanged. None
+    /// on artifacts baked before the field existed; never an error.
+    pub fn semantics_hash(&self) -> Option<&str> {
+        self.envelope.get("semantics_hash").and_then(Value::as_str)
+    }
+
     /// C12: constrained-decoding vocabulary — every terminal literal and
     /// character-class pattern in every entry's grammar, deduplicated and
     /// sorted, for LLM constrained-decoding integration.

@@ -564,3 +564,52 @@ fn glue_declaration_keeps_the_chain_anonymous() {
         "grammar G version \"1.0.0\" edition 2 {\n  glue\n  entry main: main\n  main = \"a\"\n}\n";
     assert!(parser::parse_grammar_with_mode(bare).is_err());
 }
+
+// ruby#377: the semantics hash is byte-stable across RE-BAKES — a
+// different compiler_version (the re-bake's producer change) must move
+// the checksum but not the semantics hash, so freshness gates can tell
+// "newer producer" from "the grammar changed".
+#[test]
+fn re_bake_with_a_newer_producer_keeps_the_semantics_hash() {
+    let dir = corpus_dir();
+    let source = std::fs::read_to_string(dir.join("leftrec_arith.parg"))
+        .expect("source")
+        .replace("\r\n", "\n");
+    let mut artifact = envelope::compile_source(&source).expect("compile");
+    let original_semantics = artifact["semantics_hash"]
+        .as_str()
+        .expect("stamped")
+        .to_string();
+    let original_checksum = artifact["checksum"].as_str().expect("stamped").to_string();
+
+    // The re-bake: same grammar, a NEWER producer. Recompute the
+    // checksum over the re-stamped envelope exactly as the bake does
+    // (checksum_hex covers everything except the checksum itself).
+    let version = format!("{}.99", env!("CARGO_PKG_VERSION"));
+    artifact["compiler_version"] = serde_json::Value::String(version.clone());
+    artifact.as_object_mut().expect("object").remove("checksum");
+    let re_checksum = parsanol::parg::checksum_hex(&artifact).expect("checksum");
+    artifact["checksum"] = serde_json::Value::String(re_checksum);
+
+    assert_ne!(
+        artifact["checksum"].as_str().expect("stamped"),
+        original_checksum,
+        "the checksum pins the producer: a newer compiler_version must move it"
+    );
+    assert_eq!(
+        artifact["semantics_hash"].as_str().expect("stamped"),
+        original_semantics,
+        "the semantics hash excludes producer metadata: identical grammar + \
+         different compiler_version must keep it byte-stable"
+    );
+
+    // The loader reader: present on new artifacts, and the round-trip
+    // through the artifact loader preserves it.
+    let text = serde_json::to_string(&artifact).expect("serialize");
+    let loaded = PargArtifact::from_json(&text).expect("artifact accepted");
+    assert_eq!(
+        loaded.semantics_hash(),
+        Some(original_semantics.as_str()),
+        "the loader exposes the semantics hash"
+    );
+}
