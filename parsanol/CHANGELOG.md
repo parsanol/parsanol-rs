@@ -73,6 +73,13 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- Release v0.19.16 by @[object]
+- Merge pull request #368 from parsanol/corpus/rebake-semantics-hash by @[object]
+- Re-bake the conformance corpus at parsanol 1.3.117; pin the cross-compiler semantics hash by @[object]
+- (any) reduces to the plain cross-engine shape (ruby#383); wasm semanticsHash reader (rs#366) by @[object]
+
+### Other
+
 - Merge pull request #368 from parsanol/corpus/rebake-semantics-hash by @[object]
 - Re-bake the conformance corpus at parsanol 1.3.117; pin the cross-compiler semantics hash by @[object]
 - (any) reduces to the plain cross-engine shape (ruby#383); wasm semanticsHash reader (rs#366) by @[object]
