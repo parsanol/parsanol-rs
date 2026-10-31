@@ -155,6 +155,47 @@ fn null_captures_bind_nothing() {
 }
 
 #[test]
+fn zero_instance_array_binding_binds_nothing() {
+    // rs#370: the tree carries `parts: []` for a repetition that fired
+    // zero iterations (the tgpp/bsi/jis corpus cases). The occurrence
+    // path binds nothing when count == 0; the instance-pairing path
+    // (ruby#381) pre-inserted the array before iterating and bound an
+    // empty `parts: []` where the recorded native expectations — and
+    // the pubid builders (ruby#394's resolution) — have the key
+    // absent.
+    let envelope: Value = serde_json::json!({
+        "version": "0.0.0",
+        "shape": "parsanol-tree/v2",
+        "entries": {
+            "identifier": {
+                "root": "identifier",
+                "grammar": {},
+                "bindings": [
+                    { "capture": "type", "path": "type", "type": "string" },
+                    { "capture": "number", "path": "number", "type": "string" },
+                    { "capture": "part", "path": "parts[].part", "type": "string" }
+                ]
+            }
+        }
+    });
+    let mut envelope = envelope.as_object().unwrap().clone();
+    let checksum = parsanol::parg::checksum_hex(&Value::Object(envelope.clone())).unwrap();
+    envelope.insert("checksum".to_string(), Value::String(checksum));
+    let artifact = PargArtifact::from_json(&serde_json::to_string(&envelope).unwrap()).unwrap();
+
+    let shape: Value = serde_json::json!({
+        "type": { "value": "TS", "line": 1, "column": 6, "offset": 5, "length": 2 },
+        "number": { "value": "21.101", "line": 1, "column": 9, "offset": 8, "length": 6 },
+        "parts": []
+    });
+    let bound = artifact.apply_bindings("identifier", &shape).unwrap();
+    assert_eq!(
+        bound,
+        serde_json::json!({ "type": "TS", "number": "21.101" })
+    );
+}
+
+#[test]
 fn unknown_preprocess_and_tables_raise() {
     let envelope: Value = serde_json::json!({
         "version": "0.0.0",
