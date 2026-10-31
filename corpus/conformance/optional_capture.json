@@ -1,1 +1,106 @@
-{"bindings":null,"version":"1.0.0","grammar":"ConformanceOptionalCapture","shape":"parsanol-tree/v2","binding_version":1,"entries":{"main":{"root":"main","grammar":{"atoms":[{"Str":{"pattern":"-"}},{"Repetition":{"atom":0,"min":0,"max":1,"tag":"Maybe"}},{"Named":{"name":"dash","atom":1}},{"Re":{"pattern":"[\\x61-\\x7a]"}},{"Repetition":{"atom":3,"min":1,"max":null,"tag":"Repetition"}},{"Sequence":{"atoms":[2,4]}}],"root":5},"bindings":[]}},"preprocess":{},"tables":{},"lint":{"order_warnings":[]},"default_entry":"main","render":{},"derive":{},"tests":[{"entry":"main","kind":"capture","input":"-ab","expect":{"dash":"-"}},{"entry":"main","kind":"capture","input":"ab","expect":{"dash":null}},{"entry":"main","kind":"accept","input":"ab","expect":{}},{"entry":"main","kind":"reject","input":"-","expect":{}}],"docs":{"main":"An optional dash prefix captured as a whole: nil when absent."},"source":"## Semantics: C4, K1, K2, V2, M0, A1, A2\ngrammar ConformanceOptionalCapture version \"1.0.0\" mode \"v1\" {\n  ## An optional dash prefix captured as a whole: nil when absent.\n  main = ( [ \"-\" ] ) as dash 1*%x61-7A\n\n  entry main: main\n\n  test main {\n    capture \"-ab\" { dash: \"-\" }\n    capture \"ab\" { dash: null }\n    accept \"ab\"\n    reject \"-\"\n  }\n}\n","source_hash":"03efdc803532804ee5939eeead13ec887f5f127fc525a3afd24845ede21edce3","unicode_tables":"onigmo (Ruby 3.4.8)","compiler_version":"1.3.111","edition":"v1","checksum":"sha256:040e35e393f19a92dc477c5a6b8cf87520dd24fd609ab16e4f346fba255554e4"}
+{
+  "bindings": null,
+  "version": "1.0.0",
+  "grammar": "ConformanceOptionalCapture",
+  "shape": "parsanol-tree/v2",
+  "binding_version": 1,
+  "entries": {
+    "main": {
+      "root": "main",
+      "grammar": {
+        "atoms": [
+          {
+            "Str": {
+              "pattern": "-"
+            }
+          },
+          {
+            "Repetition": {
+              "atom": 0,
+              "min": 0,
+              "max": 1,
+              "tag": "Maybe"
+            }
+          },
+          {
+            "Named": {
+              "name": "dash",
+              "atom": 1
+            }
+          },
+          {
+            "Re": {
+              "pattern": "[\\x61-\\x7a]"
+            }
+          },
+          {
+            "Repetition": {
+              "atom": 3,
+              "min": 1,
+              "max": null,
+              "tag": "Repetition"
+            }
+          },
+          {
+            "Sequence": {
+              "atoms": [
+                2,
+                4
+              ]
+            }
+          }
+        ],
+        "root": 5
+      },
+      "bindings": []
+    }
+  },
+  "preprocess": {},
+  "tables": {},
+  "lint": {
+    "order_warnings": []
+  },
+  "default_entry": "main",
+  "render": {},
+  "derive": {},
+  "tests": [
+    {
+      "entry": "main",
+      "kind": "capture",
+      "input": "-ab",
+      "expect": {
+        "dash": "-"
+      }
+    },
+    {
+      "entry": "main",
+      "kind": "capture",
+      "input": "ab",
+      "expect": {
+        "dash": null
+      }
+    },
+    {
+      "entry": "main",
+      "kind": "accept",
+      "input": "ab",
+      "expect": {}
+    },
+    {
+      "entry": "main",
+      "kind": "reject",
+      "input": "-",
+      "expect": {}
+    }
+  ],
+  "docs": {
+    "main": "An optional dash prefix captured as a whole: nil when absent."
+  },
+  "source": "## Semantics: C4, K1, K2, V2, M0, A1, A2\ngrammar ConformanceOptionalCapture version \"1.0.0\" mode \"v1\" {\n  ## An optional dash prefix captured as a whole: nil when absent.\n  main = ( [ \"-\" ] ) as dash 1*%x61-7A\n\n  entry main: main\n\n  test main {\n    capture \"-ab\" { dash: \"-\" }\n    capture \"ab\" { dash: null }\n    accept \"ab\"\n    reject \"-\"\n  }\n}\n",
+  "source_hash": "03efdc803532804ee5939eeead13ec887f5f127fc525a3afd24845ede21edce3",
+  "unicode_tables": "onigmo (Ruby 3.4.8)",
+  "compiler_version": "1.3.116",
+  "edition": 1,
+  "semantics_hash": "sha256:2f6f17932384f918895b7ae41bb46c4ffdea36a3ccdbc18879e8c3c58d344728",
+  "checksum": "sha256:a84e98d62adb0318278575564891ee29564056d32361a043378d6777639db758"
+}

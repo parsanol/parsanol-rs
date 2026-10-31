@@ -1,1 +1,166 @@
-{"bindings":null,"version":"1.0.0","grammar":"ConformanceLookbehind","shape":"parsanol-tree/v2","binding_version":1,"entries":{"main":{"root":"main","grammar":{"atoms":[{"Entity":{"atom":10}},{"Lookbehind":{"look":{"Regex":{"source":"[\\x61-\\x7a]"}},"positive":false}},{"Str":{"pattern":"*"}},{"Str":{"pattern":"*"}},{"Lookahead":{"atom":3,"positive":false}},{"Re":{"pattern":"[\\x00-\\u{10ffff}]"}},{"Sequence":{"atoms":[4,5]}},{"Repetition":{"atom":6,"min":1,"max":null,"tag":"Repetition"}},{"Str":{"pattern":"*"}},{"Sequence":{"atoms":[1,2,7,8]}},{"Named":{"name":"emph","atom":9}},{"Str":{"pattern":"*"}},{"Lookahead":{"atom":11,"positive":false}},{"Re":{"pattern":"[\\x00-\\u{10ffff}]"}},{"Sequence":{"atoms":[12,13]}},{"Alternative":{"atoms":[0,14]}},{"Repetition":{"atom":15,"min":1,"max":null,"tag":"Repetition"}}],"root":16},"bindings":[]}},"preprocess":{},"tables":{},"lint":{"order_warnings":[]},"default_entry":"main","render":{},"derive":{},"tests":[{"entry":"main","kind":"capture","input":"*cool*","expect":{"emph":"*cool*"}},{"entry":"main","kind":"reject","input":"a*b*","expect":{}}],"docs":{"emph":"Emphasis: a star not preceded by a letter, content, star.","main":"Words and emphasis."},"source":"## Semantics: T3, C5, C6, K1, V3, M0, A1, A2\ngrammar ConformanceLookbehind version \"1.0.0\" mode \"v1\" {\n  ## Emphasis: a star not preceded by a letter, content, star.\n  emph = ( !< %x61-7A \"*\" 1*( !\"*\" ANY ) \"*\" ) as emph\n  ## Words and emphasis.\n  main = 1*( emph / ( !\"*\" ANY ) )\n\n  entry main: main\n\n  test main {\n    capture \"*cool*\" { emph: \"*cool*\" }\n    reject \"a*b*\"\n  }\n}\n","source_hash":"4643d5ea09a58b7a15ed3d85e8e278128d3b3aa0fc9d44da22439fc7bbef25d4","unicode_tables":"onigmo (Ruby 3.4.8)","compiler_version":"1.3.111","edition":"v1","checksum":"sha256:448421fbdea8b765d0605b523c3f54504fa5cec53b951c562db03b8b43c976d5"}
+{
+  "bindings": null,
+  "version": "1.0.0",
+  "grammar": "ConformanceLookbehind",
+  "shape": "parsanol-tree/v2",
+  "binding_version": 1,
+  "entries": {
+    "main": {
+      "root": "main",
+      "grammar": {
+        "atoms": [
+          {
+            "Entity": {
+              "atom": 10
+            }
+          },
+          {
+            "Lookbehind": {
+              "look": {
+                "Regex": {
+                  "source": "[\\x61-\\x7a]"
+                }
+              },
+              "positive": false
+            }
+          },
+          {
+            "Str": {
+              "pattern": "*"
+            }
+          },
+          {
+            "Str": {
+              "pattern": "*"
+            }
+          },
+          {
+            "Lookahead": {
+              "atom": 3,
+              "positive": false
+            }
+          },
+          {
+            "Re": {
+              "pattern": "[\\x00-\\u{10ffff}]"
+            }
+          },
+          {
+            "Sequence": {
+              "atoms": [
+                4,
+                5
+              ]
+            }
+          },
+          {
+            "Repetition": {
+              "atom": 6,
+              "min": 1,
+              "max": null,
+              "tag": "Repetition"
+            }
+          },
+          {
+            "Str": {
+              "pattern": "*"
+            }
+          },
+          {
+            "Sequence": {
+              "atoms": [
+                1,
+                2,
+                7,
+                8
+              ]
+            }
+          },
+          {
+            "Named": {
+              "name": "emph",
+              "atom": 9
+            }
+          },
+          {
+            "Str": {
+              "pattern": "*"
+            }
+          },
+          {
+            "Lookahead": {
+              "atom": 11,
+              "positive": false
+            }
+          },
+          {
+            "Re": {
+              "pattern": "[\\x00-\\u{10ffff}]"
+            }
+          },
+          {
+            "Sequence": {
+              "atoms": [
+                12,
+                13
+              ]
+            }
+          },
+          {
+            "Alternative": {
+              "atoms": [
+                0,
+                14
+              ]
+            }
+          },
+          {
+            "Repetition": {
+              "atom": 15,
+              "min": 1,
+              "max": null,
+              "tag": "Repetition"
+            }
+          }
+        ],
+        "root": 16
+      },
+      "bindings": []
+    }
+  },
+  "preprocess": {},
+  "tables": {},
+  "lint": {
+    "order_warnings": []
+  },
+  "default_entry": "main",
+  "render": {},
+  "derive": {},
+  "tests": [
+    {
+      "entry": "main",
+      "kind": "capture",
+      "input": "*cool*",
+      "expect": {
+        "emph": "*cool*"
+      }
+    },
+    {
+      "entry": "main",
+      "kind": "reject",
+      "input": "a*b*",
+      "expect": {}
+    }
+  ],
+  "docs": {
+    "emph": "Emphasis: a star not preceded by a letter, content, star.",
+    "main": "Words and emphasis."
+  },
+  "source": "## Semantics: T3, C5, C6, K1, V3, M0, A1, A2\ngrammar ConformanceLookbehind version \"1.0.0\" mode \"v1\" {\n  ## Emphasis: a star not preceded by a letter, content, star.\n  emph = ( !< %x61-7A \"*\" 1*( !\"*\" ANY ) \"*\" ) as emph\n  ## Words and emphasis.\n  main = 1*( emph / ( !\"*\" ANY ) )\n\n  entry main: main\n\n  test main {\n    capture \"*cool*\" { emph: \"*cool*\" }\n    reject \"a*b*\"\n  }\n}\n",
+  "source_hash": "4643d5ea09a58b7a15ed3d85e8e278128d3b3aa0fc9d44da22439fc7bbef25d4",
+  "unicode_tables": "onigmo (Ruby 3.4.8)",
+  "compiler_version": "1.3.116",
+  "edition": 1,
+  "semantics_hash": "sha256:b5fd36c8e058ac999c38b6fe2258d41733ecdc35d4925ddbc8aea7cf1d0a0f10",
+  "checksum": "sha256:1d6f98d58873f0f96ebd6bfd7bb04dff99ffcd2e02f9625fc0daf18959ac8171"
+}

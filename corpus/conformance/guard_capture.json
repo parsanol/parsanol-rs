@@ -1,0 +1,166 @@
+{
+  "bindings": null,
+  "version": "1.0.0",
+  "grammar": "GuardCapture",
+  "shape": "parsanol-tree/v2",
+  "binding_version": 1,
+  "entries": {
+    "year": {
+      "root": "year",
+      "grammar": {
+        "atoms": [
+          {
+            "Entity": {
+              "atom": 1
+            }
+          },
+          {
+            "Str": {
+              "pattern": ":"
+            }
+          },
+          {
+            "Entity": {
+              "atom": 5
+            }
+          },
+          {
+            "Str": {
+              "pattern": "AMD"
+            }
+          },
+          {
+            "Str": {
+              "pattern": "COR"
+            }
+          },
+          {
+            "Alternative": {
+              "atoms": [
+                3,
+                4
+              ]
+            }
+          },
+          {
+            "Entity": {
+              "atom": 1
+            }
+          },
+          {
+            "Str": {
+              "pattern": "19"
+            }
+          },
+          {
+            "Str": {
+              "pattern": "20"
+            }
+          },
+          {
+            "Alternative": {
+              "atoms": [
+                7,
+                8
+              ]
+            }
+          },
+          {
+            "Entity": {
+              "atom": 11
+            }
+          },
+          {
+            "Re": {
+              "pattern": "[\\x30-\\x39]"
+            }
+          },
+          {
+            "Repetition": {
+              "atom": 10,
+              "min": 2,
+              "max": null,
+              "tag": "Repetition"
+            }
+          },
+          {
+            "Entity": {
+              "atom": 11
+            }
+          },
+          {
+            "Lookahead": {
+              "atom": 13,
+              "positive": false
+            }
+          },
+          {
+            "Named": {
+              "name": "year",
+              "atom": 14
+            }
+          },
+          {
+            "Sequence": {
+              "atoms": [
+                6,
+                9,
+                12,
+                15
+              ]
+            }
+          },
+          {
+            "Repetition": {
+              "atom": 16,
+              "min": 0,
+              "max": 1,
+              "tag": "Maybe"
+            }
+          },
+          {
+            "Sequence": {
+              "atoms": [
+                0,
+                2,
+                17
+              ]
+            }
+          }
+        ],
+        "root": 18
+      },
+      "bindings": []
+    }
+  },
+  "preprocess": {},
+  "tables": {},
+  "lint": {
+    "order_warnings": []
+  },
+  "default_entry": "year",
+  "render": {},
+  "derive": {},
+  "tests": [
+    {
+      "entry": "year",
+      "kind": "accept",
+      "input": ":AMD:1999",
+      "expect": {}
+    },
+    {
+      "entry": "year",
+      "kind": "reject",
+      "input": "nonsense",
+      "expect": {}
+    }
+  ],
+  "docs": {},
+  "source": "# Semantics: capture postfix binds the GUARD (parsanol-ruby#380) —\n# `!digit as year` is `( !digit ) as year`, never `!(digit as year)`.\ngrammar GuardCapture version \"1.0.0\" {\n  digit = %x30-39\n  colon = \":\"\n  word = \"AMD\" / \"COR\"\n  year = ( colon ) ( word ) [ colon ( \"19\" / \"20\" ) 2*digit !digit as year ]\n  entry year: year\n  test {\n    accept \":AMD:1999\"\n    reject \"nonsense\"\n  }\n}\n",
+  "source_hash": "3ad0c9d19d2ac270a5b64776bdc341fc6eefd183ae096b814715c629c793e33b",
+  "unicode_tables": "onigmo (Ruby 3.4.8)",
+  "compiler_version": "1.3.116",
+  "edition": 1,
+  "semantics_hash": "sha256:ce92e301c0e25663d5855028435e906018737a1f296eae8dcf94cae05e5f4009",
+  "checksum": "sha256:fc0d6e7c1c5bc15c85bdf366e16a6ced03838895b9c1ab22cf275e939e7ea006"
+}

@@ -117,3 +117,54 @@ fn rust_parser_matches_the_ruby_documents() {
     assert!(compared >= 35, "parity corpus shrank: {compared} fixtures");
     eprintln!("parser parity: {compared} documents identical");
 }
+
+// ruby#380: `!x as k` binds the GUARD — a capture inside a negated
+// lookahead never binds (it consumes nothing), so the postfix wraps
+// the pred, matching the ruby parser's postfix order.
+#[test]
+fn guard_capture_binds_the_guard_not_the_target() {
+    let document = parser::parse(
+        "grammar E version \"1\" edition 2 {\n\
+           text = ( colon ) ( word ) [ colon ( \"19\" / \"20\" ) 2*digit !digit as year ]\n\
+           colon = \":\"\n\
+           word = \"AMD\" / \"COR\"\n\
+           digit = %x30-39\n\
+           entry text: text\n\
+         }\n",
+    )
+    .expect("parses");
+
+    let rule = document
+        .rules
+        .iter()
+        .find(|(name, _)| name == "text")
+        .map(|(_, node)| node)
+        .expect("rule");
+
+    let mut found = None;
+    let mut stack: Vec<&parser::Node> = vec![rule];
+    while let Some(node) = stack.pop() {
+        if node.kind == "cap" && node.name.as_deref() == Some("year") {
+            found = Some(node);
+        }
+        if let Some(child) = &node.child {
+            stack.push(child);
+        }
+        if let Some(items) = &node.items {
+            stack.extend(items);
+        }
+        if let Some(branches) = &node.branches {
+            stack.extend(branches);
+        }
+    }
+    let cap_node = found.expect("year capture present in the tree");
+    let pred = cap_node.child.as_deref().expect("cap child");
+    assert_eq!(
+        pred.kind, "pred",
+        "the capture wraps the guard, not the target"
+    );
+    assert_eq!(pred.positive, Some(false));
+    // The guard's target is the bare digit ref, uncaptured.
+    let target = pred.child.as_deref().expect("pred child");
+    assert_eq!(target.kind, "ref");
+}

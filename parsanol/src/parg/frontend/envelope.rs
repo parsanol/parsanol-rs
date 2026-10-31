@@ -127,6 +127,13 @@ pub fn build_mode_glue(
     if document.skip_declaration.is_some() {
         envelope["skip"] = skip_source(document.skip_declaration.as_deref());
     }
+    // The semantics hash (ruby#377): everything except producer
+    // metadata — stamped on the shared builder so both the parity
+    // artifacts and compile_source's complete envelope carry it; the
+    // excluded fields are the caller's here, so the hash covers the
+    // semantics exactly as the Ruby compiler's does.
+    envelope["semantics_hash"] =
+        Value::String(semantics_hash(&envelope).map_err(|e| compile::CompileError { message: e })?);
     Ok(envelope)
 }
 
@@ -169,6 +176,28 @@ pub fn compile_source(source: &str) -> Result<Value, String> {
         obj.insert("checksum".to_string(), Value::String(checksum));
     }
     Ok(value)
+}
+
+/// Producer metadata excluded from the semantics hash (ruby#377):
+/// mirrors the Ruby compiler's SEMANTICS_EXCLUDED exactly — `checksum`
+/// and `semantics_hash` cannot cover themselves, and the engine stamps
+/// (`compiler_version`, `unicode_tables`) are the producer identity a
+/// re-bake legitimately changes.
+const SEMANTICS_EXCLUDED: [&str; 4] = [
+    "checksum",
+    "compiler_version",
+    "unicode_tables",
+    "semantics_hash",
+];
+
+fn semantics_hash(value: &Value) -> Result<String, String> {
+    let mut payload = value.clone();
+    if let Some(obj) = payload.as_object_mut() {
+        for key in SEMANTICS_EXCLUDED {
+            obj.remove(key);
+        }
+    }
+    checksum_hex(&payload).map_err(|e| e.to_string())
 }
 
 fn source_hash(source: &str) -> String {
