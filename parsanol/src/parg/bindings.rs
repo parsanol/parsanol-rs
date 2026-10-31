@@ -103,7 +103,43 @@ fn cast(value: Value, kind: Option<&str>) -> Result<Value, PargError> {
             value == Value::Bool(true)
                 || matches!(&value, Value::String(s) if s.eq_ignore_ascii_case("true")),
         )),
+        // The ONE plain shape on every engine (ruby#383): capture
+        // leaves and scalars render as their text, named groups as
+        // string-keyed plain hashes, repeats as arrays — so (any)-bound
+        // keys survive a cross-engine gate without consumer shims.
+        Some("any") => Ok(plain_shape(&value)),
         _ => Ok(value),
+    }
+}
+
+/// The engine-neutral reduction behind `(any)`: wire capture leaves
+/// (`{"value": …, …}`) render as their value's text, scalars as
+/// strings, objects as string-keyed plain objects, arrays recurse.
+/// Null passes through (absent captures stay absent — the assign
+/// paths skip them upstream).
+fn plain_shape(value: &Value) -> Value {
+    match value {
+        Value::Null => Value::Null,
+        Value::Object(object) => match object.get("value") {
+            // The wire capture leaf: its value, as text.
+            Some(leaf_value) if object.contains_key("offset") => match leaf_value {
+                Value::String(text) => Value::String(text.clone()),
+                other => Value::String(match other {
+                    Value::Number(n) => n.to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    _ => other.to_string(),
+                }),
+            },
+            _ => Value::Object(
+                object
+                    .iter()
+                    .map(|(key, item)| (key.clone(), plain_shape(item)))
+                    .collect(),
+            ),
+        },
+        Value::Array(items) => Value::Array(items.iter().map(plain_shape).collect()),
+        Value::String(text) => Value::String(text.clone()),
+        other => Value::String(other.to_string()),
     }
 }
 

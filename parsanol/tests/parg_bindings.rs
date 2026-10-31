@@ -364,3 +364,41 @@ fn derive_string_parity_with_ruby() {
         .unwrap();
     assert_eq!(derived, "urn:iso:std:5537:2025");
 }
+
+// ruby#383: the (any) cast reduces to the plain cross-engine shape —
+// wire capture leaves render as their value's text, groups as
+// string-keyed plain objects — identical to the Ruby Bindings output.
+#[test]
+fn any_binding_reduces_to_the_plain_shape() {
+    let envelope: Value = serde_json::json!({
+        "version": "0.0.0",
+        "shape": "parsanol-tree/v2",
+        "entries": {
+            "identifier": {
+                "root": "identifier",
+                "grammar": {},
+                "bindings": [
+                    { "capture": "name", "path": "name", "type": "any" },
+                    { "capture": "group", "path": "group", "type": "any" }
+                ]
+            }
+        }
+    });
+    let mut envelope = envelope.as_object().unwrap().clone();
+    let checksum = parsanol::parg::checksum_hex(&Value::Object(envelope.clone())).unwrap();
+    envelope.insert("checksum".to_string(), Value::String(checksum));
+    let artifact = PargArtifact::from_json(&serde_json::to_string(&envelope).unwrap()).unwrap();
+
+    let shape: Value = serde_json::json!({
+        "name": { "value": "ABC", "offset": 0, "length": 3, "line": 1, "column": 1 },
+        "group": { "num": { "value": "12", "offset": 4, "length": 2, "line": 1, "column": 5 } }
+    });
+    let bound = artifact.apply_bindings("identifier", &shape).unwrap();
+    assert_eq!(
+        bound,
+        serde_json::json!({
+            "name": "ABC",
+            "group": { "num": "12" }
+        })
+    );
+}
