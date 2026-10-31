@@ -1423,7 +1423,20 @@ impl Parser {
                 let child = self.line_element()?.ok_or_else(|| ParseError {
                     message: "predicate needs a target".to_string(),
                 })?;
-                Ok(Some(pred(positive, behind, child)))
+                // `!x as k` binds the GUARD (parsanol-ruby#380): the
+                // target's own element parse would have consumed the
+                // `as` into itself — a capture inside a negated guard
+                // never binds (it consumes nothing). Strip it and
+                // re-apply over the pred, matching the ruby parser's
+                // postfix order.
+                let node = match child {
+                    n if n.kind == "cap" => cap(
+                        n.name.clone().unwrap_or_default(),
+                        pred(positive, behind, n.child.map(|c| *c).expect("cap child")),
+                    ),
+                    inner => pred(positive, behind, inner),
+                };
+                Ok(Some(node))
             }
             TokenKind::Num => {
                 let min = token.value.parse::<u32>().map_err(|_| ParseError {

@@ -1,0 +1,13 @@
+# Semantics: capture postfix binds the GUARD (parsanol-ruby#380) —
+# `!digit as year` is `( !digit ) as year`, never `!(digit as year)`.
+grammar GuardCapture version "1.0.0" {
+  digit = %x30-39
+  colon = ":"
+  word = "AMD" / "COR"
+  year = ( colon ) ( word ) [ colon ( "19" / "20" ) 2*digit !digit as year ]
+  entry year: year
+  test {
+    accept ":AMD:1999"
+    reject "nonsense"
+  }
+}
