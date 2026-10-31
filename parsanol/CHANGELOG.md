@@ -73,6 +73,10 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- Expose the semantics hash; pin the re-bake stability (ruby#377) by @[object]
+
+### Other
+
 - Pair array captures by instance, not occurrence (ruby#381) by @[object]
 - `as` after a guard binds the guard (ruby#380) + the semantics hash (ruby#377) by @[object]
 
