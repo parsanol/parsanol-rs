@@ -1,0 +1,21 @@
+# Semantics: array bindings pair captures by INSTANCE (parsanol-ruby#381)
+# — a sparse capture binds to the instance whose subtree contains it.
+grammar SparseBinding version "1.0.0" edition 2 {
+  word = 1*( %x41-5A / %x61-7A )
+  colon = ":"
+  digit = %x30-39
+  part = ( word ) as part_code
+  trailing = ( colon ( 1*( digit ) ) as part_series )
+  csa_code_part = ( part ) trailing_part
+  trailing_part = ( trailing ) / ( space_end )
+  space_end = ( " " )
+  identifier = 1*( csa_code_part )
+  entry identifier: identifier
+  bindings identifier {
+    part_code -> csa_code_part[].part_code (string)
+    part_series -> csa_code_part[].part_series (string)
+  }
+  test {
+    accept "ABC DEF:23"
+  }
+}

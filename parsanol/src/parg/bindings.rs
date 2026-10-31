@@ -156,6 +156,36 @@ fn first_capture(captures: &BTreeMap<String, Vec<Value>>, capture: &str) -> Opti
     captures.get(capture)?.first().cloned()
 }
 
+/// The `prefix[]` group's instance subtrees (ruby#381): the first
+/// array under a key naming the prefix, walked in collect_captures'
+/// BFS order. A repetition-root entry's shape IS the instances array
+/// (the wire has no key for it) — the fallback when no key matches.
+fn group_instances<'a>(shape: &'a Value, prefix: &str) -> Option<&'a Vec<Value>> {
+    let mut queue: Vec<&Value> = vec![shape];
+    while let Some(node) = queue.pop() {
+        match node {
+            Value::Object(object) => {
+                for (key, value) in object {
+                    if key == prefix {
+                        if let Value::Array(array) = value {
+                            return Some(array);
+                        }
+                    }
+                    if value.is_object() || value.is_array() {
+                        queue.push(value);
+                    }
+                }
+            }
+            Value::Array(items) => queue.extend(items),
+            _ => {}
+        }
+    }
+    match shape {
+        Value::Array(array) if array.iter().any(|item| item.is_object()) => Some(array),
+        _ => None,
+    }
+}
+
 fn leaf_key(path: &str) -> String {
     if path.contains("[]") {
         path.rsplit("].").next().unwrap_or(path).to_string()
@@ -291,7 +321,43 @@ impl PargArtifact {
         prefix: &str,
         group: &[&Map<String, Value>],
         captures: &BTreeMap<String, Vec<Value>>,
+        shape: &Value,
     ) -> Result<(), PargError> {
+        // Position-aware pairing (ruby#381): when the shape nests the
+        // group's instances under the prefix key (or IS the instance
+        // array — a repetition-root entry), each instance's subtree
+        // owns its captures. Occurrence-index pairing landed a sparse
+        // capture on the wrong instance; per-instance collection is
+        // identical when every instance fires every capture. Captures
+        // outside any instance keep the legacy occurrence pairing.
+        if let Some(instances) = group_instances(shape, prefix) {
+            let mut list: Vec<Value> = Vec::with_capacity(instances.len());
+            for instance in instances {
+                let found = collect_captures(instance);
+                let mut element = Map::new();
+                for binding in group {
+                    let capture = binding
+                        .get("capture")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    let Some(value) = found.get(capture).and_then(|c| c.first()) else {
+                        continue;
+                    };
+                    if value.is_null() {
+                        continue;
+                    }
+                    let finalized = self.finalize(binding, value.clone())?;
+                    let path = binding
+                        .get("path")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    element.insert(leaf_key(path), finalized);
+                }
+                list.push(Value::Object(element));
+            }
+            out.insert(prefix.to_string(), Value::Array(list));
+            return Ok(());
+        }
         let count = group
             .iter()
             .filter_map(|binding| {
@@ -374,7 +440,7 @@ impl PargArtifact {
                 .filter(|(candidate, _)| *candidate == prefix)
                 .map(|(_, object)| *object)
                 .collect();
-            self.assign_array(&mut out, prefix, &group, &captures)?;
+            self.assign_array(&mut out, prefix, &group, &captures, shape)?;
         }
         Ok(Value::Object(out))
     }
