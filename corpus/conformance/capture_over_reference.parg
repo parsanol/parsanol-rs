@@ -1,0 +1,16 @@
+## ruby#400: a text capture over a reference-built rule stays the
+## matched text under edition 2. The capture spans the rules it
+## references, so their bodies compile unwrapped and the capture's
+## value equals its edition-1 shape — edition 2 stays purely additive.
+grammar CaptureOverReference version "1.0.0" edition "v2" {
+  root = number as num
+  number = 1*digit
+  digit = %x30-39
+  entry main: root
+
+  test {
+    accept "123"
+    capture "123" { num: "123" }
+    reject "12a"
+  }
+}
