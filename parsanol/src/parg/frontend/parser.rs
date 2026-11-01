@@ -1337,6 +1337,26 @@ impl Parser {
                         .to_string(),
                 )))
             }
+            TokenKind::Ident
+                if token.value == "alt"
+                    && self.peek_at(1).map(|t| t.value.clone())
+                        == Some("from_table".to_string()) =>
+            {
+                // The table-driven capture: the edition-2 re-wrap
+                // moved `alt from_table` into the brace lane
+                // (pubid-grammar dda4262), where this special case
+                // was line-primary-only — the plain Ident arm below
+                // parsed it as a rule reference and the compile
+                // failed with `unknown rule "alt"`.
+                self.pos += 2;
+                let table = unquote(&self.expect_string()?)?;
+                self.expect_keyword("column")?;
+                let column = unquote(&self.expect_string()?)?;
+                Ok(Some(Node::leaf("table").with(|n| {
+                    n.table = Some(table);
+                    n.column = Some(column);
+                })))
+            }
             TokenKind::Ident => {
                 self.pos += 1;
                 let mut name = token.value;
