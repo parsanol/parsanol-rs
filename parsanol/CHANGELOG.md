@@ -73,6 +73,11 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- Merge pull request #379 from parsanol/feat/capture-flatten by @[object]
+- Edition 2 wraps only non-captured structure (ruby#400) by @[object]
+
+### Other
+
 - Alt from_table parses in the brace lane; the lint gate goes sibling-aware (rs#376) ([#377](https://github.com/parsanol/parsanol-rs/pull/377)) by @[object]
 - Release v0.19.17 by @[object]
 
