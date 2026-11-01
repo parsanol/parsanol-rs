@@ -328,6 +328,9 @@ pub struct Compiler<'a> {
     /// `glue` declared names (parsanol-ruby#364): references to them
     /// never wrap, and their own bodies compile unwrapped.
     glue_rules: Vec<String>,
+    /// The rules a text capture transitively spans (ruby#400) —
+    /// memoized on first use, after the document is final.
+    capture_reachable: Option<std::collections::BTreeSet<String>>,
     skip_exempt: Vec<String>,
     skip_markers: Vec<(String, String)>,
     atoms: Vec<Atom>,
@@ -355,6 +358,7 @@ impl<'a> Compiler<'a> {
             order_warnings: Vec::new(),
             modern: mode == Some("v2"),
             glue_rules: glue_rules.to_vec(),
+            capture_reachable: None,
             skip_exempt: Vec::new(),
             skip_markers: Vec::new(),
             atoms: Vec::new(),
@@ -443,8 +447,10 @@ impl<'a> Compiler<'a> {
         self.trees.insert(name.to_string(), tree.clone());
         // A glue rule's own body compiles unwrapped (parsanol-ruby#364):
         // the declaration means the tree never sees this subtree named,
-        // inside or out.
-        let tree = if self.modern && !self.glue_rule(name) {
+        // inside or out. A capture-reachable rule's body compiles
+        // unwrapped too (ruby#400): the capture spans it, so its value
+        // must equal the edition-1 shape.
+        let tree = if self.modern && !self.glue_rule(name) && !self.captured_reachable(name) {
             self.wrap_uncaptured(tree)?
         } else {
             tree
@@ -459,6 +465,118 @@ impl<'a> Compiler<'a> {
     /// for rules that eat more than whitespace.
     fn glue_rule(&self, name: &str) -> bool {
         self.glue_rules.iter().any(|declared| declared == name)
+    }
+
+    /// The rules a text capture transitively spans (ruby#400): a
+    /// capture on a reference captures the referenced rule's whole
+    /// match, so every rule under a capture atom — the direct
+    /// reference and everything its body transitively references —
+    /// compiles unwrapped. Edition 2's Named leaves then attach only
+    /// to non-captured structure, and a capture's value equals its
+    /// edition-1 value (`{num: "123"}`, never a leaf array).
+    fn captured_reachable(&mut self, name: &str) -> bool {
+        if self.capture_reachable.is_none() {
+            let mut seeds = Vec::new();
+            for (_, node) in &self.rules {
+                Self::collect_refs_under_captures(node, &mut seeds, false);
+            }
+            let mut reachable = std::collections::BTreeSet::new();
+            while let Some(rule) = seeds.pop() {
+                if !reachable.insert(rule.clone()) {
+                    continue;
+                }
+                if let Some((_, node)) = self.rules.iter().find(|(n, _)| n == &rule) {
+                    Self::collect_all_refs(node, &mut seeds);
+                }
+            }
+            self.capture_reachable = Some(reachable);
+        }
+        self.capture_reachable
+            .as_ref()
+            .expect("computed above")
+            .contains(name)
+    }
+
+    fn collect_refs_under_captures(node: &Node, out: &mut Vec<String>, in_capture: bool) {
+        match node.kind.as_str() {
+            "ref" => {
+                // Only refs inside a captured span are reachable
+                // (ruby#400): a bare sibling of a capture keeps its
+                // Named leaf.
+                if in_capture {
+                    if let Some(name) = &node.name {
+                        out.push(name.clone());
+                    }
+                }
+            }
+            "cap" => {
+                // The capture switches the context: everything under it
+                // is inside the captured span.
+                if let Some(child) = &node.child {
+                    Self::collect_refs_under_captures(child, out, true);
+                }
+            }
+            "pred" => {
+                if let Some(child) = &node.child {
+                    Self::collect_refs_under_captures(child, out, in_capture);
+                }
+            }
+            "seq" => {
+                if let Some(items) = &node.items {
+                    for child in items {
+                        Self::collect_refs_under_captures(child, out, in_capture);
+                    }
+                }
+            }
+            "alt" => {
+                if let Some(branches) = &node.branches {
+                    for child in branches {
+                        Self::collect_refs_under_captures(child, out, in_capture);
+                    }
+                }
+            }
+            "rep" | "opt" => {
+                if let Some(child) = &node.child {
+                    Self::collect_refs_under_captures(child, out, in_capture);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn collect_all_refs(node: &Node, out: &mut Vec<String>) {
+        match node.kind.as_str() {
+            "ref" => {
+                if let Some(name) = &node.name {
+                    out.push(name.clone());
+                }
+            }
+            "cap" | "pred" => {
+                if let Some(child) = &node.child {
+                    Self::collect_all_refs(child, out);
+                }
+            }
+            "seq" => {
+                if let Some(items) = &node.items {
+                    for child in items {
+                        Self::collect_all_refs(child, out);
+                    }
+                }
+            }
+            "alt" => {
+                if let Some(branches) = &node.branches {
+                    for child in branches {
+                        Self::collect_all_refs(child, out);
+                    }
+                }
+            }
+            "rep" | "opt" => {
+                if let Some(child) = &node.child {
+                    Self::collect_all_refs(child, out);
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Modern mode (ruby#304, the #315 spec): every rule reference
@@ -478,7 +596,10 @@ impl<'a> Compiler<'a> {
                 // strips to empty.
                 let mut seen = std::collections::BTreeMap::new();
                 seen.insert(rule.clone(), true);
-                if self.glue_rule(&rule) || self.trivia_only(&rule, &mut seen)? {
+                if self.glue_rule(&rule)
+                    || self.captured_reachable(&rule)
+                    || self.trivia_only(&rule, &mut seen)?
+                {
                     INode::Entity { rule }
                 } else {
                     let produces = self.produces_capture(&INode::Entity { rule: rule.clone() })?;
