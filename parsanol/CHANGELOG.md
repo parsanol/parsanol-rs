@@ -73,6 +73,11 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- Alt from_table parses in the brace lane; the lint gate goes sibling-aware (rs#376) ([#377](https://github.com/parsanol/parsanol-rs/pull/377)) by @[object]
+- Release v0.19.17 by @[object]
+
+### Other
+
 - Release v0.19.17 ([#373](https://github.com/parsanol/parsanol-rs/pull/373)) by @[object]
 - A zero-instance array binds nothing (rs#370) ([#371](https://github.com/parsanol/parsanol-rs/pull/371)) by @[object]
 - Remove the mode grammar-header keyword (owner ruling 2026-10-31) by @[object]
