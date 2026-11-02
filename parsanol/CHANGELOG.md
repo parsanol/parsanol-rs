@@ -73,6 +73,11 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- Slice the byte view directly in the multibyte span test by @[object]
+- Pin whole-codepoint capture spans at the lutaml-path shape by @[object]
+
+### Other
+
 - Merge pull request #379 from parsanol/feat/capture-flatten by @[object]
 - Edition 2 wraps only non-captured structure (ruby#400) by @[object]
 
