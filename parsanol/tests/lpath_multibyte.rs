@@ -84,7 +84,9 @@ fn assert_spans_char_aligned(node: &AstNode, arena: &AstArena, input: &str) {
 fn collect_span_bytes(node: &AstNode, arena: &AstArena, input: &str, out: &mut Vec<Vec<u8>>) {
     match node {
         AstNode::InputRef { offset, length } => {
-            out.push(input[*offset as usize..(*offset as usize + *length as usize)].as_bytes().to_vec());
+            let start = *offset as usize;
+            let end = start + *length as usize;
+            out.push(input.as_bytes()[start..end].to_vec());
         }
         AstNode::Array { pool_index, length } => {
             for item in arena.get_array(*pool_index as usize, *length as usize) {
@@ -169,7 +171,7 @@ fn parslet_compat_flat_keeps_multibyte_whole() {
                             && input.is_char_boundary(offset + length),
                         "wire span ({offset}, {length}) splits a codepoint or overruns {input:?}"
                     );
-                    spans.push(input[offset..offset + length].as_bytes().to_vec());
+                    spans.push(input.as_bytes()[offset..offset + length].to_vec());
                     3
                 }
                 TAG_HASH_KEY | TAG_INLINE_STRING | TAG_SYMBOL => {
