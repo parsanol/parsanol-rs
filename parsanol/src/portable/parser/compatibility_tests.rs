@@ -42,11 +42,12 @@ fn legacy_batch_diagnostics_match_scalar_replay_order_and_rank_eviction() {
                 (4, vec!["shared".into(), "new".into()]),
                 (20, large),
                 (0, vec!["below-ranked-limit".into()]),
-            ],
+            ]
+            .into(),
             ..Default::default()
         };
         // The previous scalar operation is the observable ordering contract.
-        for (position, labels) in &failure.ranks {
+        for (position, labels) in failure.ranks.iter() {
             for label in labels {
                 expected.note_failure(*position, label.clone());
             }
@@ -89,6 +90,44 @@ fn legacy_owned_diagnostics_move_into_empty_frames_and_merge_into_existing_cause
             assert_eq!(actual.ranked_failures.as_ptr(), ranks_ptr);
         }
     }
+}
+
+#[test]
+fn legacy_cached_diagnostics_survive_later_branch_mutation_and_clear() {
+    let mut grammar = Grammar::new();
+    grammar.root = literal(&mut grammar, "x");
+    let mut arena = AstArena::new();
+    let mut parser = PortableParser::new(&grammar, "?", &mut arena);
+    parser.note_failure(0, "original".into());
+    let cached = parser.snapshot_legacy_failure();
+
+    parser.note_failure(0, "later branch".into());
+    parser.note_failure(4, "deeper branch".into());
+    parser.clear_legacy_failure();
+    parser.merge_owned_legacy_failure(cached.clone());
+    assert_eq!(
+        parser.failure_diagnostics(),
+        Some((0, vec!["original".into()]))
+    );
+    assert_eq!(parser.failure_ranks(), &[(0, vec!["original".into()])]);
+
+    parser.merge_legacy_failure(&LegacyFailure {
+        position: 0,
+        present: true,
+        labels: vec!["new cause".into()].into(),
+        ranks: vec![(0, vec!["new cause".into()])].into(),
+    });
+    assert_eq!(
+        parser.failure_ranks(),
+        &[(0, vec!["original".into(), "new cause".into()])]
+    );
+    parser.clear_legacy_failure();
+    parser.merge_owned_legacy_failure(cached);
+    assert_eq!(
+        parser.failure_diagnostics(),
+        Some((0, vec!["original".into()]))
+    );
+    assert_eq!(parser.failure_ranks(), &[(0, vec!["original".into()])]);
 }
 
 #[test]
