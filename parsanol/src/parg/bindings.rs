@@ -192,10 +192,14 @@ fn first_capture(captures: &BTreeMap<String, Vec<Value>>, capture: &str) -> Opti
     captures.get(capture)?.first().cloned()
 }
 
-/// The `prefix[]` group's instance subtrees (ruby#381): the first
-/// array under a key naming the prefix, walked in collect_captures'
-/// BFS order. A repetition-root entry's shape IS the instances array
-/// (the wire has no key for it) — the fallback when no key matches.
+/// The `prefix[]` group's instance subtrees (ruby#381): the array
+/// under a key naming the prefix, walked in collect_captures BFS
+/// order. There is deliberately NO fallback for a repetition-root
+/// entry — a bare top array cannot be told apart from per-token
+/// rule siblings (ruby#408/#412: claiming it split paired captures
+/// into single-field rows and sprouted phantom rows for unrelated
+/// siblings), so those shapes pair by occurrence instead — the
+/// 1.3.114 baseline ruby settled on (ruby#411/#419).
 fn group_instances<'a>(shape: &'a Value, prefix: &str) -> Option<&'a Vec<Value>> {
     let mut queue: Vec<&Value> = vec![shape];
     while let Some(node) = queue.pop() {
@@ -216,10 +220,7 @@ fn group_instances<'a>(shape: &'a Value, prefix: &str) -> Option<&'a Vec<Value>>
             _ => {}
         }
     }
-    match shape {
-        Value::Array(array) if array.iter().any(|item| item.is_object()) => Some(array),
-        _ => None,
-    }
+    None
 }
 
 fn leaf_key(path: &str) -> String {
