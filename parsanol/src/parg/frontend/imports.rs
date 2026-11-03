@@ -19,6 +19,16 @@ use super::parser::{self, Document, Node};
 pub fn merge(
     document: &mut Document,
     import_dirs: &[PathBuf],
+) -> Result<BTreeMap<String, String>, CompileError> {
+    merge_with_atomic(document, import_dirs, &mut Vec::new())
+}
+
+/// As [`merge`], also collecting the qualified names of the imported
+/// `atomic` declarations into +merged_atomic_rules+ so the exemption
+/// survives the merge for the caller that owns the envelope.
+pub fn merge_with_atomic(
+    document: &mut Document,
+    import_dirs: &[PathBuf],
     merged_atomic_rules: &mut Vec<String>,
 ) -> Result<BTreeMap<String, String>, CompileError> {
     merge_with(document, merged_atomic_rules, &|name| {
