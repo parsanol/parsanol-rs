@@ -73,6 +73,12 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- Release v0.20.1 by @[object]
+- Drop the unnecessary None-substituting closure by @[object]
+- The declared per-target binding artifact (#432, rs side) by @[object]
+
+### Other
+
 - Drop the unnecessary None-substituting closure by @[object]
 - The declared per-target binding artifact (#432, rs side) by @[object]
 
