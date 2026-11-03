@@ -73,6 +73,14 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- Keep merge's 2-arg signature; merge_with_atomic threads exemptions by @[object]
+- Merge_sources test asserts prefixed rule docs by @[object]
+- The atomic exemption qualifies with its rules by @[object]
+- Qualified references survive the prefix by @[object]
+- Merge_sources — resolve use from an in-memory source map by @[object]
+
+### Other
+
 - Drop the unnecessary None-substituting closure by @[object]
 - The declared per-target binding artifact (#432, rs side) by @[object]
 
