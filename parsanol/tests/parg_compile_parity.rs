@@ -722,3 +722,70 @@ fn re_bake_with_a_newer_producer_keeps_the_semantics_hash() {
         "the loader exposes the semantics hash"
     );
 }
+
+/// `merge_sources`: the in-memory resolver for embedded-grammar
+/// consumers — same prefixing and entry re-keying as the directory
+/// resolver, no filesystem.
+#[test]
+fn merge_sources_resolves_use_from_an_in_memory_map() {
+    use parsanol::parg::frontend::imports;
+
+    let main = concat!(
+        "use comp\n",
+        "grammar M version \"1\" edition \"v2\" {\n",
+        "  entry main: main\n",
+        "  main = comp.word\n",
+        "}\n",
+    );
+    let comp = concat!(
+        "grammar C version \"1\" edition \"v2\" {\n",
+        "  word = ( 1*( %x61-7A ) ) as w\n",
+        "}\n",
+    );
+    let sources = BTreeMap::from([("comp".to_string(), comp.to_string())]);
+
+    let mut document = parsanol::parg::frontend::parser::parse_grammar(main)
+        .expect("main parses")
+        .document;
+    let docs = imports::merge_sources(&mut document, &sources).expect("merge");
+    assert!(document.uses.is_empty(), "uses clear after the merge");
+    assert!(
+        document.rules.iter().any(|(name, _)| name == "comp.word"),
+        "the imported rule lands prefixed"
+    );
+
+    let tables = parsanol::parg::frontend::compile::Tables::default();
+    let mut compiler = parsanol::parg::frontend::compile::compiler_for(&document, &tables, &[])
+        .expect("compiler builds");
+    let grammar = compiler
+        .compile_entry_grammar("main")
+        .expect("entry compiles");
+    let mut arena = parsanol::portable::AstArena::for_input("abc".len());
+    arena.set_input("abc".to_string());
+    let mut parser = parsanol::portable::PortableParser::new(&grammar, "abc", &mut arena);
+    parser.parse().expect("parses through the imported rule");
+}
+
+/// `merge_sources` reports a missing embedded source by name.
+#[test]
+fn merge_sources_names_the_missing_import() {
+    use parsanol::parg::frontend::imports;
+
+    let main = concat!(
+        "use gone\n",
+        "grammar M version \"1\" edition \"v2\" {\n",
+        "  entry main: main\n",
+        "  main = \"x\"\n",
+        "}\n",
+    );
+    let mut document = parsanol::parg::frontend::parser::parse_grammar(main)
+        .expect("main parses")
+        .document;
+    let sources = BTreeMap::new();
+    let err = imports::merge_sources(&mut document, &sources)
+        .expect_err("the missing import is an error");
+    assert!(
+        err.message.contains("use gone"),
+        "the error names the missing import: {err}"
+    );
+}
