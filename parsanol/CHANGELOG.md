@@ -73,6 +73,14 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- Release v0.20.3 by @[object]
+- The byte-checksum tier + the canonical exclusion by @[object]
+- Share cached legacy diagnostic snapshots by @[object]
+- Move legacy diagnostics into empty application frames by @[object]
+- Batch legacy failure-label merges without changing diagnostic order by @[object]
+
+### Other
+
 - The byte-checksum tier + the canonical exclusion by @[object]
 - Share cached legacy diagnostic snapshots by @[object]
 - Move legacy diagnostics into empty application frames by @[object]
