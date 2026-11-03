@@ -273,6 +273,33 @@ impl PargArtifactJs {
             .map_err(|_| JsValue::from_str("Failed to serialize bindings"))
     }
 
+    /// Apply an entry's DECLARED bindings artifact (parsanol-ruby#432)
+    /// to a parsanol-shape tree. The bindings artifact is verified
+    /// (kind, checksum, `ts` target, binding version) and pair-checked
+    /// against this parse artifact by grammar source hash before the
+    /// shared apply core runs.
+    #[wasm_bindgen(js_name = applyBindingsArtifact)]
+    pub fn apply_bindings_artifact(
+        &self,
+        bindings_json: &str,
+        entry: &str,
+        shape_json: &str,
+    ) -> Result<JsString, JsValue> {
+        let bindings = crate::parg::bindings_artifact::PargBindingsArtifact::from_json(
+            bindings_json,
+            Some("ts"),
+        )
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        let shape: serde_json::Value = serde_json::from_str(shape_json)
+            .map_err(|e| JsValue::from_str(&format!("Invalid shape JSON: {e}")))?;
+        let bound = bindings
+            .apply(&self.artifact, entry, &shape)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        serde_json::to_string(&bound)
+            .map(JsString::from)
+            .map_err(|_| JsValue::from_str("Failed to serialize bindings"))
+    }
+
     /// Parse and bind in one step: the bound attribute hash as JSON.
     ///
     /// Returns `{}` when the entry declares no `bindings` block — the

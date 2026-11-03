@@ -241,200 +241,177 @@ fn validate_path(capture: &str, path: &str) -> Result<(), PargError> {
     Ok(())
 }
 
-impl PargArtifact {
-    /// The binding list of an entry (empty when the entry declares none).
-    pub fn bindings(&self, entry: &str) -> &[Value] {
-        self.entry_value(entry, "bindings")
-            .and_then(Value::as_array)
-            .map(Vec::as_slice)
-            .unwrap_or(&[])
-    }
+/// The execution resources the apply core resolves against: the
+/// preprocess step declarations and table rows of the PAIRED parse
+/// artifact (parsanol-ruby#432 — the declared bindings artifact
+/// carries records only; its apply borrows the paired artifact's
+/// checksummed envelope).
+pub(crate) struct ApplyEnv<'a> {
+    pub preprocess: &'a Value,
+    pub tables: &'a Value,
+}
 
-    fn preprocess_steps(&self, name: &str) -> Result<&Vec<Value>, PargError> {
-        self.envelope
-            .get("preprocess")
-            .and_then(|steps| steps.get(name))
-            .and_then(Value::as_array)
-            .ok_or_else(|| PargError::UnknownPreprocess(name.to_string()))
-    }
+static NULL_VALUE: Value = Value::Null;
 
-    /// Declared table rows (embedded in the envelope at compile time).
-    pub fn table_rows(&self, name: &str) -> Result<&Vec<Value>, PargError> {
-        let declared = self
-            .envelope
-            .get("tables")
-            .and_then(|tables| tables.get(name))
-            .ok_or_else(|| PargError::UnknownTable(name.to_string()))?;
-        if !declared.is_object() {
-            return Err(PargError::UnknownTable(name.to_string()));
+impl<'a> ApplyEnv<'a> {
+    /// The env of a parse artifact: both resources resolve from its
+    /// checksummed envelope.
+    pub fn of_artifact(envelope: &'a Value) -> Self {
+        ApplyEnv {
+            preprocess: envelope.get("preprocess").unwrap_or(&NULL_VALUE),
+            tables: envelope.get("tables").unwrap_or(&NULL_VALUE),
         }
-        declared
-            .get("rows")
-            .and_then(Value::as_array)
-            .ok_or_else(|| PargError::UnknownTable(name.to_string()))
     }
+}
 
-    fn preprocess(&self, binding: &Map<String, Value>, value: Value) -> Result<Value, PargError> {
-        let Some(name) = binding.get("preprocess").and_then(Value::as_str) else {
-            return Ok(value);
-        };
-        let mut value = value;
-        for step in self.preprocess_steps(name)? {
-            let op = step
-                .get("op")
-                .and_then(Value::as_str)
-                .ok_or_else(|| PargError::UnknownPreprocessOp("<missing>".to_string()))?;
-            if op != "table_lookup" {
-                return Err(PargError::UnknownPreprocessOp(op.to_string()));
-            }
-            let table = step
-                .get("table")
-                .and_then(Value::as_str)
-                .ok_or_else(|| PargError::UnknownPreprocessOp(op.to_string()))?;
-            let from = step
-                .get("from")
-                .and_then(Value::as_str)
-                .ok_or_else(|| PargError::UnknownPreprocessOp(op.to_string()))?;
-            let to = step
-                .get("to")
-                .and_then(Value::as_str)
-                .ok_or_else(|| PargError::UnknownPreprocessOp(op.to_string()))?;
-            let needle = to_ruby_string(&value);
-            let mut mapped = None;
-            for row in self.table_rows(table)? {
-                let Some(row) = row.as_object() else {
-                    continue;
-                };
-                let key = row.get(from).map(to_ruby_string);
-                if key.as_deref() == Some(needle.as_str()) {
-                    mapped = row.get(to).cloned();
-                    break;
-                }
-            }
-            if let Some(mapped) = mapped {
-                value = mapped;
-            }
-        }
-        Ok(value)
+fn preprocess_steps<'a>(env: &ApplyEnv<'a>, name: &str) -> Result<&'a Vec<Value>, PargError> {
+    env.preprocess
+        .get(name)
+        .and_then(Value::as_array)
+        .ok_or_else(|| PargError::UnknownPreprocess(name.to_string()))
+}
+
+fn table_rows_of<'a>(env: &ApplyEnv<'a>, name: &str) -> Result<&'a Vec<Value>, PargError> {
+    let declared = env
+        .tables
+        .get(name)
+        .ok_or_else(|| PargError::UnknownTable(name.to_string()))?;
+    if !declared.is_object() {
+        return Err(PargError::UnknownTable(name.to_string()));
     }
+    declared
+        .get("rows")
+        .and_then(Value::as_array)
+        .ok_or_else(|| PargError::UnknownTable(name.to_string()))
+}
 
-    fn finalize(&self, binding: &Map<String, Value>, value: Value) -> Result<Value, PargError> {
-        let kind = binding.get("type").and_then(Value::as_str);
-        cast(self.preprocess(binding, value)?, kind)
-    }
-
-    fn assign_scalar(
-        &self,
-        out: &mut Map<String, Value>,
-        binding: &Map<String, Value>,
-        captures: &BTreeMap<String, Vec<Value>>,
-    ) -> Result<(), PargError> {
-        let capture = binding
-            .get("capture")
+fn preprocess_with(
+    env: &ApplyEnv,
+    binding: &Map<String, Value>,
+    value: Value,
+) -> Result<Value, PargError> {
+    let Some(name) = binding.get("preprocess").and_then(Value::as_str) else {
+        return Ok(value);
+    };
+    let mut value = value;
+    for step in preprocess_steps(env, name)? {
+        let op = step
+            .get("op")
             .and_then(Value::as_str)
-            .unwrap_or_default();
-        let path = binding
-            .get("path")
-            .map(|p| p.as_str().unwrap_or_default().to_string())
-            .unwrap_or_default();
-        validate_path(capture, &path)?;
-        let Some(value) = first_capture(captures, capture) else {
-            return Ok(());
-        };
-        // Ruby `return if value.nil?` (Bindings.assign_scalar): a
-        // capture that materialized as null (the absent-optional tree
-        // wire) binds nothing — the key is skipped, never cast to "".
-        if value.is_null() {
-            return Ok(());
+            .ok_or_else(|| PargError::UnknownPreprocessOp("<missing>".to_string()))?;
+        if op != "table_lookup" {
+            return Err(PargError::UnknownPreprocessOp(op.to_string()));
         }
-        let finalized = self.finalize(binding, value)?;
-        out.insert(leaf_key(&path), finalized);
-        Ok(())
+        let table = step
+            .get("table")
+            .and_then(Value::as_str)
+            .ok_or_else(|| PargError::UnknownPreprocessOp(op.to_string()))?;
+        let from = step
+            .get("from")
+            .and_then(Value::as_str)
+            .ok_or_else(|| PargError::UnknownPreprocessOp(op.to_string()))?;
+        let to = step
+            .get("to")
+            .and_then(Value::as_str)
+            .ok_or_else(|| PargError::UnknownPreprocessOp(op.to_string()))?;
+        let needle = to_ruby_string(&value);
+        let mut mapped = None;
+        for row in table_rows_of(env, table)? {
+            let Some(row) = row.as_object() else {
+                continue;
+            };
+            let key = row.get(from).map(to_ruby_string);
+            if key.as_deref() == Some(needle.as_str()) {
+                mapped = row.get(to).cloned();
+                break;
+            }
+        }
+        if let Some(mapped) = mapped {
+            value = mapped;
+        }
     }
+    Ok(value)
+}
 
-    fn assign_array(
-        &self,
-        out: &mut Map<String, Value>,
-        prefix: &str,
-        group: &[&Map<String, Value>],
-        captures: &BTreeMap<String, Vec<Value>>,
-        shape: &Value,
-    ) -> Result<(), PargError> {
-        // Position-aware pairing (ruby#381): when the shape nests the
-        // group's instances under the prefix key (or IS the instance
-        // array — a repetition-root entry), each instance's subtree
-        // owns its captures. Occurrence-index pairing landed a sparse
-        // capture on the wrong instance; per-instance collection is
-        // identical when every instance fires every capture. Captures
-        // outside any instance keep the legacy occurrence pairing.
-        if let Some(instances) = group_instances(shape, prefix) {
-            // The occurrence path's `count == 0 → bind nothing`: a
-            // repetition that fired zero iterations (the tree carries
-            // `parts: []`) binds no key — the recorded native
-            // expectations and the pubid builders rely on the absent
-            // reading (rs#370, caught by the pubid corpus gate on the
-            // 0.10.x bump).
-            if instances.is_empty() {
-                return Ok(());
-            }
-            let mut list: Vec<Value> = Vec::with_capacity(instances.len());
-            for instance in instances {
-                let found = collect_captures(instance);
-                let mut element = Map::new();
-                for binding in group {
-                    let capture = binding
-                        .get("capture")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default();
-                    let Some(value) = found.get(capture).and_then(|c| c.first()) else {
-                        continue;
-                    };
-                    if value.is_null() {
-                        continue;
-                    }
-                    let finalized = self.finalize(binding, value.clone())?;
-                    let path = binding
-                        .get("path")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default();
-                    element.insert(leaf_key(path), finalized);
-                }
-                list.push(Value::Object(element));
-            }
-            out.insert(prefix.to_string(), Value::Array(list));
+fn finalize_with(
+    env: &ApplyEnv,
+    binding: &Map<String, Value>,
+    value: Value,
+) -> Result<Value, PargError> {
+    let kind = binding.get("type").and_then(Value::as_str);
+    cast(preprocess_with(env, binding, value)?, kind)
+}
+
+fn assign_scalar_with(
+    env: &ApplyEnv,
+    out: &mut Map<String, Value>,
+    binding: &Map<String, Value>,
+    captures: &BTreeMap<String, Vec<Value>>,
+) -> Result<(), PargError> {
+    let capture = binding
+        .get("capture")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let path = binding
+        .get("path")
+        .map(|p| p.as_str().unwrap_or_default().to_string())
+        .unwrap_or_default();
+    validate_path(capture, &path)?;
+    let Some(value) = first_capture(captures, capture) else {
+        return Ok(());
+    };
+    // Ruby `return if value.nil?` (Bindings.assign_scalar): a
+    // capture that materialized as null (the absent-optional tree
+    // wire) binds nothing — the key is skipped, never cast to "".
+    if value.is_null() {
+        return Ok(());
+    }
+    let finalized = finalize_with(env, binding, value)?;
+    out.insert(leaf_key(&path), finalized);
+    Ok(())
+}
+
+fn assign_array_with(
+    env: &ApplyEnv,
+    out: &mut Map<String, Value>,
+    prefix: &str,
+    group: &[&Map<String, Value>],
+    captures: &BTreeMap<String, Vec<Value>>,
+    shape: &Value,
+) -> Result<(), PargError> {
+    // Position-aware pairing (ruby#381): when the shape nests the
+    // group's instances under the prefix key (or IS the instance
+    // array — a repetition-root entry), each instance's subtree
+    // owns its captures. Occurrence-index pairing landed a sparse
+    // capture on the wrong instance; per-instance collection is
+    // identical when every instance fires every capture. Captures
+    // outside any instance keep the legacy occurrence pairing.
+    if let Some(instances) = group_instances(shape, prefix) {
+        // The occurrence path's `count == 0 → bind nothing`: a
+        // repetition that fired zero iterations (the tree carries
+        // `parts: []`) binds no key — the recorded native
+        // expectations and the pubid builders rely on the absent
+        // reading (rs#370, caught by the pubid corpus gate on the
+        // 0.10.x bump).
+        if instances.is_empty() {
             return Ok(());
         }
-        let count = group
-            .iter()
-            .filter_map(|binding| {
-                let capture = binding
-                    .get("capture")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default();
-                captures.get(capture).map(Vec::len)
-            })
-            .max()
-            .unwrap_or(0);
-        if count == 0 {
-            return Ok(());
-        }
-        let mut list: Vec<Value> = Vec::with_capacity(count);
-        for index in 0..count {
+        let mut list: Vec<Value> = Vec::with_capacity(instances.len());
+        for instance in instances {
+            let found = collect_captures(instance);
             let mut element = Map::new();
             for binding in group {
                 let capture = binding
                     .get("capture")
                     .and_then(Value::as_str)
                     .unwrap_or_default();
-                let Some(value) = captures.get(capture).and_then(|c| c.get(index)) else {
+                let Some(value) = found.get(capture).and_then(|c| c.first()) else {
                     continue;
                 };
-                // Ruby `next if value.nil?` (Bindings.assign_array):
-                // null slots bind nothing in their element.
                 if value.is_null() {
                     continue;
                 }
-                let finalized = self.finalize(binding, value.clone())?;
+                let finalized = finalize_with(env, binding, value.clone())?;
                 let path = binding
                     .get("path")
                     .and_then(Value::as_str)
@@ -444,51 +421,121 @@ impl PargArtifact {
             list.push(Value::Object(element));
         }
         out.insert(prefix.to_string(), Value::Array(list));
-        Ok(())
+        return Ok(());
+    }
+    let count = group
+        .iter()
+        .filter_map(|binding| {
+            let capture = binding
+                .get("capture")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            captures.get(capture).map(Vec::len)
+        })
+        .max()
+        .unwrap_or(0);
+    if count == 0 {
+        return Ok(());
+    }
+    let mut list: Vec<Value> = Vec::with_capacity(count);
+    for index in 0..count {
+        let mut element = Map::new();
+        for binding in group {
+            let capture = binding
+                .get("capture")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let Some(value) = captures.get(capture).and_then(|c| c.get(index)) else {
+                continue;
+            };
+            // Ruby `next if value.nil?` (Bindings.assign_array):
+            // null slots bind nothing in their element.
+            if value.is_null() {
+                continue;
+            }
+            let finalized = finalize_with(env, binding, value.clone())?;
+            let path = binding
+                .get("path")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            element.insert(leaf_key(path), finalized);
+        }
+        list.push(Value::Object(element));
+    }
+    out.insert(prefix.to_string(), Value::Array(list));
+    Ok(())
+}
+
+/// The apply core shared by the embedded-record path and the declared
+/// bindings-artifact path: one materializer, two entry surfaces
+/// (parsanol-ruby#432).
+pub(crate) fn apply_entry_records(
+    env: &ApplyEnv,
+    bindings: &[Value],
+    shape: &Value,
+) -> Result<Value, PargError> {
+    let captures = collect_captures(shape);
+    let mut scalars: Vec<&Map<String, Value>> = Vec::new();
+    let mut arrays: Vec<(&str, &Map<String, Value>)> = Vec::new();
+    for binding in bindings {
+        let Some(object) = binding.as_object() else {
+            continue;
+        };
+        let path = object
+            .get("path")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if path.contains("[]") {
+            let prefix = path.split("[]").next().unwrap_or(path);
+            arrays.push((prefix, object));
+        } else {
+            scalars.push(object);
+        }
+    }
+
+    let mut out = Map::new();
+    for binding in &scalars {
+        assign_scalar_with(env, &mut out, binding, &captures)?;
+    }
+    // Ruby groups by prefix while preserving first-seen order.
+    let mut order: Vec<&str> = Vec::new();
+    for (prefix, _) in &arrays {
+        if !order.contains(prefix) {
+            order.push(prefix);
+        }
+    }
+    for prefix in order {
+        let group: Vec<&Map<String, Value>> = arrays
+            .iter()
+            .filter(|(candidate, _)| *candidate == prefix)
+            .map(|(_, object)| *object)
+            .collect();
+        assign_array_with(env, &mut out, prefix, &group, &captures, shape)?;
+    }
+    Ok(Value::Object(out))
+}
+
+impl PargArtifact {
+    /// The binding list of an entry (empty when the entry declares none).
+    pub fn bindings(&self, entry: &str) -> &[Value] {
+        self.entry_value(entry, "bindings")
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    fn apply_env(&self) -> ApplyEnv<'_> {
+        ApplyEnv::of_artifact(&self.envelope)
+    }
+
+    /// Declared table rows (embedded in the envelope at compile time).
+    pub fn table_rows(&self, name: &str) -> Result<&Vec<Value>, PargError> {
+        table_rows_of(&self.apply_env(), name)
     }
 
     /// Apply an entry's bindings to a parsanol-shape parse tree.
     pub fn apply_bindings(&self, entry: &str, shape: &Value) -> Result<Value, PargError> {
-        let bindings = self.bindings(entry);
-        let captures = collect_captures(shape);
-        let mut scalars: Vec<&Map<String, Value>> = Vec::new();
-        let mut arrays: Vec<(&str, &Map<String, Value>)> = Vec::new();
-        for binding in bindings {
-            let Some(object) = binding.as_object() else {
-                continue;
-            };
-            let path = object
-                .get("path")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            if path.contains("[]") {
-                let prefix = path.split("[]").next().unwrap_or(path);
-                arrays.push((prefix, object));
-            } else {
-                scalars.push(object);
-            }
-        }
-
-        let mut out = Map::new();
-        for binding in &scalars {
-            self.assign_scalar(&mut out, binding, &captures)?;
-        }
-        // Ruby groups by prefix while preserving first-seen order.
-        let mut order: Vec<&str> = Vec::new();
-        for (prefix, _) in &arrays {
-            if !order.contains(prefix) {
-                order.push(prefix);
-            }
-        }
-        for prefix in order {
-            let group: Vec<&Map<String, Value>> = arrays
-                .iter()
-                .filter(|(candidate, _)| *candidate == prefix)
-                .map(|(_, object)| *object)
-                .collect();
-            self.assign_array(&mut out, prefix, &group, &captures, shape)?;
-        }
-        Ok(Value::Object(out))
+        apply_entry_records(&self.apply_env(), self.bindings(entry), shape)
     }
 }
 
