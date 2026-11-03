@@ -143,7 +143,8 @@ pub fn build_mode_glue(
 pub fn compile_source(source: &str) -> Result<Value, String> {
     let (mut parsed, mode, glue_rules) =
         parser::parse_grammar_mode_glue(source).map_err(|e| e.to_string())?;
-    imports::merge(&mut parsed.document, &[]).map_err(|e| e.to_string())?;
+    imports::merge(&mut parsed.document, &[], &mut parsed.atomic_rules)
+        .map_err(|e| e.to_string())?;
     let mut value = build_mode_glue(
         &parsed,
         &Tables::default(),
