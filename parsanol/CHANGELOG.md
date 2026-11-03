@@ -73,6 +73,11 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- Exclude byte_checksum from the canonical payload (rs#397) ([#398](https://github.com/parsanol/parsanol-rs/pull/398)) by @[object]
+- Release v0.20.3 by @[object]
+
+### Other
+
 - Release v0.20.3 by @[object]
 - The byte-checksum tier + the canonical exclusion by @[object]
 - Share cached legacy diagnostic snapshots by @[object]
