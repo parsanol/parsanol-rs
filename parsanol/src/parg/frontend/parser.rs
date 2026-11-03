@@ -558,18 +558,17 @@ impl Parser {
             Some(TokenKind::Str) => unquote(&self.bump().expect("peeked").value)?,
             _ => {
                 return Err(ParseError {
-                    message: "edition must be a number (1 or 2) or a quoted alias \
-                              (\"v1\", \"v2\", \"classic\")"
+                    message: "edition must be the number 2 or the quoted alias \"v2\""
                         .to_string(),
                 })
             }
         };
         match raw.as_str() {
-            "1" | "v1" | "classic" => Ok("v1".to_string()),
             "2" | "v2" => Ok("v2".to_string()),
             other => Err(ParseError {
                 message: format!(
-                    "unknown edition {other:?} -- supported editions are 1 (default) and 2 (named trees)"
+                    "edition {other:?} is not supported -- edition 1 was removed; \
+                     write edition \"v2\" (named trees + spans)"
                 ),
             }),
         }
@@ -605,11 +604,9 @@ impl Parser {
         document.version = unquote(&self.expect_string()?)?;
         // `edition` — the language edition (ruby#304, ruby#357's
         // consolidation; Rust's Cargo.toml `edition` is the model):
-        // the author declares, per grammar, which tree semantics the
-        // grammar means. THE DEFAULT IS 1 (the legacy shapes — the
-        // owner's 2026-10-28 reversal). 2 = fully named trees +
-        // explicit spans. The edition is canonicalized here —
-        // everything downstream only ever sees "v1"/"v2". The
+        // edition 2 = fully named trees + explicit spans, and the ONLY
+        // edition (edition 1 was removed). The edition is canonicalized
+        // here — everything downstream only ever sees "v2". The
         // pre-1.3.113 `mode` alias was removed (the owner's
         // 2026-10-31 ruling): the header fails with the fix named.
         let keyword = self.peek().map(|t| t.value.clone());
@@ -622,8 +619,7 @@ impl Parser {
                 Some("mode") => {
                     return Err(ParseError {
                         message: "the grammar header keyword is edition; mode (the \
-                                  pre-1.3.113 alias) was removed — write edition \"v1\" \
-                                  or edition \"v2\""
+                                  pre-1.3.113 alias) was removed — write edition \"v2\""
                             .to_string(),
                     });
                 }

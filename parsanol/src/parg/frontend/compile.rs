@@ -344,6 +344,19 @@ impl<'a> Compiler<'a> {
         mode: Option<&str>,
         glue_rules: &[String],
     ) -> Result<Self, CompileError> {
+        // Edition 2 is the only edition: the modern wrap is
+        // unconditional, and a legacy mode spelling is rejected.
+        match mode {
+            None | Some("v2") => {}
+            Some(other) => {
+                return Err(CompileError {
+                    message: format!(
+                        "edition {other:?} is not supported -- edition 1 was removed; \
+                         write edition \"v2\" (named trees + spans)"
+                    ),
+                });
+            }
+        }
         let mut compiler = Compiler {
             document,
             tables,
@@ -356,7 +369,7 @@ impl<'a> Compiler<'a> {
             skip_wrap: None,
             skip_wrap_index: None,
             order_warnings: Vec::new(),
-            modern: mode == Some("v2"),
+            modern: true,
             glue_rules: glue_rules.to_vec(),
             capture_reachable: None,
             skip_exempt: Vec::new(),
