@@ -426,12 +426,14 @@ fn rust_parses_every_flavor_source() {
         match parser::parse_grammar(&source) {
             Ok(_) => parsed += 1,
             Err(err) => {
-                // The removed `mode` alias is migration debt in
-                // pubid-grammar (tracked there), not a frontend gap:
-                // the flavor list shrinks as that repo converts.
+                // The removed `mode` alias and the removed edition 1
+                // are migration debt in pubid-grammar (tracked there),
+                // not a frontend gap: the flavor list shrinks as that
+                // repo converts.
                 if err
                     .message
                     .contains("mode (the pre-1.3.113 alias) was removed")
+                    || err.message.contains("edition 1 was removed")
                 {
                     pending_mode_migration.push(name);
                 } else {
@@ -497,24 +499,27 @@ fn compile_source_round_trips_through_the_artifact_loader() {
 }
 
 /// The numeric edition surface (ruby#357's mirror): the header takes
-/// bare integers (canonical) and the legacy quoted aliases; the
-/// envelope records the integer level. The pre-1.3.113 `mode` alias is
-/// removed — the header fails with the fix named.
+/// the bare integer (canonical) and the quoted alias; edition 1 was
+/// removed, so its spellings reject the parse with the fix named. The
+/// pre-1.3.113 `mode` alias is removed too.
 #[test]
 fn header_edition_spellings_canonicalize() {
     let body = "  entry main: main\n  main = \"x\"\n";
-    let cases = [
-        ("edition 2", "v2"),
-        ("edition 1", "v1"),
-        ("edition \"v2\"", "v2"),
-        ("edition \"v1\"", "v1"),
-        ("edition \"classic\"", "v1"),
-    ];
-    for (header, want) in cases {
+    for header in ["edition 2", "edition \"v2\""] {
         let source = format!("grammar E version \"1.0.0\" {header} {{\n{body}}}\n");
         let (_, mode) = parser::parse_grammar_with_mode(&source)
             .unwrap_or_else(|err| panic!("{header}: parse failed: {err}"));
-        assert_eq!(mode.as_deref(), Some(want), "header {header}");
+        assert_eq!(mode.as_deref(), Some("v2"), "header {header}");
+    }
+
+    for header in ["edition 1", "edition \"v1\"", "edition \"classic\""] {
+        let source = format!("grammar E version \"1.0.0\" {header} {{\n{body}}}\n");
+        let err = parser::parse_grammar_with_mode(&source)
+            .expect_err("edition 1 is removed and must fail the parse");
+        assert!(
+            err.message.contains("edition 1 was removed"),
+            "the rejection names the fix: {err}"
+        );
     }
 
     let source = format!("grammar E version \"1.0.0\" mode \"v2\" {{\n{body}}}\n");
@@ -541,7 +546,7 @@ fn header_edition_spellings_canonicalize() {
 
 #[test]
 fn the_envelope_records_the_edition_as_an_integer() {
-    for (header, want) in [("edition 2", 2u8), ("edition 1", 1), ("", 1)] {
+    for (header, want) in [("edition 2", 2u8), ("", 2)] {
         let source = format!(
             "grammar E version \"1.0.0\" {header} {{\n  entry main: main\n  main = \"x\"\n}}\n"
         );

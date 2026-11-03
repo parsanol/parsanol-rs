@@ -558,8 +558,7 @@ impl Parser {
             Some(TokenKind::Str) => unquote(&self.bump().expect("peeked").value)?,
             _ => {
                 return Err(ParseError {
-                    message: "edition must be the number 2 or the quoted alias \"v2\""
-                        .to_string(),
+                    message: "edition must be the number 2 or the quoted alias \"v2\"".to_string(),
                 })
             }
         };
