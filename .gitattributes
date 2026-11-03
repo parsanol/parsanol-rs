@@ -1,0 +1,3 @@
+# Byte-exact fixtures: checksums attest the producer's exact bytes, so
+# checkout line-ending conversion must never touch them.
+parsanol/tests/fixtures/pg/demo-sealed.json -text
