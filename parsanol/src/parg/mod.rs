@@ -262,9 +262,13 @@ fn collect_terminals(atoms: &[Value], terms: &mut Vec<String>) {
 }
 
 impl PargArtifact {
-    /// Parse and verify an envelope from its JSON text.
+    /// Parse and verify an envelope from its JSON text. When the bake
+    /// sealed the file (parsanol-ruby#443), the byte-level checksum is
+    /// verified first: a zero-hole sha256 over the exact input text, one
+    /// O(bytes) pass before any structural work.
     pub fn from_json(text: &str) -> Result<Self, PargError> {
         let envelope: Value = serde_json::from_str(text).map_err(PargError::Json)?;
+        verify_byte_checksum(&envelope, text)?;
         let shape = envelope
             .get("shape")
             .and_then(Value::as_str)
@@ -404,6 +408,29 @@ impl PargArtifact {
             .and_then(|entries| entries.get(entry))
             .and_then(|entry| entry.get(field))
     }
+}
+
+/// The byte-level checksum's fast tier: the bake hashed the file bytes
+/// with the digest's own 64-hex region zeroed (parsanol-ruby#443); the
+/// loader repeats the same substitution over the exact text it received.
+fn verify_byte_checksum(envelope: &Value, text: &str) -> Result<(), PargError> {
+    let Some(stored) = envelope.get("byte_checksum").and_then(Value::as_str) else {
+        return Ok(()); // pre-seal artifact: the canonical tier covers it
+    };
+    let placeholder = "0".repeat(64);
+    let zeroed = text.replace(stored, &placeholder);
+    // Raw bytes, exactly like the ruby bake: Digest over the text, NOT
+    // the canonical JSON form (this tier is byte-exact by design).
+    let digest = Sha256::digest(zeroed.as_bytes());
+    let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+    let computed = format!("sha256:{hex}");
+    if stored == computed {
+        return Ok(());
+    }
+    Err(PargError::ChecksumMismatch {
+        stored: stored.to_string(),
+        computed,
+    })
 }
 
 fn verify_checksum(envelope: &Value) -> Result<(), PargError> {
