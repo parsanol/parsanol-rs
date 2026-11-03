@@ -236,9 +236,19 @@ fn copy(node: &Node, prefix: &str) -> Node {
             ))),
             ..Node::default()
         },
+        // A qualified reference (`other.rule`) already names its own
+        // imported grammar — prefixing would double-qualify it
+        // (cross-import references compose: the other grammar's rules
+        // are prefixed by their own merge).
         "ref" => Node {
             kind: "ref".to_string(),
-            name: node.name.as_deref().map(|name| format!("{prefix}{name}")),
+            name: node.name.as_deref().map(|name| {
+                if name.contains('.') {
+                    name.to_string()
+                } else {
+                    format!("{prefix}{name}")
+                }
+            }),
             ..Node::default()
         },
         _ => node.clone(),
