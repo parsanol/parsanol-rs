@@ -216,8 +216,8 @@ enum NegScanTerm {
 struct LegacyFailure {
     position: usize,
     present: bool,
-    labels: Vec<String>,
-    ranks: Vec<(usize, Vec<String>)>,
+    labels: std::sync::Arc<Vec<String>>,
+    ranks: std::sync::Arc<Vec<(usize, Vec<String>)>>,
 }
 
 impl LegacyFailure {
@@ -270,7 +270,7 @@ pub struct PortableParser<'a> {
     // position any terminal failed at, and the labels expected there.
     deepest_failure_pos: usize,
     has_failure: bool,
-    expected_labels: Vec<String>,
+    expected_labels: std::sync::Arc<Vec<String>>,
     /// Recovery (TODO.sota/1): the furthest position any successful
     /// atom match ended, tracked ONLY while `track_max_end` is on —
     /// the recovery pass sets it; normal parses pay nothing.
@@ -284,7 +284,9 @@ pub struct PortableParser<'a> {
     partial_stash: Option<(usize, Vec<AstNode>, RepetitionTag)>,
     /// C4: ranked failures — up to MAX_RANKED_FAILURES distinct
     /// (position, labels) pairs, deepest first.
-    ranked_failures: Vec<(usize, Vec<String>)>,
+    ranked_failures: std::sync::Arc<Vec<(usize, Vec<String>)>>,
+    /// Reuse the empty snapshot across frames without allocating empty Arcs.
+    empty_legacy_failure: LegacyFailure,
 
     // ========================================================================
     // Output (mutable)
@@ -511,9 +513,10 @@ impl<'a> PortableParser<'a> {
             max_end_pos: 0,
             collect_partial: false,
             partial_stash: None,
-            ranked_failures: Vec::new(),
+            ranked_failures: Default::default(),
+            empty_legacy_failure: LegacyFailure::default(),
             has_failure: false,
-            expected_labels: Vec::new(),
+            expected_labels: Default::default(),
             arena,
             cache,
             compatibility: ParserCompatibility::Strict,
@@ -566,9 +569,10 @@ impl<'a> PortableParser<'a> {
             max_end_pos: 0,
             collect_partial: false,
             partial_stash: None,
-            ranked_failures: Vec::new(),
+            ranked_failures: Default::default(),
+            empty_legacy_failure: LegacyFailure::default(),
             has_failure: false,
-            expected_labels: Vec::new(),
+            expected_labels: Default::default(),
             arena,
             cache,
             compatibility: ParserCompatibility::Strict,
@@ -625,8 +629,8 @@ impl<'a> PortableParser<'a> {
         self.capture_state = CaptureState::new();
         self.deepest_failure_pos = 0;
         self.has_failure = false;
-        self.expected_labels.clear();
-        self.ranked_failures.clear();
+        self.expected_labels = self.empty_legacy_failure.labels.clone();
+        self.ranked_failures = self.empty_legacy_failure.ranks.clone();
         self.max_end_pos = 0;
         self.partial_stash = None;
         self.spine_trace.clear();
@@ -801,8 +805,12 @@ impl<'a> PortableParser<'a> {
     /// Deepest terminal failure collected during the last parse.
     #[inline]
     pub fn failure_diagnostics(&self) -> Option<(usize, Vec<String>)> {
-        self.has_failure
-            .then(|| (self.deepest_failure_pos, self.expected_labels.clone()))
+        self.has_failure.then(|| {
+            (
+                self.deepest_failure_pos,
+                self.expected_labels.as_ref().clone(),
+            )
+        })
     }
 
     /// Parse the input
@@ -975,7 +983,7 @@ impl<'a> PortableParser<'a> {
             let own_failure = self.take_legacy_failure();
             self.restore_legacy_failure(parent_failure);
             if matches!(&r, Err(ParseError::Failed { .. })) {
-                self.merge_legacy_failure(&own_failure);
+                self.merge_owned_legacy_failure(own_failure);
             }
         }
         if self.track_max_end {
@@ -1275,7 +1283,7 @@ impl<'a> PortableParser<'a> {
             } else {
                 let failure = entry.failure.clone();
                 if let Some(failure) = failure {
-                    self.merge_legacy_failure(&failure);
+                    self.merge_owned_legacy_failure(*failure);
                 }
                 Err(ParseError::Failed {
                     position: self.deepest_failure_pos,
@@ -1346,8 +1354,14 @@ impl<'a> PortableParser<'a> {
         LegacyFailure {
             position: std::mem::take(&mut self.deepest_failure_pos),
             present: std::mem::take(&mut self.has_failure),
-            labels: std::mem::take(&mut self.expected_labels),
-            ranks: std::mem::take(&mut self.ranked_failures),
+            labels: std::mem::replace(
+                &mut self.expected_labels,
+                self.empty_legacy_failure.labels.clone(),
+            ),
+            ranks: std::mem::replace(
+                &mut self.ranked_failures,
+                self.empty_legacy_failure.ranks.clone(),
+            ),
         }
     }
 
@@ -1361,16 +1375,74 @@ impl<'a> PortableParser<'a> {
     fn clear_legacy_failure(&mut self) {
         self.deepest_failure_pos = 0;
         self.has_failure = false;
-        self.expected_labels.clear();
-        self.ranked_failures.clear();
+        self.expected_labels = self.empty_legacy_failure.labels.clone();
+        self.ranked_failures = self.empty_legacy_failure.ranks.clone();
+    }
+
+    /// Application frames and memo entries already own canonical diagnostics.
+    /// An empty parent can take their buffers directly: replaying every label
+    /// cloned the same large cause set at each enclosing failed application.
+    fn merge_owned_legacy_failure(&mut self, failure: LegacyFailure) {
+        if !self.has_failure && self.ranked_failures.is_empty() {
+            self.restore_legacy_failure(failure);
+        } else {
+            self.merge_legacy_failure(&failure);
+        }
     }
 
     fn merge_legacy_failure(&mut self, failure: &LegacyFailure) {
-        for (position, labels) in &failure.ranks {
-            for label in labels {
-                self.note_failure(*position, label.clone());
+        for (position, labels) in failure.ranks.iter() {
+            if labels.is_empty() {
+                continue;
+            }
+
+            if !self.has_failure || *position > self.deepest_failure_pos {
+                self.has_failure = true;
+                self.deepest_failure_pos = *position;
+                self.expected_labels = self.empty_legacy_failure.labels.clone();
+            }
+            if *position == self.deepest_failure_pos {
+                Self::extend_failure_labels(
+                    std::sync::Arc::make_mut(&mut self.expected_labels),
+                    labels,
+                );
+            }
+            let ranks = std::sync::Arc::make_mut(&mut self.ranked_failures);
+            match ranks.iter_mut().find(|(p, _)| p == position) {
+                Some((_, current)) => Self::extend_failure_labels(current, labels),
+                None => {
+                    let mut current = Vec::new();
+                    Self::extend_failure_labels(&mut current, labels);
+                    ranks.push((*position, current));
+                    ranks.sort_by_key(|a| std::cmp::Reverse(a.0));
+                    ranks.truncate(MAX_RANKED_FAILURES);
+                }
             }
         }
+    }
+
+    /// Merge speculative causes in their original order. Replaying one label
+    /// at a time repeatedly scanned the growing vectors and cloned even labels
+    /// already present, making large alternative sets quadratic on success too.
+    fn extend_failure_labels(current: &mut Vec<String>, incoming: &[String]) {
+        if incoming.len() <= 8 {
+            for label in incoming {
+                if !current.contains(label) {
+                    current.push(label.clone());
+                }
+            }
+            return;
+        }
+
+        let mut seen: std::collections::HashSet<&str> =
+            current.iter().map(String::as_str).collect();
+        let additions: Vec<_> = incoming
+            .iter()
+            .filter(|label| seen.insert(label.as_str()))
+            .cloned()
+            .collect();
+        drop(seen);
+        current.extend(additions);
     }
 
     fn ensure_legacy_failure(&mut self, atom_id: usize, position: usize) {
@@ -1643,7 +1715,10 @@ impl<'a> PortableParser<'a> {
     /// last parse attempt recorded a failure.
     pub fn failure_wire(&self) -> Option<(usize, Vec<String>)> {
         if self.has_failure {
-            Some((self.deepest_failure_pos, self.expected_labels.clone()))
+            Some((
+                self.deepest_failure_pos,
+                self.expected_labels.as_ref().clone(),
+            ))
         } else {
             None
         }
@@ -1660,23 +1735,23 @@ impl<'a> PortableParser<'a> {
         if !self.has_failure || pos > self.deepest_failure_pos {
             self.has_failure = true;
             self.deepest_failure_pos = pos;
-            self.expected_labels.clear();
-            self.expected_labels.push(label.clone());
+            self.expected_labels = std::sync::Arc::new(vec![label.clone()]);
         } else if pos == self.deepest_failure_pos && !self.expected_labels.contains(&label) {
-            self.expected_labels.push(label.clone());
+            std::sync::Arc::make_mut(&mut self.expected_labels).push(label.clone());
         }
         // C4: keep every distinct position for ranked multi-error
         // reporting; the deepest entry mirrors failure_wire.
-        match self.ranked_failures.iter_mut().find(|(p, _)| *p == pos) {
+        let ranks = std::sync::Arc::make_mut(&mut self.ranked_failures);
+        match ranks.iter_mut().find(|(p, _)| *p == pos) {
             Some((_, labels)) => {
                 if !labels.contains(&label) {
                     labels.push(label);
                 }
             }
             None => {
-                self.ranked_failures.push((pos, vec![label]));
-                self.ranked_failures.sort_by_key(|a| std::cmp::Reverse(a.0));
-                self.ranked_failures.truncate(MAX_RANKED_FAILURES);
+                ranks.push((pos, vec![label]));
+                ranks.sort_by_key(|a| std::cmp::Reverse(a.0));
+                ranks.truncate(MAX_RANKED_FAILURES);
             }
         }
     }
