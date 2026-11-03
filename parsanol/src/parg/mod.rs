@@ -444,6 +444,10 @@ fn verify_checksum(envelope: &Value) -> Result<(), PargError> {
         .to_string();
     let mut payload = obj.clone();
     payload.remove("checksum");
+    // The byte tier's own digest region is producer-serialization
+    // specific (parsanol-ruby#443) and must not enter the canonical
+    // payload — rs#397: including it rejected every ruby-1.3.131+ bake.
+    payload.remove("byte_checksum");
     let computed = checksum_hex(&Value::Object(payload))?;
     if stored != computed {
         return Err(PargError::ChecksumMismatch { stored, computed });
