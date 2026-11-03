@@ -108,7 +108,9 @@ impl PargBindingsArtifact {
         let object = self
             .payload
             .as_object()
-            .ok_or_else(|| PargError::InvalidBindingsArtifact("payload must be an object"))?;
+            .ok_or(PargError::InvalidBindingsArtifact(
+                "payload must be an object",
+            ))?;
         if object.get("artifact_kind").and_then(Value::as_str) != Some(BINDINGS_ARTIFACT_KIND) {
             return Err(PargError::InvalidBindingsArtifact("artifact_kind mismatch"));
         }
