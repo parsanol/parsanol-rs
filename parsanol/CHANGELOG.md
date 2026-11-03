@@ -73,6 +73,13 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- The byte-checksum tier + the canonical exclusion by @[object]
+- Share cached legacy diagnostic snapshots by @[object]
+- Move legacy diagnostics into empty application frames by @[object]
+- Batch legacy failure-label merges without changing diagnostic order by @[object]
+
+### Other
+
 - Keep merge's 2-arg signature; merge_with_atomic threads exemptions by @[object]
 - Merge_sources test asserts prefixed rule docs by @[object]
 - The atomic exemption qualifies with its rules by @[object]
