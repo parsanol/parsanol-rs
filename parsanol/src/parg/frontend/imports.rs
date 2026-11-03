@@ -19,8 +19,9 @@ use super::parser::{self, Document, Node};
 pub fn merge(
     document: &mut Document,
     import_dirs: &[PathBuf],
+    merged_atomic_rules: &mut Vec<String>,
 ) -> Result<BTreeMap<String, String>, CompileError> {
-    merge_with(document, &|name| {
+    merge_with(document, merged_atomic_rules, &|name| {
         let path = find_file(name, import_dirs)?;
         // The wire is LF: a CRLF checkout's imports normalize at the
         // read boundary, or their docs bake \r remnants.
@@ -40,8 +41,9 @@ pub fn merge(
 pub fn merge_sources(
     document: &mut Document,
     sources: &BTreeMap<String, String>,
+    merged_atomic_rules: &mut Vec<String>,
 ) -> Result<BTreeMap<String, String>, CompileError> {
-    merge_with(document, &|name| {
+    merge_with(document, merged_atomic_rules, &|name| {
         sources
             .get(name)
             .cloned()
@@ -54,16 +56,24 @@ pub fn merge_sources(
 
 fn merge_with(
     document: &mut Document,
+    merged_atomic_rules: &mut Vec<String>,
     resolve: &dyn Fn(&str) -> Result<String, CompileError>,
 ) -> Result<BTreeMap<String, String>, CompileError> {
     let mut docs = BTreeMap::new();
-    merge_inner(document, &mut docs, resolve, &mut Vec::new())?;
+    merge_inner(
+        document,
+        &mut docs,
+        merged_atomic_rules,
+        resolve,
+        &mut Vec::new(),
+    )?;
     Ok(docs)
 }
 
 fn merge_inner(
     document: &mut Document,
     docs: &mut BTreeMap<String, String>,
+    merged_atomic_rules: &mut Vec<String>,
     resolve: &dyn Fn(&str) -> Result<String, CompileError>,
     merging: &mut Vec<String>,
 ) -> Result<(), CompileError> {
@@ -89,10 +99,19 @@ fn merge_inner(
             message: format!("import `use {name}` failed to parse: {error}"),
         })?;
         let (mut used, mut used_docs) = (parsed.document, parsed.docs);
+        let mut used_atomic = parsed.atomic_rules.clone();
         merging.push(name.clone());
-        merge_inner(&mut used, &mut used_docs, resolve, merging)?;
+        merge_inner(
+            &mut used,
+            &mut used_docs,
+            &mut used_atomic,
+            resolve,
+            merging,
+        )?;
         merging.pop();
-        merge_used(document, docs, &used, &used_docs, &format!("{name}."))?;
+        let prefix = format!("{name}.");
+        merge_used(document, docs, &used, &used_docs, &prefix)?;
+        merged_atomic_rules.extend(used_atomic.iter().map(|rule| format!("{prefix}{rule}")));
     }
     document.uses.clear();
     Ok(())

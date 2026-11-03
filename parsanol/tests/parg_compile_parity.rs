@@ -86,8 +86,12 @@ fn rust_compiler_matches_the_ruby_atom_streams() {
         let (mut parsed, mode) = parser::parse_grammar_with_mode(&source)
             .unwrap_or_else(|err| panic!("{name}: rust parse failed: {err}"));
         parsed.docs.extend(
-            imports::merge(&mut parsed.document, std::slice::from_ref(&dir))
-                .unwrap_or_else(|err| panic!("{name}: import merge failed: {err}")),
+            imports::merge(
+                &mut parsed.document,
+                std::slice::from_ref(&dir),
+                &mut Vec::new(),
+            )
+            .unwrap_or_else(|err| panic!("{name}: import merge failed: {err}")),
         );
         let artifact: Value =
             serde_json::from_str(&std::fs::read_to_string(path).expect("artifact")).expect("json");
@@ -160,8 +164,12 @@ fn rust_envelope_matches_the_ruby_artifacts() {
         let (mut parsed, mode) = parser::parse_grammar_with_mode(&source)
             .unwrap_or_else(|err| panic!("{name}: rust parse failed: {err}"));
         parsed.docs.extend(
-            imports::merge(&mut parsed.document, std::slice::from_ref(&dir))
-                .unwrap_or_else(|err| panic!("{name}: import merge failed: {err}")),
+            imports::merge(
+                &mut parsed.document,
+                std::slice::from_ref(&dir),
+                &mut Vec::new(),
+            )
+            .unwrap_or_else(|err| panic!("{name}: import merge failed: {err}")),
         );
         let tables = artifact_tables(&artifact);
         let got = envelope::build_mode(&parsed, &tables, None, mode.as_deref())
@@ -314,7 +322,7 @@ fn rust_order_warnings_match_the_ruby_flavor_corpus() {
         };
         let grammars = artifacts.parent().expect("repo root").join("grammars");
         parsed.docs.extend(
-            imports::merge(&mut parsed.document, &[grammars])
+            imports::merge(&mut parsed.document, &[grammars], &mut Vec::new())
                 .unwrap_or_else(|err| panic!("{name}: import merge failed: {err}")),
         );
         let tables = artifact_tables(&artifact);
@@ -552,7 +560,7 @@ fn the_envelope_records_the_edition_as_an_integer() {
         );
         let (mut parsed, mode) = parser::parse_grammar_with_mode(&source)
             .unwrap_or_else(|err| panic!("{header:?}: parse failed: {err}"));
-        imports::merge(&mut parsed.document, &[]).expect("merge");
+        imports::merge(&mut parsed.document, &[], &mut Vec::new()).expect("merge");
         let envelope =
             envelope::build_mode(&parsed, &compile::Tables::default(), None, mode.as_deref())
                 .unwrap_or_else(|err| panic!("{header:?}: compile failed: {err}"));
@@ -602,7 +610,7 @@ fn whitespace_classes_stay_glue_in_edition_2() {
 fn named_atoms(source: &str, entry: &str) -> Vec<String> {
     let (mut parsed, mode) =
         parser::parse_grammar_with_mode(source).unwrap_or_else(|err| panic!("parse failed: {err}"));
-    imports::merge(&mut parsed.document, &[]).expect("merge");
+    imports::merge(&mut parsed.document, &[], &mut Vec::new()).expect("merge");
     let grammar = compile::compile_entry_mode(
         &parsed.document,
         entry,
@@ -642,7 +650,7 @@ fn glue_declaration_keeps_the_chain_anonymous() {
     );
     let (mut parsed, mode, glue_rules) =
         parser::parse_grammar_with_glue(source).unwrap_or_else(|err| panic!("parse failed: {err}"));
-    imports::merge(&mut parsed.document, &[]).expect("merge");
+    imports::merge(&mut parsed.document, &[], &mut Vec::new()).expect("merge");
     let grammar = compile::compile_entry_mode_glue(
         &parsed.document,
         "main",
@@ -747,7 +755,7 @@ fn merge_sources_resolves_use_from_an_in_memory_map() {
     let mut document = parsanol::parg::frontend::parser::parse_grammar(main)
         .expect("main parses")
         .document;
-    let docs = imports::merge_sources(&mut document, &sources).expect("merge");
+    let docs = imports::merge_sources(&mut document, &sources, &mut Vec::new()).expect("merge");
     assert!(document.uses.is_empty(), "uses clear after the merge");
     assert!(
         document.rules.iter().any(|(name, _)| name == "comp.word"),
@@ -782,7 +790,7 @@ fn merge_sources_names_the_missing_import() {
         .expect("main parses")
         .document;
     let sources = BTreeMap::new();
-    let err = imports::merge_sources(&mut document, &sources)
+    let err = imports::merge_sources(&mut document, &sources, &mut Vec::new())
         .expect_err("the missing import is an error");
     assert!(
         err.message.contains("use gone"),
