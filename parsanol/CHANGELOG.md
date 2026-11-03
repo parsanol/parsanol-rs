@@ -73,6 +73,11 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- Drop the unnecessary None-substituting closure by @[object]
+- The declared per-target binding artifact (#432, rs side) by @[object]
+
+### Other
+
 - Kill the repetition-root fallback (ruby#408/#412 mirror) by @[object]
 
 ### Other
