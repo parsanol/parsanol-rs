@@ -747,6 +747,7 @@ fn merge_sources_resolves_use_from_an_in_memory_map() {
     );
     let comp = concat!(
         "grammar C version \"1\" edition \"v2\" {\n",
+        "  ## the component word\n",
         "  word = ( 1*( %x61-7A ) ) as w\n",
         "}\n",
     );
@@ -756,6 +757,11 @@ fn merge_sources_resolves_use_from_an_in_memory_map() {
         .expect("main parses")
         .document;
     let docs = imports::merge_sources(&mut document, &sources, &mut Vec::new()).expect("merge");
+    assert_eq!(
+        docs.get("comp.word").map(String::as_str),
+        Some("the component word"),
+        "rule docs merge under the prefixed name"
+    );
     assert!(document.uses.is_empty(), "uses clear after the merge");
     assert!(
         document.rules.iter().any(|(name, _)| name == "comp.word"),
