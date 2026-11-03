@@ -1,9 +1,11 @@
 //! Cross-file imports (PN 1): `use <name>` at the top of a .parg file
-//! loads `<name>`.parg from an import directory, prefixes every rule
-//! with `"<name>."` (capture names are preserved — embedded grammars
-//! keep their capture contract), and merges entries, bindings, and
-//! preprocess steps. Cycles and missing files are compile errors. The
-//! artifact bakes the expansion: consumers never see imports.
+//! loads `<name>`.parg from an import directory — or from an in-memory
+//! name → source map, for consumers that embed their components
+//! (expressir's core ext) — prefixes every rule with `"<name>."`
+//! (capture names are preserved — embedded grammars keep their capture
+//! contract), and merges entries, bindings, and preprocess steps.
+//! Cycles and missing files are compile errors. The artifact bakes the
+//! expansion: consumers never see imports.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -12,20 +14,57 @@ use super::compile::CompileError;
 use super::parser::{self, Document, Node};
 
 /// Merge every `use` declaration's source into +document+, in
-/// declaration order.
+/// declaration order. Sources resolve as `<name>.parg` under
+/// +import_dirs+.
 pub fn merge(
     document: &mut Document,
     import_dirs: &[PathBuf],
 ) -> Result<BTreeMap<String, String>, CompileError> {
+    merge_with(document, &|name| {
+        let path = find_file(name, import_dirs)?;
+        // The wire is LF: a CRLF checkout's imports normalize at the
+        // read boundary, or their docs bake \r remnants.
+        std::fs::read_to_string(&path)
+            .map(|text| text.replace("\r\n", "\n"))
+            .map_err(|error| CompileError {
+                message: format!("import `use {name}` unreadable: {error}"),
+            })
+    })
+}
+
+/// Merge every `use` declaration's source into +document+, resolving
+/// names from an in-memory map (the key is the `use` name, the value
+/// the grammar source — no `.parg` suffix). Embedded-grammar consumers
+/// (the expressir core ext) compile from `include_str!` assets and
+/// have no directory to hand the resolver.
+pub fn merge_sources(
+    document: &mut Document,
+    sources: &BTreeMap<String, String>,
+) -> Result<BTreeMap<String, String>, CompileError> {
+    merge_with(document, &|name| {
+        sources
+            .get(name)
+            .cloned()
+            .map(|text| text.replace("\r\n", "\n"))
+            .ok_or_else(|| CompileError {
+                message: format!("import `use {name}` not found in the embedded sources"),
+            })
+    })
+}
+
+fn merge_with(
+    document: &mut Document,
+    resolve: &dyn Fn(&str) -> Result<String, CompileError>,
+) -> Result<BTreeMap<String, String>, CompileError> {
     let mut docs = BTreeMap::new();
-    merge_inner(document, &mut docs, import_dirs, &mut Vec::new())?;
+    merge_inner(document, &mut docs, resolve, &mut Vec::new())?;
     Ok(docs)
 }
 
 fn merge_inner(
     document: &mut Document,
     docs: &mut BTreeMap<String, String>,
-    import_dirs: &[PathBuf],
+    resolve: &dyn Fn(&str) -> Result<String, CompileError>,
     merging: &mut Vec<String>,
 ) -> Result<(), CompileError> {
     if document.uses.is_empty() {
@@ -45,20 +84,13 @@ fn merge_inner(
                 ),
             });
         }
-        let source = find_file(&name, import_dirs)?;
-        // The wire is LF: a CRLF checkout's imports normalize at the
-        // read boundary, or their docs bake \r remnants.
-        let text = std::fs::read_to_string(&source)
-            .map_err(|error| CompileError {
-                message: format!("import `use {name}` unreadable: {error}"),
-            })?
-            .replace("\r\n", "\n");
+        let text = resolve(&name)?;
         let parsed = parser::parse_grammar(&text).map_err(|error| CompileError {
             message: format!("import `use {name}` failed to parse: {error}"),
         })?;
         let (mut used, mut used_docs) = (parsed.document, parsed.docs);
         merging.push(name.clone());
-        merge_inner(&mut used, &mut used_docs, import_dirs, merging)?;
+        merge_inner(&mut used, &mut used_docs, resolve, merging)?;
         merging.pop();
         merge_used(document, docs, &used, &used_docs, &format!("{name}."))?;
     }
