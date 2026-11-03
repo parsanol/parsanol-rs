@@ -73,6 +73,10 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- Kill the repetition-root fallback (ruby#408/#412 mirror) by @[object]
+
+### Other
+
 - Slice the byte view directly in the multibyte span test by @[object]
 - Pin whole-codepoint capture spans at the lutaml-path shape by @[object]
 
