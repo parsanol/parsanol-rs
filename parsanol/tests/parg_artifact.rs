@@ -8,6 +8,7 @@ use parsanol::portable::{AstArena, PortableParser};
 use parsanol::PargArtifact;
 
 const FIXTURE: &str = include_str!("fixtures/pg/demo.json");
+const SEALED_FIXTURE: &str = include_str!("fixtures/pg/demo-sealed.json");
 const CANONICAL_SAMPLE: &str = include_str!("fixtures/pg/canonical_sample.json");
 
 #[test]
@@ -38,6 +39,66 @@ fn rejects_a_tampered_envelope() {
         }
         other => panic!("expected checksum mismatch, got {other:?}"),
     }
+}
+
+/// ruby#443 sealed artifacts (1.3.131+) carry `byte_checksum` and the
+/// `validated` receipt. The canonical payload excludes both `checksum`
+/// and `byte_checksum`, so a sealed artifact verifies on loaders that
+/// only see a parsed envelope (wasm/FFI) — rs#397.
+#[test]
+fn loads_a_sealed_ruby_artifact_through_the_canonical_tier() {
+    let artifact = PargArtifact::from_json(SEALED_FIXTURE).expect("sealed fixture must verify");
+    assert_eq!(artifact.grammar_name(), Some("Demo"));
+    assert!(artifact.checksum().unwrap().starts_with("sha256:"));
+}
+
+/// The canonical payload is "everything except checksum and
+/// byte_checksum" — including the `validated` receipt. A loader that
+/// only sees a parsed envelope (no exact bytes, so no byte tier — the
+/// wasm/FFI shape) must still verify a sealed artifact's content.
+#[test]
+fn canonical_tier_covers_a_parsed_sealed_envelope() {
+    let mut value: serde_json::Value = serde_json::from_str(SEALED_FIXTURE).unwrap();
+    value.as_object_mut().unwrap().remove("byte_checksum");
+    let text = serde_json::to_string(&value).unwrap();
+    PargArtifact::from_json(&text)
+        .unwrap_or_else(|err| panic!("parsed sealed envelope must verify: {err:?}"));
+}
+
+/// When the byte_checksum region is present it is strict: the text it
+/// travels with must hash to it, even when the canonical payload is
+/// otherwise valid.
+#[test]
+fn byte_tier_rejects_a_stored_digest_that_does_not_match_the_text() {
+    let mut value: serde_json::Value = serde_json::from_str(SEALED_FIXTURE).unwrap();
+    value["byte_checksum"] = serde_json::Value::String(format!("sha256:{}", "f".repeat(64)));
+    let text = serde_json::to_string(&value).unwrap();
+    match PargArtifact::from_json(&text) {
+        Err(PargError::ChecksumMismatch { stored, .. }) => {
+            assert!(stored.ends_with(&"f".repeat(16)));
+        }
+        other => panic!("expected byte-tier mismatch, got {other:?}"),
+    }
+}
+
+/// The byte tier guards the exact file bytes, not just the content: a
+/// trailing-newline flip leaves the parsed envelope (and therefore the
+/// canonical payload) untouched, so the rejection can only come from
+/// the byte tier — which runs before any canonical work.
+#[test]
+fn byte_tier_rejects_a_flip_that_leaves_the_canonical_payload_intact() {
+    assert!(SEALED_FIXTURE.ends_with("}\n"));
+    let tampered = format!("{SEALED_FIXTURE}\n");
+    match PargArtifact::from_json(&tampered) {
+        Err(PargError::ChecksumMismatch { .. }) => {}
+        other => panic!("expected the byte tier to reject, got {other:?}"),
+    }
+    // Prove the canonical tier was satisfied: the same envelope without
+    // its byte_checksum region loads cleanly.
+    let mut value: serde_json::Value = serde_json::from_str(&tampered).unwrap();
+    value.as_object_mut().unwrap().remove("byte_checksum");
+    PargArtifact::from_json(&serde_json::to_string(&value).unwrap())
+        .unwrap_or_else(|err| panic!("canonical payload was intact: {err:?}"));
 }
 
 #[test]

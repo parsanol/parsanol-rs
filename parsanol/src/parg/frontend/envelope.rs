@@ -180,12 +180,16 @@ pub fn compile_source(source: &str) -> Result<Value, String> {
 /// mirrors the Ruby compiler's SEMANTICS_EXCLUDED exactly — `checksum`
 /// and `semantics_hash` cannot cover themselves, and the engine stamps
 /// (`compiler_version`, `unicode_tables`) are the producer identity a
-/// re-bake legitimately changes.
-const SEMANTICS_EXCLUDED: [&str; 4] = [
+/// re-bake legitimately changes. The integrity stamps
+/// (`byte_checksum`, `validated` — ruby#443) are the bake receipt,
+/// likewise producer-side (rs#397).
+const SEMANTICS_EXCLUDED: [&str; 6] = [
     "checksum",
+    "byte_checksum",
     "compiler_version",
     "unicode_tables",
     "semantics_hash",
+    "validated",
 ];
 
 fn semantics_hash(value: &Value) -> Result<String, String> {
