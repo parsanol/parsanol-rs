@@ -23,6 +23,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 pub mod bindings;
+pub mod bindings_artifact;
 pub mod derive;
 pub mod frontend;
 pub mod render;
@@ -52,6 +53,30 @@ pub enum PargError {
         /// The checksum recomputed over the canonical payload.
         computed: String,
     },
+    /// The payload is not a `parg-bindings` artifact (parsanol-ruby#432).
+    InvalidBindingsArtifact(&'static str),
+    /// The declared bindings artifact's checksum does not verify (#432).
+    BindingsChecksumMismatch {
+        /// The `checksum` field stored in the bindings artifact.
+        stored: String,
+        /// The checksum recomputed over the canonical payload.
+        computed: String,
+    },
+    /// The bindings artifact declares a target the caller did not ask
+    /// for (#432).
+    BindingsTargetMismatch {
+        /// The artifact's declared `target`.
+        declared: String,
+        /// The target the caller pinned.
+        expected: String,
+    },
+    /// A bindings artifact declares a target name outside the set (#432).
+    UnknownBindingsTarget(String),
+    /// The bindings artifact's `binding_version` is not supported (#432).
+    UnsupportedBindingVersion(i64),
+    /// The bindings artifact does not pair with the parse artifact —
+    /// grammar, version or source hash differ (#432).
+    BindingsPairingMismatch(String),
     /// Filesystem access failed.
     Io(std::io::Error),
     /// A binding references an undeclared preprocess step.
@@ -116,6 +141,27 @@ impl fmt::Display for PargError {
             PargError::ChecksumMismatch { stored, computed } => write!(
                 f,
                 "PARG artifact checksum mismatch: stored {stored:?}, computed {computed:?}"
+            ),
+            PargError::InvalidBindingsArtifact(what) => {
+                write!(f, "not a parg-bindings artifact: {what}")
+            }
+            PargError::BindingsChecksumMismatch { stored, computed } => write!(
+                f,
+                "bindings artifact checksum mismatch: stored {stored:?}, computed {computed:?}"
+            ),
+            PargError::BindingsTargetMismatch { declared, expected } => write!(
+                f,
+                "bindings artifact targets {declared:?}, not {expected:?}"
+            ),
+            PargError::UnknownBindingsTarget(target) => {
+                write!(f, "unknown binding target {target:?}")
+            }
+            PargError::UnsupportedBindingVersion(version) => {
+                write!(f, "unsupported binding_version {version}")
+            }
+            PargError::BindingsPairingMismatch(detail) => write!(
+                f,
+                "bindings artifact does not pair with the parse artifact: {detail}"
             ),
             PargError::UnknownPreprocess(name) => {
                 write!(f, "preprocess step {name:?} not declared in artifact")
@@ -268,6 +314,12 @@ impl PargArtifact {
     /// The embedded PARG source text (self-contained artifacts).
     pub fn source(&self) -> Option<&str> {
         self.envelope.get("source").and_then(Value::as_str)
+    }
+
+    /// The SHA-256 of the .parg text at compile time (parsanol-ruby#209
+    /// freshness; pins the declared bindings artifact pairing, #432).
+    pub fn source_hash(&self) -> Option<&str> {
+        self.envelope.get("source_hash").and_then(Value::as_str)
     }
 
     /// The verified checksum (`sha256:...`).
