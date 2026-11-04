@@ -182,14 +182,16 @@ pub fn compile_source(source: &str) -> Result<Value, String> {
 /// (`compiler_version`, `unicode_tables`) are the producer identity a
 /// re-bake legitimately changes. The integrity stamps
 /// (`byte_checksum`, `validated` — ruby#443) are the bake receipt,
-/// likewise producer-side (rs#397).
-const SEMANTICS_EXCLUDED: [&str; 6] = [
+/// likewise producer-side (rs#397), and `model_bindings`
+/// (ruby#447) is additive metadata, not parse semantics.
+const SEMANTICS_EXCLUDED: [&str; 7] = [
     "checksum",
     "byte_checksum",
     "compiler_version",
     "unicode_tables",
     "semantics_hash",
     "validated",
+    "model_bindings",
 ];
 
 fn semantics_hash(value: &Value) -> Result<String, String> {
