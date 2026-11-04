@@ -73,6 +73,11 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- Release v0.20.5 by @[object]
+- Exclude model_bindings from the hash (ruby#447 mirror) ([#400](https://github.com/parsanol/parsanol-rs/pull/400)) by @[object]
+
+### Other
+
 - Exclude model_bindings from the hash (ruby#447 mirror) ([#400](https://github.com/parsanol/parsanol-rs/pull/400)) by @[object]
 
 ### Other
