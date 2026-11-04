@@ -21,6 +21,8 @@
 use crate::portable::char_class::CharRanges;
 use hashbrown::HashMap;
 use regex::Regex;
+use regex_automata::meta::Regex as MetaRegex;
+use regex_automata::{Anchored, Input};
 use std::cell::RefCell;
 use std::sync::Arc;
 
@@ -38,6 +40,10 @@ pub struct CacheStats {
 thread_local! {
     /// Thread-local cache of compiled regex patterns
     static REGEX_CACHE: RefCell<HashMap<String, Regex>> = RefCell::new(HashMap::new());
+
+    /// Thread-local cache of the same patterns compiled for anchored
+    /// matching (see [`match_end_at`]).
+    static ANCHORED_CACHE: RefCell<HashMap<String, Option<MetaRegex>>> = RefCell::new(HashMap::new());
 
     /// Thread-local cache of decoded character classes: `None` marks
     /// patterns that are not pure classes, so the (negative) HIR decode
@@ -123,11 +129,41 @@ pub fn get_or_compile(pattern: &str) -> Option<Regex> {
     })
 }
 
+/// End offset of the match of `pattern` that STARTS exactly at byte `at`
+/// of `haystack`, or `None` when no match starts there.
+///
+/// The search is anchored: the engine never looks past `at` for a
+/// later match, so a failed attempt costs the length of what the
+/// pattern could consume, not the rest of the input. (An unanchored
+/// `find_at` followed by a `start == at` check scans to the end of the
+/// input whenever the pattern, e.g. a single literal character, does
+/// not occur later, which makes a repetition of failing attempts
+/// quadratic.) Look-around still sees the whole haystack, like
+/// `Regex::find_at`. An invalid pattern never matches.
+#[inline]
+pub fn match_end_at(pattern: &str, haystack: &str, at: usize) -> Option<usize> {
+    let re = ANCHORED_CACHE.with(|cache| {
+        if let Some(cached) = cache.borrow().get(pattern) {
+            return cached.clone();
+        }
+        let compiled = MetaRegex::new(pattern).ok();
+        cache
+            .borrow_mut()
+            .insert(pattern.to_string(), compiled.clone());
+        compiled
+    })?;
+    let input = Input::new(haystack)
+        .span(at..haystack.len())
+        .anchored(Anchored::Yes);
+    re.search(&input).map(|m| m.end())
+}
+
 /// Clear the regex cache
 ///
 /// Call this to free memory if many unique patterns have been compiled.
 pub fn clear_cache() {
     REGEX_CACHE.with(|cache| cache.borrow_mut().clear());
+    ANCHORED_CACHE.with(|cache| cache.borrow_mut().clear());
     clear_class_cache();
     CACHE_STATS.with(|stats| {
         let mut s = stats.borrow_mut();
@@ -184,6 +220,21 @@ mod tests {
         let r3 = get_or_compile("[a-z]+");
         assert!(r3.is_some());
         assert_eq!(cache_size(), 2);
+    }
+
+    #[test]
+    fn match_end_at_is_anchored_at_the_offset() {
+        assert_eq!(match_end_at("[\\^]", "a^", 0), None);
+        assert_eq!(match_end_at("[\\^]", "a^", 1), Some(2));
+        assert_eq!(match_end_at("[<][<]", "x<<", 1), Some(3));
+        assert_eq!(match_end_at("[<][<]", "x<ab<<", 1), None);
+        assert_eq!(match_end_at("[0-9]+", "ab123c", 2), Some(5));
+        // Multibyte: the end offset is in bytes.
+        assert_eq!(match_end_at("[\\u00a0]", "a\u{a0}", 1), Some(3));
+        // Look-around sees text before the offset, like `find_at`.
+        assert_eq!(match_end_at("\\bb", "ab", 1), None);
+        assert_eq!(match_end_at("\\bb", "a b", 2), Some(3));
+        assert_eq!(match_end_at("[invalid", "abc", 0), None);
     }
 
     #[test]

@@ -487,10 +487,9 @@ impl<'a> BytecodeVM<'a> {
                         })?;
 
                 // Use the regex cache
-                let re =
-                    regex_cache::get_or_compile(pattern).ok_or_else(|| ParseError::Internal {
-                        message: format!("Failed to compile regex: {}", pattern),
-                    })?;
+                regex_cache::get_or_compile(pattern).ok_or_else(|| ParseError::Internal {
+                    message: format!("Failed to compile regex: {}", pattern),
+                })?;
 
                 // The tree-walker rejects regexes at end-of-input (even
                 // zero-width-matchable ones) — parity requires the same.
@@ -499,14 +498,15 @@ impl<'a> BytecodeVM<'a> {
                     return Ok(ExecutionResult::Fail);
                 }
 
-                // Match at current position
-                if let Some(m) = re.find_at(self.input_str, self.position) {
-                    if m.start() == self.position {
-                        let start = self.position;
-                        self.position = m.end();
-                        self.push_span_value(start);
-                        return Ok(ExecutionResult::Continue);
-                    }
+                // Match anchored at the current position: an unanchored
+                // search scans to the end of the input on every failed
+                // attempt (quadratic under repetition).
+                if let Some(end) = regex_cache::match_end_at(pattern, self.input_str, self.position)
+                {
+                    let start = self.position;
+                    self.position = end;
+                    self.push_span_value(start);
+                    return Ok(ExecutionResult::Continue);
                 }
 
                 self.track_failure();
