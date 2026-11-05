@@ -1833,26 +1833,20 @@ impl<'a> PortableParser<'a> {
             }
         }
 
-        // General case
-        let regex = match regex_cache::get_or_compile(pattern) {
-            Some(r) => r,
-            None => {
-                return Err(ParseError::Internal {
-                    message: format!("Invalid regex: {}", pattern),
-                });
-            }
-        };
+        // General case: anchored at `pos` (an unanchored search scans to
+        // the end of the input whenever the pattern does not match here).
+        if regex_cache::get_or_compile(pattern).is_none() {
+            return Err(ParseError::Internal {
+                message: format!("Invalid regex: {}", pattern),
+            });
+        }
 
-        let remaining = &self.input[pos..];
-        if let Some(m) = regex.find(remaining) {
-            if m.start() == 0 {
-                let match_len = m.end();
-                return Ok(AtomResult {
-                    value: self.arena.input_ref(pos, match_len),
-                    end_pos: pos + match_len,
-                    capture_state: None,
-                });
-            }
+        if let Some(match_len) = regex_cache::match_end_at(pattern, &self.input[pos..], 0) {
+            return Ok(AtomResult {
+                value: self.arena.input_ref(pos, match_len),
+                end_pos: pos + match_len,
+                capture_state: None,
+            });
         }
 
         self.note_failure(pos, pattern.to_string());
