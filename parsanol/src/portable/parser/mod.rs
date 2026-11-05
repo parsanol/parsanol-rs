@@ -85,6 +85,13 @@ fn scan_plan_for(
 /// `parse_re`; the general regex engine path stays memoized (it can be
 /// expensive to repeat and can return `Internal`, which a memo would
 /// flatten into `Failed`).
+/// `PARSANOL_VM_DEBUG`, read once: the depth trace asks per dispatch, and a
+/// process environment lookup per call is far dearer than the parse step.
+fn vm_debug_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var("PARSANOL_VM_DEBUG").is_ok())
+}
+
 fn terminal_direct_atoms(grammar: &Grammar) -> Vec<bool> {
     (0..grammar.atoms.len())
         .map(|i| match grammar.get_atom(i) {
@@ -730,17 +737,20 @@ impl<'a> PortableParser<'a> {
     }
 
     fn legacy_cache_memory_usage(&self) -> usize {
+        Self::legacy_cache_bytes(&self.legacy_cache, self.legacy_diagnostic_bytes)
+    }
+
+    fn legacy_cache_bytes(
+        legacy_cache: &std::collections::HashMap<(usize, usize), LegacyCacheEntry>,
+        diagnostic_bytes: usize,
+    ) -> usize {
         // Include headroom for the hash table's load factor/control data.
-        self.legacy_cache.capacity()
+        legacy_cache.capacity()
             * (std::mem::size_of::<(usize, usize)>()
                 + std::mem::size_of::<LegacyCacheEntry>()
                 + std::mem::size_of::<usize>())
-            + if self.legacy_cache.capacity() == 0 {
-                0
-            } else {
-                64
-            }
-            + self.legacy_diagnostic_bytes
+            + if legacy_cache.capacity() == 0 { 0 } else { 64 }
+            + diagnostic_bytes
     }
 
     /// Extract the cache
@@ -876,9 +886,12 @@ impl<'a> PortableParser<'a> {
     /// Check resources (timeout and memory)
     #[inline]
     fn check_resources(&mut self) -> Result<(), ParseError> {
-        let legacy_memory = self.legacy_cache_memory_usage();
+        let (arena, cache, legacy) = (&self.arena, &self.cache, &self.legacy_cache);
+        let legacy_bytes = self.legacy_diagnostic_bytes;
         self.governor.check_resources_lazy(|| {
-            self.arena.memory_usage() + self.cache.memory_usage() + legacy_memory
+            arena.memory_usage()
+                + cache.memory_usage()
+                + Self::legacy_cache_bytes(legacy, legacy_bytes)
         })
     }
 
@@ -1041,7 +1054,7 @@ impl<'a> PortableParser<'a> {
         consume_all: bool,
     ) -> Result<AtomResult, ParseError> {
         self.dbg_depth += 1;
-        if self.dbg_depth > 120 && std::env::var("PARSANOL_VM_DEBUG").is_ok() {
+        if self.dbg_depth > 120 && vm_debug_enabled() {
             let dbg = format!("{:?}", self.grammar.get_atom(atom_id));
             eprintln!(
                 "D{} id {} pos {} {}",
@@ -1864,16 +1877,24 @@ impl<'a> PortableParser<'a> {
                 None => self.expected_labels = std::sync::Arc::new(vec![label.to_owned()]),
             }
         } else if pos == self.deepest_failure_pos
-            && !self.expected_labels.iter().any(|l| l == label)
+            && !self
+                .expected_labels
+                .iter()
+                .any(|l| Self::same_label(l, label))
         {
             std::sync::Arc::make_mut(&mut self.expected_labels).push(label.to_owned());
         }
         // C4: keep every distinct position for ranked multi-error
         // reporting; the deepest entry mirrors failure_wire.
         let ranks = std::sync::Arc::make_mut(&mut self.ranked_failures);
+        // A full list whose last entry is deeper cannot hold `pos` (entries
+        // are descending) and would drop it: skip the scan.
+        if ranks.len() >= MAX_RANKED_FAILURES && ranks.last().is_some_and(|(p, _)| *p > pos) {
+            return;
+        }
         match ranks.iter_mut().find(|(p, _)| *p == pos) {
             Some((_, labels)) => {
-                if !labels.iter().any(|l| l == label) {
+                if !labels.iter().any(|l| Self::same_label(l, label)) {
                     labels.push(label.to_owned());
                 }
             }
@@ -1895,6 +1916,24 @@ impl<'a> PortableParser<'a> {
                 ranks.insert(at, (pos, labels));
             }
         }
+    }
+
+    /// Label equality without a memcmp call for the short labels that
+    /// dominate (`'x'`, `[0-9]`): the call outweighs the compare.
+    #[inline(always)]
+    fn same_label(a: &str, b: &str) -> bool {
+        let (a, b) = (a.as_bytes(), b.as_bytes());
+        if a.len() != b.len() {
+            return false;
+        }
+        if a.len() > 16 {
+            return a == b;
+        }
+        let mut diff = 0u8;
+        for i in 0..a.len() {
+            diff |= a[i] ^ b[i];
+        }
+        diff == 0
     }
 
     /// Make `labels` exactly `[label]`, reusing its existing allocations.
@@ -1932,7 +1971,9 @@ impl<'a> PortableParser<'a> {
         }
 
         let slice = &self.input_bytes[pos..end];
-        if slice == pattern_bytes {
+        // Most literal probes fail on the first byte: reject there before
+        // paying for a memcmp call (an empty pattern has no first byte).
+        if (pattern_len == 0 || slice[0] == pattern_bytes[0]) && slice == pattern_bytes {
             Ok(AtomResult {
                 value: self.arena.input_ref(pos, pattern_len),
                 end_pos: end,
