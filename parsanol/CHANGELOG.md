@@ -71,6 +71,10 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ## [Unreleased]
 
+### Fixed
+
+- Match regex atoms anchored at the position ([#403](https://github.com/parsanol/parsanol-rs/pull/403)) by @[object]
+
 ### Other
 
 - Exclude model_bindings from the hash (ruby#447 mirror) ([#400](https://github.com/parsanol/parsanol-rs/pull/400)) by @[object]
