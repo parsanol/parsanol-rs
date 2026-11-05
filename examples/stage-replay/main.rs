@@ -3,6 +3,10 @@
 //!
 //!   cargo run --example stage-replay -- <latex.json> <payload file or dir>
 //!
+//! Payloads are the generation's raw-*.yaml files converted to JSON
+//! (raw-*.json), for example with
+//! `ruby -ryaml -rjson -e 'puts JSON.generate(YAML.load_file(ARGV[0]))'`.
+//!
 //! The declared bindings are read from the artifact's sibling
 //! `<name>.bindings.rs.json` when present. Exits 1 when any row differs.
 

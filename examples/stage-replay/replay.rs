@@ -239,7 +239,9 @@ pub fn canonical_equal(a: &Value, b: &Value) -> bool {
     sort_canonical(a) == sort_canonical(b)
 }
 
-/// The payload files: one file, or a directory's raw-*.yaml in byte order.
+/// The payload files: one file, or a directory's raw-*.json in byte order.
+/// The generation stores payloads as YAML; convert them to JSON first
+/// (the CI job does this with Ruby), so no YAML crate is needed.
 pub fn payload_files(path: &Path) -> Vec<PathBuf> {
     if path.is_file() {
         return vec![path.to_path_buf()];
@@ -251,7 +253,7 @@ pub fn payload_files(path: &Path) -> Vec<PathBuf> {
         .filter(|p| {
             p.file_name()
                 .and_then(|n| n.to_str())
-                .is_some_and(|n| n.starts_with("raw-") && n.ends_with(".yaml"))
+                .is_some_and(|n| n.starts_with("raw-") && n.ends_with(".json"))
         })
         .collect();
     files.sort();
@@ -284,8 +286,8 @@ pub fn replay_stage(artifact_path: &Path, payloads: &Path) -> ReplayReport {
     let mut rows = Vec::new();
     for file in payload_files(payloads) {
         let text = std::fs::read_to_string(&file).expect("payload readable");
-        let doc: Value = serde_yaml::from_str(&text)
-            .unwrap_or_else(|err| panic!("{}: not YAML: {err}", file.display()));
+        let doc: Value = serde_json::from_str(&text)
+            .unwrap_or_else(|err| panic!("{}: not JSON: {err}", file.display()));
         if doc["boundary"] != "raw-tree" {
             continue;
         }
