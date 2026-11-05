@@ -1961,3 +1961,98 @@ fn negative_lookahead_alternation_keeps_failure_diagnostics() {
     assert_eq!(pos, input.len() - 1);
     assert_eq!(labels, vec!["'x'", "'y'", "'é'"]);
 }
+
+/// Model test for the Strict-mode terminal memo bypass: the memoized path
+/// (bypass table cleared) and the direct path must agree on the result tree
+/// AND on every failure diagnostic, over every short input and a seeded set
+/// of longer ones.
+mod terminal_bypass_model {
+    use super::*;
+    use crate::portable::parser_dsl::{choice, dynamic, re, ref_, ParsletExt};
+
+    fn grammar() -> Grammar {
+        let item = choice([
+            dynamic(str("ab")),
+            dynamic(str("a").then(re("[a-z]"))),
+            dynamic(re("[0-9]").then(str("1").optional())),
+            dynamic(re("(?:foo|bar)baz")),
+            dynamic(str("x").not_ahead().then(str("b"))),
+            dynamic(str("(").then(ref_("list")).then(str(")"))),
+            dynamic(re("\u{e9}")),
+        ]);
+        GrammarBuilder::new()
+            .rule("item", item)
+            .rule(
+                "list",
+                ref_("item").then(str(",").then(ref_("item")).many()),
+            )
+            .rule("root", ref_("list").then(str(";").optional()))
+            .build()
+    }
+
+    type Run = (
+        String,
+        Option<(usize, Vec<String>)>,
+        Vec<(usize, Vec<String>)>,
+    );
+
+    fn run(g: &Grammar, input: &str, direct: bool) -> Run {
+        let mut arena = AstArena::new();
+        let mut p = PortableParser::new(g, input, &mut arena);
+        if !direct {
+            p.terminal_direct.clear();
+        } else {
+            assert!(p.terminal_direct.iter().any(|&d| d));
+        }
+        let r = p.parse();
+        let shown = format!("{:?}", r);
+        (shown, p.failure_diagnostics(), p.failure_ranks().to_vec())
+    }
+
+    fn check(g: &Grammar, input: &str) {
+        assert_eq!(run(g, input, true), run(g, input, false), "input {input:?}");
+    }
+
+    #[test]
+    fn exhaustive_short_inputs_agree() {
+        let g = grammar();
+        let alphabet = ["a", "b", "1", "(", ")", ",", ";", "x", "é"];
+        let mut frontier = vec![String::new()];
+        for _ in 0..5 {
+            let mut next = Vec::new();
+            for s in &frontier {
+                check(&g, s);
+                for c in alphabet {
+                    next.push(format!("{s}{c}"));
+                }
+            }
+            frontier = next;
+        }
+        for s in &frontier {
+            check(&g, s);
+        }
+    }
+
+    #[test]
+    fn seeded_long_inputs_agree() {
+        let g = grammar();
+        let pieces = [
+            "ab", "a", "b", "1", "(", ")", ",", ";", "x", "é", "foobaz", "barbaz", "fooba",
+        ];
+        let mut state = 0x9E37_79B9_7F4A_7C15_u64;
+        for _ in 0..3000 {
+            let mut s = String::new();
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            let len = 4 + (state >> 59) as usize;
+            for _ in 0..len * 2 {
+                state = state
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                s.push_str(pieces[(state >> 33) as usize % pieces.len()]);
+            }
+            check(&g, &s);
+        }
+    }
+}

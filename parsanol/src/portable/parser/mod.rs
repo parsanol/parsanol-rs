@@ -72,6 +72,32 @@ fn scan_plan_for(
 /// on — memoizing these atoms can replay a stale outcome (a different
 /// capture context at the same position can resolve differently).
 /// Empty when the grammar has no Dynamic atoms (TODO.perf/5).
+/// Pure terminals that Strict mode evaluates without the memo.
+///
+/// A literal's outcome is a function of (position, input) alone, and
+/// re-evaluating it costs a slice compare, less than a memo probe plus
+/// insert. Re-running it is observably identical to replaying it:
+/// the only side effect is `note_failure_ref`, which in Strict mode is
+/// monotone and idempotent (the failure record only changes for a deeper
+/// position or a new label at the deepest one, and is reset only together
+/// with the memo), so the first evaluation already left the state a
+/// replay would. Regexes qualify only on the direct class paths of
+/// `parse_re`; the general regex engine path stays memoized (it can be
+/// expensive to repeat and can return `Internal`, which a memo would
+/// flatten into `Failed`).
+fn terminal_direct_atoms(grammar: &Grammar) -> Vec<bool> {
+    (0..grammar.atoms.len())
+        .map(|i| match grammar.get_atom(i) {
+            Some(Atom::Str { .. }) => true,
+            Some(Atom::Re { pattern }) => {
+                CharacterPattern::from_pattern(pattern).is_some()
+                    || regex_cache::get_or_decode_class(pattern).is_some()
+            }
+            _ => false,
+        })
+        .collect()
+}
+
 fn dynamic_dependence(grammar: &Grammar) -> Vec<bool> {
     dependence_closure(grammar, |a| {
         matches!(
@@ -369,6 +395,11 @@ pub struct PortableParser<'a> {
     /// Dynamic atoms): memoization is skipped for these atoms.
     dynamic_dependent: Vec<bool>,
 
+    /// Per-atom flag: a pure terminal (literal, or a regex that takes a
+    /// direct class path) that Strict mode evaluates directly instead of
+    /// through the memo. See `terminal_direct_atoms`.
+    terminal_direct: Vec<bool>,
+
     /// Per-atom ancestry of StateSet writes (parsanol-ruby#185): a
     /// dyn-cache replay re-derives the VALUE but skips the slot
     /// write, so a later reader sees a stale slot. These atoms
@@ -575,6 +606,7 @@ impl<'a> PortableParser<'a> {
             strict_rollback_on_failure: rollback_on_failure,
             dbg_depth: 0,
             dynamic_dependent: dynamic_dependence(grammar),
+            terminal_direct: terminal_direct_atoms(grammar),
             state_write_dependent: state_write_dependence(grammar),
             capture_write_dependent: capture_write_dependence(grammar),
             named_atoms: named_atom_index(grammar),
@@ -634,6 +666,7 @@ impl<'a> PortableParser<'a> {
             strict_rollback_on_failure: false,
             dbg_depth: 0,
             dynamic_dependent: dynamic_dependence(grammar),
+            terminal_direct: terminal_direct_atoms(grammar),
             state_write_dependent: state_write_dependence(grammar),
             capture_write_dependent: capture_write_dependence(grammar),
             named_atoms: named_atom_index(grammar),
@@ -1098,6 +1131,16 @@ impl<'a> PortableParser<'a> {
         if self.compatibility == ParserCompatibility::Strict && self.grammar.is_no_cache(atom_id) {
             perf_count!(self.uncached_direct);
             return self.parse_atom_uncached(atom_id, pos, consume_all);
+        }
+        if self.compatibility == ParserCompatibility::Strict
+            && self.terminal_direct.get(atom_id).is_some_and(|&d| d)
+        {
+            let result = self.parse_atom_uncached(atom_id, pos, consume_all)?;
+            // consume_all is re-applied per application, as on a memo hit.
+            if consume_all && result.end_pos != self.input.len() {
+                return Err(ParseError::Failed { position: pos });
+            }
+            return Ok(result);
         }
         if self
             .state_write_dependent
