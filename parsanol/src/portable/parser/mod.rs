@@ -72,6 +72,39 @@ fn scan_plan_for(
 /// on — memoizing these atoms can replay a stale outcome (a different
 /// capture context at the same position can resolve differently).
 /// Empty when the grammar has no Dynamic atoms (TODO.perf/5).
+/// Pure terminals that Strict mode evaluates without the memo.
+///
+/// A literal's outcome is a function of (position, input) alone, and
+/// re-evaluating it costs a slice compare, less than a memo probe plus
+/// insert. Re-running it is observably identical to replaying it:
+/// the only side effect is `note_failure_ref`, which in Strict mode is
+/// monotone and idempotent (the failure record only changes for a deeper
+/// position or a new label at the deepest one, and is reset only together
+/// with the memo), so the first evaluation already left the state a
+/// replay would. Regexes qualify only on the direct class paths of
+/// `parse_re`; the general regex engine path stays memoized (it can be
+/// expensive to repeat and can return `Internal`, which a memo would
+/// flatten into `Failed`).
+/// `PARSANOL_VM_DEBUG`, read once: the depth trace asks per dispatch, and a
+/// process environment lookup per call is far dearer than the parse step.
+fn vm_debug_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var("PARSANOL_VM_DEBUG").is_ok())
+}
+
+fn terminal_direct_atoms(grammar: &Grammar) -> Vec<bool> {
+    (0..grammar.atoms.len())
+        .map(|i| match grammar.get_atom(i) {
+            Some(Atom::Str { .. }) => true,
+            Some(Atom::Re { pattern }) => {
+                CharacterPattern::from_pattern(pattern).is_some()
+                    || regex_cache::get_or_decode_class(pattern).is_some()
+            }
+            _ => false,
+        })
+        .collect()
+}
+
 fn dynamic_dependence(grammar: &Grammar) -> Vec<bool> {
     dependence_closure(grammar, |a| {
         matches!(
@@ -369,6 +402,11 @@ pub struct PortableParser<'a> {
     /// Dynamic atoms): memoization is skipped for these atoms.
     dynamic_dependent: Vec<bool>,
 
+    /// Per-atom flag: a pure terminal (literal, or a regex that takes a
+    /// direct class path) that Strict mode evaluates directly instead of
+    /// through the memo. See `terminal_direct_atoms`.
+    terminal_direct: Vec<bool>,
+
     /// Per-atom ancestry of StateSet writes (parsanol-ruby#185): a
     /// dyn-cache replay re-derives the VALUE but skips the slot
     /// write, so a later reader sees a stale slot. These atoms
@@ -575,6 +613,7 @@ impl<'a> PortableParser<'a> {
             strict_rollback_on_failure: rollback_on_failure,
             dbg_depth: 0,
             dynamic_dependent: dynamic_dependence(grammar),
+            terminal_direct: terminal_direct_atoms(grammar),
             state_write_dependent: state_write_dependence(grammar),
             capture_write_dependent: capture_write_dependence(grammar),
             named_atoms: named_atom_index(grammar),
@@ -634,6 +673,7 @@ impl<'a> PortableParser<'a> {
             strict_rollback_on_failure: false,
             dbg_depth: 0,
             dynamic_dependent: dynamic_dependence(grammar),
+            terminal_direct: terminal_direct_atoms(grammar),
             state_write_dependent: state_write_dependence(grammar),
             capture_write_dependent: capture_write_dependence(grammar),
             named_atoms: named_atom_index(grammar),
@@ -697,17 +737,20 @@ impl<'a> PortableParser<'a> {
     }
 
     fn legacy_cache_memory_usage(&self) -> usize {
+        Self::legacy_cache_bytes(&self.legacy_cache, self.legacy_diagnostic_bytes)
+    }
+
+    fn legacy_cache_bytes(
+        legacy_cache: &std::collections::HashMap<(usize, usize), LegacyCacheEntry>,
+        diagnostic_bytes: usize,
+    ) -> usize {
         // Include headroom for the hash table's load factor/control data.
-        self.legacy_cache.capacity()
+        legacy_cache.capacity()
             * (std::mem::size_of::<(usize, usize)>()
                 + std::mem::size_of::<LegacyCacheEntry>()
                 + std::mem::size_of::<usize>())
-            + if self.legacy_cache.capacity() == 0 {
-                0
-            } else {
-                64
-            }
-            + self.legacy_diagnostic_bytes
+            + if legacy_cache.capacity() == 0 { 0 } else { 64 }
+            + diagnostic_bytes
     }
 
     /// Extract the cache
@@ -843,9 +886,12 @@ impl<'a> PortableParser<'a> {
     /// Check resources (timeout and memory)
     #[inline]
     fn check_resources(&mut self) -> Result<(), ParseError> {
-        let legacy_memory = self.legacy_cache_memory_usage();
+        let (arena, cache, legacy) = (&self.arena, &self.cache, &self.legacy_cache);
+        let legacy_bytes = self.legacy_diagnostic_bytes;
         self.governor.check_resources_lazy(|| {
-            self.arena.memory_usage() + self.cache.memory_usage() + legacy_memory
+            arena.memory_usage()
+                + cache.memory_usage()
+                + Self::legacy_cache_bytes(legacy, legacy_bytes)
         })
     }
 
@@ -1008,7 +1054,7 @@ impl<'a> PortableParser<'a> {
         consume_all: bool,
     ) -> Result<AtomResult, ParseError> {
         self.dbg_depth += 1;
-        if self.dbg_depth > 120 && std::env::var("PARSANOL_VM_DEBUG").is_ok() {
+        if self.dbg_depth > 120 && vm_debug_enabled() {
             let dbg = format!("{:?}", self.grammar.get_atom(atom_id));
             eprintln!(
                 "D{} id {} pos {} {}",
@@ -1098,6 +1144,16 @@ impl<'a> PortableParser<'a> {
         if self.compatibility == ParserCompatibility::Strict && self.grammar.is_no_cache(atom_id) {
             perf_count!(self.uncached_direct);
             return self.parse_atom_uncached(atom_id, pos, consume_all);
+        }
+        if self.compatibility == ParserCompatibility::Strict
+            && self.terminal_direct.get(atom_id).is_some_and(|&d| d)
+        {
+            let result = self.parse_atom_uncached(atom_id, pos, consume_all)?;
+            // consume_all is re-applied per application, as on a memo hit.
+            if consume_all && result.end_pos != self.input.len() {
+                return Err(ParseError::Failed { position: pos });
+            }
+            return Ok(result);
         }
         if self
             .state_write_dependent
@@ -1821,16 +1877,24 @@ impl<'a> PortableParser<'a> {
                 None => self.expected_labels = std::sync::Arc::new(vec![label.to_owned()]),
             }
         } else if pos == self.deepest_failure_pos
-            && !self.expected_labels.iter().any(|l| l == label)
+            && !self
+                .expected_labels
+                .iter()
+                .any(|l| Self::same_label(l, label))
         {
             std::sync::Arc::make_mut(&mut self.expected_labels).push(label.to_owned());
         }
         // C4: keep every distinct position for ranked multi-error
         // reporting; the deepest entry mirrors failure_wire.
         let ranks = std::sync::Arc::make_mut(&mut self.ranked_failures);
+        // A full list whose last entry is deeper cannot hold `pos` (entries
+        // are descending) and would drop it: skip the scan.
+        if ranks.len() >= MAX_RANKED_FAILURES && ranks.last().is_some_and(|(p, _)| *p > pos) {
+            return;
+        }
         match ranks.iter_mut().find(|(p, _)| *p == pos) {
             Some((_, labels)) => {
-                if !labels.iter().any(|l| l == label) {
+                if !labels.iter().any(|l| Self::same_label(l, label)) {
                     labels.push(label.to_owned());
                 }
             }
@@ -1852,6 +1916,24 @@ impl<'a> PortableParser<'a> {
                 ranks.insert(at, (pos, labels));
             }
         }
+    }
+
+    /// Label equality without a memcmp call for the short labels that
+    /// dominate (`'x'`, `[0-9]`): the call outweighs the compare.
+    #[inline(always)]
+    fn same_label(a: &str, b: &str) -> bool {
+        let (a, b) = (a.as_bytes(), b.as_bytes());
+        if a.len() != b.len() {
+            return false;
+        }
+        if a.len() > 16 {
+            return a == b;
+        }
+        let mut diff = 0u8;
+        for i in 0..a.len() {
+            diff |= a[i] ^ b[i];
+        }
+        diff == 0
     }
 
     /// Make `labels` exactly `[label]`, reusing its existing allocations.
@@ -1889,7 +1971,9 @@ impl<'a> PortableParser<'a> {
         }
 
         let slice = &self.input_bytes[pos..end];
-        if slice == pattern_bytes {
+        // Most literal probes fail on the first byte: reject there before
+        // paying for a memcmp call (an empty pattern has no first byte).
+        if (pattern_len == 0 || slice[0] == pattern_bytes[0]) && slice == pattern_bytes {
             Ok(AtomResult {
                 value: self.arena.input_ref(pos, pattern_len),
                 end_pos: end,
