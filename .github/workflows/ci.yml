@@ -167,6 +167,46 @@ jobs:
             corpus/conformance/recovery_resync_declared.json "a=1;b=2;" | tee /tmp/cpp.out
           grep -q '"ok":true' /tmp/cpp.out
 
+  # ============================================================================
+  # Staged testsuite replay (plurimath#540): latexmath's artifact, pinned to
+  # the commit latex generation 000003's provenance names, replays the
+  # generation's Ruby-produced raw-tree rows on the Rust engine.
+  # ============================================================================
+  stage-replay:
+    name: Stage Replay
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          repository: plurimath/latexmath
+          ref: 27e300a433742765486e3bead2fac19ee8fd55a0
+          path: latexmath
+          sparse-checkout: artifacts
+      - uses: actions/checkout@v7
+        with:
+          repository: plurimath/plurimath-testsuite
+          path: plurimath-testsuite
+          sparse-checkout: stages/latex/generations/000003
+      - uses: dtolnay/rust-toolchain@stable
+      # The replay reads JSON; convert the YAML payloads with the runner's Ruby.
+      - name: Convert raw-tree payloads to JSON
+        run: |
+          mkdir -p "$RUNNER_TEMP/payloads"
+          for f in plurimath-testsuite/stages/latex/generations/000003/payloads/raw-*.yaml; do
+            ruby -ryaml -rjson -e 'puts JSON.generate(YAML.load_file(ARGV[0]))' "$f" \
+              > "$RUNNER_TEMP/payloads/$(basename "$f" .yaml).json"
+          done
+      - name: Replay latex generation 000003 (raw-tree rows)
+        run: >
+          cargo run -p parsanol --example stage-replay --
+          latexmath/artifacts/latex.json "$RUNNER_TEMP/payloads"
+      - name: Stage replay test (artifact-gated)
+        run: cargo test -p parsanol --test stage_replay
+        env:
+          PARG_ARTIFACT: ${{ github.workspace }}/latexmath/artifacts/latex.json
+          STAGE_PAYLOADS: ${{ runner.temp }}/payloads
+
   machete:
     name: Check Unused Dependencies
     runs-on: ubuntu-latest
