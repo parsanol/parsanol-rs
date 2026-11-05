@@ -29,6 +29,8 @@ compare-nom = ["nom"]
 compare-winnow = ["winnow"]
 # Strict backend parity checking (causes tests to fail on mismatches)
 strict_parity = []
+# Engine event counters for locating per-atom cost (zero cost when off)
+perf-counters = []
 
 [dependencies]
 # Derive macros (required)

@@ -287,6 +287,8 @@ pub struct PortableParser<'a> {
     ranked_failures: std::sync::Arc<Vec<(usize, Vec<String>)>>,
     /// Reuse the empty snapshot across frames without allocating empty Arcs.
     empty_legacy_failure: LegacyFailure,
+    /// Scratch buffer for building literal failure labels.
+    label_buf: String,
 
     // ========================================================================
     // Output (mutable)
@@ -406,6 +408,43 @@ pub struct PortableParser<'a> {
     /// makes it an independent differential path. Off by default; when
     /// off it costs one predictable branch per atom dispatch.
     reference: bool,
+
+    /// Event counters (feature `perf-counters`; absent otherwise).
+    #[cfg(feature = "perf-counters")]
+    perf: PerfCounters,
+}
+
+/// Count one engine event; compiles to nothing without `perf-counters`.
+macro_rules! perf_count {
+    ($self:ident . $field:ident) => {
+        #[cfg(feature = "perf-counters")]
+        {
+            $self.perf.$field += 1;
+        }
+    };
+}
+
+/// Per-event counters for finding where parse instructions go.
+#[cfg(feature = "perf-counters")]
+#[derive(Debug, Default, Clone)]
+#[allow(missing_docs)]
+pub struct PerfCounters {
+    pub dispatch: u64,
+    pub dispatch_str: u64,
+    pub dispatch_re: u64,
+    pub dispatch_seq: u64,
+    pub dispatch_alt: u64,
+    pub dispatch_rep: u64,
+    pub dispatch_look: u64,
+    pub dispatch_other: u64,
+    pub cache_lookup: u64,
+    pub cache_hit_ok: u64,
+    pub cache_hit_fail: u64,
+    pub cache_insert_ok: u64,
+    pub cache_insert_fail: u64,
+    pub uncached_direct: u64,
+    pub note_failure: u64,
+    pub scope_push: u64,
 }
 
 impl<'a> PortableParser<'a> {
@@ -515,6 +554,7 @@ impl<'a> PortableParser<'a> {
             partial_stash: None,
             ranked_failures: Default::default(),
             empty_legacy_failure: LegacyFailure::default(),
+            label_buf: String::new(),
             has_failure: false,
             expected_labels: Default::default(),
             arena,
@@ -542,6 +582,8 @@ impl<'a> PortableParser<'a> {
             snapshots_in_live,
             dispatch_counts: None,
             reference: false,
+            #[cfg(feature = "perf-counters")]
+            perf: PerfCounters::default(),
         }
     }
 
@@ -571,6 +613,7 @@ impl<'a> PortableParser<'a> {
             partial_stash: None,
             ranked_failures: Default::default(),
             empty_legacy_failure: LegacyFailure::default(),
+            label_buf: String::new(),
             has_failure: false,
             expected_labels: Default::default(),
             arena,
@@ -598,6 +641,8 @@ impl<'a> PortableParser<'a> {
             snapshots_in_live: false,
             dispatch_counts: None,
             reference: false,
+            #[cfg(feature = "perf-counters")]
+            perf: PerfCounters::default(),
         }
     }
 
@@ -730,6 +775,12 @@ impl<'a> PortableParser<'a> {
     pub fn enable_profiling(&mut self) {
         let n = self.grammar.atom_count();
         self.dispatch_counts = Some(vec![0u64; n].into_boxed_slice());
+    }
+
+    /// Human-readable event counters (feature `perf-counters`).
+    #[cfg(feature = "perf-counters")]
+    pub fn perf_counters_report(&self) -> String {
+        format!("{:#?}", self.perf)
     }
 
     /// Per-atom dispatch counts, indexed by atom id, when profiling
@@ -1015,6 +1066,17 @@ impl<'a> PortableParser<'a> {
         if let Some(counts) = &mut self.dispatch_counts {
             counts[atom_id] += 1;
         }
+        perf_count!(self.dispatch);
+        #[cfg(feature = "perf-counters")]
+        match self.grammar.get_atom(atom_id) {
+            Some(Atom::Str { .. }) => self.perf.dispatch_str += 1,
+            Some(Atom::Re { .. }) => self.perf.dispatch_re += 1,
+            Some(Atom::Sequence { .. }) => self.perf.dispatch_seq += 1,
+            Some(Atom::Alternative { .. }) => self.perf.dispatch_alt += 1,
+            Some(Atom::Repetition { .. }) => self.perf.dispatch_rep += 1,
+            Some(Atom::Lookahead { .. }) => self.perf.dispatch_look += 1,
+            _ => self.perf.dispatch_other += 1,
+        }
         self.check_resources()?;
 
         // Reference mode (TODO.sota/8 B1): the plain relation. Every
@@ -1034,6 +1096,7 @@ impl<'a> PortableParser<'a> {
         // varies with capture state, which the memo key ignores (GH-76).
         let dynamic_dependent = self.dynamic_dependent.get(atom_id).is_some_and(|&dep| dep);
         if self.compatibility == ParserCompatibility::Strict && self.grammar.is_no_cache(atom_id) {
+            perf_count!(self.uncached_direct);
             return self.parse_atom_uncached(atom_id, pos, consume_all);
         }
         if self
@@ -1153,7 +1216,7 @@ impl<'a> PortableParser<'a> {
             return result;
         }
 
-        // Check cache
+        perf_count!(self.cache_lookup);
         let cache_hit = self
             .cache
             .get_ca(
@@ -1165,6 +1228,12 @@ impl<'a> PortableParser<'a> {
             .map(|e| (e.success, e.end_pos, e.to_node(), e.is_snapshot()));
 
         if let Some((success, end_pos, cached_node, is_snapshot)) = cache_hit {
+            #[cfg(feature = "perf-counters")]
+            if success {
+                self.perf.cache_hit_ok += 1;
+            } else {
+                self.perf.cache_hit_fail += 1;
+            }
             return if success {
                 // consume_all (mirrors the interpreter's Base#apply):
                 // ANY successful application must consume the whole
@@ -1228,6 +1297,7 @@ impl<'a> PortableParser<'a> {
                         self.arena.generation(),
                     );
                     entry.set_consume_all(consume_all);
+                    perf_count!(self.cache_insert_ok);
                     self.cache.insert(entry);
                 }
 
@@ -1253,6 +1323,7 @@ impl<'a> PortableParser<'a> {
                 // This is the key to packrat parser performance
                 let mut entry = CacheEntry::failure(pos as u32, atom_id as u16);
                 entry.set_consume_all(consume_all);
+                perf_count!(self.cache_insert_fail);
                 self.cache.insert(entry);
                 Err(e)
             }
@@ -1725,6 +1796,16 @@ impl<'a> PortableParser<'a> {
     }
 
     fn note_failure(&mut self, pos: usize, label: String) {
+        self.note_failure_ref(pos, &label);
+    }
+
+    /// Record a terminal failure from a borrowed label. Allocates only
+    /// when the failure is kept: most failures (a negative lookahead's
+    /// probe, an alternative's first branch) land at or behind positions
+    /// already recorded, and a position that cannot enter the bounded
+    /// ranked list is dropped before any label is copied.
+    fn note_failure_ref(&mut self, pos: usize, label: &str) {
+        perf_count!(self.note_failure);
         // rs#171: the deepest POSITION is tracked regardless of trivia
         // nesting — the ruby engine's deepest-failure reporting sees
         // failures inside injected trivia (their terminals fail at
@@ -1735,25 +1816,65 @@ impl<'a> PortableParser<'a> {
         if !self.has_failure || pos > self.deepest_failure_pos {
             self.has_failure = true;
             self.deepest_failure_pos = pos;
-            self.expected_labels = std::sync::Arc::new(vec![label.clone()]);
-        } else if pos == self.deepest_failure_pos && !self.expected_labels.contains(&label) {
-            std::sync::Arc::make_mut(&mut self.expected_labels).push(label.clone());
+            match std::sync::Arc::get_mut(&mut self.expected_labels) {
+                Some(labels) => Self::replace_with_label(labels, label),
+                None => self.expected_labels = std::sync::Arc::new(vec![label.to_owned()]),
+            }
+        } else if pos == self.deepest_failure_pos
+            && !self.expected_labels.iter().any(|l| l == label)
+        {
+            std::sync::Arc::make_mut(&mut self.expected_labels).push(label.to_owned());
         }
         // C4: keep every distinct position for ranked multi-error
         // reporting; the deepest entry mirrors failure_wire.
         let ranks = std::sync::Arc::make_mut(&mut self.ranked_failures);
         match ranks.iter_mut().find(|(p, _)| *p == pos) {
             Some((_, labels)) => {
-                if !labels.contains(&label) {
-                    labels.push(label);
+                if !labels.iter().any(|l| l == label) {
+                    labels.push(label.to_owned());
                 }
             }
             None => {
-                ranks.push((pos, vec![label]));
-                ranks.sort_by_key(|a| std::cmp::Reverse(a.0));
-                ranks.truncate(MAX_RANKED_FAILURES);
+                // Descending by position: a full list whose last entry is
+                // already deeper would truncate this one straight away.
+                if ranks.len() >= MAX_RANKED_FAILURES && ranks.last().is_some_and(|(p, _)| *p > pos)
+                {
+                    return;
+                }
+                // The entry about to fall off the end donates its buffers.
+                let mut labels = if ranks.len() >= MAX_RANKED_FAILURES {
+                    ranks.pop().map(|(_, l)| l).unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
+                Self::replace_with_label(&mut labels, label);
+                let at = ranks.partition_point(|(p, _)| *p > pos);
+                ranks.insert(at, (pos, labels));
             }
         }
+    }
+
+    /// Make `labels` exactly `[label]`, reusing its existing allocations.
+    fn replace_with_label(labels: &mut Vec<String>, label: &str) {
+        labels.truncate(1);
+        match labels.first_mut() {
+            Some(first) => {
+                first.clear();
+                first.push_str(label);
+            }
+            None => labels.push(label.to_owned()),
+        }
+    }
+
+    /// `'pattern'` failure label for a literal, built in a reusable buffer.
+    fn note_str_failure(&mut self, pos: usize, pattern: &str) {
+        let mut label = std::mem::take(&mut self.label_buf);
+        label.clear();
+        label.push('\'');
+        label.push_str(pattern);
+        label.push('\'');
+        self.note_failure_ref(pos, &label);
+        self.label_buf = label;
     }
 
     #[inline]
@@ -1762,9 +1883,8 @@ impl<'a> PortableParser<'a> {
         let pattern_len = pattern_bytes.len();
         let end = pos + pattern_len;
 
-        let str_label = format!("'{}'", pattern);
         if end > self.input.len() {
-            self.note_failure(pos, str_label);
+            self.note_str_failure(pos, pattern);
             return Err(ParseError::Failed { position: pos });
         }
 
@@ -1776,7 +1896,7 @@ impl<'a> PortableParser<'a> {
                 capture_state: None,
             })
         } else {
-            self.note_failure(pos, str_label);
+            self.note_str_failure(pos, pattern);
             Err(ParseError::Failed { position: pos })
         }
     }
@@ -1784,7 +1904,7 @@ impl<'a> PortableParser<'a> {
     #[inline]
     fn parse_re(&mut self, pattern: &str, pos: usize) -> Result<AtomResult, ParseError> {
         if pos >= self.input.len() {
-            self.note_failure(pos, pattern.to_string());
+            self.note_failure_ref(pos, pattern);
             return Err(ParseError::Failed { position: pos });
         }
 
@@ -1809,7 +1929,7 @@ impl<'a> PortableParser<'a> {
                         capture_state: None,
                     });
                 } else {
-                    self.note_failure(pos, pattern.to_string());
+                    self.note_failure_ref(pos, pattern);
                     return Err(ParseError::Failed { position: pos });
                 }
             }
@@ -1826,7 +1946,7 @@ impl<'a> PortableParser<'a> {
                         capture_state: None,
                     }),
                     None => {
-                        self.note_failure(pos, pattern.to_string());
+                        self.note_failure_ref(pos, pattern);
                         Err(ParseError::Failed { position: pos })
                     }
                 };
@@ -1849,7 +1969,7 @@ impl<'a> PortableParser<'a> {
             });
         }
 
-        self.note_failure(pos, pattern.to_string());
+        self.note_failure_ref(pos, pattern);
         Err(ParseError::Failed { position: pos })
     }
 
@@ -2554,6 +2674,7 @@ impl<'a> PortableParser<'a> {
     ) -> Result<AtomResult, ParseError> {
         // A lookahead inspects without consuming: captures made inside
         // its body never persist, positive or negative.
+        perf_count!(self.scope_push);
         self.capture_state.try_push_scope()?;
         let inner = self.try_atom_impl(atom_id, pos, consume_all);
         self.capture_state.pop_scope();
