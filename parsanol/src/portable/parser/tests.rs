@@ -1835,3 +1835,129 @@ fn unicode_any_repetition_agrees_with_the_vm() {
     let mut parser = PortableParser::new(&grammar, "é", &mut arena);
     assert!(parser.parse().is_err());
 }
+
+/// The failure bookkeeping that predates borrowed labels, kept as the
+/// oracle: `note_failure_ref` must record exactly what it recorded.
+#[derive(Default)]
+struct FailureModel {
+    has: bool,
+    deepest: usize,
+    labels: Vec<String>,
+    ranks: Vec<(usize, Vec<String>)>,
+}
+
+impl FailureModel {
+    fn note(&mut self, pos: usize, label: String) {
+        if !self.has || pos > self.deepest {
+            self.has = true;
+            self.deepest = pos;
+            self.labels = vec![label.clone()];
+        } else if pos == self.deepest && !self.labels.contains(&label) {
+            self.labels.push(label.clone());
+        }
+        match self.ranks.iter_mut().find(|(p, _)| *p == pos) {
+            Some((_, l)) => {
+                if !l.contains(&label) {
+                    l.push(label);
+                }
+            }
+            None => {
+                self.ranks.push((pos, vec![label]));
+                self.ranks.sort_by_key(|a| std::cmp::Reverse(a.0));
+                self.ranks.truncate(MAX_RANKED_FAILURES);
+            }
+        }
+    }
+}
+
+#[test]
+fn borrowed_failure_labels_match_the_owned_label_bookkeeping() {
+    let grammar = GrammarBuilder::new().rule("test", str("x")).build();
+    let mut arena = AstArena::new();
+    let mut parser = PortableParser::new(&grammar, "", &mut arena);
+    let mut model = FailureModel::default();
+    let labels = ["'x'", "'é'", "[a-z]", "end of input", "'x'", "%x21-7E"];
+    let mut state = 0x2545_f491_4f6c_dd1du64;
+    let mut held = None;
+    for step in 0..4000 {
+        state = state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        // Mix advancing, repeated and retreating positions.
+        let pos = match (state >> 33) % 4 {
+            0 => step / 3,
+            1 => (state >> 40) as usize % 30,
+            2 => step / 3 + 5,
+            _ => 0,
+        };
+        let label = labels[(state >> 20) as usize % labels.len()];
+        // Hold a clone of the label Arc now and then: a shared Arc must
+        // be copied, never mutated in place under the holder.
+        if step % 97 == 0 {
+            held = Some((
+                parser.expected_labels.clone(),
+                parser.ranked_failures.clone(),
+            ));
+        }
+        parser.note_failure_ref(pos, label);
+        model.note(pos, label.to_string());
+        assert_eq!(parser.has_failure, model.has, "step {step}");
+        assert_eq!(parser.deepest_failure_pos, model.deepest, "step {step}");
+        assert_eq!(*parser.expected_labels, model.labels, "step {step}");
+        assert_eq!(*parser.ranked_failures, model.ranks, "step {step}");
+    }
+    assert!(held.is_some());
+}
+
+#[test]
+fn literal_failure_labels_are_quoted_and_survive_buffer_reuse() {
+    let grammar = GrammarBuilder::new().rule("test", str("hello")).build();
+    let mut arena = AstArena::new();
+    let mut parser = PortableParser::new(&grammar, "", &mut arena);
+    parser.note_str_failure(0, "ab");
+    parser.note_str_failure(0, "é");
+    parser.note_str_failure(0, "ab");
+    assert_eq!(
+        *parser.expected_labels,
+        vec!["'ab'".to_string(), "'é'".to_string()]
+    );
+}
+
+#[test]
+fn negative_lookahead_alternation_keeps_failure_diagnostics() {
+    // `1*( ( !"x" "y" ) / "é" )` over a prefix it parses, then a byte it cannot.
+    let mut g = Grammar::new();
+    let x = g.add_atom(Atom::Str {
+        pattern: "x".into(),
+    });
+    let not_x = g.add_atom(Atom::Lookahead {
+        atom: x,
+        positive: false,
+    });
+    let y = g.add_atom(Atom::Str {
+        pattern: "y".into(),
+    });
+    let seq = g.add_atom(Atom::Sequence {
+        atoms: vec![not_x, y],
+    });
+    let e = g.add_atom(Atom::Str {
+        pattern: "é".into(),
+    });
+    let alt = g.add_atom(Atom::Alternative {
+        atoms: vec![seq, e],
+    });
+    g.root = g.add_atom(Atom::Repetition {
+        atom: alt,
+        min: 1,
+        max: None,
+        tag: RepetitionTag::Repetition,
+    });
+    let input = "éyéyé!";
+    let mut arena = AstArena::new();
+    arena.set_input(input.to_string());
+    let mut parser = PortableParser::new(&g, input, &mut arena);
+    assert!(parser.parse().is_err());
+    let (pos, labels) = parser.failure_diagnostics().expect("diagnostics");
+    assert_eq!(pos, input.len() - 1);
+    assert_eq!(labels, vec!["'x'", "'y'", "'é'"]);
+}
