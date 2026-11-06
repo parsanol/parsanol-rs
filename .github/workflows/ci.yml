@@ -168,43 +168,68 @@ jobs:
           grep -q '"ok":true' /tmp/cpp.out
 
   # ============================================================================
-  # Staged testsuite replay (plurimath#540): latexmath's artifact, pinned to
-  # the commit latex generation 000003's provenance names, replays the
-  # generation's Ruby-produced raw-tree rows on the Rust engine.
+  # Staged testsuite replay (plurimath#540): each stage gem's artifact,
+  # pinned to the commit its generation's provenance names for the
+  # raw-tree producer, replays the generation's Ruby-produced raw-tree
+  # rows on the Rust engine.
   # ============================================================================
   stage-replay:
-    name: Stage Replay
+    name: Stage Replay (${{ matrix.language }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: latex
+            gem: plurimath/latexmath
+            ref: 27e300a433742765486e3bead2fac19ee8fd55a0
+            artifact: latex.json
+            generation: stages/latex/generations/000003
+          - language: asciimath
+            gem: plurimath/amath
+            ref: 8ec8ba05bc49196aa5825782a052f51a2db99c7a
+            artifact: asciimath.json
+            generation: stages/asciimath/generations/000003
+          - language: unicode
+            gem: plurimath/umath
+            ref: 0302568ef9446b1b099d15a56445ed7624816462
+            artifact: umath.json
+            generation: stages/unicode/generations/000004
     steps:
       - uses: actions/checkout@v7
+      # grammars/ holds umath's wrapper table (umath.wrappers.json).
       - uses: actions/checkout@v7
         with:
-          repository: plurimath/latexmath
-          ref: 27e300a433742765486e3bead2fac19ee8fd55a0
-          path: latexmath
-          sparse-checkout: artifacts
+          repository: ${{ matrix.gem }}
+          ref: ${{ matrix.ref }}
+          path: stage-gem
+          sparse-checkout: |
+            artifacts
+            grammars
       - uses: actions/checkout@v7
         with:
           repository: plurimath/plurimath-testsuite
           path: plurimath-testsuite
-          sparse-checkout: stages/latex/generations/000003
+          sparse-checkout: ${{ matrix.generation }}
       - uses: dtolnay/rust-toolchain@stable
       # The replay reads JSON; convert the YAML payloads with the runner's Ruby.
-      - name: Convert raw-tree payloads to JSON
+      - name: Convert payloads to JSON
         run: |
           mkdir -p "$RUNNER_TEMP/payloads"
-          for f in plurimath-testsuite/stages/latex/generations/000003/payloads/raw-*.yaml; do
+          for f in plurimath-testsuite/${{ matrix.generation }}/payloads/*.yaml; do
             ruby -ryaml -rjson -e 'puts JSON.generate(YAML.load_file(ARGV[0]))' "$f" \
               > "$RUNNER_TEMP/payloads/$(basename "$f" .yaml).json"
           done
-      - name: Replay latex generation 000003 (raw-tree rows)
+      - name: Replay ${{ matrix.generation }} (raw-tree rows)
         run: >
           cargo run -p parsanol --example stage-replay --
-          latexmath/artifacts/latex.json "$RUNNER_TEMP/payloads"
+          stage-gem/artifacts/${{ matrix.artifact }} "$RUNNER_TEMP/payloads"
+          --language ${{ matrix.language }}
       - name: Stage replay test (artifact-gated)
         run: cargo test -p parsanol --test stage_replay
         env:
-          PARG_ARTIFACT: ${{ github.workspace }}/latexmath/artifacts/latex.json
+          PARG_ARTIFACT: ${{ github.workspace }}/stage-gem/artifacts/${{ matrix.artifact }}
+          STAGE_LANGUAGE: ${{ matrix.language }}
           STAGE_PAYLOADS: ${{ runner.temp }}/payloads
 
   machete:
