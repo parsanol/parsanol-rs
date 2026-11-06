@@ -18,23 +18,27 @@
 //! parsanol-tree/v2 TaggedArray nodes are flattened first. Hash pair
 //! order is not part of the contract across engines, so hashes compare
 //! as unordered sets of pairs. Rows recorded as refusals carry no
-//! preprocessed text: their caller input is parsed, or, for a language
-//! with a ported preprocessing (unicode), that port's text, and the
-//! outcome is compared by category only (latex records the refusal offset
-//! in the caller's input). The port is checked against every row that
-//! records its preprocessed text.
-//!
-//! The per-language steps (bindings, capture, the gem's transform of the
-//! captured tree) are in languages.rs.
+//! preprocessed text: their caller input is parsed and the outcome is
+//! compared by category only, since the generation records the refusal
+//! offset in the caller's input.
 
 #![allow(dead_code)]
 
-use crate::languages::{stage_language, StageLanguage};
 use parsanol::parg::bindings_artifact::PargBindingsArtifact;
 use parsanol::{PargArtifact, PargError};
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+
+/// latexmath's Configuration: decimal marker -> artifact entry.
+pub const LATEX_DECIMAL_ENTRIES: &[(&str, &str)] =
+    &[(".", "dot"), (",", "comma"), ("\u{66b}", "arabic")];
+
+/// latexmath's CAPTURE_RENAMES: the PARG capture -> the legacy key.
+pub const LATEX_CAPTURE_RENAMES: &[(&str, &str)] = &[("row_break", "\\\\")];
+
+/// The capture holding the tree.
+pub const LATEX_CAPTURE: &str = "latex_tree";
 
 /// One replayed row.
 #[derive(Debug)]
@@ -51,7 +55,6 @@ pub struct ReplayRow {
 /// Every replayed row of a run.
 #[derive(Debug)]
 pub struct ReplayReport {
-    pub language: &'static str,
     pub rows: Vec<ReplayRow>,
 }
 
@@ -67,8 +70,7 @@ impl ReplayReport {
     /// One summary line, then both trees of each differing row.
     pub fn format(&self) -> String {
         let mut out = format!(
-            "language {}\n{} rows: {} equal, {} differ\n",
-            self.language,
+            "{} rows: {} equal, {} differ\n",
             self.rows.len(),
             self.equal(),
             self.differ()
@@ -89,7 +91,7 @@ impl ReplayReport {
     }
 }
 
-pub fn is_input_ref(map: &Map<String, Value>) -> bool {
+fn is_input_ref(map: &Map<String, Value>) -> bool {
     map.get("offset").is_some_and(Value::is_u64)
         && map.get("length").is_some_and(Value::is_u64)
         && map.keys().all(|k| {
@@ -237,10 +239,9 @@ pub fn canonical_equal(a: &Value, b: &Value) -> bool {
     sort_canonical(a) == sort_canonical(b)
 }
 
-/// The payload files: one file, or a directory's *.json in byte order.
+/// The payload files: one file, or a directory's raw-*.json in byte order.
 /// The generation stores payloads as YAML; convert them to JSON first
-/// (the CI job does this with Ruby), so no YAML crate is needed. Only
-/// raw-tree payloads are replayed (asciimath's is not named raw-*).
+/// (the CI job does this with Ruby), so no YAML crate is needed.
 pub fn payload_files(path: &Path) -> Vec<PathBuf> {
     if path.is_file() {
         return vec![path.to_path_buf()];
@@ -252,7 +253,7 @@ pub fn payload_files(path: &Path) -> Vec<PathBuf> {
         .filter(|p| {
             p.file_name()
                 .and_then(|n| n.to_str())
-                .is_some_and(|n| n.ends_with(".json"))
+                .is_some_and(|n| n.starts_with("raw-") && n.ends_with(".json"))
         })
         .collect();
     files.sort();
@@ -266,46 +267,18 @@ pub fn default_bindings(artifact: &Path) -> Option<PathBuf> {
     candidate.is_file().then_some(candidate)
 }
 
-/// The wrapper table beside an artifact: `../grammars/<name>.wrappers.json`.
-pub fn default_wrappers(artifact: &Path) -> PathBuf {
-    let stem = artifact.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-    let dir = artifact.parent().unwrap_or(Path::new("."));
-    dir.join("..")
-        .join("grammars")
-        .join(format!("{stem}.wrappers.json"))
-}
-
 /// Replay every raw-tree row of `payloads` against `artifact` with the
-/// configuration of the stage language named `language`.
-pub fn replay_stage(artifact_path: &Path, payloads: &Path, language: &str) -> ReplayReport {
-    let language: &StageLanguage = stage_language(language);
+/// latexmath configuration.
+pub fn replay_stage(artifact_path: &Path, payloads: &Path) -> ReplayReport {
     let artifact = PargArtifact::from_path(artifact_path)
         .unwrap_or_else(|err| panic!("{}: artifact rejected: {err}", artifact_path.display()));
-    let wrappers: Option<HashMap<String, String>> = language.wrappers.then(|| {
-        let path = default_wrappers(artifact_path);
-        let text = std::fs::read_to_string(&path)
-            .unwrap_or_else(|err| panic!("{}: {err}", path.display()));
-        let doc: Value = serde_json::from_str(&text).expect("wrapper table is JSON");
-        doc["wrappers"]
-            .as_object()
-            .expect("wrapper table has wrappers")
-            .iter()
-            .map(|(k, v)| (k.clone(), v.as_str().expect("wrapper kind").to_string()))
-            .collect()
-    });
-    let bindings_path = if language.bindings {
-        default_bindings(artifact_path)
-    } else {
-        None
-    };
-    let bindings = bindings_path.map(|p| {
+    let bindings = default_bindings(artifact_path).map(|p| {
         let text = std::fs::read_to_string(&p).expect("bindings readable");
         PargBindingsArtifact::from_json(&text, Some("rs"))
             .unwrap_or_else(|err| panic!("{}: bindings rejected: {err}", p.display()))
     });
-    let entries: HashMap<&str, &str> = language.decimal_entries.iter().copied().collect();
-    let renames: HashMap<String, String> = language
-        .renames
+    let entries: HashMap<&str, &str> = LATEX_DECIMAL_ENTRIES.iter().copied().collect();
+    let renames: HashMap<String, String> = LATEX_CAPTURE_RENAMES
         .iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
@@ -327,11 +300,8 @@ pub fn replay_stage(artifact_path: &Path, payloads: &Path, language: &str) -> Re
                 .unwrap_or_else(|| panic!("{id}: no entry for decimal marker {decimal:?}"));
             let input = case["input"]["str"].as_str().unwrap_or("").to_string();
             let expected_refusal = case["expected"].get("refusal");
-            let preprocessed = language.preprocess.map(|f| {
-                f(&input).unwrap_or_else(|| panic!("{id}: the input has no formula part"))
-            });
             let parsed = match expected_refusal {
-                Some(_) => preprocessed.clone().unwrap_or_else(|| input.clone()),
+                Some(_) => input.clone(),
                 None => case["expected"]["preprocessed"]["str"]
                     .as_str()
                     .unwrap_or_else(|| {
@@ -348,12 +318,10 @@ pub fn replay_stage(artifact_path: &Path, payloads: &Path, language: &str) -> Re
                             .unwrap_or_else(|err| panic!("{id}: bindings failed: {err}")),
                         None => shape,
                     };
-                    let capture = language.capture;
                     let tree = bound
-                        .get(capture)
-                        .unwrap_or_else(|| panic!("{id}: the tree has no {capture} capture"));
-                    let raw = language.apply(tree, &parsed, wrappers.as_ref());
-                    dump_canonical(&raw, &parsed, &renames)
+                        .get(LATEX_CAPTURE)
+                        .unwrap_or_else(|| panic!("{id}: the tree has no {LATEX_CAPTURE} capture"));
+                    dump_canonical(tree, &parsed, &renames)
                 }
                 Err(err) => {
                     let offset = match err {
@@ -377,12 +345,7 @@ pub fn replay_stage(artifact_path: &Path, payloads: &Path, language: &str) -> Re
                 }
                 None => {
                     let tree = case["expected"]["tree"].clone();
-                    let differ = if preprocessed.as_ref().is_some_and(|p| *p != parsed) {
-                        Some(format!(
-                            "the ported preprocessing gives {:?}",
-                            preprocessed.as_deref().unwrap_or("")
-                        ))
-                    } else if refused {
+                    let differ = if refused {
                         Some("the generation parsed, rs refused".to_string())
                     } else if !canonical_equal(&actual, &tree) {
                         Some("trees differ".to_string())
@@ -403,8 +366,5 @@ pub fn replay_stage(artifact_path: &Path, payloads: &Path, language: &str) -> Re
             });
         }
     }
-    ReplayReport {
-        language: language.name,
-        rows,
-    }
+    ReplayReport { rows }
 }
