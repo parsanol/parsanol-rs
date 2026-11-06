@@ -71,6 +71,14 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ## [Unreleased]
 
+### Other
+
+- Read stage payloads as JSON instead of adding a YAML crate by @[object]
+- Replay staged testsuite raw-tree rows on the Rust engine by @[object]
+- Pin anchored matching of case-insensitive literals ([#409](https://github.com/parsanol/parsanol-rs/pull/409)) by @[object]
+- Evaluate pure terminals directly in Strict mode (stacked on #406) ([#408](https://github.com/parsanol/parsanol-rs/pull/408)) by @[object]
+- Record terminal failures without per-failure allocations ([#406](https://github.com/parsanol/parsanol-rs/pull/406)) by @[object]
+
 ### Fixed
 
 - Match regex atoms anchored at the position ([#403](https://github.com/parsanol/parsanol-rs/pull/403)) by @[object]
