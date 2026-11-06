@@ -84,15 +84,26 @@ fn a_changed_payload_is_reported_as_differing() {
     let Some((artifact, payloads)) = gated() else {
         return;
     };
-    let source = replay::payload_files(&payloads)
+    // The first slice of a raw-tree payload: its byte offset moved by 99.
+    const KEY: &str = "\"byte_offset\":";
+    let first_slice = |text: &str| {
+        let at = text.find(",\"char_offset\"")?;
+        let start = text[..at].rfind(KEY)? + KEY.len();
+        Some((start, at))
+    };
+    let (text, (start, end)) = replay::payload_files(&payloads)
         .into_iter()
-        .find(|f| {
+        .find_map(|f| {
             let text = std::fs::read_to_string(f).unwrap();
-            text.contains("\"boundary\":\"raw-tree\"") && text.contains("\"byte_offset\":1,")
+            if !text.contains("\"boundary\":\"raw-tree\"") {
+                return None;
+            }
+            let span = first_slice(&text)?;
+            Some((text, span))
         })
-        .expect("a payload with a slice at byte 1");
-    let text = std::fs::read_to_string(&source).unwrap();
-    let changed = text.replacen("\"byte_offset\":1,", "\"byte_offset\":99,", 1);
+        .expect("a raw-tree payload with a slice");
+    let offset: u64 = text[start..end].parse().expect("a byte offset");
+    let changed = format!("{}{}{}", &text[..start], offset + 99, &text[end..]);
     let copy = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("raw-changed.json");
     std::fs::write(&copy, changed).unwrap();
     let report = replay::replay_stage(&artifact, &copy, &language());
