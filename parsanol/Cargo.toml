@@ -73,10 +73,6 @@ proptest = "=1.11.0"
 
 # Examples
 [[example]]
-name = "stage-replay"
-path = "../examples/stage-replay/main.rs"
-
-[[example]]
 name = "balanced-parens"
 path = "../examples/balanced-parens/basic.rs"
 
