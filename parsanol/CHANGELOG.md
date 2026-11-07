@@ -73,6 +73,12 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- Release v0.20.9 by @[object]
+- Drop the needless mut on the parsed grammar document by @[object]
+- Keep token spellings contiguous — no trivia inside a token by @[object]
+
+### Other
+
 - Drop the needless mut on the parsed grammar document by @[object]
 - Keep token spellings contiguous — no trivia inside a token by @[object]
 
