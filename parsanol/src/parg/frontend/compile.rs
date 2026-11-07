@@ -254,6 +254,23 @@ enum INode {
 }
 
 impl INode {
+    /// Whether any rule reference occurs in this subtree. A subtree
+    /// without one is a char-scan span — one token's spelling — and
+    /// the trivia injector must leave it verbatim: intra-token trivia
+    /// lets a keyword match across whitespace ("s IN" as the keyword
+    /// SIN, expressir#598).
+    fn has_entity(&self) -> bool {
+        match self {
+            INode::Entity { .. } => true,
+            INode::Seq(items) | INode::Alt(items) => items.iter().any(INode::has_entity),
+            INode::Rep { child, .. } | INode::Named { child, .. } | INode::SkipWrap(child) => {
+                child.has_entity()
+            }
+            INode::Lookahead { child, .. } => child.has_entity(),
+            INode::Str(_) | INode::Re(_) | INode::Lookbehind { .. } => false,
+        }
+    }
+
     /// The VM's atom-level nullability (vm.rb `nullable?`): the
     /// skip-declaration guard uses it verbatim.
     fn nullable(&self) -> bool {
@@ -862,6 +879,13 @@ impl<'a> Compiler<'a> {
             | INode::Lookbehind { .. }
             | INode::Entity { .. } => node,
             INode::Seq(items) => {
+                // parsanol-ruby#134: trivia belongs between tokens
+                // (rule references). A sequence without one is a
+                // char-scan span — one token's spelling — and takes
+                // no inter-member trivia.
+                if !items.iter().any(INode::has_entity) {
+                    return Ok(INode::Seq(items));
+                }
                 let kids = items
                     .into_iter()
                     .map(|child| self.inject(child))
@@ -880,6 +904,9 @@ impl<'a> Compiler<'a> {
                 }
             }
             INode::Alt(branches) => {
+                if !branches.iter().any(INode::has_entity) {
+                    return Ok(INode::Alt(branches));
+                }
                 let out = branches
                     .into_iter()
                     .map(|branch| self.inject(branch))
@@ -921,10 +948,15 @@ impl<'a> Compiler<'a> {
                     maybe,
                 }
             }
-            INode::Named { name, child } => INode::Named {
-                name,
-                child: Box::new(self.inject(*child)?),
-            },
+            INode::Named { name, child } => {
+                if !child.has_entity() {
+                    return Ok(INode::Named { name, child });
+                }
+                INode::Named {
+                    name,
+                    child: Box::new(self.inject(*child)?),
+                }
+            }
             terminal @ (INode::Str(_) | INode::Re(_)) => {
                 let skip = self.skip_maybe()?;
                 INode::Seq(vec![skip, terminal])
