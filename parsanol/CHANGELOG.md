@@ -73,6 +73,14 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- Release v0.20.8 ([#413](https://github.com/parsanol/parsanol-rs/pull/413)) by @[object]
+- Revert "Merge pull request #410 from parsanol/feat/540-stage-replay" by @[object]
+- Revert "Merge pull request #412 from parsanol/feat/540-stage-replay-languages" by @[object]
+- Find the changed-payload probe's slice at any byte offset by @[object]
+- Replay the asciimath and unicode stage generations on the Rust engine by @[object]
+
+### Other
+
 - Revert "Merge pull request #410 from parsanol/feat/540-stage-replay" by @[object]
 - Revert "Merge pull request #412 from parsanol/feat/540-stage-replay-languages" by @[object]
 - Find the changed-payload probe's slice at any byte offset by @[object]
