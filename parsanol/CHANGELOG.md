@@ -73,6 +73,11 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- Drop the needless mut on the parsed grammar document by @[object]
+- Keep token spellings contiguous — no trivia inside a token by @[object]
+
+### Other
+
 - Revert "Merge pull request #410 from parsanol/feat/540-stage-replay" by @[object]
 - Revert "Merge pull request #412 from parsanol/feat/540-stage-replay-languages" by @[object]
 - Find the changed-payload probe's slice at any byte offset by @[object]
