@@ -27,7 +27,7 @@ const GRAMMAR: &str = r#"grammar T598 version "0.1.0" edition 2 {
 "#;
 
 fn parses(input: &str) -> bool {
-    let mut parsed = frontend::parser::parse_grammar(GRAMMAR).expect("grammar parses");
+    let parsed = frontend::parser::parse_grammar(GRAMMAR).expect("grammar parses");
     let tables = frontend::compile::Tables::default();
     let mut compiler =
         frontend::compile::compiler_for(&parsed.document, &tables, &parsed.atomic_rules)
