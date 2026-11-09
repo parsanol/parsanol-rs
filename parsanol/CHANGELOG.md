@@ -73,6 +73,10 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- Publish the engine-compat manifest (ruby#421) ([#423](https://github.com/parsanol/parsanol-rs/pull/423)) by @[object]
+
+### Other
+
 - Drop the needless mut on the parsed grammar document by @[object]
 - Keep token spellings contiguous — no trivia inside a token by @[object]
 
