@@ -70,3 +70,18 @@ embeds its rows into the artifact; the file stays for source parity).
 Author the `.parg`, compile with the reference compiler
 (`parsanol parg compile` or the `PARG::Compiler`), commit both files in
 one commit, and make sure every engine's suite goes green before merge.
+
+## The envelope-members matrix (ruby#420)
+
+Every envelope member the reference compiler can emit must have at
+least one corpus case, so a member a loader does not understand is a
+CI failure instead of an outage (the rs#397 class):
+
+- `envelope_members` — the current bake's provenance members
+  (`byte_checksum`, `validated`, `semantics_hash`).
+- `model_bindings_embedded` — the `--model-bindings` sidecar embedded
+  in the envelope (ruby#447). The case is json-only: the embedding is
+  a compile *input*, so there is no plain-recompile twin; parity
+  excludes the member and the loaders verify it here.
+
+Whenever a new envelope member ships, add its case in the same train.
