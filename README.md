@@ -2062,3 +2062,12 @@ release-plz uses [conventional commits](https://www.conventionalcommits.org/):
 
 - [Parslet](https://github.com/kschiess/parslet) - Original Ruby PEG
   parser (inspiration)
+
+## Engine compatibility
+
+`ENGINE-COMPAT.json` maps the engine commit to the package versions
+carrying it across the registries (crates, npm, rubygems, pypi);
+`tools/check_engine_compat.py` verifies the mapping against the live
+registries on main (ruby#421). A release train updates the manifest as
+it rides; consumers and docs read the manifest instead of
+reconstructing pairings from git archaeology.
