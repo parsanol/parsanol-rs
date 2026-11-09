@@ -73,6 +73,10 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- Json-only member cases bind no source pair (ruby#420) ([#428](https://github.com/parsanol/parsanol-rs/pull/428)) by @[object]
+
+### Other
+
 - Publish the engine-compat manifest (ruby#421) ([#423](https://github.com/parsanol/parsanol-rs/pull/423)) by @[object]
 
 ### Other
