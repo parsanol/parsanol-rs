@@ -156,6 +156,14 @@ fn rust_envelope_matches_the_ruby_artifacts() {
         let artifact: Value =
             serde_json::from_str(&std::fs::read_to_string(path).expect("artifact json"))
                 .expect("json");
+        // A json without a sibling .parg is a compile-input member case
+        // (the --model-bindings embedding, ruby#420): the embedding is
+        // an input, not source output, so there is no pair to
+        // re-derive. Its loader duty is verified by the conformance
+        // sweep; parity applies to paired cases only.
+        if !dir.join(format!("{name}.parg")).exists() {
+            continue;
+        }
         // Normalize CRLF checkouts (Windows): the envelope's source,
         // docs, and hashes are LF (the Ruby bake's form).
         let source = std::fs::read_to_string(dir.join(format!("{name}.parg")))
