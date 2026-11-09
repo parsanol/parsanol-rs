@@ -493,3 +493,13 @@ jobs:
           echo "| Coverage | ✅ |" >> $GITHUB_STEP_SUMMARY
           echo "| Benchmarks | ✅ |" >> $GITHUB_STEP_SUMMARY
           echo "| Documentation | ✅ |" >> $GITHUB_STEP_SUMMARY
+
+  engine-compat:
+    # ruby#421: the manifest must match what the registries actually
+    # serve -- a train that rides without updating ENGINE-COMPAT.json
+    # fails here, and the weekly run catches registry-side drift.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 tools/check_engine_compat.py
