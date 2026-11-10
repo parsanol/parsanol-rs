@@ -717,9 +717,11 @@ fn execute_inner(text: &str, input: &str) -> Result<Outcome, String> {
                 .map(Outcome::Shape)
                 .map_err(|e| e.to_string())
         }
-        Err(error) if error.is_abort() => {
-            Err(crate::parg::PargError::runtime_abort(error).to_string())
-        }
+        Err(error) if error.is_abort() => Err(crate::parg::PargError::runtime_abort(
+            error,
+            parser.call_depth_limit_hit(),
+        )
+        .to_string()),
         Err(_) => {
             let offset = parser.failure_wire().map_or(0, |(o, _)| o);
             let ranked = parser

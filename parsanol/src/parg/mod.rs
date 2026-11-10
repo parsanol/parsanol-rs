@@ -103,20 +103,6 @@ pub enum PargError {
     UnknownRenderSegment(String),
     /// The portable engine failed to parse the input.
     ParseFailed(String),
-    /// A rule-recursion guard aborted parsing, not a syntax refusal.
-    RecursionLimitExceeded {
-        /// Recursion depth at the guard.
-        depth: usize,
-        /// Configured rule-recursion budget.
-        max_depth: usize,
-    },
-    /// VM atom-call depth reached the platform stack-resource guard.
-    CallDepthLimitExceeded {
-        /// VM atom-call depth at the guard.
-        depth: usize,
-        /// Configured VM atom-call budget.
-        max_depth: usize,
-    },
     /// Structured failure wire (F7): deepest offset, expected set, message.
     ParseWire {
         /// Byte offset of the deepest failure.
@@ -142,16 +128,34 @@ pub enum PargError {
     /// Never constructed since floats were allowed to canonicalize (B6);
     /// kept so matchers written against 0.18.11 keep compiling.
     FloatInCanonicalJson,
+    /// A rule-recursion guard aborted parsing, not a syntax refusal.
+    RecursionLimitExceeded {
+        /// Recursion depth at the guard.
+        depth: usize,
+        /// Configured rule-recursion budget.
+        max_depth: usize,
+    },
+    /// VM atom-call depth reached the platform stack-resource guard.
+    CallDepthLimitExceeded {
+        /// VM atom-call depth at the guard.
+        depth: usize,
+        /// Configured VM atom-call budget.
+        max_depth: usize,
+    },
 }
 
 impl PargError {
-    pub(crate) fn runtime_abort(error: crate::portable::ast::ParseError) -> Self {
+    pub(crate) fn runtime_abort(
+        error: crate::portable::ast::ParseError,
+        call_depth_limit_hit: bool,
+    ) -> Self {
         match error {
             crate::portable::ast::ParseError::RecursionLimitExceeded { depth, max_depth } => {
-                Self::RecursionLimitExceeded { depth, max_depth }
-            }
-            crate::portable::ast::ParseError::CallDepthLimitExceeded { depth, max_depth } => {
-                Self::CallDepthLimitExceeded { depth, max_depth }
+                if call_depth_limit_hit {
+                    Self::CallDepthLimitExceeded { depth, max_depth }
+                } else {
+                    Self::RecursionLimitExceeded { depth, max_depth }
+                }
             }
             other => Self::ParseFailed(other.to_string()),
         }
@@ -218,7 +222,7 @@ impl fmt::Display for PargError {
             PargError::RecursionLimitExceeded { depth, max_depth } => write!(f,
                 "PARG parse failed: {}", crate::portable::ast::ParseError::RecursionLimitExceeded { depth: *depth, max_depth: *max_depth }),
             PargError::CallDepthLimitExceeded { depth, max_depth } => write!(f,
-                "PARG parse failed: {}", crate::portable::ast::ParseError::CallDepthLimitExceeded { depth: *depth, max_depth: *max_depth }),
+                "PARG parse failed: VM call depth exceeded: depth {depth} exceeds limit of {max_depth}"),
             PargError::ParseWire { offset, line, column, expected, .. } => write!(
                 f,
                 "Parse failed at offset {offset} (line {line}, column {column}): expected {}",

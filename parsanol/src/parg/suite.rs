@@ -284,7 +284,7 @@ impl PargArtifact {
                 // Resource and runtime aborts are not syntax expectations:
                 // the failure wire belongs to whatever branch was active, so
                 // rendering it would send users after a phantom `]`.
-                return PargError::runtime_abort(err);
+                return PargError::runtime_abort(err, parser.call_depth_limit_hit());
             }
             match parser.failure_wire() {
                 Some((offset, expected)) => {
@@ -336,7 +336,10 @@ impl PargArtifact {
                 let shape = self.parse_shape(entry, input)?;
                 Ok(serde_json::json!({ "ok": true, "shape": shape }))
             }
-            Err(error) if error.is_abort() => Err(PargError::runtime_abort(error)),
+            Err(error) if error.is_abort() => Err(PargError::runtime_abort(
+                error,
+                parser.call_depth_limit_hit(),
+            )),
             Err(_) => {
                 // The generational undo log empties the visible store
                 // on the failing branch — that rollback IS the
@@ -351,7 +354,10 @@ impl PargArtifact {
                 journaling.set_collect_partial(true);
                 if let Err(error) = journaling.parse() {
                     if error.is_abort() {
-                        return Err(PargError::runtime_abort(error));
+                        return Err(PargError::runtime_abort(
+                            error,
+                            journaling.call_depth_limit_hit(),
+                        ));
                     }
                 }
                 let mut partial = journaling.take_partial_stash();

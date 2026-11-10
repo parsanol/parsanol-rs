@@ -176,11 +176,16 @@ fn vm_call_budget_is_a_typed_abort_and_does_not_poison_reuse() {
         assert!(error.is_abort());
         assert!(matches!(
             error,
-            ParseError::CallDepthLimitExceeded {
+            ParseError::RecursionLimitExceeded {
                 depth: 17,
                 max_depth: 16
             }
         ));
+        let rich = parser.parse_with_rich_error().unwrap_err();
+        assert_eq!(
+            rich.message,
+            "VM call depth exceeded: depth 17 exceeds limit of 16"
+        );
         parser.set_max_call_depth(0);
         assert!(parser.parse().is_ok());
     }

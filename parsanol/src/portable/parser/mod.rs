@@ -399,6 +399,7 @@ pub struct PortableParser<'a> {
 
     dbg_depth: u64,
     max_call_depth: u64,
+    call_depth_limit_hit: bool,
 
     /// Per-atom dynamic dependence (empty when the grammar has no
     /// Dynamic atoms): memoization is skipped for these atoms.
@@ -616,6 +617,7 @@ impl<'a> PortableParser<'a> {
             strict_rollback_on_failure: rollback_on_failure,
             dbg_depth: 0,
             max_call_depth: DEFAULT_MAX_CALL_DEPTH as u64,
+            call_depth_limit_hit: false,
             dynamic_dependent: dynamic_dependence(grammar),
             terminal_direct: terminal_direct_atoms(grammar),
             state_write_dependent: state_write_dependence(grammar),
@@ -677,6 +679,7 @@ impl<'a> PortableParser<'a> {
             strict_rollback_on_failure: false,
             dbg_depth: 0,
             max_call_depth: DEFAULT_MAX_CALL_DEPTH as u64,
+            call_depth_limit_hit: false,
             dynamic_dependent: dynamic_dependence(grammar),
             terminal_direct: terminal_direct_atoms(grammar),
             state_write_dependent: state_write_dependence(grammar),
@@ -780,6 +783,11 @@ impl<'a> PortableParser<'a> {
     /// This is independent of the rule-reference recursion budget.
     pub fn set_max_call_depth(&mut self, depth: usize) {
         self.max_call_depth = depth as u64;
+    }
+
+    /// Classify a resource error from the immediately preceding parser call.
+    pub(crate) fn call_depth_limit_hit(&self) -> bool {
+        self.call_depth_limit_hit
     }
 
     /// Set timeout in milliseconds
@@ -1064,8 +1072,14 @@ impl<'a> PortableParser<'a> {
         pos: usize,
         consume_all: bool,
     ) -> Result<AtomResult, ParseError> {
+        if self.dbg_depth == 0 {
+            self.call_depth_limit_hit = false;
+        }
         if self.max_call_depth != 0 && self.dbg_depth >= self.max_call_depth {
-            return Err(ParseError::CallDepthLimitExceeded {
+            // Keep ParseError exhaustive and compatible. The parser tracks
+            // the VM-specific origin until the caller classifies this abort.
+            self.call_depth_limit_hit = true;
+            return Err(ParseError::RecursionLimitExceeded {
                 depth: (self.dbg_depth + 1) as usize,
                 max_depth: self.max_call_depth as usize,
             });
@@ -1112,13 +1126,7 @@ impl<'a> PortableParser<'a> {
             }
         }
         self.dbg_depth -= 1;
-        if self.dbg_depth == 0
-            && matches!(
-                &r,
-                Err(ParseError::RecursionLimitExceeded { .. }
-                    | ParseError::CallDepthLimitExceeded { .. })
-            )
-        {
+        if self.dbg_depth == 0 && matches!(&r, Err(ParseError::RecursionLimitExceeded { .. })) {
             // Successful children may have cached values before their captures
             // were rolled back by the abort. A retry must execute those captures.
             self.cache.clear();
@@ -1279,7 +1287,6 @@ impl<'a> PortableParser<'a> {
                         e,
                         ParseError::InvalidGrammar { .. }
                             | ParseError::RecursionLimitExceeded { .. }
-                            | ParseError::CallDepthLimitExceeded { .. }
                     ) =>
                 {
                     // Runtime-level abort: never memoized,
@@ -1398,9 +1405,7 @@ impl<'a> PortableParser<'a> {
                 // likewise abort parsing rather than representing a mismatch.
                 if matches!(
                     e,
-                    ParseError::InvalidGrammar { .. }
-                        | ParseError::RecursionLimitExceeded { .. }
-                        | ParseError::CallDepthLimitExceeded { .. }
+                    ParseError::InvalidGrammar { .. } | ParseError::RecursionLimitExceeded { .. }
                 ) {
                     return Err(e);
                 }
@@ -2156,7 +2161,6 @@ impl<'a> PortableParser<'a> {
                             e,
                             ParseError::InvalidGrammar { .. }
                                 | ParseError::RecursionLimitExceeded { .. }
-                                | ParseError::CallDepthLimitExceeded { .. }
                         ) || (self.compatibility == ParserCompatibility::Parslet
                             && e.is_abort()) =>
                     {
@@ -2192,7 +2196,6 @@ impl<'a> PortableParser<'a> {
                         e,
                         ParseError::InvalidGrammar { .. }
                             | ParseError::RecursionLimitExceeded { .. }
-                            | ParseError::CallDepthLimitExceeded { .. }
                     ) || (self.compatibility == ParserCompatibility::Parslet
                         && e.is_abort()) =>
                 {
@@ -2300,12 +2303,9 @@ impl<'a> PortableParser<'a> {
                         }
                     }
                     Err(error)
-                        if matches!(
-                            error,
-                            ParseError::RecursionLimitExceeded { .. }
-                                | ParseError::CallDepthLimitExceeded { .. }
-                        ) || (self.compatibility == ParserCompatibility::Parslet
-                            && error.is_abort()) =>
+                        if matches!(error, ParseError::RecursionLimitExceeded { .. })
+                            || (self.compatibility == ParserCompatibility::Parslet
+                                && error.is_abort()) =>
                     {
                         self.capture_state.pop_scope();
                         self.capture_state.pop_scope();
@@ -2345,12 +2345,9 @@ impl<'a> PortableParser<'a> {
                         }
                     }
                     Err(error)
-                        if matches!(
-                            error,
-                            ParseError::RecursionLimitExceeded { .. }
-                                | ParseError::CallDepthLimitExceeded { .. }
-                        ) || (self.compatibility == ParserCompatibility::Parslet
-                            && error.is_abort()) =>
+                        if matches!(error, ParseError::RecursionLimitExceeded { .. })
+                            || (self.compatibility == ParserCompatibility::Parslet
+                                && error.is_abort()) =>
                     {
                         self.capture_state.pop_scope();
                         self.capture_state.pop_scope();
@@ -2805,11 +2802,7 @@ impl<'a> PortableParser<'a> {
         {
             return inner;
         }
-        if matches!(
-            &inner,
-            Err(ParseError::RecursionLimitExceeded { .. }
-                | ParseError::CallDepthLimitExceeded { .. })
-        ) {
+        if matches!(&inner, Err(ParseError::RecursionLimitExceeded { .. })) {
             return inner;
         }
         if let Err(ParseError::InvalidGrammar { .. }) = inner {
@@ -3169,10 +3162,7 @@ impl<'a> PortableParser<'a> {
                     self.dynamic_outcomes
                         .insert(outcome_key, Some((r.end_pos, r.value.clone())));
                 }
-                Err(
-                    ParseError::RecursionLimitExceeded { .. }
-                    | ParseError::CallDepthLimitExceeded { .. },
-                ) => {}
+                Err(ParseError::RecursionLimitExceeded { .. }) => {}
                 Err(_) => {
                     if self.dynamic_outcomes.len() > 2_000_000 {
                         self.dynamic_outcomes.clear();
@@ -3222,6 +3212,7 @@ impl<'a> PortableParser<'a> {
         temp_parser.pending_trivia = std::mem::take(&mut self.pending_trivia);
 
         let result = temp_parser.try_atom_impl(temp_atom_id, pos, false);
+        self.call_depth_limit_hit |= temp_parser.call_depth_limit_hit;
         // Dynamic fragments evaluate against the full input, so their cause
         // positions are already absolute byte offsets. Preserve those causes
         // before an error crosses the parser boundary; otherwise the parent
@@ -3341,6 +3332,16 @@ impl<'a> PortableParser<'a> {
                     actual,
                     line,
                     col,
+                ))
+            }
+            Err(ParseError::RecursionLimitExceeded { depth, max_depth })
+                if self.call_depth_limit_hit =>
+            {
+                Err(RichError::at_position(
+                    format!("VM call depth exceeded: depth {depth} exceeds limit of {max_depth}"),
+                    0,
+                    1,
+                    1,
                 ))
             }
             Err(e) => {

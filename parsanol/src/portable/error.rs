@@ -430,15 +430,6 @@ impl ParseError {
                     Span::default(),
                 );
             }
-            ParseError::CallDepthLimitExceeded { depth, max_depth } => {
-                return RichError::at(
-                    format!(
-                        "VM call depth exceeded: depth {} exceeds limit of {}",
-                        depth, max_depth
-                    ),
-                    Span::default(),
-                );
-            }
             ParseError::TimeoutExceeded {
                 elapsed_ms,
                 timeout_ms,
