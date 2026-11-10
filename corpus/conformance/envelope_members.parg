@@ -1,0 +1,13 @@
+## Semantics: M0, V4, T1
+## ruby#420: the envelope-members corpus case — a ruby-1.3.135 bake
+## carries byte_checksum, validated, and semantics_hash beside the
+## classic members, and every engine loader must verify both digests.
+grammar EnvelopeMembers version "1.0.0" edition "v2" {
+  main = "a" 1*"b" as run
+  entry main: main
+
+  test main {
+    accept "abb"
+    reject "ac"
+  }
+}

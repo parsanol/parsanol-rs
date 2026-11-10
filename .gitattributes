@@ -1,3 +1,9 @@
 # Byte-exact fixtures: checksums attest the producer's exact bytes, so
 # checkout line-ending conversion must never touch them.
 parsanol/tests/fixtures/pg/demo-sealed.json -text
+
+# The conformance corpus (ruby#420/#422): artifacts are checksummed over
+# the producer's exact bytes — checkout conversion would break the seal
+# on CRLF platforms (the windows conformance sweep).
+corpus/**/*.json -text
+corpus/**/*.parg -text

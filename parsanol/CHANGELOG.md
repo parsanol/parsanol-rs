@@ -73,6 +73,31 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- Drop the now-unused has_entity (wasm clippy dead-code) by @[object]
+- Restore the injected-skip interleave (ruby#425) by @[object]
+
+### Other
+
+- Json-only member cases bind no source pair (ruby#420) ([#428](https://github.com/parsanol/parsanol-rs/pull/428)) by @[object]
+
+### Other
+
+- Publish the engine-compat manifest (ruby#421) ([#423](https://github.com/parsanol/parsanol-rs/pull/423)) by @[object]
+
+### Other
+
+- Drop the needless mut on the parsed grammar document by @[object]
+- Keep token spellings contiguous — no trivia inside a token by @[object]
+
+### Other
+
+- Revert "Merge pull request #410 from parsanol/feat/540-stage-replay" by @[object]
+- Revert "Merge pull request #412 from parsanol/feat/540-stage-replay-languages" by @[object]
+- Find the changed-payload probe's slice at any byte offset by @[object]
+- Replay the asciimath and unicode stage generations on the Rust engine by @[object]
+
+### Other
+
 - Read stage payloads as JSON instead of adding a YAML crate by @[object]
 - Replay staged testsuite raw-tree rows on the Rust engine by @[object]
 - Pin anchored matching of case-insensitive literals ([#409](https://github.com/parsanol/parsanol-rs/pull/409)) by @[object]

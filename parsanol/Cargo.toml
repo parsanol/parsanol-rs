@@ -34,7 +34,7 @@ perf-counters = []
 
 [dependencies]
 # Derive macros (required)
-parsanol-derive = { path = "../parsanol-derive", version = "0.20.7" }
+parsanol-derive = { path = "../parsanol-derive", version = "0.20.12" }
 
 # Core dependencies
 serde = { workspace = true }
@@ -72,10 +72,6 @@ proptest = "=1.11.0"
 
 
 # Examples
-[[example]]
-name = "stage-replay"
-path = "../examples/stage-replay/main.rs"
-
 [[example]]
 name = "balanced-parens"
 path = "../examples/balanced-parens/basic.rs"

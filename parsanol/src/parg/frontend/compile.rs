@@ -862,6 +862,13 @@ impl<'a> Compiler<'a> {
             | INode::Lookbehind { .. }
             | INode::Entity { .. } => node,
             INode::Seq(items) => {
+                // parsanol-ruby#134: an optional skip before every
+                // terminal of every sequence — token-internal spans are
+                // protected by ATOMICITY (an atomic rule body never
+                // reaches inject: the rule-level gate above), so an
+                // entity guard here would wrongly leave plain token
+                // sequences uninterleaved (ruby#425: ruby's wire
+                // reference interleaves `"a" "b" "c"`).
                 let kids = items
                     .into_iter()
                     .map(|child| self.inject(child))
@@ -921,10 +928,14 @@ impl<'a> Compiler<'a> {
                     maybe,
                 }
             }
-            INode::Named { name, child } => INode::Named {
-                name,
-                child: Box::new(self.inject(*child)?),
-            },
+            INode::Named { name, child } => {
+                // Ruby descends unconditionally (ruby#425): composites
+                // interleave around their own children.
+                INode::Named {
+                    name,
+                    child: Box::new(self.inject(*child)?),
+                }
+            }
             terminal @ (INode::Str(_) | INode::Re(_)) => {
                 let skip = self.skip_maybe()?;
                 INode::Seq(vec![skip, terminal])
