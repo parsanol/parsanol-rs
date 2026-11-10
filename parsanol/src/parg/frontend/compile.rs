@@ -879,13 +879,13 @@ impl<'a> Compiler<'a> {
             | INode::Lookbehind { .. }
             | INode::Entity { .. } => node,
             INode::Seq(items) => {
-                // parsanol-ruby#134: trivia belongs between tokens
-                // (rule references). A sequence without one is a
-                // char-scan span — one token's spelling — and takes
-                // no inter-member trivia.
-                if !items.iter().any(INode::has_entity) {
-                    return Ok(INode::Seq(items));
-                }
+                // parsanol-ruby#134: an optional skip before every
+                // terminal of every sequence — token-internal spans are
+                // protected by ATOMICITY (an atomic rule body never
+                // reaches inject: the rule-level gate above), so an
+                // entity guard here would wrongly leave plain token
+                // sequences uninterleaved (ruby#425: ruby's wire
+                // reference interleaves `"a" "b" "c"`).
                 let kids = items
                     .into_iter()
                     .map(|child| self.inject(child))
@@ -904,9 +904,6 @@ impl<'a> Compiler<'a> {
                 }
             }
             INode::Alt(branches) => {
-                if !branches.iter().any(INode::has_entity) {
-                    return Ok(INode::Alt(branches));
-                }
                 let out = branches
                     .into_iter()
                     .map(|branch| self.inject(branch))
@@ -949,9 +946,8 @@ impl<'a> Compiler<'a> {
                 }
             }
             INode::Named { name, child } => {
-                if !child.has_entity() {
-                    return Ok(INode::Named { name, child });
-                }
+                // Ruby descends unconditionally (ruby#425): composites
+                // interleave around their own children.
                 INode::Named {
                     name,
                     child: Box::new(self.inject(*child)?),
