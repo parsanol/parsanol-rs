@@ -784,6 +784,58 @@ pub unsafe extern "C" fn parsanol_parg_error(
     }
 }
 
+/// Parse a checksum-verified artifact entry with an explicit policy:
+/// 0 = Strict (the existing default), 1 = Parslet. Returns an owned JSON
+/// envelope `{ok:true,shape:...}` or `{ok:false,error:{offset,ranked}}`.
+/// Runtime/artifact errors and unknown policies return NULL and set last_error.
+/// No recovery captures are fabricated by this API.
+///
+/// # Safety
+/// Artifact, entry and input must be non-NULL valid UTF-8 C strings.
+/// Free a non-NULL result exactly once with `parsanol_parg_free`.
+#[no_mangle]
+pub unsafe extern "C" fn parsanol_parg_parse_with_compatibility(
+    artifact_json: *const c_char,
+    entry: *const c_char,
+    input: *const c_char,
+    compatibility: u32,
+) -> *mut c_char {
+    let result = (|| -> Result<serde_json::Value, String> {
+        use crate::portable::parser::ParserCompatibility;
+        if artifact_json.is_null() || entry.is_null() || input.is_null() {
+            return Err("artifact, entry and input must be non-NULL".into());
+        }
+        let policy = match compatibility {
+            0 => ParserCompatibility::Strict,
+            1 => ParserCompatibility::Parslet,
+            _ => return Err("unknown parsing compatibility policy".into()),
+        };
+        let text = CStr::from_ptr(artifact_json)
+            .to_str()
+            .map_err(|e| e.to_string())?;
+        let entry = CStr::from_ptr(entry).to_str().map_err(|e| e.to_string())?;
+        let input = CStr::from_ptr(input).to_str().map_err(|e| e.to_string())?;
+        let artifact = crate::parg::PargArtifact::from_json(text).map_err(|e| e.to_string())?;
+        match artifact.parse_shape_with_compatibility(entry, input, policy) {
+            Ok(shape) => Ok(serde_json::json!({"ok": true, "shape": shape})),
+            Err(crate::parg::PargError::ParseWire { offset, ranked, .. }) => {
+                Ok(serde_json::json!({"ok": false, "error": {"offset": offset, "ranked": ranked}}))
+            }
+            Err(error) => Err(error.to_string()),
+        }
+    })();
+    match result {
+        Ok(value) => {
+            c_set_error("");
+            to_c(value.to_string())
+        }
+        Err(error) => {
+            c_set_error(&error);
+            std::ptr::null_mut()
+        }
+    }
+}
+
 /// # Safety
 /// Frees a pointer returned by `parsanol_parg_parse` / `parsanol_parg_error`.
 #[no_mangle]

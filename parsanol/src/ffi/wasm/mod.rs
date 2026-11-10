@@ -245,6 +245,37 @@ impl PargArtifactJs {
             .map_err(|_| JsValue::from_str("Failed to serialize shape"))
     }
 
+    /// Explicit compatibility without changing parseShape defaults.
+    /// The JSON envelope contains either shape or causal error diagnostics;
+    /// it does not claim best-effort recovery captures.
+    #[wasm_bindgen(js_name = parseShapeWithCompatibility)]
+    pub fn parse_shape_with_compatibility(
+        &self,
+        entry: &str,
+        input: &str,
+        compatibility: &str,
+    ) -> Result<JsString, JsValue> {
+        use crate::portable::parser::ParserCompatibility;
+        let policy = match compatibility {
+            "strict" => ParserCompatibility::Strict,
+            "parslet" => ParserCompatibility::Parslet,
+            _ => return Err(JsValue::from_str("unknown parsing compatibility policy")),
+        };
+        let value = match self
+            .artifact
+            .parse_shape_with_compatibility(entry, input, policy)
+        {
+            Ok(shape) => serde_json::json!({"ok": true, "shape": shape}),
+            Err(crate::parg::PargError::ParseWire { offset, ranked, .. }) => {
+                serde_json::json!({"ok": false, "error": {"offset": offset, "ranked": ranked}})
+            }
+            Err(error) => return Err(JsValue::from_str(&error.to_string())),
+        };
+        serde_json::to_string(&value)
+            .map(JsString::from)
+            .map_err(|_| JsValue::from_str("Failed to serialize parse result"))
+    }
+
     /// Best-effort recovery (TODO.sota/1): success returns
     /// `{"ok": true, "shape": ...}`; failure returns
     /// `{"ok": false, "captures": ..., "error": ..., "consumed_upto"}`.

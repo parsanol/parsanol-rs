@@ -204,11 +204,30 @@ impl PargArtifact {
     /// Parse an entry with the native portable engine and return the
     /// parsanol-shape tree as JSON.
     pub fn parse_shape(&self, entry: &str, input: &str) -> Result<Value, PargError> {
+        self.parse_shape_with_compatibility(
+            entry,
+            input,
+            crate::portable::parser::ParserCompatibility::Strict,
+        )
+    }
+
+    /// Parse with an explicit packrat compatibility policy. Strict remains
+    /// the default. Parslet selects historical memo ordering and reports
+    /// only failures in the selected rejected subtree.
+    pub fn parse_shape_with_compatibility(
+        &self,
+        entry: &str,
+        input: &str,
+        compatibility: crate::portable::parser::ParserCompatibility,
+    ) -> Result<Value, PargError> {
         let grammar: Grammar = self.grammar(entry)?;
         // The shaped tree can dwarf the input (large grammars bind few
         // characters per node); size the arena for the tree, not the text.
         let mut arena = AstArena::for_input(input.len().max(1 << 16));
         let mut parser = PortableParser::new(&grammar, input, &mut arena);
+        parser
+            .set_compatibility(compatibility)
+            .map_err(|err| PargError::ParseFailed(err.to_string()))?;
         let raw = parser.parse().map_err(|err| {
             if err.is_abort() {
                 // Resource and runtime aborts are not syntax expectations:
