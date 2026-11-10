@@ -6,10 +6,19 @@ name: WASM
 
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - "**.rs"
+      - "parsanol/tests/wasm/**"
+      - "tools/*wasm*"
+      - "Cargo.toml"
+      - ".github/workflows/wasm.yml"
   push:
     branches: [main]
     paths:
       - '**.rs'
+      - 'parsanol/tests/wasm/**'
+      - 'tools/*wasm*'
       - 'Cargo.toml'
       - '.github/workflows/wasm.yml'
 
@@ -38,6 +47,26 @@ jobs:
 
       - name: Build with WASM feature
         run: cargo build --no-default-features --features wasm --target wasm32-unknown-unknown
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Exercise explicit selector in a real browser
+        shell: bash
+        run: |
+          bindgen=$(python3 tools/fetch-wasm-bindgen.py --lockfile Cargo.lock --output "$RUNNER_TEMP/wasm-bindgen")
+          "$bindgen" target/wasm32-unknown-unknown/debug/parsanol.wasm --target web --out-dir "$RUNNER_TEMP/parsanol-web"
+          node tools/check-wasm-node.mjs "$RUNNER_TEMP/parsanol-web"
+          python3 tools/check-wasm-compatibility.py --web-dir "$RUNNER_TEMP/parsanol-web" --evidence-dir "$RUNNER_TEMP/wasm-compatibility-evidence"
+
+      - name: Upload browser compatibility evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wasm-compatibility-evidence
+          path: ${{ runner.temp }}/wasm-compatibility-evidence
+          if-no-files-found: ignore
 
       - name: Run clippy with WASM
         run: cargo clippy --no-default-features --features wasm -- -D warnings
