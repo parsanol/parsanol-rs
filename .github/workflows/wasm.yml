@@ -48,7 +48,7 @@ jobs:
       - name: Build with WASM feature
         run: cargo build --no-default-features --features wasm --target wasm32-unknown-unknown
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
 
@@ -62,7 +62,7 @@ jobs:
 
       - name: Upload browser compatibility evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wasm-compatibility-evidence
           path: ${{ runner.temp }}/wasm-compatibility-evidence
@@ -73,3 +73,6 @@ jobs:
 
       - name: Run WASM library tests (native)
         run: cargo test --no-default-features --features wasm --lib
+
+      - name: Run artifact and C ABI compatibility tests
+        run: cargo test -p parsanol --no-default-features --test parg_compatibility
