@@ -21,7 +21,7 @@ crate-type = ["cdylib", "rlib"]
 [features]
 default = []
 ruby = ["magnus"]
-wasm = ["wasm-bindgen", "js-sys", "console_error_panic_hook"]
+wasm = ["wasm-bindgen", "js-sys", "console_error_panic_hook", "serde_json/unbounded_depth"]
 logging = ["log"]
 parallel = ["rayon"]
 # Benchmark comparison features

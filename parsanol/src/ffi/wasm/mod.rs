@@ -236,6 +236,83 @@ fn parg_error_to_js(error: crate::parg::PargError) -> JsValue {
     }
 }
 
+/// Bound JSON container nesting before using serde's recursive Value decoder.
+/// This scans structural bytes only; serde remains the JSON syntax authority.
+/// The explicit budget replaces serde's implicit 127-container budget for the
+/// shape bridge, allowing parser-produced depth-64 trees to round-trip.
+const MAX_SHAPE_JSON_DEPTH: usize = 512;
+
+fn check_shape_json_depth(input: &str) -> Result<(), usize> {
+    let (mut depth, mut quoted, mut escaped) = (0usize, false, false);
+    for byte in input.bytes() {
+        if quoted {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                quoted = false;
+            }
+        } else {
+            match byte {
+                b'"' => quoted = true,
+                b'[' | b'{' => {
+                    depth += 1;
+                    if depth > MAX_SHAPE_JSON_DEPTH {
+                        return Err(depth);
+                    }
+                }
+                b']' | b'}' => depth = depth.saturating_sub(1),
+                _ => {}
+            }
+        }
+    }
+    Ok(())
+}
+
+fn binding_shape_from_json(input: &str) -> Result<serde_json::Value, JsValue> {
+    if let Err(depth) = check_shape_json_depth(input) {
+        let error = js_sys::Error::new("Binding shape exceeds the JSON container depth budget");
+        error.set_name("ShapeDepthLimitExceeded");
+        for (key, value) in [
+            ("category", JsValue::from_str("shape_depth_limit")),
+            ("depth", JsValue::from_f64(depth as f64)),
+            ("max_depth", JsValue::from_f64(MAX_SHAPE_JSON_DEPTH as f64)),
+        ] {
+            let _ = js_sys::Reflect::set(&error, &JsValue::from_str(key), &value);
+        }
+        return Err(error.into());
+    }
+    let mut decoder = serde_json::Deserializer::from_str(input);
+    // Safe only after the explicit structural budget above. Keep the default
+    // serde guard on all unrelated JSON/artifact/model decoders.
+    decoder.disable_recursion_limit();
+    let shape = <serde_json::Value as serde::Deserialize>::deserialize(&mut decoder)
+        .map_err(|error| JsValue::from_str(&format!("Invalid shape JSON: {error}")))?;
+    decoder
+        .end()
+        .map_err(|error| JsValue::from_str(&format!("Invalid shape JSON: {error}")))?;
+    Ok(shape)
+}
+
+#[cfg(test)]
+mod shape_depth_tests {
+    use super::*;
+    #[test]
+    fn structural_budget_ignores_quoted_and_escaped_delimiters() {
+        assert_eq!(
+            check_shape_json_depth(&format!("{}0{}", "[".repeat(512), "]".repeat(512))),
+            Ok(())
+        );
+        assert_eq!(
+            check_shape_json_depth(&format!("{}0{}", "[".repeat(513), "]".repeat(513))),
+            Err(513)
+        );
+        assert_eq!(check_shape_json_depth(r#"{"text":"[\"{{]"}"#), Ok(()));
+        assert_eq!(check_shape_json_depth("[[]] [[],[]]"), Ok(()));
+    }
+}
+
 /// A verified PARG artifact exposed to JavaScript: checksum-verified
 /// load, native parse, bindings application, embedded-suite runs and
 /// the binding-requirements schema (PN 2/4).
@@ -331,8 +408,7 @@ impl PargArtifactJs {
     /// Apply an entry's bindings to a parsanol-shape tree (JSON text).
     #[wasm_bindgen(js_name = applyBindings)]
     pub fn apply_bindings(&self, entry: &str, shape_json: &str) -> Result<JsString, JsValue> {
-        let shape: serde_json::Value = serde_json::from_str(shape_json)
-            .map_err(|e| JsValue::from_str(&format!("Invalid shape JSON: {e}")))?;
+        let shape = binding_shape_from_json(shape_json)?;
         let bound = self
             .artifact
             .apply_bindings(entry, &shape)
@@ -359,8 +435,7 @@ impl PargArtifactJs {
             Some("ts"),
         )
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
-        let shape: serde_json::Value = serde_json::from_str(shape_json)
-            .map_err(|e| JsValue::from_str(&format!("Invalid shape JSON: {e}")))?;
+        let shape = binding_shape_from_json(shape_json)?;
         let bound = bindings
             .apply(&self.artifact, entry, &shape)
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
