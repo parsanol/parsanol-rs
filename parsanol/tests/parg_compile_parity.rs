@@ -82,6 +82,15 @@ fn rust_compiler_matches_the_ruby_atom_streams() {
         }
 
         let source_path = dir.join(format!("{name}.parg"));
+        if !source_path.exists() {
+            // A json without a sibling .parg is a compile-input member
+            // case (the envelope-members matrix, ruby#420): no source
+            // pair exists, so no atom stream can be re-derived — the
+            // envelope test's loader duty covers it instead.
+            skipped += 1;
+            eprintln!("skip: {name} — json-only member case");
+            continue;
+        }
         let source = std::fs::read_to_string(&source_path).expect("source readable");
         let (mut parsed, mode) = parser::parse_grammar_with_mode(&source)
             .unwrap_or_else(|err| panic!("{name}: rust parse failed: {err}"));
@@ -184,8 +193,13 @@ fn rust_envelope_matches_the_ruby_artifacts() {
             .unwrap_or_else(|err| panic!("{name}: rust envelope failed: {err}"));
 
         let engine_stamps = ["checksum", "compiler_version", "unicode_tables"];
+        // The bake receipt (ruby#443): `byte_checksum` attests the
+        // committed FILE's bytes and `validated` records the bake — a
+        // compile cannot reproduce either; the ruby bake's receipt is
+        // what every engine LOADS and verifies.
+        let bake_receipt = ["byte_checksum", "validated"];
         for (key, want) in artifact.as_object().expect("artifact object") {
-            if engine_stamps.contains(&key.as_str()) {
+            if engine_stamps.contains(&key.as_str()) || bake_receipt.contains(&key.as_str()) {
                 // The engine's own stamps: the compiling engine names
                 // itself (and its Unicode table source) and the
                 // checksum covers the stamp.
