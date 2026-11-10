@@ -82,6 +82,14 @@ fn rust_compiler_matches_the_ruby_atom_streams() {
         }
 
         let source_path = dir.join(format!("{name}.parg"));
+        // A json without a sibling .parg is a compile-input member case
+        // (the --model-bindings embedding, ruby#420): nothing to
+        // re-derive — its loader duty is the conformance sweep's.
+        if !source_path.exists() {
+            skipped += 1;
+            eprintln!("skip: {name} — json-only member case");
+            continue;
+        }
         let source = std::fs::read_to_string(&source_path).expect("source readable");
         let (mut parsed, mode) = parser::parse_grammar_with_mode(&source)
             .unwrap_or_else(|err| panic!("{name}: rust parse failed: {err}"));
@@ -183,7 +191,19 @@ fn rust_envelope_matches_the_ruby_artifacts() {
         let got = envelope::build_mode(&parsed, &tables, None, mode.as_deref())
             .unwrap_or_else(|err| panic!("{name}: rust envelope failed: {err}"));
 
-        let engine_stamps = ["checksum", "compiler_version", "unicode_tables"];
+        // byte_checksum is the digest over the compiling engine's own
+        // sealed bytes (the stamp covers compiler_version), and
+        // validated is that engine's receipt — both engine-produced,
+        // both excluded from cross-compiler parity (ruby#420's corpus
+        // case pins their PRESENCE via the conformance sweep's load
+        // verification instead).
+        let engine_stamps = [
+            "checksum",
+            "compiler_version",
+            "unicode_tables",
+            "byte_checksum",
+            "validated",
+        ];
         for (key, want) in artifact.as_object().expect("artifact object") {
             if engine_stamps.contains(&key.as_str()) {
                 // The engine's own stamps: the compiling engine names
