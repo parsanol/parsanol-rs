@@ -15,6 +15,48 @@ use crate::portable::grammar::{Atom, RepetitionTag};
 use crate::portable::parslet_transform::to_parslet_compatible;
 use crate::portable::{AstArena, Grammar, PortableParser};
 
+// High-level artifact parsing must reach its rule-recursion guard on native
+// callers whose OS/language thread may have a much smaller default stack.
+// Results own their data; scoped workers are joined before borrowed input or
+// artifacts can expire. Nested recovery parses reuse the same worker.
+#[cfg(not(target_arch = "wasm32"))]
+thread_local! { static ON_PARSER_STACK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
+#[cfg(not(target_arch = "wasm32"))]
+struct ParserStackScope;
+#[cfg(not(target_arch = "wasm32"))]
+impl Drop for ParserStackScope {
+    fn drop(&mut self) {
+        ON_PARSER_STACK.with(|flag| flag.set(false));
+    }
+}
+pub(crate) fn with_parser_stack<T: Send>(
+    operation: impl FnOnce() -> T + Send,
+) -> Result<T, String> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        Ok(operation())
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        if ON_PARSER_STACK.with(|flag| flag.get()) {
+            return Ok(operation());
+        }
+        std::thread::scope(|scope| {
+            std::thread::Builder::new()
+                .name("parsanol-artifact".into())
+                .stack_size(64 * 1024 * 1024)
+                .spawn_scoped(scope, move || {
+                    ON_PARSER_STACK.with(|flag| flag.set(true));
+                    let _scope = ParserStackScope;
+                    operation()
+                })
+                .map_err(|error| format!("parser worker unavailable: {error}"))?
+                .join()
+                .map_err(|_| "parser worker panicked".to_string())
+        })
+    }
+}
+
 /// The wire's line/column at a byte offset: line counts newlines,
 /// column counts CHARACTERS since the last one — the guide's Slice
 /// contract (offsets stay bytes; the Ruby engine's slice.rb is the
@@ -220,6 +262,15 @@ impl PargArtifact {
         input: &str,
         compatibility: crate::portable::parser::ParserCompatibility,
     ) -> Result<Value, PargError> {
+        with_parser_stack(|| self.parse_shape_inner(entry, input, compatibility))
+            .map_err(PargError::ParseFailed)?
+    }
+    fn parse_shape_inner(
+        &self,
+        entry: &str,
+        input: &str,
+        compatibility: crate::portable::parser::ParserCompatibility,
+    ) -> Result<Value, PargError> {
         let grammar: Grammar = self.grammar(entry)?;
         // The shaped tree can dwarf the input (large grammars bind few
         // characters per node); size the arena for the tree, not the text.
@@ -233,7 +284,7 @@ impl PargArtifact {
                 // Resource and runtime aborts are not syntax expectations:
                 // the failure wire belongs to whatever branch was active, so
                 // rendering it would send users after a phantom `]`.
-                return PargError::ParseFailed(err.to_string());
+                return PargError::runtime_abort(err);
             }
             match parser.failure_wire() {
                 Some((offset, expected)) => {
@@ -273,6 +324,10 @@ impl PargArtifact {
     /// cost on success paths — the recovery envelope is built only
     /// from state the failed parse already left behind.
     pub fn parse_shape_recovering(&self, entry: &str, input: &str) -> Result<Value, PargError> {
+        with_parser_stack(|| self.parse_shape_recovering_inner(entry, input))
+            .map_err(PargError::ParseFailed)?
+    }
+    fn parse_shape_recovering_inner(&self, entry: &str, input: &str) -> Result<Value, PargError> {
         let grammar: Grammar = self.grammar(entry)?;
         let mut arena = AstArena::for_input(input.len().max(1 << 16));
         let mut parser = PortableParser::new(&grammar, input, &mut arena);
@@ -281,6 +336,7 @@ impl PargArtifact {
                 let shape = self.parse_shape(entry, input)?;
                 Ok(serde_json::json!({ "ok": true, "shape": shape }))
             }
+            Err(error) if error.is_abort() => Err(PargError::runtime_abort(error)),
             Err(_) => {
                 // The generational undo log empties the visible store
                 // on the failing branch — that rollback IS the
@@ -293,7 +349,11 @@ impl PargArtifact {
                 journaling.capture_state_mut().set_journaling(true);
                 journaling.set_track_max_end(true);
                 journaling.set_collect_partial(true);
-                let _ = journaling.parse();
+                if let Err(error) = journaling.parse() {
+                    if error.is_abort() {
+                        return Err(PargError::runtime_abort(error));
+                    }
+                }
                 let mut partial = journaling.take_partial_stash();
                 let journal: Vec<(String, CaptureValue)> =
                     journaling.capture_state().journal().to_vec();

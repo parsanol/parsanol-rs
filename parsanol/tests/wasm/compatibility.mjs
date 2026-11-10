@@ -30,5 +30,26 @@ export async function runCompatibilityChecks(engine) {
       assert(entry,`${prefix} unknown entry rejected`);
     } finally {artifact.free();}
   }
+  // Generic recursive source fixture exercises the same supported rule budget
+  // without parsing or scanning mathematical input in the consumer.
+  const recursive={shape:'parsanol-tree/v2',grammar:'Recursive',version:'1.0.0',default_entry:'main',entries:{main:{root:'main',grammar:{root:0,atoms:[{Entity:{atom:1}},{Alternative:{atoms:[2,5]}},{Sequence:{atoms:[3,0,4]}},{Str:{pattern:'('}},{Str:{pattern:')'}},{Str:{pattern:'x'}}]}}}};
+  const recursiveDigest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify(canonical(recursive))));
+  recursive.checksum='sha256:'+Array.from(new Uint8Array(recursiveDigest),byte=>byte.toString(16).padStart(2,'0')).join('');
+  const nested=new engine.PargArtifactJs(JSON.stringify(recursive));
+  try {
+    for(const depth of [64,128,256]){
+      nested.parseShape('main','('.repeat(depth)+'x'+')'.repeat(depth));
+      nested.parseShape('main','x');checks.push('valid nesting and reuse '+depth);
+    }
+    const excessive='('.repeat(1200)+'x'+')'.repeat(1200);
+    for(const method of ['parseShape','parseShapeRecovering']){
+      let resource;try{nested[method]('main',excessive);}catch(error){resource=error;}
+      assert(resource?.category==='recursion_limit'&&resource.max_depth===1000&&resource.name==='RecursionLimitExceeded',method+' typed guard');
+      nested.parseShape('main','x');checks.push(method+' resource reuse');
+    }
+    const resource=JSON.parse(nested.parseShapeWithCompatibility('main',excessive,'strict'));
+    assert(resource.ok===false&&resource.error.category==='recursion_limit'&&resource.error.offset===null,'compatibility typed guard');
+    nested.parseShape('main','x');checks.push('compatibility resource reuse');
+  } finally {nested.free();}
   return checks;
 }

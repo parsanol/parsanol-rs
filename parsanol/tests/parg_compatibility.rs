@@ -85,3 +85,29 @@ fn c_policy_returns_owned_envelopes_and_rejects_invalid_parameters() {
         .is_null());
     }
 }
+
+#[test]
+fn recursion_abort_is_not_syntax_or_recovery_captures() {
+    std::thread::Builder::new().stack_size(64*1024*1024).spawn(|| {
+        let mut value=json!({"shape":"parsanol-tree/v2","grammar":"Recursive","version":"1.0.0",
+            "default_entry":"main","entries":{"main":{"root":"main","grammar":{"root":0,"atoms":[
+                {"Entity":{"atom":1}},{"Alternative":{"atoms":[2,5]}},
+                {"Sequence":{"atoms":[3,0,4]}},{"Str":{"pattern":"("}},
+                {"Str":{"pattern":")"}},{"Str":{"pattern":"x"}}]}}}});
+        value["checksum"]=Value::String(parsanol::parg::checksum_hex(&value).unwrap());
+        let text=value.to_string();let artifact=PargArtifact::from_json(&text).unwrap();
+        let nested=format!("{}x{}","(".repeat(1200),")".repeat(1200));
+        for result in [artifact.parse_shape("main",&nested),artifact.parse_shape_recovering("main",&nested)] {
+            assert!(matches!(result,Err(PargError::RecursionLimitExceeded { max_depth:1000,.. })));
+        }
+        assert!(artifact.parse_shape("main","x").is_ok());
+        let text=CString::new(text).unwrap();let input=CString::new(nested).unwrap();let entry=CString::new("main").unwrap();
+        unsafe {
+            use parsanol::ffi::c::{parsanol_parg_parse_with_compatibility,parsanol_parg_free};
+            let ptr=parsanol_parg_parse_with_compatibility(text.as_ptr(),entry.as_ptr(),input.as_ptr(),0);
+            assert!(!ptr.is_null());let response:Value=serde_json::from_str(CStr::from_ptr(ptr).to_str().unwrap()).unwrap();parsanol_parg_free(ptr);
+            assert_eq!(response["error"]["category"],"recursion_limit");
+            assert_eq!(response["error"]["max_depth"],1000);assert!(response["error"]["offset"].is_null());
+        }
+    }).unwrap().join().unwrap();
+}

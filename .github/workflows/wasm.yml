@@ -46,7 +46,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Build with WASM feature
-        run: cargo build --no-default-features --features wasm --target wasm32-unknown-unknown
+        run: cargo rustc -p parsanol --release --no-default-features --features wasm --lib --target wasm32-unknown-unknown -- -C link-arg=-zstack-size=8388608
 
       - uses: actions/setup-node@v7
         with:
@@ -56,7 +56,7 @@ jobs:
         shell: bash
         run: |
           bindgen=$(python3 tools/fetch-wasm-bindgen.py --lockfile Cargo.lock --output "$RUNNER_TEMP/wasm-bindgen")
-          "$bindgen" target/wasm32-unknown-unknown/debug/parsanol.wasm --target web --out-dir "$RUNNER_TEMP/parsanol-web"
+          "$bindgen" target/wasm32-unknown-unknown/release/parsanol.wasm --target web --out-dir "$RUNNER_TEMP/parsanol-web"
           node tools/check-wasm-node.mjs "$RUNNER_TEMP/parsanol-web"
           python3 tools/check-wasm-compatibility.py --web-dir "$RUNNER_TEMP/parsanol-web" --evidence-dir "$RUNNER_TEMP/wasm-compatibility-evidence"
 

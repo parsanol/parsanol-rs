@@ -207,6 +207,23 @@ pub fn compile_source(source: &str) -> Result<String, JsValue> {
 /// A verified PARG artifact exposed to JavaScript: checksum-verified
 /// load, native parse, bindings application, embedded-suite runs and
 /// the binding-requirements schema (PN 2/4).
+fn parg_error_to_js(error: crate::parg::PargError) -> JsValue {
+    if let crate::parg::PargError::RecursionLimitExceeded { depth, max_depth } = &error {
+        let value = js_sys::Error::new(&error.to_string());
+        value.set_name("RecursionLimitExceeded");
+        for (key, data) in [
+            ("category", JsValue::from_str("recursion_limit")),
+            ("depth", JsValue::from_f64(*depth as f64)),
+            ("max_depth", JsValue::from_f64(*max_depth as f64)),
+        ] {
+            let _ = js_sys::Reflect::set(&value, &JsValue::from_str(key), &data);
+        }
+        value.into()
+    } else {
+        JsValue::from_str(&error.to_string())
+    }
+}
+
 #[wasm_bindgen]
 pub struct PargArtifactJs {
     artifact: PargArtifact,
@@ -239,7 +256,7 @@ impl PargArtifactJs {
         let shape = self
             .artifact
             .parse_shape(entry, input)
-            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+            .map_err(parg_error_to_js)?;
         serde_json::to_string(&shape)
             .map(JsString::from)
             .map_err(|_| JsValue::from_str("Failed to serialize shape"))
@@ -269,7 +286,10 @@ impl PargArtifactJs {
             Err(crate::parg::PargError::ParseWire { offset, ranked, .. }) => {
                 serde_json::json!({"ok": false, "error": {"offset": offset, "ranked": ranked}})
             }
-            Err(error) => return Err(JsValue::from_str(&error.to_string())),
+            Err(crate::parg::PargError::RecursionLimitExceeded { depth, max_depth }) => {
+                serde_json::json!({"ok": false, "error": {"category": "recursion_limit", "offset": null, "depth": depth, "max_depth": max_depth}})
+            }
+            Err(error) => return Err(parg_error_to_js(error)),
         };
         serde_json::to_string(&value)
             .map(JsString::from)
@@ -284,7 +304,7 @@ impl PargArtifactJs {
         let recovered = self
             .artifact
             .parse_shape_recovering(entry, input)
-            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+            .map_err(parg_error_to_js)?;
         serde_json::to_string(&recovered)
             .map(JsString::from)
             .map_err(|_| JsValue::from_str("Failed to serialize recovery"))

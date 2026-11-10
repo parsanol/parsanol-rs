@@ -693,6 +693,9 @@ enum Outcome {
 }
 
 fn execute(text: &str, input: &str) -> Result<Outcome, String> {
+    crate::parg::suite::with_parser_stack(|| execute_inner(text, input))?
+}
+fn execute_inner(text: &str, input: &str) -> Result<Outcome, String> {
     // Artifact-first: a full parsanol-tree/v2 envelope (checksum-verified)
     // parses through the artifact's default entry; a bare portable grammar
     // JSON keeps the historical behavior. One surface, both callers.
@@ -725,6 +728,9 @@ fn execute(text: &str, input: &str) -> Result<Outcome, String> {
             serde_json::to_string(&value)
                 .map(Outcome::Shape)
                 .map_err(|e| e.to_string())
+        }
+        Err(error) if error.is_abort() => {
+            Err(crate::parg::PargError::runtime_abort(error).to_string())
         }
         Err(_) => {
             let offset = parser.failure_wire().map_or(0, |(o, _)| o);
@@ -763,8 +769,18 @@ pub unsafe extern "C" fn parsanol_parg_parse(
     input: *const c_char,
 ) -> *mut c_char {
     match run(grammar_json, input) {
-        Ok(Outcome::Shape(json)) => to_c(json),
-        _ => std::ptr::null_mut(),
+        Ok(Outcome::Shape(json)) => {
+            c_set_error("");
+            to_c(json)
+        }
+        Ok(_) => {
+            c_set_error("");
+            std::ptr::null_mut()
+        }
+        Err(error) => {
+            c_set_error(&error);
+            std::ptr::null_mut()
+        }
     }
 }
 
@@ -778,9 +794,17 @@ pub unsafe extern "C" fn parsanol_parg_error(
 ) -> *mut c_char {
     match run(grammar_json, input) {
         Ok(Outcome::Failed { offset, ranked }) => {
+            c_set_error("");
             to_c(serde_json::json!({ "offset": offset, "ranked": ranked }).to_string())
         }
-        _ => std::ptr::null_mut(),
+        Ok(_) => {
+            c_set_error("");
+            std::ptr::null_mut()
+        }
+        Err(error) => {
+            c_set_error(&error);
+            std::ptr::null_mut()
+        }
     }
 }
 
@@ -821,6 +845,9 @@ pub unsafe extern "C" fn parsanol_parg_parse_with_compatibility(
             Err(crate::parg::PargError::ParseWire { offset, ranked, .. }) => {
                 Ok(serde_json::json!({"ok": false, "error": {"offset": offset, "ranked": ranked}}))
             }
+            Err(crate::parg::PargError::RecursionLimitExceeded { depth, max_depth }) => Ok(
+                serde_json::json!({"ok": false, "error": {"category": "recursion_limit", "offset": null, "depth": depth, "max_depth": max_depth}}),
+            ),
             Err(error) => Err(error.to_string()),
         }
     })();
