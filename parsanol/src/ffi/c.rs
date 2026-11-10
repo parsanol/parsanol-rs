@@ -477,7 +477,7 @@ use crate::ffi::shared::{collapse_ast, flatten_ast_to_u64};
 use crate::portable::{AstArena, PortableParser};
 
 static C_NEXT_HANDLE: AtomicU64 = AtomicU64::new(1);
-static C_LAST_ERROR: Mutex<String> = Mutex::new(String::new());
+thread_local! { static C_LAST_ERROR: std::cell::RefCell<CString> = std::cell::RefCell::new(CString::default()); }
 
 fn c_handle_map() -> &'static Mutex<HashMap<u64, Grammar>> {
     static MAP: std::sync::OnceLock<Mutex<HashMap<u64, Grammar>>> = std::sync::OnceLock::new();
@@ -485,12 +485,11 @@ fn c_handle_map() -> &'static Mutex<HashMap<u64, Grammar>> {
 }
 
 fn c_set_error(msg: &str) {
-    if let Ok(mut guard) = C_LAST_ERROR.lock() {
-        guard.clear();
-        guard.push_str(msg);
-        // Keep the buffer NUL-terminated: FFI callers read a C string.
-        guard.push('\0');
-    }
+    // C strings expose only the prefix before an embedded NUL. Each caller
+    // thread owns its buffer; parsing workers return errors to that caller.
+    let end = msg.find('\0').unwrap_or(msg.len());
+    C_LAST_ERROR
+        .with(|slot| *slot.borrow_mut() = CString::new(&msg[..end]).expect("NUL prefix removed"));
 }
 
 /// Register a grammar JSON and get a handle (0 on failure).
@@ -536,26 +535,15 @@ pub extern "C" fn parsanol_c_release(handle: u64) {
     }
 }
 
-/// Last error message from `parsanol_c_register`/`parsanol_c_parse`.
+/// Last error message for the current caller thread.
+/// The borrowed pointer remains valid until this thread sets another error
+/// or exits. Other caller threads cannot replace or invalidate its buffer.
 ///
 /// The returned pointer stays valid until the next library call and must
 /// not be freed.
 #[no_mangle]
 pub extern "C" fn parsanol_c_last_error() -> *const c_char {
-    // The string lives in a static Mutex and is never freed; callers read it
-    // before issuing the next call. A NUL terminator is guaranteed.
-    match C_LAST_ERROR.lock() {
-        Ok(guard) => {
-            if guard.is_empty() {
-                // An empty String's buffer pointer is dangling, not a
-                // readable C string; hand out the static NUL instead.
-                c"".as_ptr() as *const c_char
-            } else {
-                guard.as_ptr() as *const c_char
-            }
-        }
-        Err(_) => c"".as_ptr() as *const c_char,
-    }
+    C_LAST_ERROR.with(|slot| slot.borrow().as_ptr())
 }
 
 /// Parse `input` (NUL-free UTF-8, NUL-terminated) with a registered handle

@@ -204,9 +204,6 @@ pub fn compile_source(source: &str) -> Result<String, JsValue> {
     .map_err(|_| JsValue::from_str("Failed to serialize artifact"))
 }
 
-/// A verified PARG artifact exposed to JavaScript: checksum-verified
-/// load, native parse, bindings application, embedded-suite runs and
-/// the binding-requirements schema (PN 2/4).
 fn parg_error_to_js(error: crate::parg::PargError) -> JsValue {
     if let crate::parg::PargError::RecursionLimitExceeded { depth, max_depth } = &error {
         let value = js_sys::Error::new(&error.to_string());
@@ -224,6 +221,9 @@ fn parg_error_to_js(error: crate::parg::PargError) -> JsValue {
     }
 }
 
+/// A verified PARG artifact exposed to JavaScript: checksum-verified
+/// load, native parse, bindings application, embedded-suite runs and
+/// the binding-requirements schema (PN 2/4).
 #[wasm_bindgen]
 pub struct PargArtifactJs {
     artifact: PargArtifact,

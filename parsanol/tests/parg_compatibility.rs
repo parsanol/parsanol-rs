@@ -111,3 +111,52 @@ fn recursion_abort_is_not_syntax_or_recovery_captures() {
         }
     }).unwrap().join().unwrap();
 }
+
+#[test]
+fn scoped_workers_join_and_caller_errors_remain_thread_local() {
+    use std::sync::{Arc, Barrier};
+    let barrier = Arc::new(Barrier::new(4));
+    let handles: Vec<_> = (0..4)
+        .map(|index| {
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                use parsanol::ffi::c::{
+                    parsanol_c_last_error, parsanol_parg_free,
+                    parsanol_parg_parse_with_compatibility,
+                };
+                let invalid = index % 2 == 0;
+                let pointer = unsafe {
+                    // Drop all borrowed input buffers immediately after the call.
+                    let text = CString::new(artifact("α")).unwrap();
+                    let entry = CString::new("main").unwrap();
+                    let input = CString::new("αb?").unwrap();
+                    parsanol_parg_parse_with_compatibility(
+                        text.as_ptr(),
+                        entry.as_ptr(),
+                        input.as_ptr(),
+                        if invalid { 99 } else { 1 },
+                    )
+                };
+                barrier.wait();
+                unsafe {
+                    let last = CStr::from_ptr(parsanol_c_last_error()).to_str().unwrap();
+                    if invalid {
+                        assert!(pointer.is_null());
+                        assert!(last.contains("unknown parsing compatibility"));
+                    } else {
+                        assert!(last.is_empty());
+                        assert!(!pointer.is_null());
+                        let response: Value =
+                            serde_json::from_str(CStr::from_ptr(pointer).to_str().unwrap())
+                                .unwrap();
+                        parsanol_parg_free(pointer);
+                        assert_eq!(response["error"]["offset"], 2);
+                    }
+                }
+            })
+        })
+        .collect();
+    for handle in handles {
+        handle.join().unwrap();
+    }
+}
