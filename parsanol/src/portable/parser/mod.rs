@@ -471,7 +471,6 @@ macro_rules! perf_count {
 #[allow(missing_docs)]
 pub struct PerfCounters {
     pub dispatch: u64,
-    pub max_call_depth: u64,
     pub dispatch_str: u64,
     pub dispatch_re: u64,
     pub dispatch_seq: u64,
@@ -1085,10 +1084,6 @@ impl<'a> PortableParser<'a> {
             });
         }
         self.dbg_depth += 1;
-        #[cfg(feature = "perf-counters")]
-        {
-            self.perf.max_call_depth = self.perf.max_call_depth.max(self.dbg_depth as u64);
-        }
         if self.dbg_depth > 120 && vm_debug_enabled() {
             let dbg = format!("{:?}", self.grammar.get_atom(atom_id));
             eprintln!(
