@@ -26,7 +26,8 @@ mod stack_tests;
 mod tests;
 
 pub use config::{
-    ParserCompatibility, ParserConfig, DEFAULT_MAX_INPUT_SIZE, DEFAULT_MAX_RECURSION_DEPTH,
+    ParserCompatibility, ParserConfig, DEFAULT_MAX_CALL_DEPTH, DEFAULT_MAX_INPUT_SIZE,
+    DEFAULT_MAX_RECURSION_DEPTH,
 };
 pub use context::ParseContext;
 pub use governor::ResourceGovernor;
@@ -397,6 +398,7 @@ pub struct PortableParser<'a> {
     strict_rollback_on_failure: bool,
 
     dbg_depth: u64,
+    max_call_depth: u64,
 
     /// Per-atom dynamic dependence (empty when the grammar has no
     /// Dynamic atoms): memoization is skipped for these atoms.
@@ -468,6 +470,7 @@ macro_rules! perf_count {
 #[allow(missing_docs)]
 pub struct PerfCounters {
     pub dispatch: u64,
+    pub max_call_depth: u64,
     pub dispatch_str: u64,
     pub dispatch_re: u64,
     pub dispatch_seq: u64,
@@ -612,6 +615,7 @@ impl<'a> PortableParser<'a> {
             rollback_on_failure,
             strict_rollback_on_failure: rollback_on_failure,
             dbg_depth: 0,
+            max_call_depth: DEFAULT_MAX_CALL_DEPTH as u64,
             dynamic_dependent: dynamic_dependence(grammar),
             terminal_direct: terminal_direct_atoms(grammar),
             state_write_dependent: state_write_dependence(grammar),
@@ -672,6 +676,7 @@ impl<'a> PortableParser<'a> {
             rollback_on_failure: false,
             strict_rollback_on_failure: false,
             dbg_depth: 0,
+            max_call_depth: DEFAULT_MAX_CALL_DEPTH as u64,
             dynamic_dependent: dynamic_dependence(grammar),
             terminal_direct: terminal_direct_atoms(grammar),
             state_write_dependent: state_write_dependence(grammar),
@@ -769,6 +774,12 @@ impl<'a> PortableParser<'a> {
     #[inline]
     pub fn set_max_recursion_depth(&mut self, depth: usize) {
         self.governor.set_max_recursion_depth(depth);
+    }
+
+    /// Set the simultaneous VM atom-call budget (0 disables this guard).
+    /// This is independent of the rule-reference recursion budget.
+    pub fn set_max_call_depth(&mut self, depth: usize) {
+        self.max_call_depth = depth as u64;
     }
 
     /// Set timeout in milliseconds
@@ -1053,7 +1064,17 @@ impl<'a> PortableParser<'a> {
         pos: usize,
         consume_all: bool,
     ) -> Result<AtomResult, ParseError> {
+        if self.max_call_depth != 0 && self.dbg_depth >= self.max_call_depth {
+            return Err(ParseError::CallDepthLimitExceeded {
+                depth: (self.dbg_depth + 1) as usize,
+                max_depth: self.max_call_depth as usize,
+            });
+        }
         self.dbg_depth += 1;
+        #[cfg(feature = "perf-counters")]
+        {
+            self.perf.max_call_depth = self.perf.max_call_depth.max(self.dbg_depth as u64);
+        }
         if self.dbg_depth > 120 && vm_debug_enabled() {
             let dbg = format!("{:?}", self.grammar.get_atom(atom_id));
             eprintln!(
@@ -1091,7 +1112,13 @@ impl<'a> PortableParser<'a> {
             }
         }
         self.dbg_depth -= 1;
-        if self.dbg_depth == 0 && matches!(&r, Err(ParseError::RecursionLimitExceeded { .. })) {
+        if self.dbg_depth == 0
+            && matches!(
+                &r,
+                Err(ParseError::RecursionLimitExceeded { .. }
+                    | ParseError::CallDepthLimitExceeded { .. })
+            )
+        {
             // Successful children may have cached values before their captures
             // were rolled back by the abort. A retry must execute those captures.
             self.cache.clear();
@@ -1252,6 +1279,7 @@ impl<'a> PortableParser<'a> {
                         e,
                         ParseError::InvalidGrammar { .. }
                             | ParseError::RecursionLimitExceeded { .. }
+                            | ParseError::CallDepthLimitExceeded { .. }
                     ) =>
                 {
                     // Runtime-level abort: never memoized,
@@ -1370,7 +1398,9 @@ impl<'a> PortableParser<'a> {
                 // likewise abort parsing rather than representing a mismatch.
                 if matches!(
                     e,
-                    ParseError::InvalidGrammar { .. } | ParseError::RecursionLimitExceeded { .. }
+                    ParseError::InvalidGrammar { .. }
+                        | ParseError::RecursionLimitExceeded { .. }
+                        | ParseError::CallDepthLimitExceeded { .. }
                 ) {
                     return Err(e);
                 }
@@ -2126,6 +2156,7 @@ impl<'a> PortableParser<'a> {
                             e,
                             ParseError::InvalidGrammar { .. }
                                 | ParseError::RecursionLimitExceeded { .. }
+                                | ParseError::CallDepthLimitExceeded { .. }
                         ) || (self.compatibility == ParserCompatibility::Parslet
                             && e.is_abort()) =>
                     {
@@ -2161,6 +2192,7 @@ impl<'a> PortableParser<'a> {
                         e,
                         ParseError::InvalidGrammar { .. }
                             | ParseError::RecursionLimitExceeded { .. }
+                            | ParseError::CallDepthLimitExceeded { .. }
                     ) || (self.compatibility == ParserCompatibility::Parslet
                         && e.is_abort()) =>
                 {
@@ -2268,9 +2300,12 @@ impl<'a> PortableParser<'a> {
                         }
                     }
                     Err(error)
-                        if matches!(error, ParseError::RecursionLimitExceeded { .. })
-                            || (self.compatibility == ParserCompatibility::Parslet
-                                && error.is_abort()) =>
+                        if matches!(
+                            error,
+                            ParseError::RecursionLimitExceeded { .. }
+                                | ParseError::CallDepthLimitExceeded { .. }
+                        ) || (self.compatibility == ParserCompatibility::Parslet
+                            && error.is_abort()) =>
                     {
                         self.capture_state.pop_scope();
                         self.capture_state.pop_scope();
@@ -2310,9 +2345,12 @@ impl<'a> PortableParser<'a> {
                         }
                     }
                     Err(error)
-                        if matches!(error, ParseError::RecursionLimitExceeded { .. })
-                            || (self.compatibility == ParserCompatibility::Parslet
-                                && error.is_abort()) =>
+                        if matches!(
+                            error,
+                            ParseError::RecursionLimitExceeded { .. }
+                                | ParseError::CallDepthLimitExceeded { .. }
+                        ) || (self.compatibility == ParserCompatibility::Parslet
+                            && error.is_abort()) =>
                     {
                         self.capture_state.pop_scope();
                         self.capture_state.pop_scope();
@@ -2767,7 +2805,11 @@ impl<'a> PortableParser<'a> {
         {
             return inner;
         }
-        if matches!(&inner, Err(ParseError::RecursionLimitExceeded { .. })) {
+        if matches!(
+            &inner,
+            Err(ParseError::RecursionLimitExceeded { .. }
+                | ParseError::CallDepthLimitExceeded { .. })
+        ) {
             return inner;
         }
         if let Err(ParseError::InvalidGrammar { .. }) = inner {
@@ -3127,7 +3169,10 @@ impl<'a> PortableParser<'a> {
                     self.dynamic_outcomes
                         .insert(outcome_key, Some((r.end_pos, r.value.clone())));
                 }
-                Err(ParseError::RecursionLimitExceeded { .. }) => {}
+                Err(
+                    ParseError::RecursionLimitExceeded { .. }
+                    | ParseError::CallDepthLimitExceeded { .. },
+                ) => {}
                 Err(_) => {
                     if self.dynamic_outcomes.len() > 2_000_000 {
                         self.dynamic_outcomes.clear();

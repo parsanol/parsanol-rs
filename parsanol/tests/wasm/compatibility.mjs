@@ -44,11 +44,11 @@ export async function runCompatibilityChecks(engine) {
     const excessive='('.repeat(1200)+'x'+')'.repeat(1200);
     for(const method of ['parseShape','parseShapeRecovering']){
       let resource;try{nested[method]('main',excessive);}catch(error){resource=error;}
-      assert(resource?.category==='recursion_limit'&&resource.max_depth===1000&&resource.name==='RecursionLimitExceeded',method+' typed guard');
+      assert(resource?.category==='call_depth_limit'&&resource.max_depth===1024&&resource.name==='CallDepthLimitExceeded',method+' typed guard');
       nested.parseShape('main','x');checks.push(method+' resource reuse');
     }
     const resource=JSON.parse(nested.parseShapeWithCompatibility('main',excessive,'strict'));
-    assert(resource.ok===false&&resource.error.category==='recursion_limit'&&resource.error.offset===null,'compatibility typed guard');
+    assert(resource.ok===false&&resource.error.category==='call_depth_limit'&&resource.error.max_depth===1024&&resource.error.offset===null,'compatibility typed guard');
     nested.parseShape('main','x');checks.push('compatibility resource reuse');
   } finally {nested.free();}
   return checks;

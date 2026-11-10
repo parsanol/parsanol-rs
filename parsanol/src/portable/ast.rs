@@ -245,6 +245,14 @@ pub enum ParseError {
         max_depth: usize,
     },
 
+    /// Simultaneous VM atom applications exceeded the platform call-stack budget.
+    CallDepthLimitExceeded {
+        /// VM atom-call depth at the guard.
+        depth: usize,
+        /// Configured VM call-depth budget.
+        max_depth: usize,
+    },
+
     /// Timeout exceeded during parsing
     TimeoutExceeded {
         /// Time elapsed in milliseconds
@@ -290,6 +298,7 @@ impl ParseError {
                 | ParseError::Internal { .. }
                 | ParseError::InputTooLarge { .. }
                 | ParseError::RecursionLimitExceeded { .. }
+                | ParseError::CallDepthLimitExceeded { .. }
                 | ParseError::TimeoutExceeded { .. }
                 | ParseError::MemoryLimitExceeded { .. }
         )
@@ -329,6 +338,12 @@ impl ParseError {
             ParseError::RecursionLimitExceeded { depth, max_depth } => {
                 format!(
                     "Recursion limit exceeded: depth {} exceeds limit of {}",
+                    depth, max_depth
+                )
+            }
+            ParseError::CallDepthLimitExceeded { depth, max_depth } => {
+                format!(
+                    "VM call depth exceeded: depth {} exceeds limit of {}",
                     depth, max_depth
                 )
             }
@@ -397,6 +412,13 @@ impl fmt::Display for ParseError {
                 write!(
                     f,
                     "Recursion limit exceeded: depth {} exceeds limit of {}",
+                    depth, max_depth
+                )
+            }
+            ParseError::CallDepthLimitExceeded { depth, max_depth } => {
+                write!(
+                    f,
+                    "VM call depth exceeded: depth {} exceeds limit of {}",
                     depth, max_depth
                 )
             }

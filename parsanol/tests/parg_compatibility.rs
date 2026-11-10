@@ -160,3 +160,28 @@ fn scoped_workers_join_and_caller_errors_remain_thread_local() {
         handle.join().unwrap();
     }
 }
+
+#[test]
+fn vm_call_budget_is_a_typed_abort_and_does_not_poison_reuse() {
+    use parsanol::portable::ast::ParseError;
+    use parsanol::portable::{AstArena, Grammar, PortableParser};
+    let grammar=Grammar::from_json(r#"{"root":0,"atoms":[{"Entity":{"atom":1}},{"Alternative":{"atoms":[2,5]}},{"Sequence":{"atoms":[3,0,4]}},{"Str":{"pattern":"("}},{"Str":{"pattern":")"}},{"Str":{"pattern":"x"}}]}"#).unwrap();
+    let input = format!("{}x{}", "(".repeat(10), ")".repeat(10));
+    for mode in [ParserCompatibility::Strict, ParserCompatibility::Parslet] {
+        let mut arena = AstArena::for_input(1 << 16);
+        let mut parser = PortableParser::new(&grammar, &input, &mut arena);
+        parser.set_compatibility(mode).unwrap();
+        parser.set_max_call_depth(16);
+        let error = parser.parse().unwrap_err();
+        assert!(error.is_abort());
+        assert!(matches!(
+            error,
+            ParseError::CallDepthLimitExceeded {
+                depth: 17,
+                max_depth: 16
+            }
+        ));
+        parser.set_max_call_depth(0);
+        assert!(parser.parse().is_ok());
+    }
+}

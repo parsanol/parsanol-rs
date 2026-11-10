@@ -205,13 +205,28 @@ pub fn compile_source(source: &str) -> Result<String, JsValue> {
 }
 
 fn parg_error_to_js(error: crate::parg::PargError) -> JsValue {
-    if let crate::parg::PargError::RecursionLimitExceeded { depth, max_depth } = &error {
+    let resource = match &error {
+        crate::parg::PargError::RecursionLimitExceeded { depth, max_depth } => Some((
+            "recursion_limit",
+            "RecursionLimitExceeded",
+            *depth,
+            *max_depth,
+        )),
+        crate::parg::PargError::CallDepthLimitExceeded { depth, max_depth } => Some((
+            "call_depth_limit",
+            "CallDepthLimitExceeded",
+            *depth,
+            *max_depth,
+        )),
+        _ => None,
+    };
+    if let Some((category, name, depth, max_depth)) = resource {
         let value = js_sys::Error::new(&error.to_string());
-        value.set_name("RecursionLimitExceeded");
+        value.set_name(name);
         for (key, data) in [
-            ("category", JsValue::from_str("recursion_limit")),
-            ("depth", JsValue::from_f64(*depth as f64)),
-            ("max_depth", JsValue::from_f64(*max_depth as f64)),
+            ("category", JsValue::from_str(category)),
+            ("depth", JsValue::from_f64(depth as f64)),
+            ("max_depth", JsValue::from_f64(max_depth as f64)),
         ] {
             let _ = js_sys::Reflect::set(&value, &JsValue::from_str(key), &data);
         }
@@ -288,6 +303,9 @@ impl PargArtifactJs {
             }
             Err(crate::parg::PargError::RecursionLimitExceeded { depth, max_depth }) => {
                 serde_json::json!({"ok": false, "error": {"category": "recursion_limit", "offset": null, "depth": depth, "max_depth": max_depth}})
+            }
+            Err(crate::parg::PargError::CallDepthLimitExceeded { depth, max_depth }) => {
+                serde_json::json!({"ok": false, "error": {"category": "call_depth_limit", "offset": null, "depth": depth, "max_depth": max_depth}})
             }
             Err(error) => return Err(parg_error_to_js(error)),
         };

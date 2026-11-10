@@ -836,6 +836,9 @@ pub unsafe extern "C" fn parsanol_parg_parse_with_compatibility(
             Err(crate::parg::PargError::RecursionLimitExceeded { depth, max_depth }) => Ok(
                 serde_json::json!({"ok": false, "error": {"category": "recursion_limit", "offset": null, "depth": depth, "max_depth": max_depth}}),
             ),
+            Err(crate::parg::PargError::CallDepthLimitExceeded { depth, max_depth }) => Ok(
+                serde_json::json!({"ok": false, "error": {"category": "call_depth_limit", "offset": null, "depth": depth, "max_depth": max_depth}}),
+            ),
             Err(error) => Err(error.to_string()),
         }
     })();
@@ -914,8 +917,14 @@ pub unsafe extern "C" fn parsanol_parg_parse_recovering(
     input: *const c_char,
 ) -> *mut c_char {
     match run_recovering(envelope_json, entry, input) {
-        Ok(json) => to_c(json),
-        Err(_) => std::ptr::null_mut(),
+        Ok(json) => {
+            c_set_error("");
+            to_c(json)
+        }
+        Err(error) => {
+            c_set_error(&error);
+            std::ptr::null_mut()
+        }
     }
 }
 
