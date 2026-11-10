@@ -73,6 +73,11 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- Drop the now-unused has_entity (wasm clippy dead-code) by @[object]
+- Restore the injected-skip interleave (ruby#425) by @[object]
+
+### Other
+
 - Json-only member cases bind no source pair (ruby#420) ([#428](https://github.com/parsanol/parsanol-rs/pull/428)) by @[object]
 
 ### Other
