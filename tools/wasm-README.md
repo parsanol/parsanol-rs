@@ -29,6 +29,9 @@ const parg = new PargArtifactJs(artifactJson);
 
 ## Notes
 
+- The engine is built with an 8MiB wasm stack
+  (`-C link-arg=-zstack-size=8388608`) so deep-recursive parses abort
+  with the typed `CallDepthLimitExceeded` instead of trapping.
 - `parseAndBind` returns `{}` when the entry declares no
   `bindings` block — the parse succeeded, nothing was bound.
 - The async bootstrap is the package DEFAULT export

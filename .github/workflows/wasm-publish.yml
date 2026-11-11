@@ -32,10 +32,16 @@ jobs:
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
 
-      - name: Install wasm-pack
+      # The published glue must come from wasm-bindgen CLI 0.2.130 —
+      # the exact version parsanol-ts's candidate recipe pins (the ts
+      # vendor receipts record it; other glue versions fail the ts
+      # typed-resource browser suite, seen against the 0.20.13
+      # artifact). wasm-pack bundles its own, older wasm-bindgen and
+      # additionally runs wasm-opt — neither matches the contract.
+      - name: Install wasm-bindgen CLI
         uses: taiki-e/install-action@v2
         with:
-          tool: wasm-pack
+          tool: wasm-bindgen@0.2.130
 
       # Trusted publishing requires npm >= 11.5.1 (OIDC support).
       # Node 24 bundles npm 11; Node 22 bundles npm 10, which cannot
@@ -46,39 +52,55 @@ jobs:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
 
-      # wasm-pack requires a cdylib, but the crate stays rlib-only in
-      # the tree: the ruby side's cdylib twin crate (ext/parsanol_cdylib)
-      # owns the libparsanol.* artifact naming, and a permanent cdylib on
-      # the main crate would shadow it in shared target dirs. Enable it
-      # just-in-time for this build only.
-      - name: Enable cdylib for wasm-pack
-        run: |
-          sed -i 's/^crate-type = \["rlib"\]/crate-type = ["rlib", "cdylib"]/' parsanol/Cargo.toml
-          grep -q cdylib parsanol/Cargo.toml || { echo "could not patch crate-type in parsanol/Cargo.toml"; exit 1; }
+      # The typed call-depth contract (CallDepthLimitExceeded at the
+      # engine's 1024-atom resource limit) needs stack headroom: the
+      # default 1MiB wasm stack traps out-of-bounds on deep recursion
+      # before the limit fires — and even the free() of a deep parse's
+      # tree overflows it. Seen when parsanol-ts's browser depth suite
+      # ran against the 0.20.13 artifact (ts#62). 8MiB is the
+      # candidate-build profile the ts vendor receipts pin
+      # (wasm_stack_bytes). RUSTFLAGS, not -- flags: those would go to
+      # `cargo build`, not rustc. The crate ships cdylib crate-type
+      # (027c358) so the wasm artifact links directly.
+      - name: Build wasm core
+        env:
+          RUSTFLAGS: -C link-arg=-zstack-size=8388608
+        run: cargo build --release --target wasm32-unknown-unknown -p parsanol --features wasm
 
       # Generated npm payload lives OUTSIDE the crate dir so it can never
       # leak into a `cargo publish` tarball; /wasm/ is gitignored.
-      - name: Build wasm-pack
-        run: wasm-pack build parsanol --target web --scope parsanol --out-dir ../wasm --release --features wasm
+      - name: Bindgen (web)
+        run: |
+          rm -rf wasm
+          wasm-bindgen target/wasm32-unknown-unknown/release/parsanol.wasm --target web --out-dir wasm
 
+      # wasm-bindgen emits no package.json (wasm-pack used to) — the
+      # package is written from scratch, versioned from the workspace
+      # crate so the npm release matches the cargo tag that fired this
+      # workflow.
       - name: Prepare npm package
         run: |
           cd wasm
           node -e "
             const fs = require('fs');
-            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-            pkg.name = '@parsanol/wasm';
-            pkg.description = 'Parsanol PEG parser — WebAssembly bindings';
-            pkg.repository = { type: 'git', url: 'https://github.com/parsanol/parsanol-rs' };
-            pkg.keywords = ['parser', 'peg', 'wasm', 'rust'];
-            pkg.license = 'MIT';
-            pkg.files = ['parsanol_bg.wasm', 'parsanol_bg.wasm.d.ts', 'parsanol.js', 'parsanol.d.ts', 'README.md'];
-            delete pkg.main;
-            pkg.module = 'parsanol.js';
-            pkg.types = 'parsanol.d.ts';
-            pkg.exports = {
-              '.': { types: './parsanol.d.ts', default: './parsanol.js' },
-              './package.json': './package.json',
+            const cargo = fs.readFileSync('../Cargo.toml', 'utf8');
+            const version = cargo.match(/^version\s*=\s*\"([^\"]+)\"/m)[1];
+            if (!version) { throw new Error('could not read the workspace version from ../Cargo.toml'); }
+            const pkg = {
+              name: '@parsanol/wasm',
+              version,
+              description: 'Parsanol PEG parser — WebAssembly bindings',
+              repository: { type: 'git', url: 'https://github.com/parsanol/parsanol-rs' },
+              keywords: ['parser', 'peg', 'wasm', 'rust'],
+              license: 'MIT',
+              type: 'module',
+              files: ['parsanol_bg.wasm', 'parsanol_bg.wasm.d.ts', 'parsanol.js', 'parsanol.d.ts', 'README.md'],
+              module: 'parsanol.js',
+              types: 'parsanol.d.ts',
+              exports: {
+                '.': { types: './parsanol.d.ts', default: './parsanol.js' },
+                './package.json': './package.json',
+              },
             };
             fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
             // rs#308: the init surface is the DEFAULT export (async) and
