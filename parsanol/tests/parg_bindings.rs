@@ -271,7 +271,7 @@ fn preprocess_v11_ops_execute() {
 }
 
 /// Grow-with-minor: binding_version 2 loads; an unknown level refuses
-/// at load instead of mis-executing steps it does not know.
+/// at load instead of executing steps it does not know wrongly.
 #[test]
 fn binding_version_policy() {
     let base: Value = serde_json::json!({
