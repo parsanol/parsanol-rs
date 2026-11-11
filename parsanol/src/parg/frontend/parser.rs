@@ -209,17 +209,30 @@ pub struct Binding {
     pub preprocess: Option<String>,
 }
 
-/// One preprocess step (table_lookup in v1).
+/// One preprocess step. `table_lookup` is the v1 vocabulary; v1.1
+/// (binding_version 2) adds `const_map`, `default_when_absent`, and
+/// `rename`. Op-irrelevant fields stay absent on the wire so each op
+/// serializes exactly the keys the Ruby reference compiler emits —
+/// the envelope checksum is shared across the toolchain.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Step {
-    /// The step operation (`table_lookup` in v1).
+    /// The step operation.
     pub op: String,
-    /// The table to read.
-    pub table: String,
-    /// The key column.
-    pub from: String,
-    /// The value column.
-    pub to: String,
+    /// The table to read (`table_lookup`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub table: Option<String>,
+    /// The key column (`table_lookup`) / the renamed key (`rename`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
+    /// The value column (`table_lookup`) / the replacement key (`rename`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub to: Option<String>,
+    /// The closed mapping (`const_map`), in source order.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pairs: Option<serde_json::Map<String, serde_json::Value>>,
+    /// The fill literal (`default_when_absent`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value: Option<serde_json::Value>,
 }
 
 /// One embedded test line: kind, its input, and the expectations.
@@ -1042,20 +1055,115 @@ impl Parser {
                 self.pos += 1;
                 break;
             }
-            self.expect_keyword("table_lookup")?;
-            let table = self.expect_ident()?;
-            let from = self.expect_ident()?;
-            self.expect_arrow()?;
-            let to = self.expect_ident()?;
-            steps.push(Step {
-                op: "table_lookup".to_string(),
-                table,
-                from,
-                to,
-            });
+            let op = self.expect_ident()?;
+            let step = match op.as_str() {
+                "table_lookup" => {
+                    let table = self.expect_ident()?;
+                    let from = self.expect_ident()?;
+                    self.expect_arrow()?;
+                    let to = self.expect_ident()?;
+                    Step {
+                        op,
+                        table: Some(table),
+                        from: Some(from),
+                        to: Some(to),
+                        pairs: None,
+                        value: None,
+                    }
+                }
+                "const_map" => {
+                    let mut pairs = serde_json::Map::new();
+                    loop {
+                        let key = self.expect_preprocess_literal()?;
+                        self.expect_arrow()?;
+                        let value = self.expect_preprocess_literal()?;
+                        pairs.insert(key, serde_json::Value::String(value));
+                        if !self.accept_punct(",") {
+                            break;
+                        }
+                        self.skip_blank();
+                    }
+                    Step {
+                        op,
+                        table: None,
+                        from: None,
+                        to: None,
+                        pairs: Some(pairs),
+                        value: None,
+                    }
+                }
+                "default_when_absent" => {
+                    let value = self.expect_preprocess_literal()?;
+                    Step {
+                        op,
+                        table: None,
+                        from: None,
+                        to: None,
+                        pairs: None,
+                        value: Some(serde_json::Value::String(value)),
+                    }
+                }
+                "rename" => {
+                    let from = self.expect_ident()?;
+                    self.expect_arrow()?;
+                    let to = self.expect_ident()?;
+                    Step {
+                        op,
+                        table: None,
+                        from: Some(from),
+                        to: Some(to),
+                        pairs: None,
+                        value: None,
+                    }
+                }
+                other => {
+                    return Err(ParseError {
+                        message: format!("unknown preprocess op {other:?}"),
+                    })
+                }
+            };
+            steps.push(step);
         }
         document.preprocess.insert(name, steps);
         Ok(())
+    }
+
+    /// A preprocess literal: a quoted string (unquoted), a bare
+    /// identifier, or a number kept as its string form — the
+    /// vocabulary is string-valued.
+    fn expect_preprocess_literal(&mut self) -> Result<String, ParseError> {
+        match self.peek().map(|t| t.kind) {
+            Some(TokenKind::Str) => {
+                let token = self.bump().unwrap();
+                unquote(&token.value)
+            }
+            Some(TokenKind::Istring | TokenKind::Sstring) => {
+                let token = self.bump().unwrap();
+                // %i/%s values arrive without their prefix but still
+                // quoted; strip the quotes the same way unquote does.
+                unquote(&format!("\"{}\"", token.value))
+            }
+            Some(TokenKind::Ident) => self.expect_ident(),
+            Some(TokenKind::Num) => {
+                let token = self.bump().unwrap();
+                Ok(token.value)
+            }
+            other => Err(ParseError {
+                message: format!(
+                    "expected a preprocess literal, got {:?}",
+                    other.map(|k| k.as_ruby_name())
+                ),
+            }),
+        }
+    }
+
+    fn accept_punct(&mut self, char: &str) -> bool {
+        if self.is_punct(char) {
+            self.pos += 1;
+            true
+        } else {
+            false
+        }
     }
 
     fn resync_rule(&mut self, document: &mut Document) -> Result<(), ParseError> {

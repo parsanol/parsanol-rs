@@ -1,0 +1,34 @@
+## Semantics: D1, D2, B5, B3, M0, A1
+grammar ConformancePreprocessOps version "1.0.0" edition "v2" {
+  ## A stage abbreviation resolved through the stages table, then a
+  ## supplement letter.
+  letter = %x41-5A
+  main = alt from_table "stages" column "abbr" as abbr [ "-" letter as sub ]
+
+  ## v1.1 vocabulary (binding_version 2): sidecar lookup, closed map.
+  preprocess resolve {
+    table_lookup stages abbr -> code
+    const_map "draft" -> "Draft", "international-standard" -> "Full standard"
+  }
+
+  ## Absent fill and key rename on the optional capture.
+  preprocess align {
+    default_when_absent "-"
+    rename sub -> supplement
+  }
+
+  bindings main {
+    abbr -> code (string) preprocess: resolve
+    sub -> supplement (string) preprocess: align
+  }
+
+  entry main: main
+
+  test main {
+    accept "DIS"
+    accept "IS"
+    accept "DIS-A"
+    reject "XX"
+    reject "A"
+  }
+}

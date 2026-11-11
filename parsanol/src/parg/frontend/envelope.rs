@@ -95,12 +95,27 @@ pub fn build_mode_glue(
         })
         .collect();
 
+    // Grow-with-minor (rs#147): the envelope declares the contract
+    // level the artifact RELIES on. v1-only preprocess keeps the
+    // envelope byte-identical (binding_version 1); any post-v1 op
+    // raises the declared level so old engines refuse loudly.
+    let binding_version = if document
+        .preprocess
+        .values()
+        .flatten()
+        .all(|step| step.op == "table_lookup")
+    {
+        1
+    } else {
+        2
+    };
+
     let mut envelope = json!({
         "bindings": bindings,
         "version": document.version,
         "grammar": document.grammar_name,
         "shape": "parsanol-tree/v2",
-        "binding_version": 1,
+        "binding_version": binding_version,
         "entries": entries,
         "preprocess": serde_json::to_value(&document.preprocess)
             .expect("preprocess serializes"),

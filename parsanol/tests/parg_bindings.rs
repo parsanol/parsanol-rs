@@ -219,6 +219,90 @@ fn unknown_preprocess_and_tables_raise() {
     assert!(matches!(err, parsanol::PargError::UnknownPreprocess(_)));
 }
 
+/// F9 v1.1 (rs#147): the declarative preprocess vocabulary gains
+/// const_map, default_when_absent (hash members — scalar nulls never
+/// reach the pipeline), and rename (key order preserved on the wire).
+#[test]
+fn preprocess_v11_ops_execute() {
+    let envelope: Value = serde_json::json!({
+        "version": "0.0.0",
+        "grammar": "Synth",
+        "shape": "parsanol-tree/v2",
+        "binding_version": 2,
+        "entries": {
+            "identifier": {
+                "root": "identifier",
+                "grammar": {},
+                "bindings": [
+                    { "capture": "code", "path": "code", "type": "string", "preprocess": "chain" },
+                    { "capture": "grp", "path": "aligned", "preprocess": "align" }
+                ]
+            }
+        },
+        "preprocess": {
+            "chain": [
+                { "op": "const_map", "pairs": { "ab": "AB", "cd": "CD" } }
+            ],
+            "align": [
+                { "op": "default_when_absent", "value": "-" },
+                { "op": "rename", "from": "sub", "to": "supplement" }
+            ]
+        }
+    });
+    let mut envelope = envelope.as_object().unwrap().clone();
+    let checksum = parsanol::parg::checksum_hex(&Value::Object(envelope.clone())).unwrap();
+    envelope.insert("checksum".to_string(), Value::String(checksum));
+    let artifact = PargArtifact::from_json(&serde_json::to_string(&envelope).unwrap()).unwrap();
+
+    let shape: Value = serde_json::json!({
+        "code": "ab",
+        "grp": { "sub": null, "code": "DIS" }
+    });
+    let bound = artifact.apply_bindings("identifier", &shape).unwrap();
+    assert_eq!(
+        bound,
+        serde_json::json!({
+            "code": "AB",
+            // default fills the nil member in place, then rename moves
+            // the key KEEPING ITS POSITION (canonical JSON parity).
+            "aligned": { "supplement": "-", "code": "DIS" }
+        })
+    );
+}
+
+/// Grow-with-minor: binding_version 2 loads; an unknown level refuses
+/// at load instead of mis-executing steps it does not know.
+#[test]
+fn binding_version_policy() {
+    let base: Value = serde_json::json!({
+        "version": "0.0.0",
+        "grammar": "Synth",
+        "shape": "parsanol-tree/v2",
+        "entries": {}
+    });
+    for version in [1, 2] {
+        let mut envelope = base.as_object().unwrap().clone();
+        envelope.insert("binding_version".to_string(), Value::from(version));
+        let checksum = parsanol::parg::checksum_hex(&Value::Object(envelope.clone())).unwrap();
+        envelope.insert("checksum".to_string(), Value::String(checksum));
+        let text = serde_json::to_string(&envelope).unwrap();
+        assert!(
+            PargArtifact::from_json(&text).is_ok(),
+            "binding_version {version} loads"
+        );
+    }
+    let mut envelope = base.as_object().unwrap().clone();
+    envelope.insert("binding_version".to_string(), Value::from(3));
+    let checksum = parsanol::parg::checksum_hex(&Value::Object(envelope.clone())).unwrap();
+    envelope.insert("checksum".to_string(), Value::String(checksum));
+    let text = serde_json::to_string(&envelope).unwrap();
+    let err = PargArtifact::from_json(&text).unwrap_err();
+    assert!(matches!(
+        err,
+        parsanol::PargError::UnsupportedBindingVersion(3)
+    ));
+}
+
 #[test]
 fn nested_binding_paths_are_refused() {
     let envelope: Value = serde_json::json!({

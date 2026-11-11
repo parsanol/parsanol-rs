@@ -246,6 +246,12 @@ impl std::error::Error for PargError {}
 /// artifact is refused loudly at load, never parsed with wrong semantics.
 pub const SUPPORTED_SHAPE: &str = "parsanol-tree/v2";
 
+/// The highest binding_version this engine executes (grow-with-minor,
+/// rs#147): 1 = the v1 preprocess vocabulary (`table_lookup`); 2 adds
+/// `const_map`, `default_when_absent`, and `rename`. Artifacts
+/// declaring a higher level refuse at load.
+pub const SUPPORTED_BINDING_VERSION: i64 = 2;
+
 /// A verified PARG artifact envelope.
 ///
 /// The checksum is verified at load time; a `PargArtifact` value never
@@ -311,6 +317,18 @@ impl PargArtifact {
             .ok_or(PargError::InvalidEnvelope("shape"))?;
         if shape != SUPPORTED_SHAPE {
             return Err(PargError::UnsupportedShape(shape.to_string()));
+        }
+        // Grow-with-minor (rs#147): the envelope's binding_version is
+        // the contract level the artifact relies on. 1 = the v1
+        // preprocess vocabulary (table_lookup); 2 = the v1.1 ops
+        // (const_map, default_when_absent, rename). Absent = 1 (the
+        // minimal pre-v1.1 envelopes some fixtures hand-build).
+        let binding_version = envelope
+            .get("binding_version")
+            .and_then(Value::as_i64)
+            .unwrap_or(1);
+        if !(1..=SUPPORTED_BINDING_VERSION).contains(&binding_version) {
+            return Err(PargError::UnsupportedBindingVersion(binding_version));
         }
         // Edition 2 is the only edition (edition 1 was removed): a
         // removed or unknown spelling rejects the artifact at load

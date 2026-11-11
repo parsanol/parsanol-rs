@@ -299,35 +299,102 @@ fn preprocess_with(
             .get("op")
             .and_then(Value::as_str)
             .ok_or_else(|| PargError::UnknownPreprocessOp("<missing>".to_string()))?;
-        if op != "table_lookup" {
-            return Err(PargError::UnknownPreprocessOp(op.to_string()));
-        }
-        let table = step
-            .get("table")
-            .and_then(Value::as_str)
-            .ok_or_else(|| PargError::UnknownPreprocessOp(op.to_string()))?;
-        let from = step
-            .get("from")
-            .and_then(Value::as_str)
-            .ok_or_else(|| PargError::UnknownPreprocessOp(op.to_string()))?;
-        let to = step
-            .get("to")
-            .and_then(Value::as_str)
-            .ok_or_else(|| PargError::UnknownPreprocessOp(op.to_string()))?;
-        let needle = to_ruby_string(&value);
-        let mut mapped = None;
-        for row in table_rows_of(env, table)? {
-            let Some(row) = row.as_object() else {
-                continue;
-            };
-            let key = row.get(from).map(to_ruby_string);
-            if key.as_deref() == Some(needle.as_str()) {
-                mapped = row.get(to).cloned();
-                break;
+        match op {
+            // A sidecar-table lookup; unmapped values pass through.
+            "table_lookup" => {
+                let table = step
+                    .get("table")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| PargError::UnknownPreprocessOp(op.to_string()))?;
+                let from = step
+                    .get("from")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| PargError::UnknownPreprocessOp(op.to_string()))?;
+                let to = step
+                    .get("to")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| PargError::UnknownPreprocessOp(op.to_string()))?;
+                let needle = to_ruby_string(&value);
+                let mut mapped = None;
+                for row in table_rows_of(env, table)? {
+                    let Some(row) = row.as_object() else {
+                        continue;
+                    };
+                    let key = row.get(from).map(to_ruby_string);
+                    if key.as_deref() == Some(needle.as_str()) {
+                        mapped = row.get(to).cloned();
+                        break;
+                    }
+                }
+                if let Some(mapped) = mapped {
+                    value = mapped;
+                }
             }
-        }
-        if let Some(mapped) = mapped {
-            value = mapped;
+            // The step's own closed mapping; unmapped values pass
+            // through, mirroring table_lookup.
+            "const_map" => {
+                let pairs = step
+                    .get("pairs")
+                    .and_then(Value::as_object)
+                    .ok_or_else(|| PargError::UnknownPreprocessOp(op.to_string()))?;
+                let needle = to_ruby_string(&value);
+                if let Some(mapped) = pairs.get(&needle) {
+                    value = mapped.clone();
+                }
+            }
+            // Fill absent data. Scalar nulls never reach the pipeline
+            // (the null-capture contract skips the binding upstream),
+            // so the meaningful path is a hash-shaped capture value
+            // with null members: fill those in place (order kept).
+            "default_when_absent" => {
+                let fill = step
+                    .get("value")
+                    .cloned()
+                    .ok_or_else(|| PargError::UnknownPreprocessOp(op.to_string()))?;
+                if value.is_null() {
+                    value = fill;
+                } else if let Some(object) = value.as_object() {
+                    if object.values().any(Value::is_null) {
+                        let mut rebuilt = Map::new();
+                        for (key, val) in object {
+                            if val.is_null() {
+                                rebuilt.insert(key.clone(), fill.clone());
+                            } else {
+                                rebuilt.insert(key.clone(), val.clone());
+                            }
+                        }
+                        value = Value::Object(rebuilt);
+                    }
+                }
+            }
+            // Capture-name alignment on a hash-shaped value. Keys
+            // rebuild in place (the renamed key keeps its position),
+            // matching the Ruby executor's transform_keys — key order
+            // is part of the canonical JSON the corpus freezes.
+            "rename" => {
+                let from = step
+                    .get("from")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| PargError::UnknownPreprocessOp(op.to_string()))?;
+                let to = step
+                    .get("to")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| PargError::UnknownPreprocessOp(op.to_string()))?;
+                if let Some(object) = value.as_object() {
+                    if object.contains_key(from) {
+                        let mut rebuilt = Map::new();
+                        for (key, val) in object {
+                            if key == from {
+                                rebuilt.insert(to.to_string(), val.clone());
+                            } else {
+                                rebuilt.insert(key.clone(), val.clone());
+                            }
+                        }
+                        value = Value::Object(rebuilt);
+                    }
+                }
+            }
+            other => return Err(PargError::UnknownPreprocessOp(other.to_string())),
         }
     }
     Ok(value)
