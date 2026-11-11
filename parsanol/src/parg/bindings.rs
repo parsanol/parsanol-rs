@@ -299,35 +299,107 @@ fn preprocess_with(
             .get("op")
             .and_then(Value::as_str)
             .ok_or_else(|| PargError::UnknownPreprocessOp("<missing>".to_string()))?;
-        if op != "table_lookup" {
-            return Err(PargError::UnknownPreprocessOp(op.to_string()));
-        }
-        let table = step
-            .get("table")
-            .and_then(Value::as_str)
-            .ok_or_else(|| PargError::UnknownPreprocessOp(op.to_string()))?;
-        let from = step
-            .get("from")
-            .and_then(Value::as_str)
-            .ok_or_else(|| PargError::UnknownPreprocessOp(op.to_string()))?;
-        let to = step
-            .get("to")
-            .and_then(Value::as_str)
-            .ok_or_else(|| PargError::UnknownPreprocessOp(op.to_string()))?;
-        let needle = to_ruby_string(&value);
-        let mut mapped = None;
-        for row in table_rows_of(env, table)? {
-            let Some(row) = row.as_object() else {
-                continue;
-            };
-            let key = row.get(from).map(to_ruby_string);
-            if key.as_deref() == Some(needle.as_str()) {
-                mapped = row.get(to).cloned();
-                break;
+        match op {
+            // A sidecar-table lookup; unmapped values pass through.
+            "table_lookup" => {
+                let table = step
+                    .get("table")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| PargError::UnknownPreprocessOp(op.to_string()))?;
+                let from = step
+                    .get("from")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| PargError::UnknownPreprocessOp(op.to_string()))?;
+                let to = step
+                    .get("to")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| PargError::UnknownPreprocessOp(op.to_string()))?;
+                let needle = to_ruby_string(&value);
+                let mut mapped = None;
+                for row in table_rows_of(env, table)? {
+                    let Some(row) = row.as_object() else {
+                        continue;
+                    };
+                    let key = row.get(from).map(to_ruby_string);
+                    if key.as_deref() == Some(needle.as_str()) {
+                        mapped = row.get(to).cloned();
+                        break;
+                    }
+                }
+                if let Some(mapped) = mapped {
+                    value = mapped;
+                }
             }
-        }
-        if let Some(mapped) = mapped {
-            value = mapped;
+            // A single closed mapping entry; unmapped values pass
+            // through, mirroring table_lookup. A multi-entry source
+            // line emits sequential const_map steps, so the pipeline
+            // applies them in the declared order.
+            "const_map" => {
+                let from = step
+                    .get("from")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| PargError::UnknownPreprocessOp(op.to_string()))?;
+                let to = step
+                    .get("to")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| PargError::UnknownPreprocessOp(op.to_string()))?;
+                if to_ruby_string(&value) == from {
+                    value = Value::String(to.to_string());
+                }
+            }
+            // Fill absent data. Scalar nulls never reach the pipeline
+            // (the null-capture contract skips the binding upstream),
+            // so the meaningful path is a hash-shaped capture value
+            // with null members: fill those in place (order kept).
+            "default_when_absent" => {
+                let fill = step
+                    .get("to")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| PargError::UnknownPreprocessOp(op.to_string()))?;
+                if value.is_null() {
+                    value = Value::String(fill.to_string());
+                } else if let Some(object) = value.as_object() {
+                    if object.values().any(Value::is_null) {
+                        let mut rebuilt = Map::new();
+                        for (key, val) in object {
+                            if val.is_null() {
+                                rebuilt.insert(key.clone(), Value::String(fill.to_string()));
+                            } else {
+                                rebuilt.insert(key.clone(), val.clone());
+                            }
+                        }
+                        value = Value::Object(rebuilt);
+                    }
+                }
+            }
+            // Capture-name alignment on a hash-shaped value. Keys
+            // rebuild in place (the renamed key keeps its position),
+            // matching the Ruby executor's transform_keys — key order
+            // is part of the canonical JSON the corpus freezes.
+            "rename" => {
+                let from = step
+                    .get("from")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| PargError::UnknownPreprocessOp(op.to_string()))?;
+                let to = step
+                    .get("to")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| PargError::UnknownPreprocessOp(op.to_string()))?;
+                if let Some(object) = value.as_object() {
+                    if object.contains_key(from) {
+                        let mut rebuilt = Map::new();
+                        for (key, val) in object {
+                            if key == from {
+                                rebuilt.insert(to.to_string(), val.clone());
+                            } else {
+                                rebuilt.insert(key.clone(), val.clone());
+                            }
+                        }
+                        value = Value::Object(rebuilt);
+                    }
+                }
+            }
+            other => return Err(PargError::UnknownPreprocessOp(other.to_string())),
         }
     }
     Ok(value)

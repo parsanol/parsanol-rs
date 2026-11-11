@@ -209,16 +209,25 @@ pub struct Binding {
     pub preprocess: Option<String>,
 }
 
-/// One preprocess step (table_lookup in v1).
+/// One preprocess step. The v1 vocabulary is `table_lookup`;
+/// v1.1 (binding_version 2) adds `const_map`, `default_when_absent`,
+/// and `rename` — all four ops share the same `{op, table, from, to}`
+/// wire shape: `const_map` carries ONE mapping entry per step
+/// (a multi-entry source line emits sequential steps, preserving the
+/// declared order), `default_when_absent` carries the fill in `to`,
+/// and `rename` aligns `from` to `to`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Step {
-    /// The step operation (`table_lookup` in v1).
+    /// The step operation.
     pub op: String,
-    /// The table to read.
+    /// The table to read (`table_lookup`; empty for the other ops).
     pub table: String,
-    /// The key column.
+    /// The key column (`table_lookup`) / mapping source (`const_map`)
+    /// / renamed key (`rename`); empty for `default_when_absent`.
     pub from: String,
-    /// The value column.
+    /// The value column (`table_lookup`) / mapping target (`const_map`)
+    /// / the fill literal (`default_when_absent`) / replacement key
+    /// (`rename`).
     pub to: String,
 }
 
@@ -1042,20 +1051,110 @@ impl Parser {
                 self.pos += 1;
                 break;
             }
-            self.expect_keyword("table_lookup")?;
-            let table = self.expect_ident()?;
-            let from = self.expect_ident()?;
-            self.expect_arrow()?;
-            let to = self.expect_ident()?;
-            steps.push(Step {
-                op: "table_lookup".to_string(),
-                table,
-                from,
-                to,
-            });
+            let op = self.expect_ident()?;
+            let step = match op.as_str() {
+                "table_lookup" => {
+                    let table = self.expect_ident()?;
+                    let from = self.expect_ident()?;
+                    self.expect_arrow()?;
+                    let to = self.expect_ident()?;
+                    Step {
+                        op,
+                        table,
+                        from,
+                        to,
+                    }
+                }
+                // One mapping entry per step; the reference compiler
+                // emits the same sequence from the multi-entry line.
+                "const_map" => {
+                    let mut emitted = Vec::new();
+                    loop {
+                        let key = self.expect_preprocess_literal()?;
+                        self.expect_arrow()?;
+                        let value = self.expect_preprocess_literal()?;
+                        emitted.push(Step {
+                            op: op.clone(),
+                            table: String::new(),
+                            from: key,
+                            to: value,
+                        });
+                        if !self.accept_punct(",") {
+                            break;
+                        }
+                        self.skip_blank();
+                    }
+                    steps.extend(emitted);
+                    continue;
+                }
+                "default_when_absent" => {
+                    let to = self.expect_preprocess_literal()?;
+                    Step {
+                        op,
+                        table: String::new(),
+                        from: String::new(),
+                        to,
+                    }
+                }
+                "rename" => {
+                    let from = self.expect_ident()?;
+                    self.expect_arrow()?;
+                    let to = self.expect_ident()?;
+                    Step {
+                        op,
+                        table: String::new(),
+                        from,
+                        to,
+                    }
+                }
+                other => {
+                    return Err(ParseError {
+                        message: format!("unknown preprocess op {other:?}"),
+                    })
+                }
+            };
+            steps.push(step);
         }
         document.preprocess.insert(name, steps);
         Ok(())
+    }
+
+    /// A preprocess literal: a quoted string (unquoted), a bare
+    /// identifier, or a number kept as its string form — the
+    /// vocabulary is string-valued.
+    fn expect_preprocess_literal(&mut self) -> Result<String, ParseError> {
+        match self.peek().map(|t| t.kind) {
+            Some(TokenKind::Str) => {
+                let token = self.bump().unwrap();
+                unquote(&token.value)
+            }
+            Some(TokenKind::Istring | TokenKind::Sstring) => {
+                let token = self.bump().unwrap();
+                // %i/%s values arrive without their prefix but still
+                // quoted; strip the quotes the same way unquote does.
+                unquote(&format!("\"{}\"", token.value))
+            }
+            Some(TokenKind::Ident) => self.expect_ident(),
+            Some(TokenKind::Num) => {
+                let token = self.bump().unwrap();
+                Ok(token.value)
+            }
+            other => Err(ParseError {
+                message: format!(
+                    "expected a preprocess literal, got {:?}",
+                    other.map(|k| k.as_ruby_name())
+                ),
+            }),
+        }
+    }
+
+    fn accept_punct(&mut self, char: &str) -> bool {
+        if self.is_punct(char) {
+            self.pos += 1;
+            true
+        } else {
+            false
+        }
     }
 
     fn resync_rule(&mut self, document: &mut Document) -> Result<(), ParseError> {
