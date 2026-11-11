@@ -73,6 +73,10 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- Expose explicit artifact compatibility selection in C and WASM ([#440](https://github.com/parsanol/parsanol-rs/pull/440)) by @[object]
+
+### Other
+
 - Drop the now-unused has_entity (wasm clippy dead-code) by @[object]
 - Restore the injected-skip interleave (ruby#425) by @[object]
 
