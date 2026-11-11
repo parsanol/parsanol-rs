@@ -241,11 +241,12 @@ fn preprocess_v11_ops_execute() {
         },
         "preprocess": {
             "chain": [
-                { "op": "const_map", "pairs": { "ab": "AB", "cd": "CD" } }
+                { "op": "const_map", "table": "", "from": "ab", "to": "AB" },
+                { "op": "const_map", "table": "", "from": "cd", "to": "CD" }
             ],
             "align": [
-                { "op": "default_when_absent", "value": "-" },
-                { "op": "rename", "from": "sub", "to": "supplement" }
+                { "op": "default_when_absent", "table": "", "from": "", "to": "-" },
+                { "op": "rename", "table": "", "from": "sub", "to": "supplement" }
             ]
         }
     });

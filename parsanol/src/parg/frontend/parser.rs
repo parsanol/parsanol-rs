@@ -209,30 +209,26 @@ pub struct Binding {
     pub preprocess: Option<String>,
 }
 
-/// One preprocess step. `table_lookup` is the v1 vocabulary; v1.1
-/// (binding_version 2) adds `const_map`, `default_when_absent`, and
-/// `rename`. Op-irrelevant fields stay absent on the wire so each op
-/// serializes exactly the keys the Ruby reference compiler emits —
-/// the envelope checksum is shared across the toolchain.
+/// One preprocess step. The v1 vocabulary is `table_lookup`;
+/// v1.1 (binding_version 2) adds `const_map`, `default_when_absent`,
+/// and `rename` — all four ops share the same `{op, table, from, to}`
+/// wire shape: `const_map` carries ONE mapping entry per step
+/// (a multi-entry source line emits sequential steps, preserving the
+/// declared order), `default_when_absent` carries the fill in `to`,
+/// and `rename` aligns `from` to `to`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Step {
     /// The step operation.
     pub op: String,
-    /// The table to read (`table_lookup`).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub table: Option<String>,
-    /// The key column (`table_lookup`) / the renamed key (`rename`).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub from: Option<String>,
-    /// The value column (`table_lookup`) / the replacement key (`rename`).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub to: Option<String>,
-    /// The closed mapping (`const_map`), in source order.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pairs: Option<serde_json::Map<String, serde_json::Value>>,
-    /// The fill literal (`default_when_absent`).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub value: Option<serde_json::Value>,
+    /// The table to read (`table_lookup`; empty for the other ops).
+    pub table: String,
+    /// The key column (`table_lookup`) / mapping source (`const_map`)
+    /// / renamed key (`rename`); empty for `default_when_absent`.
+    pub from: String,
+    /// The value column (`table_lookup`) / mapping target (`const_map`)
+    /// / the fill literal (`default_when_absent`) / replacement key
+    /// (`rename`).
+    pub to: String,
 }
 
 /// One embedded test line: kind, its input, and the expectations.
@@ -1064,43 +1060,40 @@ impl Parser {
                     let to = self.expect_ident()?;
                     Step {
                         op,
-                        table: Some(table),
-                        from: Some(from),
-                        to: Some(to),
-                        pairs: None,
-                        value: None,
+                        table,
+                        from,
+                        to,
                     }
                 }
+                // One mapping entry per step; the reference compiler
+                // emits the same sequence from the multi-entry line.
                 "const_map" => {
-                    let mut pairs = serde_json::Map::new();
+                    let mut emitted = Vec::new();
                     loop {
                         let key = self.expect_preprocess_literal()?;
                         self.expect_arrow()?;
                         let value = self.expect_preprocess_literal()?;
-                        pairs.insert(key, serde_json::Value::String(value));
+                        emitted.push(Step {
+                            op: op.clone(),
+                            table: String::new(),
+                            from: key,
+                            to: value,
+                        });
                         if !self.accept_punct(",") {
                             break;
                         }
                         self.skip_blank();
                     }
-                    Step {
-                        op,
-                        table: None,
-                        from: None,
-                        to: None,
-                        pairs: Some(pairs),
-                        value: None,
-                    }
+                    steps.extend(emitted);
+                    continue;
                 }
                 "default_when_absent" => {
-                    let value = self.expect_preprocess_literal()?;
+                    let to = self.expect_preprocess_literal()?;
                     Step {
                         op,
-                        table: None,
-                        from: None,
-                        to: None,
-                        pairs: None,
-                        value: Some(serde_json::Value::String(value)),
+                        table: String::new(),
+                        from: String::new(),
+                        to,
                     }
                 }
                 "rename" => {
@@ -1109,11 +1102,9 @@ impl Parser {
                     let to = self.expect_ident()?;
                     Step {
                         op,
-                        table: None,
-                        from: Some(from),
-                        to: Some(to),
-                        pairs: None,
-                        value: None,
+                        table: String::new(),
+                        from,
+                        to,
                     }
                 }
                 other => {

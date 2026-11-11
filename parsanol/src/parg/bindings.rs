@@ -330,16 +330,21 @@ fn preprocess_with(
                     value = mapped;
                 }
             }
-            // The step's own closed mapping; unmapped values pass
-            // through, mirroring table_lookup.
+            // A single closed mapping entry; unmapped values pass
+            // through, mirroring table_lookup. A multi-entry source
+            // line emits sequential const_map steps, so the pipeline
+            // applies them in the declared order.
             "const_map" => {
-                let pairs = step
-                    .get("pairs")
-                    .and_then(Value::as_object)
+                let from = step
+                    .get("from")
+                    .and_then(Value::as_str)
                     .ok_or_else(|| PargError::UnknownPreprocessOp(op.to_string()))?;
-                let needle = to_ruby_string(&value);
-                if let Some(mapped) = pairs.get(&needle) {
-                    value = mapped.clone();
+                let to = step
+                    .get("to")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| PargError::UnknownPreprocessOp(op.to_string()))?;
+                if to_ruby_string(&value) == from {
+                    value = Value::String(to.to_string());
                 }
             }
             // Fill absent data. Scalar nulls never reach the pipeline
@@ -348,17 +353,17 @@ fn preprocess_with(
             // with null members: fill those in place (order kept).
             "default_when_absent" => {
                 let fill = step
-                    .get("value")
-                    .cloned()
+                    .get("to")
+                    .and_then(Value::as_str)
                     .ok_or_else(|| PargError::UnknownPreprocessOp(op.to_string()))?;
                 if value.is_null() {
-                    value = fill;
+                    value = Value::String(fill.to_string());
                 } else if let Some(object) = value.as_object() {
                     if object.values().any(Value::is_null) {
                         let mut rebuilt = Map::new();
                         for (key, val) in object {
                             if val.is_null() {
-                                rebuilt.insert(key.clone(), fill.clone());
+                                rebuilt.insert(key.clone(), Value::String(fill.to_string()));
                             } else {
                                 rebuilt.insert(key.clone(), val.clone());
                             }
