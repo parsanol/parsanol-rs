@@ -2,8 +2,8 @@
   "engine_commit": "48bf8ad13146ce3d833f70dc9699f0a98f893ede",
   "crates": "0.20.15",
   "npm": "0.10.47",
-  "rubygems": "1.3.140",
+  "rubygems": "1.3.141",
   "pypi": "0.1.26",
-  "released_at": "2026-11-11T13:45:00Z",
+  "released_at": "2026-11-11T14:35:00Z",
   "_comment": "ruby#421 -- the engine-compat manifest. Every release train updates the pairings as it rides; tools/check_engine_compat.py verifies the manifest against the live registries in CI (tag <-> engine_commit, crates, npm, rubygems, pypi). Docs and downstream gates consume this instead of reconstructing pairings by archaeology."
 }
