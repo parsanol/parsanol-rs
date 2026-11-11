@@ -271,11 +271,14 @@ impl PargArtifact {
         input: &str,
         compatibility: crate::portable::parser::ParserCompatibility,
     ) -> Result<Value, PargError> {
-        let grammar: Grammar = self.grammar(entry)?;
+        let (grammar, ascii_matches) = self.grammar_with_ascii_state_matches(entry)?;
         // The shaped tree can dwarf the input (large grammars bind few
         // characters per node); size the arena for the tree, not the text.
         let mut arena = AstArena::for_input(input.len().max(1 << 16));
         let mut parser = PortableParser::new(&grammar, input, &mut arena);
+        parser
+            .set_ascii_state_match_atoms(&ascii_matches)
+            .map_err(|err| PargError::ParseFailed(err.to_string()))?;
         parser
             .set_compatibility(compatibility)
             .map_err(|err| PargError::ParseFailed(err.to_string()))?;
@@ -328,9 +331,12 @@ impl PargArtifact {
             .map_err(PargError::ParseFailed)?
     }
     fn parse_shape_recovering_inner(&self, entry: &str, input: &str) -> Result<Value, PargError> {
-        let grammar: Grammar = self.grammar(entry)?;
+        let (grammar, ascii_matches) = self.grammar_with_ascii_state_matches(entry)?;
         let mut arena = AstArena::for_input(input.len().max(1 << 16));
         let mut parser = PortableParser::new(&grammar, input, &mut arena);
+        parser
+            .set_ascii_state_match_atoms(&ascii_matches)
+            .map_err(|err| PargError::ParseFailed(err.to_string()))?;
         match parser.parse() {
             Ok(_) => {
                 let shape = self.parse_shape(entry, input)?;
@@ -349,6 +355,9 @@ impl PargArtifact {
                 // back. Success paths never journal (zero cost).
                 let mut arena2 = AstArena::for_input(input.len().max(1 << 16));
                 let mut journaling = PortableParser::new(&grammar, input, &mut arena2);
+                journaling
+                    .set_ascii_state_match_atoms(&ascii_matches)
+                    .map_err(|err| PargError::ParseFailed(err.to_string()))?;
                 journaling.capture_state_mut().set_journaling(true);
                 journaling.set_track_max_end(true);
                 journaling.set_collect_partial(true);
@@ -403,20 +412,37 @@ impl PargArtifact {
                     // are exactly the pattern's matches — the author owns
                     // them, deterministically. When no pattern is
                     // declared, the inferred trial scan applies.
-                    let declared_grammar: Option<Grammar> = self
-                        .entry_value(entry, "resync")
-                        .cloned()
-                        .map(|value| serde_json::from_value::<Grammar>(value))
-                        .transpose()
-                        .ok()
-                        .flatten();
+                    let declared_grammar = match self.entry_value(entry, "resync") {
+                        Some(value)
+                            if value.get("atoms").and_then(Value::as_array).is_some_and(
+                                |atoms| {
+                                    atoms
+                                        .iter()
+                                        .any(|atom| atom.get("StateMatchAscii").is_some())
+                                },
+                            ) =>
+                        {
+                            Some(super::decode_ascii_state_grammar(value.clone())?)
+                        }
+                        Some(value) => serde_json::from_value::<Grammar>(value.clone())
+                            .ok()
+                            .map(|grammar| (grammar, Vec::new())),
+                        None => None,
+                    };
                     // The pattern parser gets its own arena: the
                     // journaling parser holds arena2 for the whole
                     // recovery pass.
                     let mut pattern_arena = AstArena::for_input(input.len().max(1 << 16));
-                    let mut pattern_parser = declared_grammar
-                        .as_ref()
-                        .map(|grammar| PortableParser::new(grammar, input, &mut pattern_arena));
+                    let mut pattern_parser = declared_grammar.as_ref().map(|(grammar, _)| {
+                        PortableParser::new(grammar, input, &mut pattern_arena)
+                    });
+                    if let (Some(parser), Some((_, modes))) =
+                        (pattern_parser.as_mut(), declared_grammar.as_ref())
+                    {
+                        parser
+                            .set_ascii_state_match_atoms(modes)
+                            .map_err(|err| PargError::ParseFailed(err.to_string()))?;
+                    }
                     'rounds: for _ in 0..MAX_RESYNCS {
                         // An iteration may already be viable at the
                         // cursor (e.g. right after a declared skip).

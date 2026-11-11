@@ -456,12 +456,63 @@ impl PargArtifact {
         serde_json::from_value(value).map_err(PargError::Json)
     }
 
+    /// Load executable grammar data, retaining the explicit StateMatchAscii wire
+    /// operation as per-atom matching policy. The ordinary grammar() API keeps
+    /// rejecting that unknown operation instead of silently dropping its mode.
+    /// Atom and Grammar retain their existing public construction/match shapes.
+    pub(crate) fn grammar_with_ascii_state_matches(
+        &self,
+        entry: &str,
+    ) -> Result<(Grammar, Vec<usize>), PargError> {
+        let value = self
+            .entry_value(entry, "grammar")
+            .cloned()
+            .ok_or_else(|| PargError::UnknownEntry(entry.to_owned()))?;
+        decode_ascii_state_grammar(value)
+    }
+
     fn entry_value(&self, entry: &str, field: &str) -> Option<&Value> {
         self.envelope
             .get("entries")
             .and_then(|entries| entries.get(entry))
             .and_then(|entry| entry.get(field))
     }
+}
+
+// Shared by executable entries and explicitly declared recovery grammars.
+fn decode_ascii_state_grammar(mut value: Value) -> Result<(Grammar, Vec<usize>), PargError> {
+    if !value.get("atoms").is_some_and(Value::is_array) {
+        return serde_json::from_value(value)
+            .map(|grammar| (grammar, Vec::new()))
+            .map_err(PargError::Json);
+    }
+
+    let atoms = value
+        .get_mut("atoms")
+        .and_then(Value::as_array_mut)
+        .ok_or(PargError::InvalidEnvelope("grammar atoms"))?;
+    let mut indexes = Vec::new();
+    for (index, atom) in atoms.iter_mut().enumerate() {
+        let Some(fields) = atom.as_object_mut() else {
+            continue;
+        };
+        if fields.contains_key("StateMatchAscii") {
+            if fields.len() != 1 {
+                return Err(PargError::InvalidEnvelope("StateMatchAscii atom fields"));
+            }
+            let payload = fields.remove("StateMatchAscii").unwrap();
+            let valid = payload
+                .as_object()
+                .is_some_and(|p| p.len() == 1 && p.get("slot").is_some_and(Value::is_string));
+            if !valid {
+                return Err(PargError::InvalidEnvelope("StateMatchAscii slot"));
+            }
+            fields.insert("StateMatch".into(), payload);
+            indexes.push(index);
+        }
+    }
+    let grammar = serde_json::from_value(value).map_err(PargError::Json)?;
+    Ok((grammar, indexes))
 }
 
 /// The byte-level checksum's fast tier: the bake hashed the file bytes
