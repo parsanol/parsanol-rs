@@ -477,7 +477,7 @@ use crate::ffi::shared::{collapse_ast, flatten_ast_to_u64};
 use crate::portable::{AstArena, PortableParser};
 
 static C_NEXT_HANDLE: AtomicU64 = AtomicU64::new(1);
-static C_LAST_ERROR: Mutex<String> = Mutex::new(String::new());
+thread_local! { static C_LAST_ERROR: std::cell::RefCell<CString> = std::cell::RefCell::new(CString::default()); }
 
 fn c_handle_map() -> &'static Mutex<HashMap<u64, Grammar>> {
     static MAP: std::sync::OnceLock<Mutex<HashMap<u64, Grammar>>> = std::sync::OnceLock::new();
@@ -485,12 +485,11 @@ fn c_handle_map() -> &'static Mutex<HashMap<u64, Grammar>> {
 }
 
 fn c_set_error(msg: &str) {
-    if let Ok(mut guard) = C_LAST_ERROR.lock() {
-        guard.clear();
-        guard.push_str(msg);
-        // Keep the buffer NUL-terminated: FFI callers read a C string.
-        guard.push('\0');
-    }
+    // C strings expose only the prefix before an embedded NUL. Each caller
+    // thread owns its buffer; parsing workers return errors to that caller.
+    let end = msg.find('\0').unwrap_or(msg.len());
+    C_LAST_ERROR
+        .with(|slot| *slot.borrow_mut() = CString::new(&msg[..end]).expect("NUL prefix removed"));
 }
 
 /// Register a grammar JSON and get a handle (0 on failure).
@@ -536,26 +535,15 @@ pub extern "C" fn parsanol_c_release(handle: u64) {
     }
 }
 
-/// Last error message from `parsanol_c_register`/`parsanol_c_parse`.
+/// Last error message for the current caller thread.
+/// The borrowed pointer remains valid until this thread sets another error
+/// or exits. Other caller threads cannot replace or invalidate its buffer.
 ///
 /// The returned pointer stays valid until the next library call and must
 /// not be freed.
 #[no_mangle]
 pub extern "C" fn parsanol_c_last_error() -> *const c_char {
-    // The string lives in a static Mutex and is never freed; callers read it
-    // before issuing the next call. A NUL terminator is guaranteed.
-    match C_LAST_ERROR.lock() {
-        Ok(guard) => {
-            if guard.is_empty() {
-                // An empty String's buffer pointer is dangling, not a
-                // readable C string; hand out the static NUL instead.
-                c"".as_ptr() as *const c_char
-            } else {
-                guard.as_ptr() as *const c_char
-            }
-        }
-        Err(_) => c"".as_ptr() as *const c_char,
-    }
+    C_LAST_ERROR.with(|slot| slot.borrow().as_ptr())
 }
 
 /// Parse `input` (NUL-free UTF-8, NUL-terminated) with a registered handle
@@ -693,6 +681,9 @@ enum Outcome {
 }
 
 fn execute(text: &str, input: &str) -> Result<Outcome, String> {
+    crate::parg::suite::with_parser_stack(|| execute_inner(text, input))?
+}
+fn execute_inner(text: &str, input: &str) -> Result<Outcome, String> {
     // Artifact-first: a full parsanol-tree/v2 envelope (checksum-verified)
     // parses through the artifact's default entry; a bare portable grammar
     // JSON keeps the historical behavior. One surface, both callers.
@@ -726,6 +717,11 @@ fn execute(text: &str, input: &str) -> Result<Outcome, String> {
                 .map(Outcome::Shape)
                 .map_err(|e| e.to_string())
         }
+        Err(error) if error.is_abort() => Err(crate::parg::PargError::runtime_abort(
+            error,
+            parser.call_depth_limit_hit(),
+        )
+        .to_string()),
         Err(_) => {
             let offset = parser.failure_wire().map_or(0, |(o, _)| o);
             let ranked = parser
@@ -763,8 +759,18 @@ pub unsafe extern "C" fn parsanol_parg_parse(
     input: *const c_char,
 ) -> *mut c_char {
     match run(grammar_json, input) {
-        Ok(Outcome::Shape(json)) => to_c(json),
-        _ => std::ptr::null_mut(),
+        Ok(Outcome::Shape(json)) => {
+            c_set_error("");
+            to_c(json)
+        }
+        Ok(_) => {
+            c_set_error("");
+            std::ptr::null_mut()
+        }
+        Err(error) => {
+            c_set_error(&error);
+            std::ptr::null_mut()
+        }
     }
 }
 
@@ -778,9 +784,75 @@ pub unsafe extern "C" fn parsanol_parg_error(
 ) -> *mut c_char {
     match run(grammar_json, input) {
         Ok(Outcome::Failed { offset, ranked }) => {
+            c_set_error("");
             to_c(serde_json::json!({ "offset": offset, "ranked": ranked }).to_string())
         }
-        _ => std::ptr::null_mut(),
+        Ok(_) => {
+            c_set_error("");
+            std::ptr::null_mut()
+        }
+        Err(error) => {
+            c_set_error(&error);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Parse a checksum-verified artifact entry with an explicit policy:
+/// 0 = Strict (the existing default), 1 = Parslet. Returns an owned JSON
+/// envelope `{ok:true,shape:...}` or `{ok:false,error:{offset,ranked}}`.
+/// Runtime/artifact errors and unknown policies return NULL and set last_error.
+/// No recovery captures are fabricated by this API.
+///
+/// # Safety
+/// Artifact, entry and input must be non-NULL valid UTF-8 C strings.
+/// Free a non-NULL result exactly once with `parsanol_parg_free`.
+#[no_mangle]
+pub unsafe extern "C" fn parsanol_parg_parse_with_compatibility(
+    artifact_json: *const c_char,
+    entry: *const c_char,
+    input: *const c_char,
+    compatibility: u32,
+) -> *mut c_char {
+    let result = (|| -> Result<serde_json::Value, String> {
+        use crate::portable::parser::ParserCompatibility;
+        if artifact_json.is_null() || entry.is_null() || input.is_null() {
+            return Err("artifact, entry and input must be non-NULL".into());
+        }
+        let policy = match compatibility {
+            0 => ParserCompatibility::Strict,
+            1 => ParserCompatibility::Parslet,
+            _ => return Err("unknown parsing compatibility policy".into()),
+        };
+        let text = CStr::from_ptr(artifact_json)
+            .to_str()
+            .map_err(|e| e.to_string())?;
+        let entry = CStr::from_ptr(entry).to_str().map_err(|e| e.to_string())?;
+        let input = CStr::from_ptr(input).to_str().map_err(|e| e.to_string())?;
+        let artifact = crate::parg::PargArtifact::from_json(text).map_err(|e| e.to_string())?;
+        match artifact.parse_shape_with_compatibility(entry, input, policy) {
+            Ok(shape) => Ok(serde_json::json!({"ok": true, "shape": shape})),
+            Err(crate::parg::PargError::ParseWire { offset, ranked, .. }) => {
+                Ok(serde_json::json!({"ok": false, "error": {"offset": offset, "ranked": ranked}}))
+            }
+            Err(crate::parg::PargError::RecursionLimitExceeded { depth, max_depth }) => Ok(
+                serde_json::json!({"ok": false, "error": {"category": "recursion_limit", "offset": null, "depth": depth, "max_depth": max_depth}}),
+            ),
+            Err(crate::parg::PargError::CallDepthLimitExceeded { depth, max_depth }) => Ok(
+                serde_json::json!({"ok": false, "error": {"category": "call_depth_limit", "offset": null, "depth": depth, "max_depth": max_depth}}),
+            ),
+            Err(error) => Err(error.to_string()),
+        }
+    })();
+    match result {
+        Ok(value) => {
+            c_set_error("");
+            to_c(value.to_string())
+        }
+        Err(error) => {
+            c_set_error(&error);
+            std::ptr::null_mut()
+        }
     }
 }
 
@@ -847,8 +919,14 @@ pub unsafe extern "C" fn parsanol_parg_parse_recovering(
     input: *const c_char,
 ) -> *mut c_char {
     match run_recovering(envelope_json, entry, input) {
-        Ok(json) => to_c(json),
-        Err(_) => std::ptr::null_mut(),
+        Ok(json) => {
+            c_set_error("");
+            to_c(json)
+        }
+        Err(error) => {
+            c_set_error(&error);
+            std::ptr::null_mut()
+        }
     }
 }
 

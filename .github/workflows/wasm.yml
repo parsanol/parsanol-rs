@@ -6,10 +6,19 @@ name: WASM
 
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - "**.rs"
+      - "parsanol/tests/wasm/**"
+      - "tools/*wasm*"
+      - "Cargo.toml"
+      - ".github/workflows/wasm.yml"
   push:
     branches: [main]
     paths:
       - '**.rs'
+      - 'parsanol/tests/wasm/**'
+      - 'tools/*wasm*'
       - 'Cargo.toml'
       - '.github/workflows/wasm.yml'
 
@@ -37,10 +46,33 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Build with WASM feature
-        run: cargo build --no-default-features --features wasm --target wasm32-unknown-unknown
+        run: cargo rustc -p parsanol --release --no-default-features --features wasm --lib --target wasm32-unknown-unknown -- -C link-arg=-zstack-size=8388608
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+
+      - name: Exercise explicit selector in a real browser
+        shell: bash
+        run: |
+          bindgen=$(python3 tools/fetch-wasm-bindgen.py --lockfile Cargo.lock --output "$RUNNER_TEMP/wasm-bindgen")
+          "$bindgen" target/wasm32-unknown-unknown/release/parsanol.wasm --target web --out-dir "$RUNNER_TEMP/parsanol-web"
+          node tools/check-wasm-node.mjs "$RUNNER_TEMP/parsanol-web"
+          python3 tools/check-wasm-compatibility.py --web-dir "$RUNNER_TEMP/parsanol-web" --evidence-dir "$RUNNER_TEMP/wasm-compatibility-evidence"
+
+      - name: Upload browser compatibility evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: wasm-compatibility-evidence
+          path: ${{ runner.temp }}/wasm-compatibility-evidence
+          if-no-files-found: ignore
 
       - name: Run clippy with WASM
         run: cargo clippy --no-default-features --features wasm -- -D warnings
 
       - name: Run WASM library tests (native)
         run: cargo test --no-default-features --features wasm --lib
+
+      - name: Run artifact and C ABI compatibility tests
+        run: cargo test -p parsanol --no-default-features --test parg_compatibility

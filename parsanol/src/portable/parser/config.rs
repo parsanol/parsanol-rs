@@ -99,6 +99,15 @@ impl ParserConfig {
     }
 }
 
+/// Simultaneous VM atom applications allowed before a typed stack-resource abort.
+/// WASM has a host call-stack limit independent of its linear-memory stack.
+/// Native high-level artifact parsing provisions its own scoped worker stack.
+#[cfg(target_arch = "wasm32")]
+pub const DEFAULT_MAX_CALL_DEPTH: usize = 1024;
+/// Native callers retain the existing rule-recursion budget without a VM cap.
+#[cfg(not(target_arch = "wasm32"))]
+pub const DEFAULT_MAX_CALL_DEPTH: usize = 0;
+
 #[cfg(test)]
 mod tests {
     use super::*;

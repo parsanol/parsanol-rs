@@ -26,7 +26,8 @@ mod stack_tests;
 mod tests;
 
 pub use config::{
-    ParserCompatibility, ParserConfig, DEFAULT_MAX_INPUT_SIZE, DEFAULT_MAX_RECURSION_DEPTH,
+    ParserCompatibility, ParserConfig, DEFAULT_MAX_CALL_DEPTH, DEFAULT_MAX_INPUT_SIZE,
+    DEFAULT_MAX_RECURSION_DEPTH,
 };
 pub use context::ParseContext;
 pub use governor::ResourceGovernor;
@@ -397,6 +398,8 @@ pub struct PortableParser<'a> {
     strict_rollback_on_failure: bool,
 
     dbg_depth: u64,
+    max_call_depth: u64,
+    call_depth_limit_hit: bool,
 
     /// Per-atom dynamic dependence (empty when the grammar has no
     /// Dynamic atoms): memoization is skipped for these atoms.
@@ -612,6 +615,8 @@ impl<'a> PortableParser<'a> {
             rollback_on_failure,
             strict_rollback_on_failure: rollback_on_failure,
             dbg_depth: 0,
+            max_call_depth: DEFAULT_MAX_CALL_DEPTH as u64,
+            call_depth_limit_hit: false,
             dynamic_dependent: dynamic_dependence(grammar),
             terminal_direct: terminal_direct_atoms(grammar),
             state_write_dependent: state_write_dependence(grammar),
@@ -672,6 +677,8 @@ impl<'a> PortableParser<'a> {
             rollback_on_failure: false,
             strict_rollback_on_failure: false,
             dbg_depth: 0,
+            max_call_depth: DEFAULT_MAX_CALL_DEPTH as u64,
+            call_depth_limit_hit: false,
             dynamic_dependent: dynamic_dependence(grammar),
             terminal_direct: terminal_direct_atoms(grammar),
             state_write_dependent: state_write_dependence(grammar),
@@ -769,6 +776,17 @@ impl<'a> PortableParser<'a> {
     #[inline]
     pub fn set_max_recursion_depth(&mut self, depth: usize) {
         self.governor.set_max_recursion_depth(depth);
+    }
+
+    /// Set the simultaneous VM atom-call budget (0 disables this guard).
+    /// This is independent of the rule-reference recursion budget.
+    pub fn set_max_call_depth(&mut self, depth: usize) {
+        self.max_call_depth = depth as u64;
+    }
+
+    /// Classify a resource error from the immediately preceding parser call.
+    pub(crate) fn call_depth_limit_hit(&self) -> bool {
+        self.call_depth_limit_hit
     }
 
     /// Set timeout in milliseconds
@@ -1053,6 +1071,18 @@ impl<'a> PortableParser<'a> {
         pos: usize,
         consume_all: bool,
     ) -> Result<AtomResult, ParseError> {
+        if self.dbg_depth == 0 {
+            self.call_depth_limit_hit = false;
+        }
+        if self.max_call_depth != 0 && self.dbg_depth >= self.max_call_depth {
+            // Keep ParseError exhaustive and compatible. The parser tracks
+            // the VM-specific origin until the caller classifies this abort.
+            self.call_depth_limit_hit = true;
+            return Err(ParseError::RecursionLimitExceeded {
+                depth: (self.dbg_depth + 1) as usize,
+                max_depth: self.max_call_depth as usize,
+            });
+        }
         self.dbg_depth += 1;
         if self.dbg_depth > 120 && vm_debug_enabled() {
             let dbg = format!("{:?}", self.grammar.get_atom(atom_id));
@@ -3177,6 +3207,7 @@ impl<'a> PortableParser<'a> {
         temp_parser.pending_trivia = std::mem::take(&mut self.pending_trivia);
 
         let result = temp_parser.try_atom_impl(temp_atom_id, pos, false);
+        self.call_depth_limit_hit |= temp_parser.call_depth_limit_hit;
         // Dynamic fragments evaluate against the full input, so their cause
         // positions are already absolute byte offsets. Preserve those causes
         // before an error crosses the parser boundary; otherwise the parent
@@ -3296,6 +3327,16 @@ impl<'a> PortableParser<'a> {
                     actual,
                     line,
                     col,
+                ))
+            }
+            Err(ParseError::RecursionLimitExceeded { depth, max_depth })
+                if self.call_depth_limit_hit =>
+            {
+                Err(RichError::at_position(
+                    format!("VM call depth exceeded: depth {depth} exceeds limit of {max_depth}"),
+                    0,
+                    1,
+                    1,
                 ))
             }
             Err(e) => {
