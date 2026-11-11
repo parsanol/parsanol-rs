@@ -334,6 +334,8 @@ pub struct PortableParser<'a> {
     cache: DenseCache,
     /// Explicit legacy policy; strict remains the default.
     compatibility: ParserCompatibility,
+    /// Explicit executable-grammar policy; public Atom shape stays unchanged.
+    ascii_state_match_atoms: Vec<bool>,
     /// Eager legacy memo retained for this parser's lifetime. Recycling a
     /// prefix entry can change legacy ordered-choice results, so these
     /// entries use the parser's resource governor rather than eviction.
@@ -601,6 +603,7 @@ impl<'a> PortableParser<'a> {
             arena,
             cache,
             compatibility: ParserCompatibility::Strict,
+            ascii_state_match_atoms: Vec::new(),
             legacy_cache: std::collections::HashMap::new(),
             legacy_diagnostic_bytes: 0,
             governor,
@@ -663,6 +666,7 @@ impl<'a> PortableParser<'a> {
             arena,
             cache,
             compatibility: ParserCompatibility::Strict,
+            ascii_state_match_atoms: Vec::new(),
             legacy_cache: std::collections::HashMap::new(),
             legacy_diagnostic_bytes: 0,
             governor,
@@ -713,6 +717,11 @@ impl<'a> PortableParser<'a> {
             return Ok(());
         }
         self.compatibility = compatibility;
+        self.reset_policy_state(compatibility);
+        Ok(())
+    }
+
+    fn reset_policy_state(&mut self, compatibility: ParserCompatibility) {
         self.cache.clear();
         self.legacy_cache.clear();
         self.legacy_diagnostic_bytes = 0;
@@ -735,6 +744,25 @@ impl<'a> PortableParser<'a> {
         } else {
             self.strict_rollback_on_failure
         };
+    }
+
+    /// Select ASCII-insensitive state comparisons for explicit atom indexes.
+    /// Other StateMatch atoms retain exact byte comparison. Changing this policy
+    /// resets memoized values, diagnostics and captures, just like compatibility.
+    pub fn set_ascii_state_match_atoms(&mut self, indexes: &[usize]) -> Result<(), ParseError> {
+        let mut modes = vec![false; self.grammar.atom_count()];
+        for &index in indexes {
+            if !matches!(self.grammar.get_atom(index), Some(Atom::StateMatch { .. })) {
+                return Err(ParseError::InvalidGrammar {
+                    reason: format!("ASCII state match atom {index} is not a StateMatch"),
+                });
+            }
+            modes[index] = true;
+        }
+        if modes != self.ascii_state_match_atoms {
+            self.ascii_state_match_atoms = modes;
+            self.reset_policy_state(self.compatibility);
+        }
         Ok(())
     }
 
@@ -1781,7 +1809,14 @@ impl<'a> PortableParser<'a> {
                 Atom::StateSet { slot, value, expr } => {
                     self.parse_state_set(slot, value, expr, pos, consume_all)
                 }
-                Atom::StateMatch { slot } => self.parse_state_match(slot, pos),
+                Atom::StateMatch { slot } => self.parse_state_match(
+                    slot,
+                    pos,
+                    self.ascii_state_match_atoms
+                        .get(atom_id)
+                        .copied()
+                        .unwrap_or(false),
+                ),
                 Atom::StateSwitch {
                     slot,
                     arms,
@@ -2873,7 +2908,12 @@ impl<'a> PortableParser<'a> {
     /// PARG runtime-state comparison: matches the slot's current value
     /// verbatim at the position (the block-delimiter close).
     #[inline]
-    fn parse_state_match(&mut self, slot: &str, pos: usize) -> Result<AtomResult, ParseError> {
+    fn parse_state_match(
+        &mut self,
+        slot: &str,
+        pos: usize,
+        ascii_case_insensitive: bool,
+    ) -> Result<AtomResult, ParseError> {
         let expected = self
             .capture_state
             .get(slot)
@@ -2882,7 +2922,14 @@ impl<'a> PortableParser<'a> {
             self.note_failure(pos, format!("state({slot})"));
             return Err(ParseError::Failed { position: pos });
         };
-        if self.input_bytes[pos..].starts_with(expected.as_bytes()) {
+        let matches = if ascii_case_insensitive {
+            pos.checked_add(expected.len())
+                .and_then(|end| self.input_bytes.get(pos..end))
+                .is_some_and(|actual| actual.eq_ignore_ascii_case(expected.as_bytes()))
+        } else {
+            self.input_bytes[pos..].starts_with(expected.as_bytes())
+        };
+        if matches {
             let len = expected.len();
             Ok(AtomResult {
                 value: AstNode::Nil,
