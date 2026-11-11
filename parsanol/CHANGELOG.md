@@ -73,6 +73,11 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- Release v0.20.13 ([#441](https://github.com/parsanol/parsanol-rs/pull/441)) by @[object]
+- Expose explicit artifact compatibility selection in C and WASM ([#440](https://github.com/parsanol/parsanol-rs/pull/440)) by @[object]
+
+### Other
+
 - Expose explicit artifact compatibility selection in C and WASM ([#440](https://github.com/parsanol/parsanol-rs/pull/440)) by @[object]
 
 ### Other
