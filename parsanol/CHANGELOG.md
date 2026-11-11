@@ -73,6 +73,11 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- Release v0.20.14 ([#446](https://github.com/parsanol/parsanol-rs/pull/446)) by @[object]
+- Preprocess vocabulary v1.1: const_map, default_when_absent, rename (rs#147) ([#445](https://github.com/parsanol/parsanol-rs/pull/445)) by @[object]
+
+### Other
+
 - Preprocess vocabulary v1.1: const_map, default_when_absent, rename (rs#147) ([#445](https://github.com/parsanol/parsanol-rs/pull/445)) by @[object]
 
 ### Other
