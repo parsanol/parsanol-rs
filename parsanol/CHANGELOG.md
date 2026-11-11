@@ -73,6 +73,11 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- Release v0.20.15 ([#451](https://github.com/parsanol/parsanol-rs/pull/451)) by @[object]
+- Support portable ASCII-insensitive state matching in PARG ([#449](https://github.com/parsanol/parsanol-rs/pull/449)) by @[object]
+
+### Other
+
 - Support portable ASCII-insensitive state matching in PARG ([#449](https://github.com/parsanol/parsanol-rs/pull/449)) by @[object]
 
 ### Other
