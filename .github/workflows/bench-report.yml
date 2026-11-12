@@ -1,0 +1,69 @@
+name: Bench Report
+
+# rs#463: the public benchmark receipts. Weekly + manual: run the
+# receipt benches on this fixed runner class, gate >10% regressions
+# against the committed receipt, and open a PR with the refreshed
+# benchmarks/latest.md (receipts land through review, like any other
+# change to main).
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  receipt:
+    name: Bench receipt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Snapshot the committed receipt
+        run: |
+          git show HEAD:benchmarks/latest.md > /tmp/committed.md \
+            || echo "no committed receipt yet — the first run only records" \
+            > /tmp/committed.md
+          [ -s /tmp/committed.md ] || echo "no committed receipt yet" > /tmp/committed.md
+
+      - name: Run the receipt benches
+        run: bash scripts/bench-report.sh
+
+      - name: Gate regressions against the committed receipt
+        run: python3 scripts/bench-regression.py /tmp/committed.md benchmarks/latest.md --threshold 10 | tee gate.txt
+
+      - name: Summary
+        if: always()
+        run: |
+          { cat gate.txt 2>/dev/null || echo "gate did not run"; \
+            echo; sed -n '1,12p' benchmarks/latest.md; } >> $GITHUB_STEP_SUMMARY
+
+      - name: Open the receipt PR
+        run: |
+          set -eu
+          if git diff --quiet benchmarks/latest.md; then
+            echo "receipt unchanged"
+            exit 0
+          fi
+          branch="bench-receipt/$(date -u +%Y-%m-%d)"
+          git config user.name "parsanol-bot"
+          git config user.email "bot@parsanol.org"
+          git checkout -b "$branch"
+          git add benchmarks/latest.md
+          git commit -m "Bench receipt $(date -u +%Y-%m-%d): refresh benchmarks/latest.md"
+          git push -u origin "$branch"
+          gh pr create --head "$branch" --title "Bench receipt $(date -u +%Y-%m-%d)" \
+            --body "The weekly benchmark receipt (rs#463); the regression gate ran green in the workflow. Trends on the ubuntu-latest runner class only — never compare across machines."
+        env:
+          GH_TOKEN: ${{ github.token }}
