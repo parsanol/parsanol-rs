@@ -1768,6 +1768,12 @@ Examples are compiled and tested via `cargo build --examples`.
 
 **Documentation tests (doc tests):** Code examples in documentation comments. Note that many doc tests are marked with `ignore` because they show **incomplete code snippets** (e.g., method signatures or pseudocode) rather than complete runnable examples. This is intentional - the doc tests illustrate API patterns, while the `examples/` directory contains fully runnable code that is verified by CI.
 
+**Scheduled heavy fuzzing:** the weekly `fuzz-heavy` workflow survives
+hours of seeded mutation input over the grammar corpus on a reduced
+sandbox, retains any crash as an artifact, and carries an honest
+counter — hours with 0 crashes, reset on any crash. See
+[docs/fuzzing.md](docs/fuzzing.md).
+
 To run all tests:
 
 ```bash

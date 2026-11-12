@@ -2017,8 +2017,13 @@ mod terminal_bypass_model {
     fn exhaustive_short_inputs_agree() {
         let g = grammar();
         let alphabet = ["a", "b", "1", "(", ")", ",", ";", "x", "é"];
+        // the heavy fuzz job (rs#466) scales the frontier depth
+        let depth: usize = std::env::var("PARSANOL_FUZZ_DEPTH")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(5);
         let mut frontier = vec![String::new()];
-        for _ in 0..5 {
+        for _ in 0..depth {
             let mut next = Vec::new();
             for s in &frontier {
                 check(&g, s);
@@ -2039,8 +2044,13 @@ mod terminal_bypass_model {
         let pieces = [
             "ab", "a", "b", "1", "(", ")", ",", ";", "x", "é", "foobaz", "barbaz", "fooba",
         ];
+        // the heavy fuzz job (rs#466) scales the seed count
+        let seeds: usize = std::env::var("PARSANOL_FUZZ_SEEDS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(3000);
         let mut state = 0x9E37_79B9_7F4A_7C15_u64;
-        for _ in 0..3000 {
+        for _ in 0..seeds {
             let mut s = String::new();
             state = state
                 .wrapping_mul(6364136223846793005)

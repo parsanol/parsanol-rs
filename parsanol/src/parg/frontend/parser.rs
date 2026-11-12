@@ -147,6 +147,14 @@ fn hex_node(spec: &str) -> Result<Node, ParseError> {
     if let Some((lo, hi)) = spec.split_once('-') {
         let lo = parse(lo).ok_or_else(bad)?;
         let hi = parse(hi).ok_or_else(bad)?;
+        // RFC 5234 value ranges ascend: a descending range would build
+        // an inverted class (and panic the class pattern downstream).
+        // The fuzzer found this via `%x3a-39` (rs#466).
+        if lo > hi {
+            return Err(ParseError {
+                message: format!("bad %x spec {spec:?}: the range descends ({lo:#x} > {hi:#x})"),
+            });
+        }
         Ok(class_node(vec![(lo, hi)]))
     } else if spec.contains('.') {
         let mut items = Vec::new();

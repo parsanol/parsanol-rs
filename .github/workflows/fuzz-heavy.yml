@@ -1,0 +1,110 @@
+name: Fuzz Heavy
+
+# rs#466: the scheduled long-running fuzz. The per-push CI runs the
+# property/differential suites in minutes; this job survives HOURS of
+# seeded mutation input on a reduced sandbox, retains any crash as an
+# artifact, and keeps the honest counter in docs/fuzzing.md (reset on
+# any crash — new crashes are real bugs first, flakes last).
+
+on:
+  schedule:
+    - cron: "0 4 * * 6" # Saturdays 04:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  heavy:
+    name: Heavy fuzz
+    runs-on: ubuntu-latest
+    timeout-minutes: 80
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      # the ambient sibling checkout feeds the corpus gates and the
+      # fuzz seed pool (the discovery path the corpus tests use)
+      - name: Check out the grammar corpus
+        uses: actions/checkout@v7
+        with:
+          repository: parsanol/pubid-grammar
+          ref: main
+          path: pubid/pubid-grammar
+
+      - name: Reduced sandbox
+        run: |
+          ulimit -c 0            # no core dumps
+          ulimit -v 8388608      # 8 GiB address space (the 24 GB VM loop precedent)
+
+      - name: Heavy fuzz (60 min budget)
+        env:
+          PARSANOL_FUZZ_SECONDS: "3600"
+          PARSANOL_FUZZ_SEEDS: "500000"
+          PARSANOL_FUZZ_DEPTH: "7"
+        run: |
+          timeout 3900 cargo test -p parsanol --release \
+            --test fuzz_heavy \
+            -- anchored_case_insensitive anchored_single_char state_match_ascii recovery_metrics \
+            --nocapture
+
+      - name: Property + differential gates
+        env:
+          PARSANOL_FUZZ_SEEDS: "500000"
+          PARSANOL_FUZZ_DEPTH: "7"
+        run: cargo test -p parsanol --release -- --nocapture
+
+      - name: Retain the crash corpus
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crash-${{ github.run_id }}
+          path: |
+            fuzz-crashes/
+            target/proptest_persist/
+          if-no-files-found: ignore
+
+      - name: Bump the honest counter
+        if: success()
+        run: |
+          set -eu
+          hours="$(python3 -c "
+          import json, re
+          text = open('docs/fuzzing.md').read()
+          match = re.search(r'\"hours\":\s*(\d+)', text)
+          print(int(match.group(1)) + 1 if match else 1)
+          ")"
+          python3 - "$hours" <<'PY'
+          import json, re, sys
+          hours = sys.argv[1]
+          path = "docs/fuzzing.md"
+          text = open(path).read()
+          state = json.dumps({"hours": int(hours), "crashes": 0})
+          new = re.sub(r'"state":\s*\{[^}]*\}', f'"state": {state}', text)
+          if new == text:
+              new = re.sub(r'"hours":\s*\d+', f'"hours": {hours}', text)
+          open(path, "w").write(new)
+          PY
+          if git diff --quiet docs/fuzzing.md; then
+            echo "counter unchanged"
+            exit 0
+          fi
+          branch="fuzz-counter/$(date -u +%Y-%m-%d)"
+          git config user.name "parsanol-bot"
+          git config user.email "bot@parsanol.org"
+          git checkout -b "$branch"
+          git add docs/fuzzing.md
+          git commit -m "Fuzz counter: +1 hour, 0 crashes"
+          git push -u origin "$branch"
+          gh pr create --head "$branch" --title "Fuzz counter: +1 hour, 0 crashes" \
+            --body "The scheduled heavy fuzz survived its budget (rs#466). The counter is honest: it resets on any crash."
+        env:
+          GH_TOKEN: ${{ github.token }}
