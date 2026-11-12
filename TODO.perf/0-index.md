@@ -31,3 +31,11 @@ expressir-core (TODO.max-perf/1-4, 6, 9) all shipped.
   added cold indirection. Closed with the mechanism recorded in
   item 3; the harness (jit_profile.rs) ships for the next rerun.**
   SVE scan kernels once stable on aarch64 targets matter.
+
+- 2026-11-12 (rs#464 round 1): the remap-shaped pre-drop retain measured
+  NEGATIVE in both tiers (interleaved min-of-3, bucketed late band:
+  retained 19.34->20.23 ms median, snapshot 40.4->46.7 ms) — the 4 MB
+  remap vector's random access loses to the sequential rebuild at 10^6
+  entries. REVERTED; recorded in TODO.perf/9. Open: the position-bucketed
+  retention index (skips whole buckets), then the dense suffix memo
+  re-test. Baseline: retained late band min 18.78 ms.
