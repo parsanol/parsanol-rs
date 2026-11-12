@@ -50,6 +50,7 @@ use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int, c_ulong};
 use std::ptr;
 
+use crate::parg::export::ExportTarget;
 use crate::portable::Grammar;
 
 // ============================================================================
@@ -862,6 +863,59 @@ pub unsafe extern "C" fn parsanol_parg_parse_with_compatibility(
 pub unsafe extern "C" fn parsanol_parg_free(ptr: *mut c_char) {
     if !ptr.is_null() {
         drop(CString::from_raw(ptr));
+    }
+}
+
+/// Lower a checksum-verified PARG artifact to a constrained-decoder
+/// grammar form: target `"xgrammar"` (EBNF `name ::= body`) or
+/// `"llguidance"` (Lark `name: body`, `start:` prologue). `recovery`
+/// (non-zero) lowers each declared resync pattern as an escape
+/// alternative at the repetition spine. Rust is the authoritative
+/// lowering; Python inherits it through this surface. Returns the
+/// owned grammar text (free with `parsanol_parg_free`) or NULL with
+/// last_error set — an unsupported construct or a recursive grammar
+/// is named, never silently dropped.
+///
+/// # Safety
+/// artifact_json and target must be non-NULL valid UTF-8 C strings.
+/// Free a non-NULL result exactly once with `parsanol_parg_free`.
+#[no_mangle]
+pub unsafe extern "C" fn parsanol_parg_export(
+    artifact_json: *const c_char,
+    target: *const c_char,
+    recovery: c_int,
+) -> *mut c_char {
+    let result = (|| -> Result<String, String> {
+        if artifact_json.is_null() || target.is_null() {
+            return Err("artifact and target must be non-NULL".into());
+        }
+        let text = CStr::from_ptr(artifact_json)
+            .to_str()
+            .map_err(|e| e.to_string())?;
+        let target = CStr::from_ptr(target).to_str().map_err(|e| e.to_string())?;
+        let target = match target {
+            "xgrammar" => ExportTarget::Xgrammar,
+            "llguidance" => ExportTarget::Llguidance,
+            other => {
+                return Err(format!(
+                    "unknown export target {other:?} (supported: xgrammar, llguidance)"
+                ))
+            }
+        };
+        let artifact = crate::parg::PargArtifact::from_json(text).map_err(|e| e.to_string())?;
+        artifact
+            .export(target, recovery != 0)
+            .map_err(|e| e.message)
+    })();
+    match result {
+        Ok(text) => {
+            c_set_error("");
+            to_c(text)
+        }
+        Err(error) => {
+            c_set_error(&error);
+            std::ptr::null_mut()
+        }
     }
 }
 
