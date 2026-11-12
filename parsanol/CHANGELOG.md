@@ -73,6 +73,10 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- Scheduled heavy fuzzing: the weekly hours-long gate (rs#466) by @[object]
+
+### Other
+
 - Constrained-decoding export: the Rust-authoritative lowering (ruby#493) by @[object]
 - Jit#458 closed NEGATIVE: the dispatch-mix harness + the recorded mechanism ([#462](https://github.com/parsanol/parsanol-rs/pull/462)) by @[object]
 - Jit#458 phase 1: the dispatch-mix profile harness ([#460](https://github.com/parsanol/parsanol-rs/pull/460)) by @[object]
