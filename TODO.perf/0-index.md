@@ -24,4 +24,10 @@ expressir-core (TODO.max-perf/1-4, 6, 9) all shipped.
 
 - cranelift JIT (item 3's original form) only if a fresh profile
   shows dispatch — not backtracking — dominating a real corpus
-  again. SVE scan kernels once stable on aarch64 targets matter.
+  again. **Revisit check 2026-11-12 (jit#458): the condition was met
+  on the iso corpus (dispatch-dominant by count) and the
+  operand-specialized dispatch still measured NEGATIVE (+48–55%) —
+  release LLVM already fuses the terminal dispatch; the plan table
+  added cold indirection. Closed with the mechanism recorded in
+  item 3; the harness (jit_profile.rs) ships for the next rerun.**
+  SVE scan kernels once stable on aarch64 targets matter.
