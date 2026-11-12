@@ -97,3 +97,72 @@ fn c_abi_null_entry_selects_the_default() {
     });
     assert_eq!(named, default);
 }
+
+/// The constrained-decoder export through the C ABI returns the same
+/// bytes as the artifact-level lowering (the Rust-authoritative
+/// export; Python inherits it through this surface), and an unknown
+/// target names itself in last_error.
+#[test]
+fn c_abi_export_matches_the_artifact_lowering() {
+    let Some(dir) = corpus_dir() else {
+        eprintln!("skipping: corpus not present outside the workspace");
+        return;
+    };
+
+    let text =
+        std::fs::read_to_string(dir.join("recovery_resync_declared.json")).expect("artifact");
+    let artifact = PargArtifact::from_json(&text).expect("artifact verifies");
+    let envelope = CString::new(text).unwrap();
+
+    for (target_name, target, recovery) in [
+        (
+            "xgrammar",
+            parsanol::parg::export::ExportTarget::Xgrammar,
+            0,
+        ),
+        (
+            "xgrammar",
+            parsanol::parg::export::ExportTarget::Xgrammar,
+            1,
+        ),
+        (
+            "llguidance",
+            parsanol::parg::export::ExportTarget::Llguidance,
+            0,
+        ),
+        (
+            "llguidance",
+            parsanol::parg::export::ExportTarget::Llguidance,
+            1,
+        ),
+    ] {
+        let reference = artifact
+            .export(target, recovery != 0)
+            .unwrap_or_else(|e| panic!("{target_name} export must lower: {e}"));
+        let target_c = CString::new(target_name).unwrap();
+        let out = take(unsafe {
+            parsanol::ffi::c::parsanol_parg_export(envelope.as_ptr(), target_c.as_ptr(), recovery)
+        });
+        assert_eq!(
+            out, reference,
+            "{target_name} recovery={recovery} bytes diverge"
+        );
+    }
+
+    let bad = CString::new("gbnf").unwrap();
+    let out = unsafe { parsanol::ffi::c::parsanol_parg_export(envelope.as_ptr(), bad.as_ptr(), 0) };
+    assert!(out.is_null(), "an unknown target must fail");
+    let error = take_last_error();
+    assert!(
+        error.contains("unknown export target"),
+        "error names the target: {error}"
+    );
+}
+
+fn take_last_error() -> String {
+    let ptr = parsanol::ffi::c::parsanol_c_last_error();
+    assert!(!ptr.is_null());
+    unsafe { CStr::from_ptr(ptr) }
+        .to_string_lossy()
+        .into_owned()
+}

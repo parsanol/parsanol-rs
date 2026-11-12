@@ -4,6 +4,7 @@
 //! When compiled with the `wasm` feature, this exposes a `WasmParser` class
 //! that can be used from JavaScript.
 
+use crate::parg::export::ExportTarget;
 use crate::parg::PargArtifact;
 use crate::portable::{AstArena, AstNode, Grammar, PortableParser};
 use js_sys::{Array, JsString, Object, Reflect};
@@ -495,6 +496,28 @@ impl PargArtifactJs {
         self.artifact
             .semantics_hash()
             .map(|hash| JsString::from(hash.to_string()))
+    }
+
+    /// Lower the artifact to a constrained-decoder grammar form
+    /// (`target`: "xgrammar" | "llguidance"); `recovery` lowers each
+    /// declared resync pattern as an escape alternative at the
+    /// repetition spine. Rust is the authoritative lowering — TS
+    /// inherits it through this surface instead of a per-language port.
+    #[wasm_bindgen(js_name = export)]
+    pub fn export(&self, target: &str, recovery: bool) -> Result<JsString, JsValue> {
+        let target = match target {
+            "xgrammar" => ExportTarget::Xgrammar,
+            "llguidance" => ExportTarget::Llguidance,
+            other => {
+                return Err(JsValue::from_str(&format!(
+                    "unknown export target {other:?} (supported: xgrammar, llguidance)"
+                )))
+            }
+        };
+        self.artifact
+            .export(target, recovery)
+            .map(JsString::from)
+            .map_err(|e| JsValue::from_str(&e.message))
     }
 }
 

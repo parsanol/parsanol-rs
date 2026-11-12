@@ -1,0 +1,2300 @@
+{
+  "cases": [
+    {
+      "artifact": "synthetic:escapes",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "default_entry": "main",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Str": {
+                    "pattern": "\\"
+                  }
+                },
+                {
+                  "Str": {
+                    "pattern": "\""
+                  }
+                },
+                {
+                  "Str": {
+                    "pattern": "a\\b\"c"
+                  }
+                },
+                {
+                  "Str": {
+                    "pattern": "plain"
+                  }
+                },
+                {
+                  "Sequence": {
+                    "atoms": [
+                      0,
+                      1,
+                      2,
+                      3
+                    ]
+                  }
+                }
+              ],
+              "root": 4
+            }
+          }
+        }
+      },
+      "target": "xgrammar",
+      "recovery": false,
+      "export": "main_entry ::= \"\\\\\\\\\" \"\\\\\\\"\" \"a\\\\\\\\b\\\\\\\"c\" \"plain\"\n"
+    },
+    {
+      "artifact": "synthetic:escapes",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "default_entry": "main",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Str": {
+                    "pattern": "\\"
+                  }
+                },
+                {
+                  "Str": {
+                    "pattern": "\""
+                  }
+                },
+                {
+                  "Str": {
+                    "pattern": "a\\b\"c"
+                  }
+                },
+                {
+                  "Str": {
+                    "pattern": "plain"
+                  }
+                },
+                {
+                  "Sequence": {
+                    "atoms": [
+                      0,
+                      1,
+                      2,
+                      3
+                    ]
+                  }
+                }
+              ],
+              "root": 4
+            }
+          }
+        }
+      },
+      "target": "llguidance",
+      "recovery": false,
+      "export": "start: main_entry\nmain_entry: \"\\\\\\\\\" \"\\\\\\\"\" \"a\\\\\\\\b\\\\\\\"c\" \"plain\"\n"
+    },
+    {
+      "artifact": "synthetic:escapes",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "default_entry": "main",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Str": {
+                    "pattern": "\\"
+                  }
+                },
+                {
+                  "Str": {
+                    "pattern": "\""
+                  }
+                },
+                {
+                  "Str": {
+                    "pattern": "a\\b\"c"
+                  }
+                },
+                {
+                  "Str": {
+                    "pattern": "plain"
+                  }
+                },
+                {
+                  "Sequence": {
+                    "atoms": [
+                      0,
+                      1,
+                      2,
+                      3
+                    ]
+                  }
+                }
+              ],
+              "root": 4
+            }
+          }
+        }
+      },
+      "target": "xgrammar",
+      "recovery": true,
+      "export": "main_entry ::= \"\\\\\\\\\" \"\\\\\\\"\" \"a\\\\\\\\b\\\\\\\"c\" \"plain\"\n"
+    },
+    {
+      "artifact": "synthetic:escapes",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "default_entry": "main",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Str": {
+                    "pattern": "\\"
+                  }
+                },
+                {
+                  "Str": {
+                    "pattern": "\""
+                  }
+                },
+                {
+                  "Str": {
+                    "pattern": "a\\b\"c"
+                  }
+                },
+                {
+                  "Str": {
+                    "pattern": "plain"
+                  }
+                },
+                {
+                  "Sequence": {
+                    "atoms": [
+                      0,
+                      1,
+                      2,
+                      3
+                    ]
+                  }
+                }
+              ],
+              "root": 4
+            }
+          }
+        }
+      },
+      "target": "llguidance",
+      "recovery": true,
+      "export": "start: main_entry\nmain_entry: \"\\\\\\\\\" \"\\\\\\\"\" \"a\\\\\\\\b\\\\\\\"c\" \"plain\"\n"
+    },
+    {
+      "artifact": "synthetic:u_class",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "default_entry": "main",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Re": {
+                    "pattern": "[\\x00-\\u{10ffff}]"
+                  }
+                },
+                {
+                  "Re": {
+                    "pattern": "[\\u0041-\\u007a]"
+                  }
+                },
+                {
+                  "Sequence": {
+                    "atoms": [
+                      0,
+                      1
+                    ]
+                  }
+                }
+              ],
+              "root": 2
+            }
+          }
+        }
+      },
+      "target": "xgrammar",
+      "recovery": false,
+      "export": "main_entry ::= [\\x00-􏿿] [A-z]\n"
+    },
+    {
+      "artifact": "synthetic:u_class",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "default_entry": "main",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Re": {
+                    "pattern": "[\\x00-\\u{10ffff}]"
+                  }
+                },
+                {
+                  "Re": {
+                    "pattern": "[\\u0041-\\u007a]"
+                  }
+                },
+                {
+                  "Sequence": {
+                    "atoms": [
+                      0,
+                      1
+                    ]
+                  }
+                }
+              ],
+              "root": 2
+            }
+          }
+        }
+      },
+      "target": "llguidance",
+      "recovery": false,
+      "export": "start: main_entry\nmain_entry: [\\x00-􏿿] [A-z]\n"
+    },
+    {
+      "artifact": "synthetic:u_class",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "default_entry": "main",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Re": {
+                    "pattern": "[\\x00-\\u{10ffff}]"
+                  }
+                },
+                {
+                  "Re": {
+                    "pattern": "[\\u0041-\\u007a]"
+                  }
+                },
+                {
+                  "Sequence": {
+                    "atoms": [
+                      0,
+                      1
+                    ]
+                  }
+                }
+              ],
+              "root": 2
+            }
+          }
+        }
+      },
+      "target": "xgrammar",
+      "recovery": true,
+      "export": "main_entry ::= [\\x00-􏿿] [A-z]\n"
+    },
+    {
+      "artifact": "synthetic:u_class",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "default_entry": "main",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Re": {
+                    "pattern": "[\\x00-\\u{10ffff}]"
+                  }
+                },
+                {
+                  "Re": {
+                    "pattern": "[\\u0041-\\u007a]"
+                  }
+                },
+                {
+                  "Sequence": {
+                    "atoms": [
+                      0,
+                      1
+                    ]
+                  }
+                }
+              ],
+              "root": 2
+            }
+          }
+        }
+      },
+      "target": "llguidance",
+      "recovery": true,
+      "export": "start: main_entry\nmain_entry: [\\x00-􏿿] [A-z]\n"
+    },
+    {
+      "artifact": "synthetic:fold",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "default_entry": "main",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Re": {
+                    "pattern": "(?i:Expert\\ Commentary)"
+                  }
+                },
+                {
+                  "Re": {
+                    "pattern": "(?i:iso)"
+                  }
+                },
+                {
+                  "Sequence": {
+                    "atoms": [
+                      0,
+                      1
+                    ]
+                  }
+                }
+              ],
+              "root": 2
+            }
+          }
+        }
+      },
+      "target": "xgrammar",
+      "recovery": false,
+      "export": "main_entry ::= [Ee][Xx][Pp][Ee][Rr][Tt]\\ [Cc][Oo][Mm][Mm][Ee][Nn][Tt][Aa][Rr][Yy] [Ii][Ss][Oo]\n"
+    },
+    {
+      "artifact": "synthetic:fold",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "default_entry": "main",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Re": {
+                    "pattern": "(?i:Expert\\ Commentary)"
+                  }
+                },
+                {
+                  "Re": {
+                    "pattern": "(?i:iso)"
+                  }
+                },
+                {
+                  "Sequence": {
+                    "atoms": [
+                      0,
+                      1
+                    ]
+                  }
+                }
+              ],
+              "root": 2
+            }
+          }
+        }
+      },
+      "target": "llguidance",
+      "recovery": false,
+      "export": "start: main_entry\nmain_entry: [Ee][Xx][Pp][Ee][Rr][Tt]\\ [Cc][Oo][Mm][Mm][Ee][Nn][Tt][Aa][Rr][Yy] [Ii][Ss][Oo]\n"
+    },
+    {
+      "artifact": "synthetic:fold",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "default_entry": "main",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Re": {
+                    "pattern": "(?i:Expert\\ Commentary)"
+                  }
+                },
+                {
+                  "Re": {
+                    "pattern": "(?i:iso)"
+                  }
+                },
+                {
+                  "Sequence": {
+                    "atoms": [
+                      0,
+                      1
+                    ]
+                  }
+                }
+              ],
+              "root": 2
+            }
+          }
+        }
+      },
+      "target": "xgrammar",
+      "recovery": true,
+      "export": "main_entry ::= [Ee][Xx][Pp][Ee][Rr][Tt]\\ [Cc][Oo][Mm][Mm][Ee][Nn][Tt][Aa][Rr][Yy] [Ii][Ss][Oo]\n"
+    },
+    {
+      "artifact": "synthetic:fold",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "default_entry": "main",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Re": {
+                    "pattern": "(?i:Expert\\ Commentary)"
+                  }
+                },
+                {
+                  "Re": {
+                    "pattern": "(?i:iso)"
+                  }
+                },
+                {
+                  "Sequence": {
+                    "atoms": [
+                      0,
+                      1
+                    ]
+                  }
+                }
+              ],
+              "root": 2
+            }
+          }
+        }
+      },
+      "target": "llguidance",
+      "recovery": true,
+      "export": "start: main_entry\nmain_entry: [Ee][Xx][Pp][Ee][Rr][Tt]\\ [Cc][Oo][Mm][Mm][Ee][Nn][Tt][Aa][Rr][Yy] [Ii][Ss][Oo]\n"
+    },
+    {
+      "artifact": "synthetic:fold_nonascii",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "default_entry": "main",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Re": {
+                    "pattern": "(?i:caf\\u{e9})"
+                  }
+                }
+              ],
+              "root": 0
+            }
+          }
+        }
+      },
+      "target": "xgrammar",
+      "recovery": false,
+      "export": "main_entry ::= [Cc][Aa][Ff]\\[Uu]{[Ee]9}\n"
+    },
+    {
+      "artifact": "synthetic:fold_nonascii",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "default_entry": "main",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Re": {
+                    "pattern": "(?i:caf\\u{e9})"
+                  }
+                }
+              ],
+              "root": 0
+            }
+          }
+        }
+      },
+      "target": "llguidance",
+      "recovery": false,
+      "export": "start: main_entry\nmain_entry: [Cc][Aa][Ff]\\[Uu]{[Ee]9}\n"
+    },
+    {
+      "artifact": "synthetic:fold_nonascii",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "default_entry": "main",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Re": {
+                    "pattern": "(?i:caf\\u{e9})"
+                  }
+                }
+              ],
+              "root": 0
+            }
+          }
+        }
+      },
+      "target": "xgrammar",
+      "recovery": true,
+      "export": "main_entry ::= [Cc][Aa][Ff]\\[Uu]{[Ee]9}\n"
+    },
+    {
+      "artifact": "synthetic:fold_nonascii",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "default_entry": "main",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Re": {
+                    "pattern": "(?i:caf\\u{e9})"
+                  }
+                }
+              ],
+              "root": 0
+            }
+          }
+        }
+      },
+      "target": "llguidance",
+      "recovery": true,
+      "export": "start: main_entry\nmain_entry: [Cc][Aa][Ff]\\[Uu]{[Ee]9}\n"
+    },
+    {
+      "artifact": "synthetic:category",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "default_entry": "main",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Re": {
+                    "pattern": "[\\p{L}]"
+                  }
+                }
+              ],
+              "root": 0
+            }
+          }
+        }
+      },
+      "target": "xgrammar",
+      "recovery": false,
+      "error": "xgrammar export: unicode category \"[\\\\p{L}]\" has no XGrammar equivalent"
+    },
+    {
+      "artifact": "synthetic:category",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "default_entry": "main",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Re": {
+                    "pattern": "[\\p{L}]"
+                  }
+                }
+              ],
+              "root": 0
+            }
+          }
+        }
+      },
+      "target": "llguidance",
+      "recovery": false,
+      "error": "llguidance export: unicode category \"[\\\\p{L}]\" has no llguidance equivalent"
+    },
+    {
+      "artifact": "synthetic:category",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "default_entry": "main",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Re": {
+                    "pattern": "[\\p{L}]"
+                  }
+                }
+              ],
+              "root": 0
+            }
+          }
+        }
+      },
+      "target": "xgrammar",
+      "recovery": true,
+      "error": "xgrammar export: unicode category \"[\\\\p{L}]\" has no XGrammar equivalent"
+    },
+    {
+      "artifact": "synthetic:category",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "default_entry": "main",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Re": {
+                    "pattern": "[\\p{L}]"
+                  }
+                }
+              ],
+              "root": 0
+            }
+          }
+        }
+      },
+      "target": "llguidance",
+      "recovery": true,
+      "error": "llguidance export: unicode category \"[\\\\p{L}]\" has no llguidance equivalent"
+    },
+    {
+      "artifact": "synthetic:plain_re",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "default_entry": "main",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Re": {
+                    "pattern": "[0-9]+"
+                  }
+                }
+              ],
+              "root": 0
+            }
+          }
+        }
+      },
+      "target": "xgrammar",
+      "recovery": false,
+      "error": "xgrammar export: regex pattern \"[0-9]+\" has no XGrammar equivalent"
+    },
+    {
+      "artifact": "synthetic:plain_re",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "default_entry": "main",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Re": {
+                    "pattern": "[0-9]+"
+                  }
+                }
+              ],
+              "root": 0
+            }
+          }
+        }
+      },
+      "target": "llguidance",
+      "recovery": false,
+      "error": "llguidance export: regex pattern \"[0-9]+\" has no llguidance equivalent"
+    },
+    {
+      "artifact": "synthetic:plain_re",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "default_entry": "main",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Re": {
+                    "pattern": "[0-9]+"
+                  }
+                }
+              ],
+              "root": 0
+            }
+          }
+        }
+      },
+      "target": "xgrammar",
+      "recovery": true,
+      "error": "xgrammar export: regex pattern \"[0-9]+\" has no XGrammar equivalent"
+    },
+    {
+      "artifact": "synthetic:plain_re",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "default_entry": "main",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Re": {
+                    "pattern": "[0-9]+"
+                  }
+                }
+              ],
+              "root": 0
+            }
+          }
+        }
+      },
+      "target": "llguidance",
+      "recovery": true,
+      "error": "llguidance export: regex pattern \"[0-9]+\" has no llguidance equivalent"
+    },
+    {
+      "artifact": "synthetic:bounded",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "default_entry": "main",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Str": {
+                    "pattern": "a"
+                  }
+                },
+                {
+                  "Re": {
+                    "pattern": "[\\x30-\\x39]"
+                  }
+                },
+                {
+                  "Sequence": {
+                    "atoms": [
+                      0,
+                      1
+                    ]
+                  }
+                },
+                {
+                  "Repetition": {
+                    "atom": 2,
+                    "min": 2,
+                    "max": 4,
+                    "tag": "Repetition"
+                  }
+                },
+                {
+                  "Repetition": {
+                    "atom": 2,
+                    "min": 2,
+                    "max": null,
+                    "tag": "Repetition"
+                  }
+                },
+                {
+                  "Repetition": {
+                    "atom": 2,
+                    "min": 3,
+                    "max": null,
+                    "tag": "Repetition"
+                  }
+                },
+                {
+                  "Maybe": {
+                    "atom": 2
+                  }
+                },
+                {
+                  "Repetition": {
+                    "atom": 2,
+                    "min": 0,
+                    "max": 65,
+                    "tag": "Repetition"
+                  }
+                }
+              ],
+              "root": 7
+            }
+          }
+        }
+      },
+      "target": "xgrammar",
+      "recovery": false,
+      "export": "main_entry ::= ( \"a\" [\\x30-\\x39] ){0,65}\n"
+    },
+    {
+      "artifact": "synthetic:bounded",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "default_entry": "main",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Str": {
+                    "pattern": "a"
+                  }
+                },
+                {
+                  "Re": {
+                    "pattern": "[\\x30-\\x39]"
+                  }
+                },
+                {
+                  "Sequence": {
+                    "atoms": [
+                      0,
+                      1
+                    ]
+                  }
+                },
+                {
+                  "Repetition": {
+                    "atom": 2,
+                    "min": 2,
+                    "max": 4,
+                    "tag": "Repetition"
+                  }
+                },
+                {
+                  "Repetition": {
+                    "atom": 2,
+                    "min": 2,
+                    "max": null,
+                    "tag": "Repetition"
+                  }
+                },
+                {
+                  "Repetition": {
+                    "atom": 2,
+                    "min": 3,
+                    "max": null,
+                    "tag": "Repetition"
+                  }
+                },
+                {
+                  "Maybe": {
+                    "atom": 2
+                  }
+                },
+                {
+                  "Repetition": {
+                    "atom": 2,
+                    "min": 0,
+                    "max": 65,
+                    "tag": "Repetition"
+                  }
+                }
+              ],
+              "root": 7
+            }
+          }
+        }
+      },
+      "target": "llguidance",
+      "recovery": false,
+      "error": "llguidance export: bounded repetition {0,65} exceeds the 64-item expansion cap has no llguidance equivalent"
+    },
+    {
+      "artifact": "synthetic:bounded",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "default_entry": "main",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Str": {
+                    "pattern": "a"
+                  }
+                },
+                {
+                  "Re": {
+                    "pattern": "[\\x30-\\x39]"
+                  }
+                },
+                {
+                  "Sequence": {
+                    "atoms": [
+                      0,
+                      1
+                    ]
+                  }
+                },
+                {
+                  "Repetition": {
+                    "atom": 2,
+                    "min": 2,
+                    "max": 4,
+                    "tag": "Repetition"
+                  }
+                },
+                {
+                  "Repetition": {
+                    "atom": 2,
+                    "min": 2,
+                    "max": null,
+                    "tag": "Repetition"
+                  }
+                },
+                {
+                  "Repetition": {
+                    "atom": 2,
+                    "min": 3,
+                    "max": null,
+                    "tag": "Repetition"
+                  }
+                },
+                {
+                  "Maybe": {
+                    "atom": 2
+                  }
+                },
+                {
+                  "Repetition": {
+                    "atom": 2,
+                    "min": 0,
+                    "max": 65,
+                    "tag": "Repetition"
+                  }
+                }
+              ],
+              "root": 7
+            }
+          }
+        }
+      },
+      "target": "xgrammar",
+      "recovery": true,
+      "export": "main_entry ::= ( \"a\" [\\x30-\\x39] ){0,65}\n"
+    },
+    {
+      "artifact": "synthetic:bounded",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "default_entry": "main",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Str": {
+                    "pattern": "a"
+                  }
+                },
+                {
+                  "Re": {
+                    "pattern": "[\\x30-\\x39]"
+                  }
+                },
+                {
+                  "Sequence": {
+                    "atoms": [
+                      0,
+                      1
+                    ]
+                  }
+                },
+                {
+                  "Repetition": {
+                    "atom": 2,
+                    "min": 2,
+                    "max": 4,
+                    "tag": "Repetition"
+                  }
+                },
+                {
+                  "Repetition": {
+                    "atom": 2,
+                    "min": 2,
+                    "max": null,
+                    "tag": "Repetition"
+                  }
+                },
+                {
+                  "Repetition": {
+                    "atom": 2,
+                    "min": 3,
+                    "max": null,
+                    "tag": "Repetition"
+                  }
+                },
+                {
+                  "Maybe": {
+                    "atom": 2
+                  }
+                },
+                {
+                  "Repetition": {
+                    "atom": 2,
+                    "min": 0,
+                    "max": 65,
+                    "tag": "Repetition"
+                  }
+                }
+              ],
+              "root": 7
+            }
+          }
+        }
+      },
+      "target": "llguidance",
+      "recovery": true,
+      "error": "llguidance export: bounded repetition {0,65} exceeds the 64-item expansion cap has no llguidance equivalent"
+    },
+    {
+      "artifact": "synthetic:u_out_of_range",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "default_entry": "main",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Re": {
+                    "pattern": "[\\u{110000}]"
+                  }
+                }
+              ],
+              "root": 0
+            }
+          }
+        }
+      },
+      "target": "xgrammar",
+      "recovery": false,
+      "error": "invalid byte sequence in UTF-8"
+    },
+    {
+      "artifact": "synthetic:u_out_of_range",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "default_entry": "main",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Re": {
+                    "pattern": "[\\u{110000}]"
+                  }
+                }
+              ],
+              "root": 0
+            }
+          }
+        }
+      },
+      "target": "llguidance",
+      "recovery": false,
+      "error": "invalid byte sequence in UTF-8"
+    },
+    {
+      "artifact": "synthetic:u_out_of_range",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "default_entry": "main",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Re": {
+                    "pattern": "[\\u{110000}]"
+                  }
+                }
+              ],
+              "root": 0
+            }
+          }
+        }
+      },
+      "target": "xgrammar",
+      "recovery": true,
+      "error": "invalid byte sequence in UTF-8"
+    },
+    {
+      "artifact": "synthetic:u_out_of_range",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "default_entry": "main",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Re": {
+                    "pattern": "[\\u{110000}]"
+                  }
+                }
+              ],
+              "root": 0
+            }
+          }
+        }
+      },
+      "target": "llguidance",
+      "recovery": true,
+      "error": "invalid byte sequence in UTF-8"
+    },
+    {
+      "artifact": "synthetic:unsupported",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "default_entry": "main",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Lookahead": {
+                    "atom": {
+                      "Str": {
+                        "pattern": "x"
+                      }
+                    },
+                    "positive": false
+                  }
+                },
+                {
+                  "Lookahead": {
+                    "atom": {
+                      "Str": {
+                        "pattern": "x"
+                      }
+                    },
+                    "positive": true
+                  }
+                },
+                {
+                  "BehindGuard": {
+                    "atom": 0,
+                    "positive": true
+                  }
+                },
+                {
+                  "Custom": {
+                    "name": "foo"
+                  }
+                },
+                {
+                  "Constant": {
+                    "value": 1
+                  }
+                }
+              ],
+              "root": 0
+            }
+          }
+        }
+      },
+      "target": "xgrammar",
+      "recovery": false,
+      "error": "xgrammar export: lookahead (!x / &x) has no XGrammar equivalent"
+    },
+    {
+      "artifact": "synthetic:unsupported",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "default_entry": "main",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Lookahead": {
+                    "atom": {
+                      "Str": {
+                        "pattern": "x"
+                      }
+                    },
+                    "positive": false
+                  }
+                },
+                {
+                  "Lookahead": {
+                    "atom": {
+                      "Str": {
+                        "pattern": "x"
+                      }
+                    },
+                    "positive": true
+                  }
+                },
+                {
+                  "BehindGuard": {
+                    "atom": 0,
+                    "positive": true
+                  }
+                },
+                {
+                  "Custom": {
+                    "name": "foo"
+                  }
+                },
+                {
+                  "Constant": {
+                    "value": 1
+                  }
+                }
+              ],
+              "root": 0
+            }
+          }
+        }
+      },
+      "target": "llguidance",
+      "recovery": false,
+      "error": "llguidance export: lookahead (!x / &x) has no llguidance equivalent"
+    },
+    {
+      "artifact": "synthetic:unsupported",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "default_entry": "main",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Lookahead": {
+                    "atom": {
+                      "Str": {
+                        "pattern": "x"
+                      }
+                    },
+                    "positive": false
+                  }
+                },
+                {
+                  "Lookahead": {
+                    "atom": {
+                      "Str": {
+                        "pattern": "x"
+                      }
+                    },
+                    "positive": true
+                  }
+                },
+                {
+                  "BehindGuard": {
+                    "atom": 0,
+                    "positive": true
+                  }
+                },
+                {
+                  "Custom": {
+                    "name": "foo"
+                  }
+                },
+                {
+                  "Constant": {
+                    "value": 1
+                  }
+                }
+              ],
+              "root": 0
+            }
+          }
+        }
+      },
+      "target": "xgrammar",
+      "recovery": true,
+      "error": "xgrammar export: lookahead (!x / &x) has no XGrammar equivalent"
+    },
+    {
+      "artifact": "synthetic:unsupported",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "default_entry": "main",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Lookahead": {
+                    "atom": {
+                      "Str": {
+                        "pattern": "x"
+                      }
+                    },
+                    "positive": false
+                  }
+                },
+                {
+                  "Lookahead": {
+                    "atom": {
+                      "Str": {
+                        "pattern": "x"
+                      }
+                    },
+                    "positive": true
+                  }
+                },
+                {
+                  "BehindGuard": {
+                    "atom": 0,
+                    "positive": true
+                  }
+                },
+                {
+                  "Custom": {
+                    "name": "foo"
+                  }
+                },
+                {
+                  "Constant": {
+                    "value": 1
+                  }
+                }
+              ],
+              "root": 0
+            }
+          }
+        }
+      },
+      "target": "llguidance",
+      "recovery": true,
+      "error": "llguidance export: lookahead (!x / &x) has no llguidance equivalent"
+    },
+    {
+      "artifact": "synthetic:recovery",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "default_entry": "main",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Str": {
+                    "pattern": "a"
+                  }
+                },
+                {
+                  "Repetition": {
+                    "atom": 0,
+                    "min": 1,
+                    "max": null,
+                    "tag": "Repetition"
+                  }
+                }
+              ],
+              "root": 1
+            },
+            "resync": {
+              "atoms": [
+                {
+                  "Str": {
+                    "pattern": "junk"
+                  }
+                }
+              ],
+              "root": 0
+            }
+          }
+        }
+      },
+      "target": "xgrammar",
+      "recovery": false,
+      "export": "main_entry ::= \"a\"+\n"
+    },
+    {
+      "artifact": "synthetic:recovery",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "default_entry": "main",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Str": {
+                    "pattern": "a"
+                  }
+                },
+                {
+                  "Repetition": {
+                    "atom": 0,
+                    "min": 1,
+                    "max": null,
+                    "tag": "Repetition"
+                  }
+                }
+              ],
+              "root": 1
+            },
+            "resync": {
+              "atoms": [
+                {
+                  "Str": {
+                    "pattern": "junk"
+                  }
+                }
+              ],
+              "root": 0
+            }
+          }
+        }
+      },
+      "target": "llguidance",
+      "recovery": false,
+      "export": "start: main_entry\nmain_entry: \"a\"+\n"
+    },
+    {
+      "artifact": "synthetic:recovery",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "default_entry": "main",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Str": {
+                    "pattern": "a"
+                  }
+                },
+                {
+                  "Repetition": {
+                    "atom": 0,
+                    "min": 1,
+                    "max": null,
+                    "tag": "Repetition"
+                  }
+                }
+              ],
+              "root": 1
+            },
+            "resync": {
+              "atoms": [
+                {
+                  "Str": {
+                    "pattern": "junk"
+                  }
+                }
+              ],
+              "root": 0
+            }
+          }
+        }
+      },
+      "target": "xgrammar",
+      "recovery": true,
+      "export": "main_entry ::= ( \"a\"+ | ( \"junk\" ) ( \"a\"+ )? )*\n"
+    },
+    {
+      "artifact": "synthetic:recovery",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "default_entry": "main",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Str": {
+                    "pattern": "a"
+                  }
+                },
+                {
+                  "Repetition": {
+                    "atom": 0,
+                    "min": 1,
+                    "max": null,
+                    "tag": "Repetition"
+                  }
+                }
+              ],
+              "root": 1
+            },
+            "resync": {
+              "atoms": [
+                {
+                  "Str": {
+                    "pattern": "junk"
+                  }
+                }
+              ],
+              "root": 0
+            }
+          }
+        }
+      },
+      "target": "llguidance",
+      "recovery": true,
+      "export": "start: main_entry\nmain_entry: ( \"a\"+ | ( \"junk\" ) ( \"a\"+ )? )*\n"
+    },
+    {
+      "artifact": "synthetic:recovery_nonspine",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "default_entry": "main",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Str": {
+                    "pattern": "a"
+                  }
+                }
+              ],
+              "root": 0
+            },
+            "resync": {
+              "atoms": [
+                {
+                  "Str": {
+                    "pattern": "junk"
+                  }
+                }
+              ],
+              "root": 0
+            }
+          }
+        }
+      },
+      "target": "xgrammar",
+      "recovery": false,
+      "export": "main_entry ::= \"a\"\n"
+    },
+    {
+      "artifact": "synthetic:recovery_nonspine",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "default_entry": "main",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Str": {
+                    "pattern": "a"
+                  }
+                }
+              ],
+              "root": 0
+            },
+            "resync": {
+              "atoms": [
+                {
+                  "Str": {
+                    "pattern": "junk"
+                  }
+                }
+              ],
+              "root": 0
+            }
+          }
+        }
+      },
+      "target": "llguidance",
+      "recovery": false,
+      "export": "start: main_entry\nmain_entry: \"a\"\n"
+    },
+    {
+      "artifact": "synthetic:recovery_nonspine",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "default_entry": "main",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Str": {
+                    "pattern": "a"
+                  }
+                }
+              ],
+              "root": 0
+            },
+            "resync": {
+              "atoms": [
+                {
+                  "Str": {
+                    "pattern": "junk"
+                  }
+                }
+              ],
+              "root": 0
+            }
+          }
+        }
+      },
+      "target": "xgrammar",
+      "recovery": true,
+      "error": "xgrammar export: recovery export: the entry root is not a repetition spine has no XGrammar equivalent"
+    },
+    {
+      "artifact": "synthetic:recovery_nonspine",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "default_entry": "main",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Str": {
+                    "pattern": "a"
+                  }
+                }
+              ],
+              "root": 0
+            },
+            "resync": {
+              "atoms": [
+                {
+                  "Str": {
+                    "pattern": "junk"
+                  }
+                }
+              ],
+              "root": 0
+            }
+          }
+        }
+      },
+      "target": "llguidance",
+      "recovery": true,
+      "error": "llguidance export: recovery export: the entry root is not a repetition spine has no llguidance equivalent"
+    },
+    {
+      "artifact": "synthetic:recovery_no_decl",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "default_entry": "main",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Str": {
+                    "pattern": "a"
+                  }
+                },
+                {
+                  "Repetition": {
+                    "atom": 0,
+                    "min": 1,
+                    "max": null,
+                    "tag": "Repetition"
+                  }
+                }
+              ],
+              "root": 1
+            }
+          }
+        }
+      },
+      "target": "xgrammar",
+      "recovery": false,
+      "export": "main_entry ::= \"a\"+\n"
+    },
+    {
+      "artifact": "synthetic:recovery_no_decl",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "default_entry": "main",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Str": {
+                    "pattern": "a"
+                  }
+                },
+                {
+                  "Repetition": {
+                    "atom": 0,
+                    "min": 1,
+                    "max": null,
+                    "tag": "Repetition"
+                  }
+                }
+              ],
+              "root": 1
+            }
+          }
+        }
+      },
+      "target": "llguidance",
+      "recovery": false,
+      "export": "start: main_entry\nmain_entry: \"a\"+\n"
+    },
+    {
+      "artifact": "synthetic:recovery_no_decl",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "default_entry": "main",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Str": {
+                    "pattern": "a"
+                  }
+                },
+                {
+                  "Repetition": {
+                    "atom": 0,
+                    "min": 1,
+                    "max": null,
+                    "tag": "Repetition"
+                  }
+                }
+              ],
+              "root": 1
+            }
+          }
+        }
+      },
+      "target": "xgrammar",
+      "recovery": true,
+      "export": "main_entry ::= \"a\"+\n"
+    },
+    {
+      "artifact": "synthetic:recovery_no_decl",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "default_entry": "main",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Str": {
+                    "pattern": "a"
+                  }
+                },
+                {
+                  "Repetition": {
+                    "atom": 0,
+                    "min": 1,
+                    "max": null,
+                    "tag": "Repetition"
+                  }
+                }
+              ],
+              "root": 1
+            }
+          }
+        }
+      },
+      "target": "llguidance",
+      "recovery": true,
+      "export": "start: main_entry\nmain_entry: \"a\"+\n"
+    },
+    {
+      "artifact": "synthetic:entries_order",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "default_entry": "main",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Str": {
+                    "pattern": "main_body"
+                  }
+                }
+              ],
+              "root": 0
+            }
+          },
+          "zeta": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Str": {
+                    "pattern": "zeta_body"
+                  }
+                }
+              ],
+              "root": 0
+            }
+          }
+        }
+      },
+      "target": "xgrammar",
+      "recovery": false,
+      "export": "main_entry ::= \"main_body\"\nzeta_entry ::= \"zeta_body\"\n"
+    },
+    {
+      "artifact": "synthetic:entries_order",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "default_entry": "main",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Str": {
+                    "pattern": "main_body"
+                  }
+                }
+              ],
+              "root": 0
+            }
+          },
+          "zeta": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Str": {
+                    "pattern": "zeta_body"
+                  }
+                }
+              ],
+              "root": 0
+            }
+          }
+        }
+      },
+      "target": "llguidance",
+      "recovery": false,
+      "export": "start: main_entry\nmain_entry: \"main_body\"\nzeta_entry: \"zeta_body\"\n"
+    },
+    {
+      "artifact": "synthetic:entries_order",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "default_entry": "main",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Str": {
+                    "pattern": "main_body"
+                  }
+                }
+              ],
+              "root": 0
+            }
+          },
+          "zeta": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Str": {
+                    "pattern": "zeta_body"
+                  }
+                }
+              ],
+              "root": 0
+            }
+          }
+        }
+      },
+      "target": "xgrammar",
+      "recovery": true,
+      "export": "main_entry ::= \"main_body\"\nzeta_entry ::= \"zeta_body\"\n"
+    },
+    {
+      "artifact": "synthetic:entries_order",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "default_entry": "main",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Str": {
+                    "pattern": "main_body"
+                  }
+                }
+              ],
+              "root": 0
+            }
+          },
+          "zeta": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Str": {
+                    "pattern": "zeta_body"
+                  }
+                }
+              ],
+              "root": 0
+            }
+          }
+        }
+      },
+      "target": "llguidance",
+      "recovery": true,
+      "export": "start: main_entry\nmain_entry: \"main_body\"\nzeta_entry: \"zeta_body\"\n"
+    },
+    {
+      "artifact": "synthetic:no_default",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Str": {
+                    "pattern": "x"
+                  }
+                }
+              ],
+              "root": 0
+            }
+          }
+        }
+      },
+      "target": "xgrammar",
+      "recovery": false,
+      "export": "main_entry ::= \"x\"\n"
+    },
+    {
+      "artifact": "synthetic:no_default",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Str": {
+                    "pattern": "x"
+                  }
+                }
+              ],
+              "root": 0
+            }
+          }
+        }
+      },
+      "target": "llguidance",
+      "recovery": false,
+      "error": "key not found: \"default_entry\""
+    },
+    {
+      "artifact": "synthetic:no_default",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Str": {
+                    "pattern": "x"
+                  }
+                }
+              ],
+              "root": 0
+            }
+          }
+        }
+      },
+      "target": "xgrammar",
+      "recovery": true,
+      "export": "main_entry ::= \"x\"\n"
+    },
+    {
+      "artifact": "synthetic:no_default",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Str": {
+                    "pattern": "x"
+                  }
+                }
+              ],
+              "root": 0
+            }
+          }
+        }
+      },
+      "target": "llguidance",
+      "recovery": true,
+      "error": "key not found: \"default_entry\""
+    },
+    {
+      "artifact": "synthetic:named_maybe",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "default_entry": "main",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Str": {
+                    "pattern": "ab"
+                  }
+                },
+                {
+                  "Named": {
+                    "name": "num",
+                    "atom": 0
+                  }
+                },
+                {
+                  "Maybe": {
+                    "atom": 1
+                  }
+                }
+              ],
+              "root": 2
+            }
+          }
+        }
+      },
+      "target": "xgrammar",
+      "recovery": false,
+      "export": "main_entry ::= ( ( \"ab\" ) )?\n"
+    },
+    {
+      "artifact": "synthetic:named_maybe",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "default_entry": "main",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Str": {
+                    "pattern": "ab"
+                  }
+                },
+                {
+                  "Named": {
+                    "name": "num",
+                    "atom": 0
+                  }
+                },
+                {
+                  "Maybe": {
+                    "atom": 1
+                  }
+                }
+              ],
+              "root": 2
+            }
+          }
+        }
+      },
+      "target": "llguidance",
+      "recovery": false,
+      "export": "start: main_entry\nmain_entry: ( ( \"ab\" ) )?\n"
+    },
+    {
+      "artifact": "synthetic:named_maybe",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "default_entry": "main",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Str": {
+                    "pattern": "ab"
+                  }
+                },
+                {
+                  "Named": {
+                    "name": "num",
+                    "atom": 0
+                  }
+                },
+                {
+                  "Maybe": {
+                    "atom": 1
+                  }
+                }
+              ],
+              "root": 2
+            }
+          }
+        }
+      },
+      "target": "xgrammar",
+      "recovery": true,
+      "export": "main_entry ::= ( ( \"ab\" ) )?\n"
+    },
+    {
+      "artifact": "synthetic:named_maybe",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "default_entry": "main",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Str": {
+                    "pattern": "ab"
+                  }
+                },
+                {
+                  "Named": {
+                    "name": "num",
+                    "atom": 0
+                  }
+                },
+                {
+                  "Maybe": {
+                    "atom": 1
+                  }
+                }
+              ],
+              "root": 2
+            }
+          }
+        }
+      },
+      "target": "llguidance",
+      "recovery": true,
+      "export": "start: main_entry\nmain_entry: ( ( \"ab\" ) )?\n"
+    },
+    {
+      "artifact": "synthetic:recursive",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "default_entry": "main",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Entity": {
+                    "atom": 0
+                  }
+                }
+              ],
+              "root": 0
+            }
+          }
+        }
+      },
+      "target": "xgrammar",
+      "recovery": false,
+      "error": "xgrammar export: recursive grammar: atom 0 re-enters while being lowered (inline EBNF cannot carry recursive rules)"
+    },
+    {
+      "artifact": "synthetic:recursive",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "default_entry": "main",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Entity": {
+                    "atom": 0
+                  }
+                }
+              ],
+              "root": 0
+            }
+          }
+        }
+      },
+      "target": "llguidance",
+      "recovery": false,
+      "error": "llguidance export: recursive grammar: atom 0 re-enters while being lowered (inline EBNF cannot carry recursive rules)"
+    },
+    {
+      "artifact": "synthetic:recursive",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "default_entry": "main",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Entity": {
+                    "atom": 0
+                  }
+                }
+              ],
+              "root": 0
+            }
+          }
+        }
+      },
+      "target": "xgrammar",
+      "recovery": true,
+      "error": "xgrammar export: recursive grammar: atom 0 re-enters while being lowered (inline EBNF cannot carry recursive rules)"
+    },
+    {
+      "artifact": "synthetic:recursive",
+      "envelope": {
+        "shape": "parsanol-tree/v2",
+        "default_entry": "main",
+        "entries": {
+          "main": {
+            "grammar": {
+              "atoms": [
+                {
+                  "Entity": {
+                    "atom": 0
+                  }
+                }
+              ],
+              "root": 0
+            }
+          }
+        }
+      },
+      "target": "llguidance",
+      "recovery": true,
+      "error": "llguidance export: recursive grammar: atom 0 re-enters while being lowered (inline EBNF cannot carry recursive rules)"
+    }
+  ]
+}

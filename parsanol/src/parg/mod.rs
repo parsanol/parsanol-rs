@@ -25,6 +25,7 @@ use sha2::{Digest, Sha256};
 pub mod bindings;
 pub mod bindings_artifact;
 pub mod derive;
+pub mod export;
 pub mod frontend;
 pub mod render;
 pub mod schema;
@@ -367,6 +368,12 @@ impl PargArtifact {
     /// The parsanol-shape contract the artifact was compiled against.
     pub fn shape(&self) -> Option<&str> {
         self.envelope.get("shape").and_then(Value::as_str)
+    }
+
+    /// The verified envelope (read-only): the pure functions over the
+    /// wire — export, schema, derive — take it from here.
+    pub fn envelope_value(&self) -> &Value {
+        &self.envelope
     }
 
     /// The embedded PARG source text (self-contained artifacts).
