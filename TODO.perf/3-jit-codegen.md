@@ -46,3 +46,40 @@ backend accelerates dispatch, which is not the bottleneck; the revisit
 condition ("a fresh profile that shows dispatch dominating") is not
 met. Stays deferred. The probe example ships so the next revisit is a
 one-command rerun.
+
+## Revisit check 2026-11-12: operand-specialized dispatch measured NEGATIVE (jit#458)
+
+The mandated fresh profile ran on a different shape — the iso corpus
+grammar through the artifact envelope (jit_profile.rs, this round's
+harness): 200 real accept inputs, 220,800 dispatches (1,104 per
+identifier, ~5.5/byte — dispatch-dominant by count, unlike KV's
+0.4/byte). Str terminals carried 46.3% of dispatches. The revisit
+condition ("dispatch dominating") was MET this time, so the
+operand-specialized dispatch was implemented three ways behind a
+`jit` feature and measured (min-of-9, release, identical inputs):
+
+| design | best-of-3 wall (200 inputs) | vs plain |
+|---|---|---|
+| plain interpreter | 14.12 ms | — |
+| v1: StrPlan table + eval method | 20.87 ms | +48% |
+| v2: tuple copy + second index | (worse than v1) | — |
+| v3: inlined, split field borrows, scalar snapshot | 21.94 ms | +55% |
+
+All under the feature flag; 541/541 lib tests and the parser battery
+green in both configs before measuring.
+
+**Why it loses (the mechanism, for the next revisit):** in a release
+build LLVM already fuses `get_atom` (a Vec index) + the `Atom::Str`
+enum match + `parse_str` (first-byte reject + memcmp) into the same
+code the "specialized" path would generate — the dispatch the profile
+counts is not dispatch COST. The plan table then ADDS indirection:
+`Vec<Option<StrPlan>>` scatters the operands into cold cloned
+allocations (String + Box per atom) while the generic path's pattern
+lives in the grammar arena's hot string pool. Same lesson as the
+dense-memo negative (item 7): pre-computed side structures pay cold
+memory for work the optimizer already fused.
+
+The remaining levers the profile actually suggests: packrat
+backtracking (items 8/9) and arena memory layout — NOT dispatch
+specialization. Stays closed; the harness ships so the next revisit
+re-runs in one command.
