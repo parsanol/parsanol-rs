@@ -1,4 +1,3 @@
-
 //! specialization decision (operand-specialized dispatch) comes from
 //! this distribution, not intuition.
 
@@ -75,16 +74,12 @@ fn profile_the_iso_grammar_dispatch_mix() {
             tests
                 .iter()
                 .filter(|t| t.get("kind").and_then(|k| k.as_str()) == Some("accept"))
-                .filter_map(|t| {
-                    t.get("input").and_then(|i| i.as_str()).map(String::from)
-                })
+                .filter_map(|t| t.get("input").and_then(|i| i.as_str()).map(String::from))
                 .collect()
         })
         .unwrap_or_default();
     assert!(!base.is_empty(), "the iso artifact ships accept inputs");
-    let inputs: Vec<String> = (0..200)
-        .map(|i| base[i % base.len()].clone())
-        .collect();
+    let inputs: Vec<String> = (0..200).map(|i| base[i % base.len()].clone()).collect();
 
     // One identifier per parse (the entry consumes all); aggregate the
     // dispatch counts across the batch and take min-of-3 wall time over
@@ -131,6 +126,9 @@ fn profile_the_iso_grammar_dispatch_mix() {
     }
     println!("\nby kind:");
     for (k, c) in &by_kind {
-        println!("  {k:>12} {c:>10} {:>5.1}%", 100.0 * (*c as f64) / (total as f64));
+        println!(
+            "  {k:>12} {c:>10} {:>5.1}%",
+            100.0 * (*c as f64) / (total as f64)
+        );
     }
 }
