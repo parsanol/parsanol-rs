@@ -175,3 +175,37 @@ Laws this arc burned in:
    tier's remaining floor; the splice stays NON-default (no measured
    mean-level win), but end-of-document typing — the realistic
    editor case — is now measurably faster in both tiers.
+
+## Round 2026-11-12: the remap-shaped pre-drop retain — measured negative
+
+rs#464's lever 1 (shrink the maintenance working set) started with the
+cheap half: the pre-drop `cache.retain` re-hashed every survivor per
+parse (fill + hash + probe over ~10^6 entries); the remap shape
+`retain_snapshot_adopt` already ships (compaction + old->new index
+remap + hole repair, no re-hashing) looked like a drop-in.
+
+Interleaved min-of-3 A/B on the bucketed instrument (911 KiB, 100
+keystrokes, late band = end-of-document edits where only maintenance
+differs):
+
+| config | retained late (ms, legs) | snapshot late (ms, legs) |
+|---|---|---|
+| baseline (rebuild) | 19.34 / 18.78 / 19.63 | 40.40 / 40.21 / 40.70 |
+| remap retain | 20.23 / 19.29 / 20.38 | 48.80 / 46.69 / 53.79 |
+
+**The remap loses in BOTH tiers** — retained median +0.9 ms (+4.6%),
+snapshot +6 to +13 ms. Mechanism: the remap vector is 4 MB of i32 over
+10^6 entries, and the two capacity-wide remap/repair loops read it
+random-access against the slots array; the rebuild's sequential
+hash+probe writes stay in cache and pipeline. The jit#458 lesson again:
+the count of operations is not the cost — memory layout is. REVERTED.
+
+What this closes and what remains: the remap SHAPE for the pre-drop
+retain is closed. The O(retained) index (rs#464 lever 1 proper — a
+position-bucketed summary so the scans SKIP whole buckets instead of
+visiting entries) remains the open design: it changes which entries
+get visited, not how the table is maintained, so this negative does
+not bound it. Next after that: lever 2, the dense suffix memo re-test
+under the retained tier (item 7's negative predates the tree
+architecture). The instrument baseline for both: retained late band
+min 18.78 ms.
