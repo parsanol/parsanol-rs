@@ -1,0 +1,68 @@
+name: Cachegrind Dispatch
+
+# rs#465's gate: the arena-locality lever exists only if Str dispatch
+# actually misses in cache. darwin hosts have no valgrind/perf, so the
+# counter measurement runs here — linux + valgrind --tool=cachegrind
+# over the jit_profile workload (the iso artifact, 200 real inputs,
+# the dispatch-mix harness). The report lands in the run summary; the
+# lever decision (the per-kind slab layout) reads it, not intuition.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cachegrind:
+    name: Cachegrind over the dispatch-mix workload
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check out the grammar corpus
+        uses: actions/checkout@v7
+        with:
+          repository: parsanol/pubid-grammar
+          ref: main
+          path: pubid/pubid-grammar
+
+      - name: Install Rust + valgrind
+        run: |
+          rustup toolchain install stable --profile minimal
+          sudo apt-get update
+          sudo apt-get install -y valgrind
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Build the profiling harness (release, one test binary)
+        run: cargo test -p parsanol --release --test jit_profile --no-run
+
+      - name: Cachegrind the dispatch-mix workload
+        run: |
+          set -eu
+          binary=$(ls target/release/deps/jit_profile-* | grep -v '\.d$' | head -1)
+          valgrind --tool=cachegrind --cachegrind-out-file=cachegrind.out \
+            --branch-sim=no "$binary" --ignored --nocapture --test-threads=1 \
+            2>&1 | tee cachegrind-run.log
+
+      - name: Annotate into the run summary
+        run: |
+          {
+            echo "## Cachegrind: the dispatch-mix workload (iso artifact)"
+            echo
+            echo '```'
+            cg_annotate --show=Ir,Dr,Dw,D1mr,D1mw,DLmr,DLmw cachegrind.out \
+              | sed -n '1,40p'
+            echo '```'
+            echo
+            echo '### The dispatch loop function (the locality question)'
+            echo '```'
+            cg_annotate --show=Ir,Dr,Dw,D1mr,D1mw,DLmr,DLmw cachegrind.out \
+              | grep -iE 'dispatch|parse_str|get_atom|profile' | head -20
+            echo '```'
+          } >> $GITHUB_STEP_SUMMARY
