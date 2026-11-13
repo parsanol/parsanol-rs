@@ -319,7 +319,22 @@ impl DenseCache {
         let estimated = (input_len.saturating_mul(atom_count)).clamp(4096, 8_000_000);
 
         let min_capacity = if atom_count > 100 { 10000 } else { 1000 };
-        Self::new(estimated.clamp(min_capacity, 2_000_000))
+        let sized = estimated.clamp(min_capacity, 2_000_000);
+
+        // rs#486: the surface's exact ceiling. Memo keys are (position,
+        // atom) pairs — at most (len+1) x atom_count of them — and each
+        // pair can hold one entry per consume_all variant (the key folds
+        // the flag into the atom id), so twice that is a hard upper bound
+        // on insertions. Sizing to that bound makes the recycle-oldest
+        // cap unreachable: eviction can never fire, whatever the floors
+        // would have under-covered. Never ABOVE the floored estimate, so
+        // mid-size and large inputs keep their documented memory bound.
+        let exact = (input_len + 1)
+            .saturating_mul(atom_count)
+            .saturating_mul(2)
+            .max(16);
+
+        Self::new(sized.min(exact))
     }
 
     /// Rehash the surviving entries into a right-sized table.
