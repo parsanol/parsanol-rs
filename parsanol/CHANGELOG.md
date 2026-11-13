@@ -73,6 +73,10 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- Shrink_to_entries after retained retention (rs#464 round 2, TODO.perf/9) by @[object]
+
+### Other
+
 - Scheduled heavy fuzzing: the weekly hours-long gate (rs#466) by @[object]
 
 ### Other
