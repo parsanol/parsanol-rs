@@ -2028,7 +2028,9 @@ impl<'a> PortableParser<'a> {
         consume_all: bool,
     ) -> Result<AtomResult, ParseError> {
         let mut current_pos = pos;
-        let mut items = Vec::with_capacity(atoms.len());
+        // Lazy: sequences that fail at their first element — the common
+        // case under alternative exploration — never touch the heap.
+        let mut items = Vec::new();
 
         // A failed element discards the captures of every earlier
         // element: the sequence never matched (GH-76 follow-up —
@@ -2155,7 +2157,9 @@ impl<'a> PortableParser<'a> {
             // Check for SIMD optimization
             if let Some(Atom::Re { pattern }) = self.grammar.get_atom(atom_id) {
                 if let Some(char_pattern) = CharacterPattern::from_pattern(pattern) {
-                    let bulk_label = pattern.to_string();
+                    // The failure label is grammar data (`&'a str`, not tied to
+                    // the parser borrow), so the error path builds it lazily —
+                    // a successful bulk scan (the common case) allocates nothing.
                     return self
                         .parse_repetition_bulk(
                             pattern,
@@ -2168,7 +2172,7 @@ impl<'a> PortableParser<'a> {
                         )
                         .map_err(|e| {
                             if matches!(e, ParseError::Failed { .. }) {
-                                self.note_failure(pos, bulk_label.clone());
+                                self.note_failure_ref(pos, pattern);
                             }
                             e
                         });
@@ -2197,7 +2201,8 @@ impl<'a> PortableParser<'a> {
 
         let mut current_pos = pos;
         let mut count = 0;
-        let mut items: Vec<AstNode> = Vec::with_capacity(min.clamp(8, 64));
+        // Lazy: zero-iteration runs (optional elements) never touch the heap.
+        let mut items: Vec<AstNode> = Vec::new();
         let input_len = self.input.len();
         let spine_watched = self.spine_watch == Some((atom_id, pos));
         if spine_watched {

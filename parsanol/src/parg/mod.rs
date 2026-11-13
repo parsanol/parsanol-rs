@@ -268,8 +268,12 @@ pub struct PargArtifact {
     /// `serde_json::from_value` over the artifact's atom list — the
     /// dominant per-parse fixed cost on artifact-sized grammars
     /// (rs#486). Clones share the cache.
-    grammar_cache: Arc<Mutex<HashMap<String, Arc<(Grammar, Vec<usize>)>>>>,
+    grammar_cache: GrammarCache,
 }
+
+/// The decoded-grammar cache's shape: entry name → the executable
+/// (grammar, StateMatchAscii atom indexes) pair, shared behind a lock.
+type GrammarCache = Arc<Mutex<HashMap<String, Arc<(Grammar, Vec<usize>)>>>>;
 
 /// The edition spellings this runtime loads: edition 2 (named trees +
 /// explicit spans) is the only edition — edition 1 was removed, so its

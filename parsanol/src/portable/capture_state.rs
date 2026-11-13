@@ -302,10 +302,23 @@ impl Default for CaptureState {
 }
 
 impl CaptureState {
-    /// Create a new capture state with default capacity
+    /// Create a new capture state. Everything is lazy: a grammar whose
+    /// parse never stores a capture (Named-only shapes like the
+    /// asciichem formula entry) allocates nothing here (rs#486).
     #[inline]
     pub fn new() -> Self {
-        Self::with_capacity(16)
+        Self {
+            captures: AHashMap::new(),
+            nodes: AHashMap::new(),
+            capture_order: Vec::new(),
+            scope_stack: Vec::new(),
+            depth: 0,
+            version: 0,
+            content_hash: 0,
+            capture_fps: AHashMap::new(),
+            journaling: false,
+            journal: Vec::new(),
+        }
     }
 
     /// Create a new capture state with specified initial capacity

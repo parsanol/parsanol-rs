@@ -360,7 +360,7 @@ impl PargArtifact {
                 // capture, including writes the failed attempt rolled
                 // back. Success paths never journal (zero cost).
                 let mut arena2 = AstArena::for_input(input.len().max(1 << 16));
-                let mut journaling = PortableParser::new(&grammar, input, &mut arena2);
+                let mut journaling = PortableParser::new(grammar, input, &mut arena2);
                 journaling
                     .set_ascii_state_match_atoms(ascii_matches)
                     .map_err(|err| PargError::ParseFailed(err.to_string()))?;
