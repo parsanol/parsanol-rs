@@ -44,14 +44,18 @@ jobs:
 
       - name: Cachegrind the dispatch-mix workload
         run: |
-          set -eu
-          binary=$(ls target/release/deps/jit_profile-* | grep -v '\.d$' | head -1)
+          set -euo pipefail
+          binary=$(find target -type f -name 'jit_profile-*' ! -name '*.d' | head -1)
+          [ -n "$binary" ] || { echo "the jit_profile test binary is missing from target/" >&2; exit 1; }
+          echo "instrumenting $binary"
           valgrind --tool=cachegrind --cachegrind-out-file=cachegrind.out \
             --branch-sim=no "$binary" --ignored --nocapture --test-threads=1 \
             2>&1 | tee cachegrind-run.log
+          [ -f cachegrind.out ] || { echo "valgrind produced no cachegrind.out" >&2; exit 1; }
 
       - name: Annotate into the run summary
         run: |
+          set -euo pipefail
           {
             echo "## Cachegrind: the dispatch-mix workload (iso artifact)"
             echo
