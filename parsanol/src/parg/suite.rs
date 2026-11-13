@@ -271,13 +271,14 @@ impl PargArtifact {
         input: &str,
         compatibility: crate::portable::parser::ParserCompatibility,
     ) -> Result<Value, PargError> {
-        let (grammar, ascii_matches) = self.grammar_with_ascii_state_matches(entry)?;
+        let decoded = self.decoded_entry(entry)?;
         // The shaped tree can dwarf the input (large grammars bind few
         // characters per node); size the arena for the tree, not the text.
         let mut arena = AstArena::for_input(input.len().max(1 << 16));
-        let mut parser = PortableParser::new(&grammar, input, &mut arena);
+        let mut parser =
+            PortableParser::with_analysis(&decoded.grammar, input, &mut arena, &decoded.analysis);
         parser
-            .set_ascii_state_match_atoms(&ascii_matches)
+            .set_ascii_state_match_atoms(&decoded.ascii_matches)
             .map_err(|err| PargError::ParseFailed(err.to_string()))?;
         parser
             .set_compatibility(compatibility)
@@ -331,11 +332,13 @@ impl PargArtifact {
             .map_err(PargError::ParseFailed)?
     }
     fn parse_shape_recovering_inner(&self, entry: &str, input: &str) -> Result<Value, PargError> {
-        let (grammar, ascii_matches) = self.grammar_with_ascii_state_matches(entry)?;
+        let decoded = self.decoded_entry(entry)?;
+        let grammar = &decoded.grammar;
+        let ascii_matches = &decoded.ascii_matches;
         let mut arena = AstArena::for_input(input.len().max(1 << 16));
-        let mut parser = PortableParser::new(&grammar, input, &mut arena);
+        let mut parser = PortableParser::new(grammar, input, &mut arena);
         parser
-            .set_ascii_state_match_atoms(&ascii_matches)
+            .set_ascii_state_match_atoms(ascii_matches)
             .map_err(|err| PargError::ParseFailed(err.to_string()))?;
         match parser.parse() {
             Ok(_) => {
@@ -354,9 +357,10 @@ impl PargArtifact {
                 // capture, including writes the failed attempt rolled
                 // back. Success paths never journal (zero cost).
                 let mut arena2 = AstArena::for_input(input.len().max(1 << 16));
-                let mut journaling = PortableParser::new(&grammar, input, &mut arena2);
+                let mut journaling =
+                    PortableParser::with_analysis(grammar, input, &mut arena2, &decoded.analysis);
                 journaling
-                    .set_ascii_state_match_atoms(&ascii_matches)
+                    .set_ascii_state_match_atoms(ascii_matches)
                     .map_err(|err| PargError::ParseFailed(err.to_string()))?;
                 journaling.capture_state_mut().set_journaling(true);
                 journaling.set_track_max_end(true);
