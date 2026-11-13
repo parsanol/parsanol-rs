@@ -96,8 +96,8 @@ impl CharSet {
     /// Negate the set
     #[inline]
     pub fn negate(&mut self) {
-        for i in 0..256 {
-            self.bitmap[i] = !self.bitmap[i];
+        for slot in &mut self.bitmap {
+            *slot = !*slot;
         }
     }
 }
