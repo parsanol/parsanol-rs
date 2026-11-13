@@ -340,6 +340,9 @@ pub struct PortableParser<'a> {
     /// prefix entry can change legacy ordered-choice results, so these
     /// entries use the parser's resource governor rather than eviction.
     legacy_cache: std::collections::HashMap<(usize, usize), LegacyCacheEntry>,
+    /// Parslet-mode memo identity per atom (see `legacy_memo_identity`);
+    /// empty outside Parslet compatibility.
+    legacy_memo_identity: Vec<usize>,
     legacy_diagnostic_bytes: usize,
 
     // ========================================================================
@@ -605,6 +608,7 @@ impl<'a> PortableParser<'a> {
             compatibility: ParserCompatibility::Strict,
             ascii_state_match_atoms: Vec::new(),
             legacy_cache: std::collections::HashMap::new(),
+            legacy_memo_identity: Vec::new(),
             legacy_diagnostic_bytes: 0,
             governor,
             capture_state: CaptureState::new(),
@@ -668,6 +672,7 @@ impl<'a> PortableParser<'a> {
             compatibility: ParserCompatibility::Strict,
             ascii_state_match_atoms: Vec::new(),
             legacy_cache: std::collections::HashMap::new(),
+            legacy_memo_identity: Vec::new(),
             legacy_diagnostic_bytes: 0,
             governor,
             capture_state: CaptureState::new(),
@@ -717,6 +722,11 @@ impl<'a> PortableParser<'a> {
             return Ok(());
         }
         self.compatibility = compatibility;
+        self.legacy_memo_identity = if compatibility == ParserCompatibility::Parslet {
+            legacy_memo_identity(self.grammar)
+        } else {
+            Vec::new()
+        };
         self.reset_policy_state(compatibility);
         Ok(())
     }
@@ -1453,7 +1463,12 @@ impl<'a> PortableParser<'a> {
         pos: usize,
         consume_all: bool,
     ) -> Result<AtomResult, ParseError> {
-        let key = (atom_id, pos);
+        let identity = self
+            .legacy_memo_identity
+            .get(atom_id)
+            .copied()
+            .unwrap_or(atom_id);
+        let key = (identity, pos);
         let cached = self.legacy_cache.get(&key).filter(|entry| {
             !entry.outcome.success || entry.outcome.generation == self.arena.generation()
         });
@@ -3562,4 +3577,81 @@ impl<'a> PortableParser<'a> {
 
         result
     }
+}
+
+/// Parslet memoizes per atom object, and a rule is one object however many
+/// places refer to it: a prefix result computed at one reference replays at
+/// another (with consume_all re-checked), which decides shadowed
+/// alternatives such as `e / e " " rest`. A lowered PARG graph has no rule
+/// identity — each reference to a recursive rule can be its own copy of the
+/// rule's atoms — so the legacy memo is keyed by structural identity
+/// instead: atoms with the same kind, the same non-child fields and
+/// structurally identical children in order (the coarsest bisimulation)
+/// share one memo slot, represented by the smallest atom index of the
+/// class. A graph without copies keeps every atom its own key.
+fn legacy_memo_identity(grammar: &Grammar) -> Vec<usize> {
+    let mut labels: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut children: Vec<Vec<usize>> = Vec::with_capacity(grammar.atoms.len());
+    let mut block: Vec<usize> = Vec::with_capacity(grammar.atoms.len());
+    for atom in &grammar.atoms {
+        let mut value = serde_json::to_value(atom).unwrap_or(serde_json::Value::Null);
+        let mut kids = Vec::new();
+        if let Some(fields) = value
+            .as_object_mut()
+            .and_then(|variant| variant.values_mut().next())
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            // Only child references leave the label; any other field,
+            // including an unrecognised one, must match exactly.
+            if let Some(child) = fields.get("atom").and_then(serde_json::Value::as_u64) {
+                kids.push(child as usize);
+                fields.remove("atom");
+            }
+            let list = fields
+                .get("atoms")
+                .and_then(serde_json::Value::as_array)
+                .and_then(|items| {
+                    items
+                        .iter()
+                        .map(|item| item.as_u64().map(|id| id as usize))
+                        .collect::<Option<Vec<_>>>()
+                });
+            if let Some(list) = list {
+                kids.extend(list);
+                fields.remove("atoms");
+            }
+        }
+        let next = labels.len();
+        block.push(*labels.entry(value.to_string()).or_insert(next));
+        children.push(kids);
+    }
+    let mut classes = labels.len();
+    loop {
+        let mut signatures: std::collections::HashMap<(usize, Vec<usize>), usize> =
+            std::collections::HashMap::new();
+        let refined: Vec<usize> = (0..block.len())
+            .map(|id| {
+                let signature = (
+                    block[id],
+                    children[id]
+                        .iter()
+                        .map(|&child| block.get(child).copied().unwrap_or(usize::MAX))
+                        .collect(),
+                );
+                let next = signatures.len();
+                *signatures.entry(signature).or_insert(next)
+            })
+            .collect();
+        let refined_classes = signatures.len();
+        block = refined;
+        if refined_classes == classes {
+            break;
+        }
+        classes = refined_classes;
+    }
+    let mut representative = vec![usize::MAX; classes];
+    for (id, &class) in block.iter().enumerate() {
+        representative[class] = representative[class].min(id);
+    }
+    block.iter().map(|&class| representative[class]).collect()
 }

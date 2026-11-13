@@ -882,3 +882,60 @@ fn successful_dynamic_fragments_follow_the_selected_diagnostic_policy() {
         assert_eq!(parser.failure_diagnostics().unwrap().0, expected);
     }
 }
+
+/// One copy of `e = ("ab") as s / ("a") as f ("b c") as p / ("c") as c`,
+/// with fresh atoms: a lowered PARG graph emits such a copy for each
+/// reference to a recursive rule.
+fn copied_rule(grammar: &mut Grammar) -> usize {
+    let ab = literal(grammar, "ab");
+    let s = named(grammar, ab, "s");
+    let a = literal(grammar, "a");
+    let f = named(grammar, a, "f");
+    let rest = literal(grammar, "b c");
+    let p = named(grammar, rest, "p");
+    let split = grammar.add_atom(Atom::Sequence { atoms: vec![f, p] });
+    let c = literal(grammar, "c");
+    let c = named(grammar, c, "c");
+    let body = grammar.add_atom(Atom::Alternative {
+        atoms: vec![s, split, c],
+    });
+    grammar.add_atom(Atom::Entity { atom: body })
+}
+
+#[test]
+fn legacy_memo_replays_across_copies_of_one_rule() {
+    // t = e ("!") as other / e / e " " (e) as expr, every `e` its own copy.
+    // Parslet replays the prefix result of `e` ("ab") at the second
+    // reference, so the bare `e` fails its consume_all check and the third
+    // branch wins; recomputing the copy would instead take `f p`.
+    let mut grammar = Grammar::new();
+    let first = copied_rule(&mut grammar);
+    let bang = literal(&mut grammar, "!");
+    let other = named(&mut grammar, bang, "other");
+    let shadowing = grammar.add_atom(Atom::Sequence {
+        atoms: vec![first, other],
+    });
+    let bare = copied_rule(&mut grammar);
+    let lead = copied_rule(&mut grammar);
+    let space = literal(&mut grammar, " ");
+    let tail = copied_rule(&mut grammar);
+    let expr = named(&mut grammar, tail, "expr");
+    let spaced = grammar.add_atom(Atom::Sequence {
+        atoms: vec![lead, space, expr],
+    });
+    grammar.root = grammar.add_atom(Atom::Alternative {
+        atoms: vec![shadowing, bare, spaced],
+    });
+    let mut arena = AstArena::new();
+    let mut parser = PortableParser::new(&grammar, "ab c", &mut arena);
+    parser
+        .set_compatibility(ParserCompatibility::Parslet)
+        .unwrap();
+    assert_eq!(parsed_keys(&mut parser).unwrap(), vec!["expr", "s"]);
+    assert_eq!(parser.legacy_memo_identity[bare], first);
+    assert_eq!(parser.legacy_memo_identity[tail], first);
+
+    let mut strict_arena = AstArena::new();
+    let mut strict = PortableParser::new(&grammar, "ab c", &mut strict_arena);
+    assert_eq!(parsed_keys(&mut strict).unwrap(), vec!["f", "p"]);
+}
