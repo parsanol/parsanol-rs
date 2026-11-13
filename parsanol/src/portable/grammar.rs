@@ -478,9 +478,12 @@ pub struct Grammar {
 
     /// The parser's derived analyses (see [`ParserAnalysis`]). Pure
     /// functions of `atoms`, cached via interior mutability — equality
-    /// is decided by the three data fields alone.
+    /// is decided by the three data fields alone. Internal: public only
+    /// so struct-literal construction keeps working (the `no_cache`
+    /// precedent); never read or write it directly, use
+    /// [`Grammar::parser_analysis`].
     #[serde(skip, default)]
-    pub(crate) parser_analysis: Arc<OnceLock<ParserAnalysis>>,
+    pub parser_analysis: Arc<OnceLock<ParserAnalysis>>,
 }
 
 impl PartialEq for Grammar {

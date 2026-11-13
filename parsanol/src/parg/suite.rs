@@ -273,12 +273,14 @@ impl PargArtifact {
     ) -> Result<Value, PargError> {
         let decoded = self.grammar_with_ascii_state_matches(entry)?;
         let (grammar, ascii_matches) = (&decoded.0, &decoded.1);
+        // grammar/ascii_matches are already references (the decoded pair
+        // is shared behind an Arc)
         // The shaped tree can dwarf the input (large grammars bind few
         // characters per node); size the arena for the tree, not the text.
         let mut arena = AstArena::for_input(input.len().max(1 << 16));
-        let mut parser = PortableParser::new(&grammar, input, &mut arena);
+        let mut parser = PortableParser::new(grammar, input, &mut arena);
         parser
-            .set_ascii_state_match_atoms(&ascii_matches)
+            .set_ascii_state_match_atoms(ascii_matches)
             .map_err(|err| PargError::ParseFailed(err.to_string()))?;
         parser
             .set_compatibility(compatibility)
@@ -334,10 +336,12 @@ impl PargArtifact {
     fn parse_shape_recovering_inner(&self, entry: &str, input: &str) -> Result<Value, PargError> {
         let decoded = self.grammar_with_ascii_state_matches(entry)?;
         let (grammar, ascii_matches) = (&decoded.0, &decoded.1);
+        // grammar/ascii_matches are already references (the decoded pair
+        // is shared behind an Arc)
         let mut arena = AstArena::for_input(input.len().max(1 << 16));
-        let mut parser = PortableParser::new(&grammar, input, &mut arena);
+        let mut parser = PortableParser::new(grammar, input, &mut arena);
         parser
-            .set_ascii_state_match_atoms(&ascii_matches)
+            .set_ascii_state_match_atoms(ascii_matches)
             .map_err(|err| PargError::ParseFailed(err.to_string()))?;
         match parser.parse() {
             Ok(_) => {
@@ -358,7 +362,7 @@ impl PargArtifact {
                 let mut arena2 = AstArena::for_input(input.len().max(1 << 16));
                 let mut journaling = PortableParser::new(&grammar, input, &mut arena2);
                 journaling
-                    .set_ascii_state_match_atoms(&ascii_matches)
+                    .set_ascii_state_match_atoms(ascii_matches)
                     .map_err(|err| PargError::ParseFailed(err.to_string()))?;
                 journaling.capture_state_mut().set_journaling(true);
                 journaling.set_track_max_end(true);
