@@ -519,6 +519,7 @@ impl PargArtifactJs {
             .map(JsString::from)
             .map_err(|e| JsValue::from_str(&e.message))
     }
+
 }
 
 /// Initialize the WASM module
