@@ -24,7 +24,7 @@ jobs:
       - name: Check out the grammar corpus
         uses: actions/checkout@v7
         with:
-          repository: parsanol/pubid-grammar
+          repository: pubid/pubid-grammar
           ref: main
           path: pubid/pubid-grammar
 
