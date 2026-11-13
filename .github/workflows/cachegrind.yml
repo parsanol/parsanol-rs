@@ -48,9 +48,12 @@ jobs:
           binary=$(find target -type f -name 'jit_profile-*' ! -name '*.d' | head -1)
           [ -n "$binary" ] || { echo "the jit_profile test binary is missing from target/" >&2; exit 1; }
           echo "instrumenting $binary"
+          # --cache-sim=yes is explicit: the v4 run collected I refs
+          # only (the D simulator never engaged), useless for the
+          # locality question
           valgrind --tool=cachegrind --cachegrind-out-file=cachegrind.out \
-            --branch-sim=no "$binary" --ignored --nocapture --test-threads=1 \
-            2>&1 | tee cachegrind-run.log
+            --cache-sim=yes --branch-sim=no "$binary" --ignored --nocapture \
+            --test-threads=1 2>&1 | tee cachegrind-run.log
           [ -f cachegrind.out ] || { echo "valgrind produced no cachegrind.out" >&2; exit 1; }
 
       - name: Annotate into the run summary
