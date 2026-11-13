@@ -45,18 +45,40 @@ fn one_parse(grammar: &parsanol::portable::grammar::Grammar, input: &str) {
 
 fn main() {
     let counts = std::env::args().any(|a| a == "--counts");
-    let path = std::env::args()
-        .nth(1)
+    let args: Vec<String> = std::env::args()
+        .skip(1)
         .filter(|a| a != "--counts")
-        .expect("usage: eval-profile <asciichem.json> [rounds|--counts]");
-    let text = std::fs::read_to_string(&path).expect("artifact file");
+        .collect();
+    let path = args
+        .first()
+        .expect("usage: eval-profile <artifact.json> [entry] [inputs...] [rounds]");
+    let text = std::fs::read_to_string(path).expect("artifact file");
     let artifact = parsanol::PargArtifact::from_json(&text).expect("artifact loads");
-    let grammar = artifact.grammar("formula").expect("the formula entry");
+    // Optional entry name (args[2]); defaults to the asciichem formula
+    // entry. Anything after the entry that parses as an integer is the
+    // rounds count for the timing mode; the rest are the inputs.
+    let entry = args
+        .get(1)
+        .map(String::as_str)
+        .filter(|a| a.parse::<u32>().is_err())
+        .unwrap_or("formula");
+    let grammar = artifact
+        .grammar(entry)
+        .unwrap_or_else(|e| panic!("entry {entry}: {e:?}"));
 
-    let inputs = ["H_2O", "Ca^2+", "SO_4^2-"];
+    let inputs: Vec<&str> = match entry {
+        "formula" => vec!["H_2O", "Ca^2+", "SO_4^2-"],
+        _ => vec!["ISO 8601-1:2019"],
+    };
+    // The rounds count for the timing mode: the first arg that parses
+    // as an integer (the entry name and the inputs never do).
+    let rounds = args
+        .iter()
+        .find_map(|a| a.parse::<u32>().ok())
+        .unwrap_or(200_000);
 
     if counts {
-        for input in inputs {
+        for input in &inputs {
             // Warm all process-lifetime caches (grammar decode, regex
             // cache, scan plans) so the counted parse sees steady state.
             one_parse(&grammar, input);
@@ -83,18 +105,14 @@ fn main() {
     }
 
     // Warm once (assert the parse succeeds; caches warm like the bench).
-    for input in inputs {
+    for input in &inputs {
         let mut arena = parsanol::portable::AstArena::for_input(input.len());
         let mut parser = parsanol::portable::PortableParser::new(&grammar, input, &mut arena);
         assert!(parser.parse_with_end_pos().is_ok(), "{input} must parse");
     }
 
-    let rounds = std::env::args()
-        .nth(2)
-        .and_then(|r| r.parse::<u32>().ok())
-        .unwrap_or(200_000);
     for _ in 0..rounds {
-        for input in inputs {
+        for input in &inputs {
             let mut arena = parsanol::portable::AstArena::for_input(black_box(input).len());
             let mut parser = parsanol::portable::PortableParser::new(
                 black_box(&grammar),
