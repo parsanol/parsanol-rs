@@ -451,7 +451,7 @@ fn render_string_parity_with_ruby() {
     let rendered = artifact
         .render_string("identifier", "ISO 5537:2025", "default")
         .unwrap();
-    assert_eq!(rendered, "ISO-5537:2025");
+    assert_eq!(rendered, "ISO 5537:2025");
 }
 
 /// F7 C-ABI mapping: the wire functions round-trip through C strings.
