@@ -919,6 +919,56 @@ pub unsafe extern "C" fn parsanol_parg_export(
     }
 }
 
+/// Emit a render variant against a bound attribute map (rs#459 slice
+/// 2 — the graduated generation path). `model_json` is the bound map
+/// as JSON text (what `parsanol_parg_parse` returns). Rust is the
+/// authoritative lowering; Python inherits it through this surface.
+/// Returns the owned string (free with `parsanol_parg_free`) or NULL
+/// with last_error set.
+///
+/// # Safety
+/// artifact_json, variant and model_json must be non-NULL valid UTF-8
+/// C strings. Free a non-NULL result exactly once with
+/// `parsanol_parg_free`.
+#[no_mangle]
+pub unsafe extern "C" fn parsanol_parg_generate(
+    artifact_json: *const c_char,
+    variant: *const c_char,
+    model_json: *const c_char,
+) -> *mut c_char {
+    let result = (|| -> Result<String, String> {
+        if artifact_json.is_null() || variant.is_null() || model_json.is_null() {
+            return Err("artifact, variant and model must be non-NULL".into());
+        }
+        let text = CStr::from_ptr(artifact_json)
+            .to_str()
+            .map_err(|e| e.to_string())?;
+        let variant = CStr::from_ptr(variant)
+            .to_str()
+            .map_err(|e| e.to_string())?;
+        let model: serde_json::Value = serde_json::from_str(
+            CStr::from_ptr(model_json)
+                .to_str()
+                .map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| format!("model is not valid JSON: {e}"))?;
+        let artifact = crate::parg::PargArtifact::from_json(text).map_err(|e| e.to_string())?;
+        artifact
+            .generate(variant, &model)
+            .map_err(|e| e.to_string())
+    })();
+    match result {
+        Ok(text) => {
+            c_set_error("");
+            to_c(text)
+        }
+        Err(error) => {
+            c_set_error(&error);
+            std::ptr::null_mut()
+        }
+    }
+}
+
 fn run_recovering(
     envelope_json: *const c_char,
     entry: *const c_char,

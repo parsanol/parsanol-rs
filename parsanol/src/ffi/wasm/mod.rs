@@ -520,6 +520,20 @@ impl PargArtifactJs {
             .map_err(|e| JsValue::from_str(&e.message))
     }
 
+    /// Emit a render variant against a bound attribute map (rs#459
+    /// slice 2 — the graduated generation path). `model_json` is the
+    /// bound map as JSON text (what `parseAndBind` returns). Rust is
+    /// the authoritative lowering; TS inherits it through this surface
+    /// instead of a per-language renderer.
+    #[wasm_bindgen(js_name = generate)]
+    pub fn generate(&self, variant: &str, model_json: &str) -> Result<JsString, JsValue> {
+        let model: serde_json::Value = serde_json::from_str(model_json)
+            .map_err(|e| JsValue::from_str(&format!("model is not valid JSON: {e}")))?;
+        self.artifact
+            .generate(variant, &model)
+            .map(JsString::from)
+            .map_err(|e| JsValue::from_str(&e.to_string()))
+    }
 }
 
 /// Initialize the WASM module

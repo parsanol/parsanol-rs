@@ -103,6 +103,21 @@ fn every_corpus_case_replays_identically() {
                                 "{}: render {variant:?} diverges from Ruby",
                                 ctx()
                             );
+                            // The graduated path (rs#459 slice 2): the
+                            // lowered generator must reproduce the same
+                            // frozen string through the bound map.
+                            let bound = artifact
+                                .parse_and_bind(&entry, input)
+                                .unwrap_or_else(|err| panic!("{}: {err}", ctx()));
+                            let generated = artifact
+                                .generate(variant, &bound)
+                                .unwrap_or_else(|err| panic!("{}: {err}", ctx()));
+                            assert_eq!(
+                                generated,
+                                expected.as_str().expect("rendered string"),
+                                "{}: generate {variant:?} diverges from Ruby",
+                                ctx()
+                            );
                         }
                     }
                     if let Some(derived) = case.get("derived") {
