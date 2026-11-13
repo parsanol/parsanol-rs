@@ -60,13 +60,13 @@ jobs:
             echo "## Cachegrind: the dispatch-mix workload (iso artifact)"
             echo
             echo '```'
-            cg_annotate --show=Ir,Dr,Dw,D1mr,D1mw,DLmr,DLmw cachegrind.out \
+            cg_annotate --show=Ir,D1mr,DLmr cachegrind.out \
               | sed -n '1,40p'
             echo '```'
             echo
             echo '### The dispatch loop function (the locality question)'
             echo '```'
-            cg_annotate --show=Ir,Dr,Dw,D1mr,D1mw,DLmr,DLmw cachegrind.out \
+            cg_annotate --show=Ir,D1mr,DLmr cachegrind.out \
               | grep -iE 'dispatch|parse_str|get_atom|profile' | head -20
             echo '```'
           } >> $GITHUB_STEP_SUMMARY
