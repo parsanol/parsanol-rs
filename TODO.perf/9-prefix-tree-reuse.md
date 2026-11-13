@@ -236,3 +236,28 @@ for the A/B), keyed by (atom_id, pos - window_start) with a small
 sentinel for out-of-window probes falling back to the hash map.
 Measure the late band; a mean-level win there is what the splice
 never had.
+
+## Round 2 (final, 2026-11-13): the shrink lands — the late band drops below 22 ms
+
+rs#464 round 2: `DenseCache::shrink_to_entries` rehashes the retained
+survivors into a right-sized table after the post-parse retention
+(the capacity-wide maintenance loops were scanning the session-start
+slot table, millions of slots, per keystroke). The insert path's
+load-factor check grows the table back naturally if the retained set
+recovers. SHIPPED (fix-corpus-ref -> #482).
+
+Interleaved min-of-3 A/B on the bucketed instrument, under RISING
+host load (the snapshot tier — shrink-free — moved UP):
+
+| config | retained late median | retained late min |
+|---|---|---|
+| baseline | 24.22 ms | 23.56 ms |
+| shrink | 21.99 ms | 20.94 ms |
+
+Retained/snapshot ratio: 2.5x -> 4.3x. The mechanism contrast with
+round 1's remap negative is the record's lesson: the remap wrote a
+4 MB vector with random access against the old slots array; the
+shrink writes a fresh right-sized table sequentially and then all
+maintenance loops scan only what survives. Same maintenance problem,
+opposite data motion, opposite verdict. The strict-cutoff gates and
+the 40-edit sessions stayed green throughout (618 passed).
