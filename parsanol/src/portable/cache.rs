@@ -322,6 +322,34 @@ impl DenseCache {
         Self::new(estimated.clamp(min_capacity, 2_000_000))
     }
 
+    /// Rehash the surviving entries into a right-sized table.
+    ///
+    /// The retained tier's per-keystroke cost includes the capacity-wide
+    /// slot loops (remap + hole repair over `self.capacity`, sized for
+    /// the FULL input at session start) — at 911 KiB that is millions of
+    /// slots scanned per keystroke while only a few thousand entries
+    /// survive. Shrinking the table to the survivor count turns the
+    /// maintenance loops O(window) for the rest of the session.
+    /// TODO.perf/9 round 2 (rs#464).
+    pub fn shrink_to_entries(&mut self) {
+        let survivors = self.entries.len();
+        let new_capacity = (survivors * 2).clamp(16, self.capacity).next_power_of_two();
+        if new_capacity >= self.capacity {
+            return; // nothing to shrink
+        }
+        self.slots = vec![-1i32; new_capacity];
+        self.capacity = new_capacity;
+        self.max_entries = ((new_capacity as f64 * 0.75) as usize).max(survivors);
+        for (idx, entry) in self.entries.iter().enumerate() {
+            let slot = Self::hash_static(entry.pos, entry.atom_id, self.capacity);
+            let mut probe = slot;
+            while self.slots[probe] >= 0 {
+                probe = (probe + 1) & (self.capacity - 1);
+            }
+            self.slots[probe] = idx as i32;
+        }
+    }
+
     /// Get a cached entry
     #[inline]
     pub fn get(&mut self, pos: u32, atom_id: u16, generation: u32) -> Option<&CacheEntry> {

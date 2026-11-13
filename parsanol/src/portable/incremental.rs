@@ -471,6 +471,15 @@ impl<'a> IncrementalParser<'a> {
             // predicate, and only pool-backed values adopt.
             |node| node.clone(),
         );
+
+        // TODO.perf/9 round 2 (rs#464): the slot table stays sized for
+        // the session-start input while only a few thousand entries
+        // survive retention — the capacity-wide maintenance loops are
+        // the late band's remaining floor. Shrink to the survivors
+        // (the insert path's load-factor check grows it back naturally
+        // if the set recovers).
+        self.cache.shrink_to_entries();
+
         self.dirty_tracker.clear();
 
         (result, before, post_parse)
