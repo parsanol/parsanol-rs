@@ -115,6 +115,7 @@ impl GrammarBuilder {
             atoms,
             root,
             no_cache: Vec::new(),
+            parser_analysis: std::sync::Arc::new(std::sync::OnceLock::new()),
         }
     }
 

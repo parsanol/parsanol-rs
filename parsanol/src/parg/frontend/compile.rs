@@ -1433,6 +1433,7 @@ impl<'a> Compiler<'a> {
             atoms: std::mem::take(&mut self.atoms),
             root,
             no_cache: Vec::new(),
+            parser_analysis: std::sync::Arc::new(std::sync::OnceLock::new()),
         })
     }
 

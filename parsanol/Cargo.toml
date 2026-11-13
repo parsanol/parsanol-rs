@@ -266,3 +266,8 @@ harness = false
 
 [package.metadata.wasm-pack.profile.release]
 wasm-opt = ["-O3", "--enable-simd"]
+
+[[bench]]
+name = "eval-fixed-cost"
+path = "../benches/eval-fixed-cost.rs"
+harness = false

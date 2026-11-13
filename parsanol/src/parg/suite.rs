@@ -271,7 +271,8 @@ impl PargArtifact {
         input: &str,
         compatibility: crate::portable::parser::ParserCompatibility,
     ) -> Result<Value, PargError> {
-        let (grammar, ascii_matches) = self.grammar_with_ascii_state_matches(entry)?;
+        let decoded = self.grammar_with_ascii_state_matches(entry)?;
+        let (grammar, ascii_matches) = (&decoded.0, &decoded.1);
         // The shaped tree can dwarf the input (large grammars bind few
         // characters per node); size the arena for the tree, not the text.
         let mut arena = AstArena::for_input(input.len().max(1 << 16));
@@ -331,7 +332,8 @@ impl PargArtifact {
             .map_err(PargError::ParseFailed)?
     }
     fn parse_shape_recovering_inner(&self, entry: &str, input: &str) -> Result<Value, PargError> {
-        let (grammar, ascii_matches) = self.grammar_with_ascii_state_matches(entry)?;
+        let decoded = self.grammar_with_ascii_state_matches(entry)?;
+        let (grammar, ascii_matches) = (&decoded.0, &decoded.1);
         let mut arena = AstArena::for_input(input.len().max(1 << 16));
         let mut parser = PortableParser::new(&grammar, input, &mut arena);
         parser

@@ -2000,7 +2000,7 @@ mod terminal_bypass_model {
         let mut arena = AstArena::new();
         let mut p = PortableParser::new(g, input, &mut arena);
         if !direct {
-            p.terminal_direct.clear();
+            p.test_disable_terminal_direct();
         } else {
             assert!(p.terminal_direct.iter().any(|&d| d));
         }

@@ -15,9 +15,11 @@
 //! // parse `input` with PortableParser::new(&grammar, input, &mut arena)
 //! ```
 
+use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Write as _;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -260,6 +262,13 @@ pub const SUPPORTED_BINDING_VERSION: i64 = 2;
 #[derive(Debug, Clone)]
 pub struct PargArtifact {
     envelope: Value,
+    /// Decoded grammars per entry, filled on first parse. The envelope
+    /// is immutable after the verified load, so the decode is a pure
+    /// cache: without it every `parse_and_bind` re-ran
+    /// `serde_json::from_value` over the artifact's atom list — the
+    /// dominant per-parse fixed cost on artifact-sized grammars
+    /// (rs#486). Clones share the cache.
+    grammar_cache: Arc<Mutex<HashMap<String, Arc<(Grammar, Vec<usize>)>>>>,
 }
 
 /// The edition spellings this runtime loads: edition 2 (named trees +
@@ -340,7 +349,10 @@ impl PargArtifact {
              recompile the grammar with edition \"v2\" (named trees + spans)",
         ))?;
         verify_checksum(&envelope)?;
-        Ok(Self { envelope })
+        Ok(Self {
+            envelope,
+            grammar_cache: Arc::new(Mutex::new(HashMap::new())),
+        })
     }
 
     /// The language edition the artifact's trees carry (ruby#357):
@@ -470,12 +482,20 @@ impl PargArtifact {
     pub(crate) fn grammar_with_ascii_state_matches(
         &self,
         entry: &str,
-    ) -> Result<(Grammar, Vec<usize>), PargError> {
+    ) -> Result<Arc<(Grammar, Vec<usize>)>, PargError> {
+        if let Some(hit) = self.grammar_cache.lock().unwrap().get(entry) {
+            return Ok(hit.clone());
+        }
         let value = self
             .entry_value(entry, "grammar")
             .cloned()
             .ok_or_else(|| PargError::UnknownEntry(entry.to_owned()))?;
-        decode_ascii_state_grammar(value)
+        let decoded = Arc::new(decode_ascii_state_grammar(value)?);
+        self.grammar_cache
+            .lock()
+            .unwrap()
+            .insert(entry.to_string(), decoded.clone());
+        Ok(decoded)
     }
 
     fn entry_value(&self, entry: &str, field: &str) -> Option<&Value> {

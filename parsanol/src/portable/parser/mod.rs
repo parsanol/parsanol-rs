@@ -93,118 +93,6 @@ fn vm_debug_enabled() -> bool {
     *ENABLED.get_or_init(|| std::env::var("PARSANOL_VM_DEBUG").is_ok())
 }
 
-fn terminal_direct_atoms(grammar: &Grammar) -> Vec<bool> {
-    (0..grammar.atoms.len())
-        .map(|i| match grammar.get_atom(i) {
-            Some(Atom::Str { .. }) => true,
-            Some(Atom::Re { pattern }) => {
-                CharacterPattern::from_pattern(pattern).is_some()
-                    || regex_cache::get_or_decode_class(pattern).is_some()
-            }
-            _ => false,
-        })
-        .collect()
-}
-
-fn dynamic_dependence(grammar: &Grammar) -> Vec<bool> {
-    dependence_closure(grammar, |a| {
-        matches!(
-            a,
-            Atom::Dynamic { .. } | Atom::StateMatch { .. } | Atom::StateSwitch { .. }
-        )
-    })
-}
-
-/// Ancestors of StateSet writes (parsanol-ruby#185): a dyn-cache
-/// replay re-derives the VALUE but skips the slot write, so a later
-/// reader sees a stale slot. These atoms bypass the dyn cache.
-fn state_write_dependence(grammar: &Grammar) -> Vec<bool> {
-    dependence_closure(grammar, |a| matches!(a, Atom::StateSet { .. }))
-}
-
-/// Capture writes are observable after their atom succeeds, but memo
-/// entries contain only the parsed value and end position. Replaying a
-/// capture-producing subtree after rollback would skip its writes. Scope
-/// and lookahead isolate those writes, so they stop this propagation and
-/// remain eligible for memoization themselves.
-fn capture_write_dependence(grammar: &Grammar) -> Vec<bool> {
-    dependence_closure_until(
-        grammar,
-        |a| matches!(a, Atom::Capture { .. }),
-        |a| matches!(a, Atom::Scope { .. } | Atom::Lookahead { .. }),
-    )
-}
-
-fn dependence_closure(grammar: &Grammar, is_seed: impl Fn(&Atom) -> bool) -> Vec<bool> {
-    dependence_closure_until(grammar, is_seed, |_| false)
-}
-
-fn dependence_closure_until(
-    grammar: &Grammar,
-    is_seed: impl Fn(&Atom) -> bool,
-    is_barrier: impl Fn(&Atom) -> bool,
-) -> Vec<bool> {
-    let has_dynamic = grammar.atoms.iter().any(|a| is_seed(a));
-    if !has_dynamic {
-        return Vec::new();
-    }
-
-    let n = grammar.atoms.len();
-    let mut parents: Vec<Vec<usize>> = vec![Vec::new(); n];
-    for (i, atom) in grammar.atoms.iter().enumerate() {
-        if is_barrier(atom) {
-            continue;
-        }
-        let mut children = Vec::new();
-        match atom {
-            Atom::Sequence { atoms } | Atom::Alternative { atoms } => children.extend(atoms),
-            Atom::Repetition { atom, .. }
-            | Atom::Named { atom, .. }
-            | Atom::Entity { atom }
-            | Atom::Lookahead { atom, .. }
-            | Atom::Ignore { atom }
-            | Atom::Capture { atom, .. }
-            | Atom::Scope { atom } => children.push(*atom),
-            _ => {}
-        }
-        for c in children {
-            if c < n {
-                parents[c].push(i);
-            }
-        }
-    }
-
-    let mut dep = vec![false; n];
-    let mut stack: Vec<usize> = grammar
-        .atoms
-        .iter()
-        .enumerate()
-        .filter_map(|(i, a)| is_seed(a).then_some(i))
-        .collect();
-    while let Some(a) = stack.pop() {
-        if dep[a] {
-            continue;
-        }
-        dep[a] = true;
-        stack.extend(parents[a].iter().copied());
-    }
-    dep
-}
-
-/// Rule-name → Named-atom index for StateSwitch dispatch: the wire
-/// inlines rule bodies, so a rule name resolves to the Named atom
-/// that carries it (first occurrence wins — inlined copies are
-/// equivalent).
-fn named_atom_index(grammar: &Grammar) -> std::collections::HashMap<String, usize> {
-    let mut index = std::collections::HashMap::new();
-    for (i, atom) in grammar.atoms.iter().enumerate() {
-        if let Atom::Named { name, .. } = atom {
-            index.entry(name.clone()).or_insert(i);
-        }
-    }
-    index
-}
-
 /// Logging macros - no-op when logging feature is disabled
 #[cfg(not(feature = "logging"))]
 macro_rules! log_debug {
@@ -404,30 +292,31 @@ pub struct PortableParser<'a> {
     call_depth_limit_hit: bool,
 
     /// Per-atom dynamic dependence (empty when the grammar has no
-    /// Dynamic atoms): memoization is skipped for these atoms.
-    dynamic_dependent: Vec<bool>,
+    /// Dynamic atoms): memoization is skipped for these atoms. Shared
+    /// from the grammar's cached [`crate::portable::grammar::ParserAnalysis`].
+    dynamic_dependent: std::sync::Arc<Vec<bool>>,
 
     /// Per-atom flag: a pure terminal (literal, or a regex that takes a
     /// direct class path) that Strict mode evaluates directly instead of
-    /// through the memo. See `terminal_direct_atoms`.
-    terminal_direct: Vec<bool>,
+    /// through the memo. See `ParserAnalysis`.
+    terminal_direct: std::sync::Arc<Vec<bool>>,
 
     /// Per-atom ancestry of StateSet writes (parsanol-ruby#185): a
     /// dyn-cache replay re-derives the VALUE but skips the slot
     /// write, so a later reader sees a stale slot. These atoms
     /// bypass the dyn cache entirely.
-    state_write_dependent: Vec<bool>,
+    state_write_dependent: std::sync::Arc<Vec<bool>>,
 
     /// Capture-writing atoms and ancestors whose writes escape their
     /// boundary. Re-execute these effects while pure children and
     /// capture-isolating scopes retain their ordinary memoization.
-    capture_write_dependent: Vec<bool>,
+    capture_write_dependent: std::sync::Arc<Vec<bool>>,
 
     /// Rule-name index for state dispatch (parsanol-ruby#129):
     /// StateSwitch arms reference rules by name; the wire inlines
     /// rule bodies, so the resolution target is the Named atom
     /// carrying the rule's name.
-    named_atoms: std::collections::HashMap<String, usize>,
+    named_atoms: std::sync::Arc<std::collections::HashMap<String, usize>>,
 
     /// Stable arena backing snapshot-marked cache entries (incremental
     /// reparsing, TODO.perf/4). Hits on snapshot entries adopt their
@@ -620,11 +509,11 @@ impl<'a> PortableParser<'a> {
             dbg_depth: 0,
             max_call_depth: DEFAULT_MAX_CALL_DEPTH as u64,
             call_depth_limit_hit: false,
-            dynamic_dependent: dynamic_dependence(grammar),
-            terminal_direct: terminal_direct_atoms(grammar),
-            state_write_dependent: state_write_dependence(grammar),
-            capture_write_dependent: capture_write_dependence(grammar),
-            named_atoms: named_atom_index(grammar),
+            dynamic_dependent: grammar.parser_analysis().dynamic_dependent.clone(),
+            terminal_direct: grammar.parser_analysis().terminal_direct.clone(),
+            state_write_dependent: grammar.parser_analysis().state_write_dependent.clone(),
+            capture_write_dependent: grammar.parser_analysis().capture_write_dependent.clone(),
+            named_atoms: grammar.parser_analysis().named_atoms.clone(),
             snapshot_arena,
             snapshots_in_live,
             dispatch_counts: None,
@@ -683,11 +572,11 @@ impl<'a> PortableParser<'a> {
             dbg_depth: 0,
             max_call_depth: DEFAULT_MAX_CALL_DEPTH as u64,
             call_depth_limit_hit: false,
-            dynamic_dependent: dynamic_dependence(grammar),
-            terminal_direct: terminal_direct_atoms(grammar),
-            state_write_dependent: state_write_dependence(grammar),
-            capture_write_dependent: capture_write_dependence(grammar),
-            named_atoms: named_atom_index(grammar),
+            dynamic_dependent: grammar.parser_analysis().dynamic_dependent.clone(),
+            terminal_direct: grammar.parser_analysis().terminal_direct.clone(),
+            state_write_dependent: grammar.parser_analysis().state_write_dependent.clone(),
+            capture_write_dependent: grammar.parser_analysis().capture_write_dependent.clone(),
+            named_atoms: grammar.parser_analysis().named_atoms.clone(),
             snapshot_arena: None,
             snapshots_in_live: false,
             dispatch_counts: None,
@@ -695,6 +584,15 @@ impl<'a> PortableParser<'a> {
             #[cfg(feature = "perf-counters")]
             perf: PerfCounters::default(),
         }
+    }
+
+    /// Test-only affordance: the direct-terminal table is shared from
+    /// the grammar's cached analysis (immutable), so the direct-vs-memo
+    /// parity test disables it with a fresh all-off table instead of
+    /// mutating the shared one.
+    #[cfg(test)]
+    pub(crate) fn test_disable_terminal_direct(&mut self) {
+        self.terminal_direct = std::sync::Arc::new(vec![false; self.grammar.atoms.len()]);
     }
 
     /// Select an explicit memo compatibility policy before parsing.
