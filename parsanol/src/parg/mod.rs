@@ -29,6 +29,7 @@ pub mod bindings_artifact;
 pub mod derive;
 pub mod export;
 pub mod frontend;
+pub mod generate;
 pub mod render;
 pub mod schema;
 pub mod suite;
@@ -270,6 +271,11 @@ pub struct PargArtifact {
     /// dominant per-parse fixed cost on artifact-sized grammars
     /// (rs#486). Clones share the cache.
     grammar_cache: EntryCache,
+    /// Lowered generators per render variant (rs#459 slice 2), same
+    /// pure-cache discipline. Clones share.
+    generators: GeneratorCache,
+    /// Lowered derive templates per name (rs#459 slice 2). Clones share.
+    gen_templates: TemplateCache,
 }
 
 /// One decoded, analyzed entry: the grammar, its ascii-state-match
@@ -283,6 +289,8 @@ pub(crate) struct DecodedEntry {
 }
 
 type EntryCache = Arc<Mutex<HashMap<String, Arc<DecodedEntry>>>>;
+type GeneratorCache = Arc<Mutex<HashMap<String, Arc<generate::Generator>>>>;
+type TemplateCache = Arc<Mutex<HashMap<String, Arc<generate::GenTemplate>>>>;
 
 /// The edition spellings this runtime loads: edition 2 (named trees +
 /// explicit spans) is the only edition — edition 1 was removed, so its
@@ -365,6 +373,8 @@ impl PargArtifact {
         Ok(Self {
             envelope,
             grammar_cache: Arc::new(Mutex::new(HashMap::new())),
+            generators: Arc::new(Mutex::new(HashMap::new())),
+            gen_templates: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
