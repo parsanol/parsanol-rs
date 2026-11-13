@@ -83,3 +83,28 @@ The remaining levers the profile actually suggests: packrat
 backtracking (items 8/9) and arena memory layout — NOT dispatch
 specialization. Stays closed; the harness ships so the next revisit
 re-runs in one command.
+
+## 2026-11-13: the arena-locality lever falsified by the counters (rs#465)
+
+The cachegrind instrument (dispatched on CI, valgrind 3.22, the
+dispatch-mix workload: the iso artifact, 200 real inputs, 296,070
+dispatches, 52.1% Str) measured the dispatch locality question
+directly:
+
+```
+I refs:  918,473,555   I1 miss rate  0.04%
+D refs:  433,670,003   D1 miss rate  3.2%   (9.8M rd + 4.3M wr misses)
+LLd miss rate:          0.03%   (151,573 LLd misses total)
+```
+
+**The working set is L2-resident.** The D1 misses never reach memory
+(LLd ~0%): each data miss costs an L2 latency, not a DRAM one. The
+slab-layout hypothesis (Str payloads scattered across cache lines) has
+no memory-wall cost to remove — the ceiling on the lever is the L1→L2
+delta on a 3.2% slice of D refs, far below the measurement noise of
+the time harness. The jit#458 conclusion holds from the counter side:
+dispatch locality is not a lever; the arena indirection is already
+cache-cheap. CLOSED as a measured negative with the counter data, the
+acceptance shape the issue demanded. The instrument
+(.github/workflows/cachegrind.yml) stays dispatchable for any future
+layout question.
