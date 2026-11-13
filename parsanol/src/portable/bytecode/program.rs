@@ -80,16 +80,16 @@ impl CharSet {
     /// Union with another set
     #[inline]
     pub fn union(&mut self, other: &CharSet) {
-        for i in 0..256 {
-            self.bitmap[i] = self.bitmap[i] || other.bitmap[i];
+        for (slot, other_bit) in self.bitmap.iter_mut().zip(&other.bitmap) {
+            *slot |= *other_bit;
         }
     }
 
     /// Intersect with another set
     #[inline]
     pub fn intersect(&mut self, other: &CharSet) {
-        for i in 0..256 {
-            self.bitmap[i] = self.bitmap[i] && other.bitmap[i];
+        for (slot, other_bit) in self.bitmap.iter_mut().zip(&other.bitmap) {
+            *slot &= *other_bit;
         }
     }
 
