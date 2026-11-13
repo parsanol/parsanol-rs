@@ -63,6 +63,7 @@ pub mod grammar_analysis;
 pub mod incremental;
 pub mod infix;
 pub mod parser;
+pub mod parser_analysis;
 pub mod parser_dsl;
 pub mod parslet_transform;
 pub mod plugin;

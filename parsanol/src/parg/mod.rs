@@ -15,9 +15,11 @@
 //! // parse `input` with PortableParser::new(&grammar, input, &mut arena)
 //! ```
 
+use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Write as _;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -31,6 +33,7 @@ pub mod render;
 pub mod schema;
 pub mod suite;
 
+use crate::portable::parser_analysis::ParserAnalysis;
 use crate::portable::Grammar;
 
 /// Errors raised while loading or extracting from a PARG artifact envelope.
@@ -260,7 +263,26 @@ pub const SUPPORTED_BINDING_VERSION: i64 = 2;
 #[derive(Debug, Clone)]
 pub struct PargArtifact {
     envelope: Value,
+    /// Decoded grammars per entry, filled on first parse. The envelope
+    /// is immutable after the verified load, so the decode is a pure
+    /// cache: without it every `parse_and_bind` re-ran
+    /// `serde_json::from_value` over the artifact's atom list — the
+    /// dominant per-parse fixed cost on artifact-sized grammars
+    /// (rs#486). Clones share the cache.
+    grammar_cache: EntryCache,
 }
+
+/// One decoded, analyzed entry: the grammar, its ascii-state-match
+/// atoms, and the parser analyses — computed once per entry instead of
+/// per parse (rs#486).
+#[derive(Debug)]
+pub(crate) struct DecodedEntry {
+    pub(crate) grammar: Grammar,
+    pub(crate) ascii_matches: Vec<usize>,
+    pub(crate) analysis: Arc<ParserAnalysis>,
+}
+
+type EntryCache = Arc<Mutex<HashMap<String, Arc<DecodedEntry>>>>;
 
 /// The edition spellings this runtime loads: edition 2 (named trees +
 /// explicit spans) is the only edition — edition 1 was removed, so its
@@ -340,7 +362,10 @@ impl PargArtifact {
              recompile the grammar with edition \"v2\" (named trees + spans)",
         ))?;
         verify_checksum(&envelope)?;
-        Ok(Self { envelope })
+        Ok(Self {
+            envelope,
+            grammar_cache: Arc::new(Mutex::new(HashMap::new())),
+        })
     }
 
     /// The language edition the artifact's trees carry (ruby#357):
@@ -467,15 +492,25 @@ impl PargArtifact {
     /// operation as per-atom matching policy. The ordinary grammar() API keeps
     /// rejecting that unknown operation instead of silently dropping its mode.
     /// Atom and Grammar retain their existing public construction/match shapes.
-    pub(crate) fn grammar_with_ascii_state_matches(
-        &self,
-        entry: &str,
-    ) -> Result<(Grammar, Vec<usize>), PargError> {
+    pub(crate) fn decoded_entry(&self, entry: &str) -> Result<Arc<DecodedEntry>, PargError> {
+        if let Some(hit) = self.grammar_cache.lock().unwrap().get(entry) {
+            return Ok(hit.clone());
+        }
         let value = self
             .entry_value(entry, "grammar")
             .cloned()
             .ok_or_else(|| PargError::UnknownEntry(entry.to_owned()))?;
-        decode_ascii_state_grammar(value)
+        let (grammar, ascii_matches) = decode_ascii_state_grammar(value)?;
+        let entry_decoded = Arc::new(DecodedEntry {
+            analysis: Arc::new(ParserAnalysis::compute(&grammar)),
+            grammar,
+            ascii_matches,
+        });
+        self.grammar_cache
+            .lock()
+            .unwrap()
+            .insert(entry.to_string(), entry_decoded.clone());
+        Ok(entry_decoded)
     }
 
     fn entry_value(&self, entry: &str, field: &str) -> Option<&Value> {
