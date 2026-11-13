@@ -73,6 +73,15 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- Rs#459 slice 2: the segment->generator lowering, exposed on every tier by @[object]
+- Cache the per-parse fixed work: decoded entries and grammar analyses (rs#486) by @[object]
+- Cache the per-parse fixed work: decoded entries and grammar analyses (rs#486) by @[object]
+- :negate: iterator form (stable 1.100 clippy needless_range_loop) by @[object]
+- The iso render expectation follows the #116 spec fix by @[object]
+- Iterator-style union/intersect (the CI clippy's needless_range_loop) by @[object]
+
+### Other
+
 - Shrink_to_entries after retained retention (rs#464 round 2, TODO.perf/9) by @[object]
 
 ### Other
