@@ -209,3 +209,30 @@ not bound it. Next after that: lever 2, the dense suffix memo re-test
 under the retained tier (item 7's negative predates the tree
 architecture). The instrument baseline for both: retained late band
 min 18.78 ms.
+
+## Round 2 design (next session): the dense suffix memo, re-tested under the retained tier
+
+Item 7's negative (1.8x regression from faulting cold dense-table
+pages, 0.87–0.98x from growth rehashing) was measured on 64 KB
+REPARSE inputs where a fresh VM paid the memset before its first
+instruction. The retained tier's late band is a DIFFERENT cost
+regime, which is exactly why the re-test is owed:
+
+- **The window is small.** End-of-document edits reparse a suffix of
+  a few KiB; a dense table sized to the suffix window faults a few
+  pages, not hundreds of KiB. Item 7's memset objection inverts.
+- **The keys are local.** The suffix memo's (pos, atom) pairs sit in
+  a narrow position range — a dense index by (pos - window_start)
+  turns the hashbrown tuple hash into an add, and the table stays
+  cache-resident for the whole window.
+- **The instrument is already burned in**: the bucketed bench's late
+  band, interleaved min-of-3 A/B, strict-cutoff gates, the 40-edit
+  sessions. The lever closes honestly either way.
+
+Implementation shape: a dense memo variant behind the retained
+parse's cache construction (`new_with_cache_and_snap` gains a
+window-sized dense alternative; PARSANOL_DENSE_SUFFIX=1 selects it
+for the A/B), keyed by (atom_id, pos - window_start) with a small
+sentinel for out-of-window probes falling back to the hash map.
+Measure the late band; a mean-level win there is what the splice
+never had.
