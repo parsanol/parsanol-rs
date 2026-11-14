@@ -32,7 +32,9 @@ fn rejects_a_tampered_envelope() {
     value["version"] = serde_json::Value::String("9.9.9".into());
     let text = serde_json::to_string(&value).unwrap();
     match PargArtifact::from_json(&text) {
-        Err(PargError::ChecksumMismatch {
+        // the fixture carries compiler_version, so the refusal is the
+        // producer-naming variant (rs#494)
+        Err(PargError::ChecksumCompilerMismatch {
             stored, computed, ..
         }) => {
             assert!(stored.starts_with("sha256:"));
