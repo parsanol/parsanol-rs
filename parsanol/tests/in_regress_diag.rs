@@ -44,7 +44,7 @@ fn dump_the_tin_atoms() {
     let grammar = express_grammar();
     for (i, atom) in grammar.atoms.iter().enumerate().take(20000) {
         let text = format!("{atom:?}");
-        if i <= 12 || (i >= 2650 && i <= 2675) {
+        if i <= 12 || (2650..=2675).contains(&i) {
             println!("{i}: {text}");
         }
     }
@@ -61,7 +61,7 @@ WHERE\n\
 END_ENTITY;\n\
 END_SCHEMA;\n";
     let mut arena = AstArena::for_input(input.len());
-    let mut parser = PortableParser::new(&grammar, &input, &mut arena);
+    let mut parser = PortableParser::new(&grammar, input, &mut arena);
     let result = parser.parse_with_end_pos();
     match &result {
         Ok(r) => println!("parse Ok end_pos={}", r.end_pos),
