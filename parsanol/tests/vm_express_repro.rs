@@ -52,6 +52,55 @@ fn express_grammar() -> Grammar {
 use std::collections::BTreeMap;
 
 #[test]
+#[ignore = "needs the expressir-rs assets - bisects syntax.exp to the shortest VM-failing prefix"]
+fn bisect_the_shortest_vm_failing_prefix() {
+    let grammar = express_grammar();
+    let input = std::fs::read_to_string(
+        std::env::var("EXPRESSIR_FIXTURE")
+            .unwrap_or_else(|_| "../../lutaml/expressir-rs/tests/fixtures/syntax.exp".into()),
+    )
+    .expect("syntax.exp");
+    let program = compile(grammar.clone()).expect("the program compiles");
+
+    for i in 46..95 {
+        println!("I{i:02} {:?}", program.get_instruction(i).unwrap());
+    }
+
+    // declaration boundaries: prefixes ending at `;` line-ends
+    let mut cutpoints: Vec<usize> = input.match_indices(";\n").map(|(i, _)| i + 2).collect();
+    cutpoints.push(input.len());
+    let mut first_bad = None;
+    for cut in cutpoints.iter() {
+        let prefix = &input[..*cut];
+        let mut arena = AstArena::for_input(prefix.len());
+        let (vm, _) =
+            parsanol::portable::bytecode::parse_with_vm_diag(&program, prefix, &mut arena);
+        let vm_end = vm.as_ref().map(|r| r.end_pos).unwrap_or(usize::MAX);
+        let mut packrat_arena = AstArena::for_input(prefix.len());
+        let mut pr = PortableParser::new(&grammar, prefix, &mut packrat_arena);
+        let pr_end = pr
+            .parse_with_end_pos()
+            .map(|r| r.end_pos)
+            .unwrap_or(usize::MAX);
+        if vm_end != pr_end {
+            println!("DIVERGE at prefix len {cut}: packrat {pr_end} vm {vm_end}");
+            first_bad = Some(*cut);
+            break;
+        }
+    }
+    println!(
+        "first diverging prefix: {:?} of {} cutpoints",
+        first_bad,
+        cutpoints.len()
+    );
+    if let Some(cut) = first_bad {
+        let tail_start = cut.saturating_sub(200);
+        println!("the divergence region (last 200 bytes of the prefix):");
+        println!("{}", &input[tail_start..cut]);
+    }
+}
+
+#[test]
 #[ignore = "needs the expressir-rs assets (EXPRESSIR_ASSETS) - the VM short-parse repro, rs#496"]
 fn vm_matches_packrat_end_pos_on_the_express_corpus() {
     let grammar = express_grammar();
