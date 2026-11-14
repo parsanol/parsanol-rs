@@ -184,6 +184,16 @@ pub struct BytecodeVM<'a> {
     opcode_counts: Option<Box<[u64]>>,
 }
 
+fn vm_success_traced() -> bool {
+    static TRACED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *TRACED.get_or_init(|| std::env::var("PARSANOL_VM_SUCCESS_TRACE").is_ok())
+}
+
+fn vm_choice_traced() -> bool {
+    static TRACED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *TRACED.get_or_init(|| std::env::var("PARSANOL_VM_CHOICE_TRACE").is_ok())
+}
+
 impl<'a> BytecodeVM<'a> {
     /// Create a new VM instance
     #[inline]
@@ -315,6 +325,14 @@ impl<'a> BytecodeVM<'a> {
                     self.ip = (self.ip as isize + 1 + offset as isize) as usize;
                 }
                 ExecutionResult::Success(value) => {
+                    if vm_success_traced() {
+                        eprintln!(
+                            "parsanol-vm: Success at ip={} position={} value_stack={}",
+                            self.ip,
+                            self.position,
+                            self.value_stack.len()
+                        );
+                    }
                     return Ok(VMResult {
                         value,
                         end_pos: self.position,
@@ -1270,7 +1288,7 @@ impl<'a> BytecodeVM<'a> {
             // not a parse outcome.
             if frame.kind == FrameKind::Return {
                 if let Some(rule_pc) = frame.memo_rule {
-                    if !self.budget_exceeded {
+                    if !self.budget_exceeded && std::env::var("PARSANOL_VM_NO_FAIL_MEMO").is_err() {
                         self.memo_store(
                             rule_pc,
                             frame.position,
@@ -1292,6 +1310,15 @@ impl<'a> BytecodeVM<'a> {
                 // failure memoized above.
                 FrameKind::Return | FrameKind::Predicate | FrameKind::Mark => continue,
                 FrameKind::Choice => {
+                    if vm_choice_traced() {
+                        eprintln!(
+                            "parsanol-vm: Choice resume -> ip={} position={} (frame pos {}) depth {}",
+                            frame.return_ip,
+                            frame.position,
+                            self.position,
+                            self.backtrack_stack.len()
+                        );
+                    }
                     self.ip = frame.return_ip;
                     return Ok(true);
                 }

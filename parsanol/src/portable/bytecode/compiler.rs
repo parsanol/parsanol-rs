@@ -350,8 +350,21 @@ impl Compiler {
                 }
             }
             let after_all = self.program.instruction_count();
-            for &choice_idx in &choice_idxs {
-                let offset = (after_all as i32) - (choice_idx as i32 + 1);
+            // Choice i's fail-resume is the NEXT tail's unit (the
+            // following Choice, or — for the last choice — the final
+            // tail's body right after its Commit). Pointing every
+            // Choice at the join skipped the remaining tails: a
+            // first-alternative failure (e.g. abstractSupertype's
+            // `ABSTRACT SUPERTYPE ;` missing its tSUPERTYPE) landed in
+            // the rule's epilogue projection and "succeeded" with
+            // garbage instead of trying `ABSTRACT ;` (rs#496).
+            for (i, &choice_idx) in choice_idxs.iter().enumerate() {
+                let next_start = if i + 1 < choice_idxs.len() {
+                    choice_idxs[i + 1]
+                } else {
+                    commit_idxs[i] + 1
+                };
+                let offset = (next_start as i32) - (choice_idx as i32 + 1);
                 self.program
                     .set_instruction(choice_idx, Instruction::choice(offset));
             }
