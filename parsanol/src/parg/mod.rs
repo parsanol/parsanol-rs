@@ -14,6 +14,20 @@
 //! let grammar = artifact.grammar("identifier").unwrap();
 //! // parse `input` with PortableParser::new(&grammar, input, &mut arena)
 //! ```
+//!
+//! # The checksum contract (rs#494)
+//!
+//! The canonical checksum is a compatibility contract between the
+//! compiler that baked the artifact and this verifier: an envelope
+//! with a byte array (`source`), float spellings (the B6 canonical
+//! form), and a `checksum` field over the canonicalized payload minus
+//! `checksum`/`byte_checksum`. Artifacts compiled by a compiler whose
+//! canonicalization differs are refused at load — the refusal names
+//! the artifact's `compiler_version` so consumers get version guidance
+//! instead of a bare checksum error. The envelope's `compiler_version`
+//! and `edition` fields are the machine-readable side of the matrix;
+//! keep compilers and runtimes aligned on the same canonicalization
+//! generation.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -51,12 +65,17 @@ pub enum PargError {
     /// A declared entry does not exist in the envelope.
     UnknownEntry(String),
     /// The stored checksum does not match the recomputed one. Never fall
-    /// back: a mismatched artifact is a corrupt or tampered artifact.
+    /// back: a mismatched artifact is a corrupt or tampered artifact —
+    /// or was compiled by a compiler whose canonicalization this
+    /// runtime does not accept (rs#494); the `compiler` field names the
+    /// artifact's producer so the refusal carries version guidance.
     ChecksumMismatch {
         /// The `checksum` field stored in the envelope.
         stored: String,
         /// The checksum recomputed over the canonical payload.
         computed: String,
+        /// The artifact's `compiler_version` (what produced it).
+        compiler: String,
     },
     /// The payload is not a `parg-bindings` artifact (parsanol-ruby#432).
     InvalidBindingsArtifact(&'static str),
@@ -175,9 +194,16 @@ impl fmt::Display for PargError {
                 write!(f, "PARG artifact envelope is invalid: missing {what}")
             }
             PargError::UnknownEntry(entry) => write!(f, "PARG artifact has no entry {entry:?}"),
-            PargError::ChecksumMismatch { stored, computed } => write!(
+            PargError::ChecksumMismatch {
+                stored,
+                computed,
+                compiler,
+            } => write!(
                 f,
-                "PARG artifact checksum mismatch: stored {stored:?}, computed {computed:?}"
+                "PARG artifact checksum mismatch: stored {stored:?}, computed {computed:?} — \
+                 compiled by compiler {compiler:?}; this runtime accepts artifacts whose \
+                 canonicalization matches its own compiler contract (compile with a \
+                 compatible compiler version, or recompile this artifact)"
             ),
             PargError::InvalidBindingsArtifact(what) => {
                 write!(f, "not a parg-bindings artifact: {what}")
@@ -587,6 +613,7 @@ fn verify_byte_checksum(envelope: &Value, text: &str) -> Result<(), PargError> {
     Err(PargError::ChecksumMismatch {
         stored: stored.to_string(),
         computed,
+        compiler: String::new(),
     })
 }
 
@@ -607,7 +634,19 @@ fn verify_checksum(envelope: &Value) -> Result<(), PargError> {
     payload.remove("byte_checksum");
     let computed = checksum_hex(&Value::Object(payload))?;
     if stored != computed {
-        return Err(PargError::ChecksumMismatch { stored, computed });
+        // rs#494: a mismatch usually means the artifact was compiled by
+        // a compiler whose canonicalization this runtime does not
+        // accept. Name the artifact's producer and the known-good
+        // contract instead of a bare checksum failure.
+        let compiler = obj
+            .get("compiler_version")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown (pre-compiler_version artifact)");
+        return Err(PargError::ChecksumMismatch {
+            stored,
+            computed,
+            compiler: compiler.to_string(),
+        });
     }
     Ok(())
 }

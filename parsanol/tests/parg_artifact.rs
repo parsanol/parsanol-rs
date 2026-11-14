@@ -32,7 +32,9 @@ fn rejects_a_tampered_envelope() {
     value["version"] = serde_json::Value::String("9.9.9".into());
     let text = serde_json::to_string(&value).unwrap();
     match PargArtifact::from_json(&text) {
-        Err(PargError::ChecksumMismatch { stored, computed }) => {
+        Err(PargError::ChecksumMismatch {
+            stored, computed, ..
+        }) => {
             assert!(stored.starts_with("sha256:"));
             assert!(computed.starts_with("sha256:"));
             assert_ne!(stored, computed);
@@ -192,4 +194,18 @@ fn resign_with_edition(spelling: &serde_json::Value) -> Result<PargArtifact, Par
     let computed = parsanol::parg::checksum_hex(&value).unwrap();
     value["checksum"] = serde_json::Value::String(computed);
     PargArtifact::from_json(&serde_json::to_string(&value).unwrap())
+}
+
+#[test]
+fn checksum_refusal_names_the_compiler_version() {
+    // rs#494: the refusal carries version guidance, not a bare error.
+    let mut value: serde_json::Value = serde_json::from_str(FIXTURE).unwrap();
+    value["version"] = serde_json::Value::String("9.9.9".into());
+    let text = serde_json::to_string(&value).unwrap();
+    let err = PargArtifact::from_json(&text).expect_err("tampered envelope must refuse");
+    let message = err.to_string();
+    assert!(
+        message.contains("compiled by compiler"),
+        "the refusal must name the producer: {message}"
+    );
 }
