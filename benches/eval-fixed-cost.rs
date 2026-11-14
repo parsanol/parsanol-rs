@@ -69,6 +69,32 @@ fn bench_fixed_cost(c: &mut Criterion) {
         })
     });
 
+    // The consumer pattern (asciichem's shape): an embedded artifact,
+    // many inputs against one grammar. BASE holds the grammar clone
+    // and constructs a fresh parser per parse (the PortableParser::new
+    // path recomputes the analyses per construction).
+    let held_grammar = artifact
+        .grammar("identifier")
+        .expect("the identifier entry");
+    group.bench_function("consumer_new_per_parse", |b| {
+        b.iter(|| {
+            let mut arena =
+                parsanol::portable::AstArena::for_input(black_box(input).len().max(1 << 16));
+            let mut parser = parsanol::portable::PortableParser::new(
+                black_box(&held_grammar),
+                black_box(input),
+                &mut arena,
+            );
+            black_box(parser.parse().ok())
+        })
+    });
+
+    // CANDIDATE: the prepared form - analyses computed once.
+    let prepared = artifact.prepared_grammar("identifier").expect("prepared");
+    group.bench_function("consumer_prepared_per_parse", |b| {
+        b.iter(|| black_box(prepared.parse(black_box(input)).ok()))
+    });
+
     group.bench_function("parse_and_bind_tiny_input", |b| {
         b.iter(|| black_box(artifact.parse_and_bind("identifier", black_box(input)).ok()))
     });

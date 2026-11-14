@@ -67,6 +67,7 @@ pub mod parser_analysis;
 pub mod parser_dsl;
 pub mod parslet_transform;
 pub mod plugin;
+pub mod prepared;
 pub mod regex_cache;
 pub mod scan;
 pub mod source_location;
