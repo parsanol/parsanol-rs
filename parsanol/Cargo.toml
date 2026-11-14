@@ -34,7 +34,7 @@ perf-counters = []
 
 [dependencies]
 # Derive macros (required)
-parsanol-derive = { path = "../parsanol-derive", version = "0.20.20" }
+parsanol-derive = { path = "../parsanol-derive", version = "0.20.21" }
 
 # Core dependencies
 serde = { workspace = true }
