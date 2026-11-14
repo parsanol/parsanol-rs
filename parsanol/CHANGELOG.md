@@ -73,6 +73,10 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- The express-grammar repro gates (the VM short-parse, packaged) ([#500](https://github.com/parsanol/parsanol-rs/pull/500)) by @[object]
+
+### Other
+
 - The producer-naming refusal as a separate variant by @[object]
 - Checksum refusals name the compiler and document the contract (rs#494) by @[object]
 - The analyses computed once for the parse-many pattern (rs#486 residual) by @[object]
