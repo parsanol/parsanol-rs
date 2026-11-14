@@ -73,6 +73,12 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- The producer-naming refusal as a separate variant by @[object]
+- Checksum refusals name the compiler and document the contract (rs#494) by @[object]
+- The analyses computed once for the parse-many pattern (rs#486 residual) by @[object]
+
+### Other
+
 - Rs#459 slice 2: the segment->generator lowering, exposed on every tier by @[object]
 - Cache the per-parse fixed work: decoded entries and grammar analyses (rs#486) by @[object]
 - Cache the per-parse fixed work: decoded entries and grammar analyses (rs#486) by @[object]
