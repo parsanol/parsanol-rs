@@ -35,6 +35,7 @@ pub mod schema;
 pub mod suite;
 
 use crate::portable::parser_analysis::ParserAnalysis;
+use crate::portable::prepared::PreparedGrammar;
 use crate::portable::Grammar;
 
 /// Errors raised while loading or extracting from a PARG artifact envelope.
@@ -502,6 +503,19 @@ impl PargArtifact {
     /// operation as per-atom matching policy. The ordinary grammar() API keeps
     /// rejecting that unknown operation instead of silently dropping its mode.
     /// Atom and Grammar retain their existing public construction/match shapes.
+    /// The entry's decoded grammar with its cached analyses (rs#486),
+    /// ready for repeated parsing. The decode and the analyses were
+    /// already cached per entry — this surface hands them to callers
+    /// who hold a grammar and parse many inputs, instead of cloning
+    /// the grammar out and paying per-construction recomputation.
+    pub fn prepared_grammar(&self, entry: &str) -> Result<Arc<PreparedGrammar>, PargError> {
+        let decoded = self.decoded_entry(entry)?;
+        Ok(Arc::new(PreparedGrammar {
+            grammar: Arc::new(decoded.grammar.clone()),
+            analysis: decoded.analysis.clone(),
+        }))
+    }
+
     pub(crate) fn decoded_entry(&self, entry: &str) -> Result<Arc<DecodedEntry>, PargError> {
         if let Some(hit) = self.grammar_cache.lock().unwrap().get(entry) {
             return Ok(hit.clone());
