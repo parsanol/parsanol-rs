@@ -1,6 +1,6 @@
 //! rs#499 diagnostic: parse the minimal `s IN t` snippet with the
 //! compiled EXPRESS grammar and dump the failure wire + deepest-failure
-//! diagnostics, so the mis-injection is observed rather than inferred.
+//! diagnostics, so the skip-injection is observed rather than inferred.
 
 use parsanol::portable::{AstArena, Grammar, PortableParser};
 use std::collections::BTreeMap;

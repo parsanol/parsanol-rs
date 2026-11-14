@@ -46,7 +46,8 @@ fn express_grammar() -> Grammar {
 
 const HEAD: &str = "SCHEMA syntax_schema '{ISO standard 10303 part(41) object(1) version(8)}';\nENTITY empty_entity;\nEND_ENTITY;\n";
 const TAIL: &str = "END_SCHEMA;\n";
-const PLAIN: &str = "SUBTYPE_CONSTRAINT empty_subtype_constraint FOR empty_entity; END_SUBTYPE_CONSTRAINT;\n";
+const PLAIN: &str =
+    "SUBTYPE_CONSTRAINT empty_subtype_constraint FOR empty_entity; END_SUBTYPE_CONSTRAINT;\n";
 const ABSTRACT: &str = "SUBTYPE_CONSTRAINT abstract_supertype_subtype_constraint FOR empty_entity; ABSTRACT; END_SUBTYPE_CONSTRAINT;\n";
 
 #[test]
@@ -82,12 +83,15 @@ fn vm_matches_packrat_on_the_mini_abstract_repro() {
     let input = format!("{HEAD}{ABSTRACT}{TAIL}");
     let mut packrat_arena = AstArena::for_input(input.len());
     let mut packrat = PortableParser::new(&grammar, &input, &mut packrat_arena);
-    let pr_end = packrat.parse_with_end_pos().expect("packrat parses").end_pos;
+    let pr_end = packrat
+        .parse_with_end_pos()
+        .expect("packrat parses")
+        .end_pos;
     let mut vm_arena = AstArena::for_input(input.len());
     let (vm, _) = parsanol::portable::bytecode::parse_with_vm_diag(&program, &input, &mut vm_arena);
     assert_eq!(
-        vm.expect("vm ok").end_pos, pr_end,
+        vm.expect("vm ok").end_pos,
+        pr_end,
         "the VM must fully parse the abstract-only fixture"
     );
 }
-
