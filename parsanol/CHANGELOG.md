@@ -73,6 +73,11 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- Release v0.20.21 ([#502](https://github.com/parsanol/parsanol-rs/pull/502)) by @[object]
+- The express-grammar repro gates (the VM short-parse, packaged) ([#500](https://github.com/parsanol/parsanol-rs/pull/500)) by @[object]
+
+### Other
+
 - The express-grammar repro gates (the VM short-parse, packaged) ([#500](https://github.com/parsanol/parsanol-rs/pull/500)) by @[object]
 
 ### Other
