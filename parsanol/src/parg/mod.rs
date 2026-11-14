@@ -65,11 +65,19 @@ pub enum PargError {
     /// A declared entry does not exist in the envelope.
     UnknownEntry(String),
     /// The stored checksum does not match the recomputed one. Never fall
-    /// back: a mismatched artifact is a corrupt or tampered artifact —
-    /// or was compiled by a compiler whose canonicalization this
-    /// runtime does not accept (rs#494); the `compiler` field names the
-    /// artifact's producer so the refusal carries version guidance.
+    /// back: a mismatched artifact is a corrupt or tampered artifact.
     ChecksumMismatch {
+        /// The `checksum` field stored in the envelope.
+        stored: String,
+        /// The checksum recomputed over the canonical payload.
+        computed: String,
+    },
+    /// rs#494: the mismatch names the artifact's producer — usually a
+    /// compiler whose canonicalization this runtime does not accept.
+    /// The variant exists separately from [`PargError::ChecksumMismatch`]
+    /// so exhaustive matches against the older shape keep compiling
+    /// (variant additions are additive on this non_exhaustive enum).
+    ChecksumCompilerMismatch {
         /// The `checksum` field stored in the envelope.
         stored: String,
         /// The checksum recomputed over the canonical payload.
@@ -194,7 +202,11 @@ impl fmt::Display for PargError {
                 write!(f, "PARG artifact envelope is invalid: missing {what}")
             }
             PargError::UnknownEntry(entry) => write!(f, "PARG artifact has no entry {entry:?}"),
-            PargError::ChecksumMismatch {
+            PargError::ChecksumMismatch { stored, computed } => write!(
+                f,
+                "PARG artifact checksum mismatch: stored {stored:?}, computed {computed:?}"
+            ),
+            PargError::ChecksumCompilerMismatch {
                 stored,
                 computed,
                 compiler,
@@ -613,7 +625,6 @@ fn verify_byte_checksum(envelope: &Value, text: &str) -> Result<(), PargError> {
     Err(PargError::ChecksumMismatch {
         stored: stored.to_string(),
         computed,
-        compiler: String::new(),
     })
 }
 
@@ -642,7 +653,7 @@ fn verify_checksum(envelope: &Value) -> Result<(), PargError> {
             .get("compiler_version")
             .and_then(Value::as_str)
             .unwrap_or("unknown (pre-compiler_version artifact)");
-        return Err(PargError::ChecksumMismatch {
+        return Err(PargError::ChecksumCompilerMismatch {
             stored,
             computed,
             compiler: compiler.to_string(),
