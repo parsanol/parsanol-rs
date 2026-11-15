@@ -1,9 +1,9 @@
 {
-  "engine_commit": "347797139f29f0c3c3e2eda722baf84ac0b6147a",
-  "crates": "1.5.0",
-  "npm": "1.5.0",
-  "rubygems": "1.5.0.0",
-  "pypi": "1.5.0.0",
-  "released_at": "2026-11-15T13:00:00Z",
+  "engine_commit": "62a64ae099d9d0004df3c60fdcc599a33667edcc",
+  "crates": "1.5.1",
+  "npm": "1.5.1",
+  "rubygems": "1.5.1.0",
+  "pypi": "1.5.1.0",
+  "released_at": "2026-11-15T16:30:00Z",
   "_comment": "ruby#421 -- the engine-compat manifest. Every release train updates the pairings as it rides; tools/check_engine_compat.py verifies the manifest against the live registries in CI (tag <-> engine_commit, crates, npm, rubygems, pypi). Runtime versions follow the engine-linked scheme {engine-semver}.{runtime-single-digit} (npm: the engine semver, the 4th segment is invalid there) -- the leptris precedent."
 }
