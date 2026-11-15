@@ -35,9 +35,14 @@ unsafe impl GlobalAlloc for Counting {
 #[global_allocator]
 static GLOBAL: Counting = Counting;
 
-fn one_parse(grammar: &parsanol::portable::grammar::Grammar, input: &str) {
+fn one_parse(grammar: &parsanol::portable::grammar::Grammar, input: &str, pending: bool) {
     let mut arena = parsanol::portable::AstArena::for_input(input.len());
     let mut parser = parsanol::portable::PortableParser::new(grammar, input, &mut arena);
+    if pending {
+        parser
+            .set_diagnostics_policy(parsanol::portable::DiagnosticsPolicy::Pending)
+            .expect("pending policy");
+    }
     let result = parser.parse_with_end_pos();
     black_box(result.expect("parse"));
     let _ = black_box(parser);
@@ -45,9 +50,10 @@ fn one_parse(grammar: &parsanol::portable::grammar::Grammar, input: &str) {
 
 fn main() {
     let counts = std::env::args().any(|a| a == "--counts");
+    let pending = std::env::args().any(|a| a == "--pending");
     let args: Vec<String> = std::env::args()
         .skip(1)
-        .filter(|a| a != "--counts")
+        .filter(|a| a != "--counts" && a != "--pending")
         .collect();
     let path = args
         .first()
@@ -81,12 +87,17 @@ fn main() {
         for input in &inputs {
             // Warm all process-lifetime caches (grammar decode, regex
             // cache, scan plans) so the counted parse sees steady state.
-            one_parse(&grammar, input);
+            one_parse(&grammar, input, pending);
             ALLOCS.store(0, Ordering::Relaxed);
             BYTES.store(0, Ordering::Relaxed);
             let mut arena = parsanol::portable::AstArena::for_input(input.len());
             let construct_allocs = ALLOCS.load(Ordering::Relaxed);
             let mut parser = parsanol::portable::PortableParser::new(&grammar, input, &mut arena);
+            if pending {
+                parser
+                    .set_diagnostics_policy(parsanol::portable::DiagnosticsPolicy::Pending)
+                    .expect("pending policy");
+            }
             let eval_allocs = ALLOCS.load(Ordering::Relaxed) - construct_allocs;
             let result = parser.parse_with_end_pos();
             black_box(result.expect("parse"));
@@ -108,6 +119,11 @@ fn main() {
     for input in &inputs {
         let mut arena = parsanol::portable::AstArena::for_input(input.len());
         let mut parser = parsanol::portable::PortableParser::new(&grammar, input, &mut arena);
+        if pending {
+            parser
+                .set_diagnostics_policy(parsanol::portable::DiagnosticsPolicy::Pending)
+                .expect("pending policy");
+        }
         assert!(parser.parse_with_end_pos().is_ok(), "{input} must parse");
     }
 
@@ -119,6 +135,11 @@ fn main() {
                 black_box(input),
                 &mut arena,
             );
+            if pending {
+                parser
+                    .set_diagnostics_policy(parsanol::portable::DiagnosticsPolicy::Pending)
+                    .expect("pending policy");
+            }
             black_box(parser.parse_with_end_pos().ok());
         }
     }
