@@ -109,6 +109,9 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ## [Unreleased]
 
+- Release v0.20.23
+- Box the pending frame payload: keep the recursion stack footprint
+- Pending diagnostics: the rs#498 v2 surface with hash-first label storage
 - Release v0.20.23 ([#510](https://github.com/parsanol/parsanol-rs/pull/510))
 - The pure-class regex fast path and the clone-free fetch (rs#507) ([#512](https://github.com/parsanol/parsanol-rs/pull/512))
 - Strip the @[object] attributions from the changelog ([#513](https://github.com/parsanol/parsanol-rs/pull/513))
