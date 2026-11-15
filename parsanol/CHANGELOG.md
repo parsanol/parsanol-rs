@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.20.22] - 2026-11-15
+
+### Performance
+
+- Eval loop: cut the per-parse fixed cost on tiny inputs (#492) —
+  `DenseCache::for_input` sizes to the memo surface, lazy CaptureState,
+  lazy items vecs, lazy bulk-scan failure labels; 338 -> 231 allocations
+  on a 4-byte parse, -32% end-to-end on the shared parse legs.
+- Hash-shadow dedup on the deepest failure labels (rs#498 round 1):
+  the probe is a hash lookup with linear verification on hash hits —
+  byte-identical buffers.
+
+## [0.20.21] - 2026-11-14
+
+### Fixed
+
+- Bytecode VM: the prefix-split choice fail-jump landed in the rule
+  epilogue instead of the next alternative (#500, rs#496) — the VM
+  silently short-parsed shared-prefix grammars (expressir's syntax.exp
+  parsed Ok@10 instead of 21028).
+
+## [0.20.20] - 2026-11-14
+
+### Added
+
+- PreparedGrammar: the analyses computed once for the parse-many
+  consumer pattern (rs#486/#495).
+- Checksum refusals name the compiler (rs#494/#497):
+  ChecksumCompilerMismatch carries the stored/computed checksums and
+  the producing compiler.
+
+## [0.20.19] - 2026-11-13
+
+### Added
+
+- Constrained-decoding export: the Rust-authoritative lowering
+  (ruby#493), exposed on the wasm and C-ABI tiers.
+
 ## [0.18.8] - 2026-10-16
 
 ### Fixed
