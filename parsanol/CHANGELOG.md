@@ -109,6 +109,9 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ## [Unreleased]
 
+- Strip the @[object] attributions from the changelog ([#513](https://github.com/parsanol/parsanol-rs/pull/513))
+- Fix the changelog template and curate the 0.20.x sections ([#511](https://github.com/parsanol/parsanol-rs/pull/511))
+- Release v0.20.22
 ### Other
 
 - Release v0.20.22 ([#506](https://github.com/parsanol/parsanol-rs/pull/506))
