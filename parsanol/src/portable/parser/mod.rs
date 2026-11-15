@@ -194,6 +194,12 @@ pub struct PortableParser<'a> {
     deepest_failure_pos: usize,
     has_failure: bool,
     expected_labels: std::sync::Arc<Vec<String>>,
+    /// Shadow hash index over `expected_labels` (rs#498): the deepest-set
+    /// dedup probe is a hash lookup; a rare hash hit falls back to the
+    /// linear `same_label` verify, so the buffer contents and order are
+    /// byte-identical to the linear-only path. Rebuilt lazily after any
+    /// wholesale replacement (take/restore/clear/merge).
+    expected_label_hashes: Option<Box<LabelHashes>>,
     /// Recovery (TODO.sota/1): the furthest position any successful
     /// atom match ended, tracked ONLY while `track_max_end` is on —
     /// the recovery pass sets it; normal parses pay nothing.
@@ -380,6 +386,37 @@ pub struct PerfCounters {
     pub scope_push: u64,
 }
 
+/// Shadow hash index for the deepest failure set (rs#498). The
+/// dedup probe is a hash lookup; a rare hash hit falls back to the
+/// linear `same_label` verify over the real buffer, so behavior is
+/// byte-identical to the linear-only scan while the per-parse
+/// dedup-scan iterations collapse to hash lookups. A 64-bit FNV-1a
+/// collision only forces the linear verify — it can never drop a
+/// distinct label or keep a duplicate.
+#[derive(Default)]
+struct LabelHashes {
+    set: std::collections::HashSet<u64>,
+}
+
+impl LabelHashes {
+    fn insert(&mut self, label: &str) {
+        self.set.insert(Self::hash(label));
+    }
+
+    fn contains(&self, label: &str) -> bool {
+        self.set.contains(&Self::hash(label))
+    }
+
+    fn hash(label: &str) -> u64 {
+        let mut h: u64 = 0xcbf29ce484222325;
+        for b in label.as_bytes() {
+            h ^= u64::from(*b);
+            h = h.wrapping_mul(0x100000001b3);
+        }
+        h
+    }
+}
+
 impl<'a> PortableParser<'a> {
     /// Create a new parser with default security limits
     #[inline]
@@ -513,6 +550,7 @@ impl<'a> PortableParser<'a> {
             label_buf: String::new(),
             has_failure: false,
             expected_labels: Default::default(),
+            expected_label_hashes: None,
             arena,
             cache,
             compatibility: ParserCompatibility::Strict,
@@ -597,6 +635,7 @@ impl<'a> PortableParser<'a> {
             label_buf: String::new(),
             has_failure: false,
             expected_labels: Default::default(),
+            expected_label_hashes: None,
             arena,
             cache,
             compatibility: ParserCompatibility::Strict,
@@ -674,6 +713,7 @@ impl<'a> PortableParser<'a> {
         self.deepest_failure_pos = 0;
         self.has_failure = false;
         self.expected_labels = self.empty_legacy_failure.labels.clone();
+        self.expected_label_hashes = None;
         self.ranked_failures = self.empty_legacy_failure.ranks.clone();
         self.max_end_pos = 0;
         self.partial_stash = None;
@@ -1497,6 +1537,7 @@ impl<'a> PortableParser<'a> {
         self.deepest_failure_pos = failure.position;
         self.has_failure = failure.present;
         self.expected_labels = failure.labels;
+        self.expected_label_hashes = None;
         self.ranked_failures = failure.ranks;
     }
 
@@ -1504,6 +1545,7 @@ impl<'a> PortableParser<'a> {
         self.deepest_failure_pos = 0;
         self.has_failure = false;
         self.expected_labels = self.empty_legacy_failure.labels.clone();
+        self.expected_label_hashes = None;
         self.ranked_failures = self.empty_legacy_failure.ranks.clone();
     }
 
@@ -1528,12 +1570,14 @@ impl<'a> PortableParser<'a> {
                 self.has_failure = true;
                 self.deepest_failure_pos = *position;
                 self.expected_labels = self.empty_legacy_failure.labels.clone();
+                self.expected_label_hashes = None;
             }
             if *position == self.deepest_failure_pos {
                 Self::extend_failure_labels(
                     std::sync::Arc::make_mut(&mut self.expected_labels),
                     labels,
                 );
+                self.expected_label_hashes = None;
             }
             let ranks = std::sync::Arc::make_mut(&mut self.ranked_failures);
             match ranks.iter_mut().find(|(p, _)| p == position) {
@@ -1547,6 +1591,29 @@ impl<'a> PortableParser<'a> {
                 }
             }
         }
+    }
+
+    /// The deepest-set dedup probe: O(1) via the shadow index, with the
+    /// linear verify only on a hash hit (collision safety). The shadow
+    /// rebuilds lazily after any wholesale buffer replacement.
+    fn label_seen(&mut self, label: &str) -> bool {
+        if self.expected_label_hashes.is_none() {
+            let mut shadow = LabelHashes::default();
+            for existing in self.expected_labels.iter() {
+                shadow.insert(existing);
+            }
+            self.expected_label_hashes = Some(Box::new(shadow));
+        }
+        let hit = self
+            .expected_label_hashes
+            .as_ref()
+            .is_some_and(|shadow| shadow.contains(label));
+        if !hit {
+            return false;
+        }
+        self.expected_labels
+            .iter()
+            .any(|l| Self::same_label(l, label))
     }
 
     /// Merge speculative causes in their original order. Replaying one label
@@ -1884,13 +1951,12 @@ impl<'a> PortableParser<'a> {
                 Some(labels) => Self::replace_with_label(labels, label),
                 None => self.expected_labels = std::sync::Arc::new(vec![label.to_owned()]),
             }
-        } else if pos == self.deepest_failure_pos
-            && !self
-                .expected_labels
-                .iter()
-                .any(|l| Self::same_label(l, label))
-        {
+            self.expected_label_hashes = None;
+        } else if pos == self.deepest_failure_pos && !self.label_seen(label) {
             std::sync::Arc::make_mut(&mut self.expected_labels).push(label.to_owned());
+            if let Some(shadow) = self.expected_label_hashes.as_mut() {
+                shadow.insert(label);
+            }
         }
         // C4: keep every distinct position for ranked multi-error
         // reporting; the deepest entry mirrors failure_wire.
