@@ -73,6 +73,12 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ### Other
 
+- Hash-shadow dedup on the deepest failure labels (rs#498 round 1) ([#507](https://github.com/parsanol/parsanol-rs/pull/507)) by @[object]
+- Eval loop: cut the per-parse fixed cost (setup/eval on tiny inputs) ([#492](https://github.com/parsanol/parsanol-rs/pull/492)) by @[object]
+- Release v0.20.21 ([#504](https://github.com/parsanol/parsanol-rs/pull/504)) by @[object]
+
+### Other
+
 - Release v0.20.21 ([#502](https://github.com/parsanol/parsanol-rs/pull/502)) by @[object]
 - The express-grammar repro gates (the VM short-parse, packaged) ([#500](https://github.com/parsanol/parsanol-rs/pull/500)) by @[object]
 
