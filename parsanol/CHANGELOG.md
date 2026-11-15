@@ -109,6 +109,11 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ## [Unreleased]
 
+- Release v0.20.23 ([#510](https://github.com/parsanol/parsanol-rs/pull/510))
+- The pure-class regex fast path and the clone-free fetch (rs#507) ([#512](https://github.com/parsanol/parsanol-rs/pull/512))
+- Strip the @[object] attributions from the changelog ([#513](https://github.com/parsanol/parsanol-rs/pull/513))
+- Fix the changelog template and curate the 0.20.x sections ([#511](https://github.com/parsanol/parsanol-rs/pull/511))
+- Release v0.20.22
 - Strip the @[object] attributions from the changelog ([#513](https://github.com/parsanol/parsanol-rs/pull/513))
 - Fix the changelog template and curate the 0.20.x sections ([#511](https://github.com/parsanol/parsanol-rs/pull/511))
 - Release v0.20.22
