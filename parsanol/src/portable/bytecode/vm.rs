@@ -296,8 +296,12 @@ impl<'a> BytecodeVM<'a> {
             }
 
             // Fetch instruction
+            // Fetch instruction. `program` is a shared `&'a` reference, so
+            // the fetch borrows the program's lifetime, not `&mut self` —
+            // the per-dispatch clone this replaces memcpy'd the enum
+            // (~24B) on every executed instruction (rs#507's VM perf).
             let instr = match self.program.get_instruction(self.ip) {
-                Some(i) => i.clone(),
+                Some(i) => i,
                 None => {
                     return Err(ParseError::Internal {
                         message: format!("Invalid instruction pointer: {}", self.ip),
@@ -317,7 +321,7 @@ impl<'a> BytecodeVM<'a> {
             }
 
             // Dispatch instruction
-            match self.execute_instruction(&instr)? {
+            match self.execute_instruction(instr)? {
                 ExecutionResult::Continue => {
                     self.ip += 1;
                 }
@@ -513,6 +517,23 @@ impl<'a> BytecodeVM<'a> {
                 // zero-width-matchable ones) — parity requires the same.
                 if self.position >= self.input.len() {
                     self.track_failure_with_context();
+                    return Ok(ExecutionResult::Fail);
+                }
+
+                // Pure-class fast path (rs#507: the VM-parity of the
+                // interpreter's): a pattern whose HIR is a single Unicode
+                // class matches by direct membership — the regex engine's
+                // lazy-DFA determinization is catastrophic per character,
+                // and the keyword spellings lower to per-char class
+                // patterns, so this is the VM's dominant corpus cost.
+                if let Some(class) = regex_cache::get_or_decode_class(pattern) {
+                    if let Some(char_len) = class.match_at(self.input, self.position) {
+                        let start = self.position;
+                        self.position += char_len;
+                        self.push_span_value(start);
+                        return Ok(ExecutionResult::Continue);
+                    }
+                    self.track_failure();
                     return Ok(ExecutionResult::Fail);
                 }
 
