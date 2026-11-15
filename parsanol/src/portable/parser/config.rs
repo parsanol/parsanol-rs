@@ -39,6 +39,26 @@ pub enum ParserCompatibility {
     Parslet,
 }
 
+/// The failure-diagnostics storage policy (rs#498 v2 surface).
+///
+/// Legacy keeps the ordered `Arc` buffers live during the parse and
+/// pins their pointer-identity/merge-order contracts. Pending holds
+/// note-ordered inline labels with hash-first dedup and materializes
+/// the legacy shapes once at parse end, on the failure path only — a
+/// successful parse allocates no label storage. Observable output
+/// (`failure_diagnostics`, `failure_wire`, `failure_ranks`) is
+/// identical between the policies; the legacy snapshot/take/restore
+/// pointer-identity contracts are legacy-surface details.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum DiagnosticsPolicy {
+    /// The ordered live-buffer surface; the default.
+    #[default]
+    Legacy,
+    /// The pending inline-label surface (rs#498): hash-first dedup,
+    /// parse-end materialization.
+    Pending,
+}
+
 /// Parser configuration
 ///
 /// Holds all configurable parameters for parsing operations.

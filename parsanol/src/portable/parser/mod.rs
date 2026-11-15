@@ -16,18 +16,21 @@
 mod config;
 mod context;
 mod governor;
+mod pending;
 mod result;
 
 #[cfg(test)]
 mod compatibility_tests;
+#[cfg(test)]
+mod pending_diagnostics_tests;
 #[cfg(test)]
 mod stack_tests;
 #[cfg(test)]
 mod tests;
 
 pub use config::{
-    ParserCompatibility, ParserConfig, DEFAULT_MAX_CALL_DEPTH, DEFAULT_MAX_INPUT_SIZE,
-    DEFAULT_MAX_RECURSION_DEPTH,
+    DiagnosticsPolicy, ParserCompatibility, ParserConfig, DEFAULT_MAX_CALL_DEPTH,
+    DEFAULT_MAX_INPUT_SIZE, DEFAULT_MAX_RECURSION_DEPTH,
 };
 pub use context::ParseContext;
 pub use governor::ResourceGovernor;
@@ -162,14 +165,44 @@ impl LegacyFailure {
 struct LegacyCacheEntry {
     outcome: CacheEntry,
     // Failures must replay their selected causes as well as acceptance.
-    failure: Option<Box<LegacyFailure>>,
+    failure: Option<Box<FailureFrame>>,
 }
 
 impl LegacyCacheEntry {
     fn payload_memory_usage(&self) -> usize {
-        self.failure.as_ref().map_or(0, |failure| {
-            std::mem::size_of::<LegacyFailure>() + failure.memory_usage()
-        })
+        self.failure
+            .as_ref()
+            .map_or(0, |failure| failure.payload_memory_usage())
+    }
+}
+
+/// The frame currency for the diagnostics state: the live-`Arc` legacy
+/// form or the pending inline-label form (rs#498). A parser's policy is
+/// selected before parsing, so every frame crossing a boundary (Parslet
+/// application frames, memo entries, dynamic fragments) carries the
+/// parser's own variant.
+enum FailureFrame {
+    Legacy(LegacyFailure),
+    Pending(pending::PendingFailure),
+}
+
+impl Clone for FailureFrame {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Legacy(failure) => Self::Legacy(failure.clone()),
+            Self::Pending(failure) => Self::Pending(failure.clone()),
+        }
+    }
+}
+
+impl FailureFrame {
+    fn payload_memory_usage(&self) -> usize {
+        match self {
+            Self::Legacy(failure) => std::mem::size_of::<LegacyFailure>() + failure.memory_usage(),
+            Self::Pending(failure) => {
+                std::mem::size_of::<pending::PendingFailure>() + failure.memory_usage()
+            }
+        }
     }
 }
 
@@ -218,6 +251,10 @@ pub struct PortableParser<'a> {
     empty_legacy_failure: LegacyFailure,
     /// Scratch buffer for building literal failure labels.
     label_buf: String,
+    /// The pending diagnostics store (rs#498): live only under
+    /// `DiagnosticsPolicy::Pending`; the legacy fields above stay
+    /// untouched during the parse and materialize at parse end.
+    pending_failure: pending::PendingFailure,
 
     // ========================================================================
     // Output (mutable)
@@ -229,6 +266,8 @@ pub struct PortableParser<'a> {
     cache: DenseCache,
     /// Explicit legacy policy; strict remains the default.
     compatibility: ParserCompatibility,
+    /// Failure-diagnostics storage policy (rs#498); legacy by default.
+    diagnostics_policy: DiagnosticsPolicy,
     /// Explicit executable-grammar policy; public Atom shape stays unchanged.
     ascii_state_match_atoms: Vec<bool>,
     /// Eager legacy memo retained for this parser's lifetime. Recycling a
@@ -548,12 +587,14 @@ impl<'a> PortableParser<'a> {
             ranked_failures: Default::default(),
             empty_legacy_failure: LegacyFailure::default(),
             label_buf: String::new(),
+            pending_failure: pending::PendingFailure::default(),
             has_failure: false,
             expected_labels: Default::default(),
             expected_label_hashes: None,
             arena,
             cache,
             compatibility: ParserCompatibility::Strict,
+            diagnostics_policy: DiagnosticsPolicy::Legacy,
             ascii_state_match_atoms: Vec::new(),
             legacy_cache: std::collections::HashMap::new(),
             legacy_diagnostic_bytes: 0,
@@ -633,12 +674,14 @@ impl<'a> PortableParser<'a> {
             ranked_failures: Default::default(),
             empty_legacy_failure: LegacyFailure::default(),
             label_buf: String::new(),
+            pending_failure: pending::PendingFailure::default(),
             has_failure: false,
             expected_labels: Default::default(),
             expected_label_hashes: None,
             arena,
             cache,
             compatibility: ParserCompatibility::Strict,
+            diagnostics_policy: DiagnosticsPolicy::Legacy,
             ascii_state_match_atoms: Vec::new(),
             legacy_cache: std::collections::HashMap::new(),
             legacy_diagnostic_bytes: 0,
@@ -703,6 +746,31 @@ impl<'a> PortableParser<'a> {
         Ok(())
     }
 
+    /// The active diagnostics storage policy (rs#498).
+    pub fn diagnostics_policy(&self) -> DiagnosticsPolicy {
+        self.diagnostics_policy
+    }
+
+    /// Select the failure-diagnostics storage policy before parsing.
+    ///
+    /// [`DiagnosticsPolicy::Pending`] keeps note-ordered inline labels
+    /// with hash-first dedup during the parse and materializes the
+    /// legacy shapes (`failure_diagnostics` / `failure_wire` /
+    /// `failure_ranks`) once at parse end, on the failure path only;
+    /// observable output is identical to
+    /// [`DiagnosticsPolicy::Legacy`]. Changing policy clears
+    /// memoized values/failures and accumulated diagnostics, exactly
+    /// like [`Self::set_compatibility`].
+    pub fn set_diagnostics_policy(&mut self, policy: DiagnosticsPolicy) -> Result<(), ParseError> {
+        if self.diagnostics_policy == policy {
+            return Ok(());
+        }
+        self.diagnostics_policy = policy;
+        self.pending_failure = pending::PendingFailure::default();
+        self.reset_policy_state(self.compatibility);
+        Ok(())
+    }
+
     fn reset_policy_state(&mut self, compatibility: ParserCompatibility) {
         self.cache.clear();
         self.legacy_cache.clear();
@@ -715,6 +783,7 @@ impl<'a> PortableParser<'a> {
         self.expected_labels = self.empty_legacy_failure.labels.clone();
         self.expected_label_hashes = None;
         self.ranked_failures = self.empty_legacy_failure.ranks.clone();
+        self.pending_failure = pending::PendingFailure::default();
         self.max_end_pos = 0;
         self.partial_stash = None;
         self.spine_trace.clear();
@@ -917,10 +986,12 @@ impl<'a> PortableParser<'a> {
     fn check_resources(&mut self) -> Result<(), ParseError> {
         let (arena, cache, legacy) = (&self.arena, &self.cache, &self.legacy_cache);
         let legacy_bytes = self.legacy_diagnostic_bytes;
+        let pending_bytes = self.pending_failure.memory_usage();
         self.governor.check_resources_lazy(|| {
             arena.memory_usage()
                 + cache.memory_usage()
                 + Self::legacy_cache_bytes(legacy, legacy_bytes)
+                + pending_bytes
         })
     }
 
@@ -976,7 +1047,9 @@ impl<'a> PortableParser<'a> {
             self.grammar.root
         );
 
-        match self.try_atom_impl(self.grammar.root, 0, true) {
+        let outcome = self.try_atom_impl(self.grammar.root, 0, true);
+        self.sync_failure_surface();
+        match outcome {
             Ok(result) => {
                 if result.end_pos == self.input.len() {
                     log_debug!("Parse successful");
@@ -1007,8 +1080,11 @@ impl<'a> PortableParser<'a> {
     pub fn parse_with_end_pos(&mut self) -> Result<ParseResult, ParseError> {
         self.check_input_size()?;
         self.start_timeout_timer();
-        self.try_atom_impl(self.grammar.root, 0, false)
-            .map(Into::into)
+        let outcome = self
+            .try_atom_impl(self.grammar.root, 0, false)
+            .map(Into::into);
+        self.sync_failure_surface();
+        outcome
     }
 
     /// Parse with custom config
@@ -1111,17 +1187,17 @@ impl<'a> PortableParser<'a> {
         }
         // Tree-style diagnostics follow only the selected failed subtree.
         // The strict reporter deliberately retains its global deepest policy.
-        let parent_failure = (self.compatibility == ParserCompatibility::Parslet)
-            .then(|| self.take_legacy_failure());
+        let parent_failure =
+            (self.compatibility == ParserCompatibility::Parslet).then(|| self.take_failure());
         let r = self.try_atom_impl_inner(atom_id, pos, consume_all);
         if let Some(parent_failure) = parent_failure {
             if let Err(ParseError::Failed { position }) = &r {
                 self.ensure_legacy_failure(atom_id, *position);
             }
-            let own_failure = self.take_legacy_failure();
-            self.restore_legacy_failure(parent_failure);
+            let own_failure = self.take_failure();
+            self.restore_failure(parent_failure);
             if matches!(&r, Err(ParseError::Failed { .. })) {
-                self.merge_owned_legacy_failure(own_failure);
+                self.merge_owned_failure(own_failure);
             }
         }
         if self.track_max_end {
@@ -1138,6 +1214,7 @@ impl<'a> PortableParser<'a> {
             self.cache.clear();
             self.legacy_cache.clear();
             self.legacy_diagnostic_bytes = 0;
+            self.pending_failure.clear();
             self.dyn_cache.clear();
             self.dynamic_outcomes.clear();
         }
@@ -1451,10 +1528,13 @@ impl<'a> PortableParser<'a> {
             } else {
                 let failure = entry.failure.clone();
                 if let Some(failure) = failure {
-                    self.merge_owned_legacy_failure(*failure);
+                    self.merge_owned_failure(*failure);
                 }
                 Err(ParseError::Failed {
-                    position: self.deepest_failure_pos,
+                    position: match self.diagnostics_policy {
+                        DiagnosticsPolicy::Legacy => self.deepest_failure_pos,
+                        DiagnosticsPolicy::Pending => self.pending_failure.deepest,
+                    },
                 })
             }
         } else {
@@ -1474,7 +1554,7 @@ impl<'a> PortableParser<'a> {
                     self.ensure_legacy_failure(atom_id, *position);
                     Some(LegacyCacheEntry {
                         outcome: CacheEntry::failure(pos as u32, atom_id as u16),
-                        failure: Some(Box::new(self.snapshot_legacy_failure())),
+                        failure: Some(Box::new(self.snapshot_failure())),
                     })
                 }
                 _ => None, // Runtime aborts and effect-spanning outcomes are not memoized.
@@ -1499,7 +1579,7 @@ impl<'a> PortableParser<'a> {
             if consume_all && parsed.end_pos != self.input.len() {
                 // Base#unconsumed_error points at the unconsumed suffix,
                 // and its raw success remains reusable as a prefix.
-                self.clear_legacy_failure();
+                self.clear_failure_state();
                 self.note_failure(parsed.end_pos, "end of input".to_string());
                 return Err(ParseError::Failed {
                     position: parsed.end_pos,
@@ -1593,6 +1673,75 @@ impl<'a> PortableParser<'a> {
         }
     }
 
+    // -- policy-dispatching frame ops (rs#498) --------------------------
+    // Every diagnostics-state boundary crossing (application frames,
+    // memo entries, dynamic fragments) goes through these; the variant
+    // matches the parser's selected policy by construction.
+
+    fn snapshot_failure(&self) -> FailureFrame {
+        match self.diagnostics_policy {
+            DiagnosticsPolicy::Legacy => FailureFrame::Legacy(self.snapshot_legacy_failure()),
+            DiagnosticsPolicy::Pending => FailureFrame::Pending(self.pending_failure.clone()),
+        }
+    }
+
+    fn take_failure(&mut self) -> FailureFrame {
+        match self.diagnostics_policy {
+            DiagnosticsPolicy::Legacy => FailureFrame::Legacy(self.take_legacy_failure()),
+            DiagnosticsPolicy::Pending => FailureFrame::Pending(self.pending_failure.take()),
+        }
+    }
+
+    fn restore_failure(&mut self, frame: FailureFrame) {
+        match frame {
+            FailureFrame::Legacy(failure) => self.restore_legacy_failure(failure),
+            FailureFrame::Pending(failure) => {
+                self.pending_failure = failure;
+                self.expected_label_hashes = None;
+            }
+        }
+    }
+
+    fn clear_failure_state(&mut self) {
+        match self.diagnostics_policy {
+            DiagnosticsPolicy::Legacy => self.clear_legacy_failure(),
+            DiagnosticsPolicy::Pending => self.pending_failure.clear(),
+        }
+    }
+
+    fn merge_owned_failure(&mut self, frame: FailureFrame) {
+        match frame {
+            FailureFrame::Legacy(failure) => self.merge_owned_legacy_failure(failure),
+            // The legacy move-into-empty fast path buys nothing here:
+            // pending frames are inline labels, and the note path's
+            // hash dedup makes replay as cheap as a move.
+            FailureFrame::Pending(failure) => self.pending_failure.merge(&failure),
+        }
+    }
+
+    fn merge_failure(&mut self, frame: &FailureFrame) {
+        match frame {
+            FailureFrame::Legacy(failure) => self.merge_legacy_failure(failure),
+            FailureFrame::Pending(failure) => self.pending_failure.merge(failure),
+        }
+    }
+
+    /// Parse-end materialization under the pending policy: the legacy
+    /// read shapes (`failure_diagnostics`, `failure_wire`,
+    /// `failure_ranks`) and the deepest-position scalars populate from
+    /// the pending store exactly once. A parse that noted nothing
+    /// materializes nothing beyond empty vectors.
+    fn sync_failure_surface(&mut self) {
+        if self.diagnostics_policy != DiagnosticsPolicy::Pending {
+            return;
+        }
+        self.has_failure = self.pending_failure.present;
+        self.deepest_failure_pos = self.pending_failure.deepest;
+        self.expected_labels = Arc::new(self.pending_failure.deepest_labels());
+        self.expected_label_hashes = None;
+        self.ranked_failures = Arc::new(self.pending_failure.materialize_ranks());
+    }
+
     /// The deepest-set dedup probe: O(1) via the shadow index, with the
     /// linear verify only on a hash hit (collision safety). The shadow
     /// rebuilds lazily after any wholesale buffer replacement.
@@ -1641,7 +1790,11 @@ impl<'a> PortableParser<'a> {
     }
 
     fn ensure_legacy_failure(&mut self, atom_id: usize, position: usize) {
-        if !self.has_failure {
+        let have = match self.diagnostics_policy {
+            DiagnosticsPolicy::Legacy => self.has_failure,
+            DiagnosticsPolicy::Pending => self.pending_failure.present,
+        };
+        if !have {
             self.note_failure(
                 position,
                 self.describe_atom_failure(self.grammar.get_atom(atom_id), position),
@@ -1937,6 +2090,13 @@ impl<'a> PortableParser<'a> {
     /// ranked list is dropped before any label is copied.
     fn note_failure_ref(&mut self, pos: usize, label: &str) {
         perf_count!(self.note_failure);
+        // rs#498: the pending policy keeps note-ordered inline labels
+        // with hash-first per-position dedup; the legacy buffer work
+        // below runs only under the legacy policy.
+        if self.diagnostics_policy == DiagnosticsPolicy::Pending {
+            self.pending_failure.note(pos, label);
+            return;
+        }
         // rs#171: the deepest POSITION is tracked regardless of trivia
         // nesting — the ruby engine's deepest-failure reporting sees
         // failures inside injected trivia (their terminals fail at
@@ -3247,6 +3407,7 @@ impl<'a> PortableParser<'a> {
             PortableParser::new(temp_grammar, self.input, &mut temp_arena)
         };
         temp_parser.set_compatibility(self.compatibility)?;
+        let _ = temp_parser.set_diagnostics_policy(self.diagnostics_policy);
         // Seed the fragment's visible capture state wholesale
         // (rs#174 round 2): the per-name store loop pushed two undo-log
         // entries per capture per boundary crossing, and the merge-back
@@ -3275,7 +3436,8 @@ impl<'a> PortableParser<'a> {
         // can report only an earlier failure outside the fragment. Strict
         // retains speculative failures, while legacy's application frames
         // discard them when the dynamic atom ultimately succeeds.
-        self.merge_legacy_failure(&temp_parser.take_legacy_failure());
+        let fragment_failure = temp_parser.take_failure();
+        self.merge_failure(&fragment_failure);
         let result = result?;
 
         // Merge captures from temp parser: replay only what the

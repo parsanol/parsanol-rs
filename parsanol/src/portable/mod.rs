@@ -87,7 +87,9 @@ pub mod parallel;
 pub use arena::AstArena;
 pub use ast::{AstNode, ParseError, ParseResult};
 pub use grammar::{Atom, AtomTypeCounter, AtomVisitor, Grammar};
-pub use parser::{ParseContext, ParserCompatibility, ParserConfig, PortableParser};
+pub use parser::{
+    DiagnosticsPolicy, ParseContext, ParserCompatibility, ParserConfig, PortableParser,
+};
 
 // ============================================================================
 // Error Handling
