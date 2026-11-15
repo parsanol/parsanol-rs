@@ -183,7 +183,11 @@ impl LegacyCacheEntry {
 /// parser's own variant.
 enum FailureFrame {
     Legacy(LegacyFailure),
-    Pending(pending::PendingFailure),
+    /// The pending payload is boxed so the frame keeps the legacy
+    /// stack footprint: the Parslet frame block holds one across
+    /// every recursion level, and the 1 MiB stack budget
+    /// (stack_tests) prices every byte.
+    Pending(Box<pending::PendingFailure>),
 }
 
 impl Clone for FailureFrame {
@@ -1681,14 +1685,18 @@ impl<'a> PortableParser<'a> {
     fn snapshot_failure(&self) -> FailureFrame {
         match self.diagnostics_policy {
             DiagnosticsPolicy::Legacy => FailureFrame::Legacy(self.snapshot_legacy_failure()),
-            DiagnosticsPolicy::Pending => FailureFrame::Pending(self.pending_failure.clone()),
+            DiagnosticsPolicy::Pending => {
+                FailureFrame::Pending(Box::new(self.pending_failure.clone()))
+            }
         }
     }
 
     fn take_failure(&mut self) -> FailureFrame {
         match self.diagnostics_policy {
             DiagnosticsPolicy::Legacy => FailureFrame::Legacy(self.take_legacy_failure()),
-            DiagnosticsPolicy::Pending => FailureFrame::Pending(self.pending_failure.take()),
+            DiagnosticsPolicy::Pending => {
+                FailureFrame::Pending(Box::new(self.pending_failure.take()))
+            }
         }
     }
 
@@ -1696,7 +1704,7 @@ impl<'a> PortableParser<'a> {
         match frame {
             FailureFrame::Legacy(failure) => self.restore_legacy_failure(failure),
             FailureFrame::Pending(failure) => {
-                self.pending_failure = failure;
+                self.pending_failure = *failure;
                 self.expected_label_hashes = None;
             }
         }
@@ -1715,14 +1723,14 @@ impl<'a> PortableParser<'a> {
             // The legacy move-into-empty fast path buys nothing here:
             // pending frames are inline labels, and the note path's
             // hash dedup makes replay as cheap as a move.
-            FailureFrame::Pending(failure) => self.pending_failure.merge(&failure),
+            FailureFrame::Pending(ref failure) => self.pending_failure.merge(failure),
         }
     }
 
     fn merge_failure(&mut self, frame: &FailureFrame) {
         match frame {
             FailureFrame::Legacy(failure) => self.merge_legacy_failure(failure),
-            FailureFrame::Pending(failure) => self.pending_failure.merge(failure),
+            FailureFrame::Pending(ref failure) => self.pending_failure.merge(failure),
         }
     }
 
