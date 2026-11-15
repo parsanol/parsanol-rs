@@ -32,6 +32,11 @@ def expect(name, actual, wanted):
         failures.append(f"{name}: registry serves {actual!r}, manifest says {wanted!r}")
 
 
+def expect_in(name, wanted, versions):
+    if wanted not in versions:
+        failures.append(f"{name}: registry does not serve {wanted!r}")
+
+
 # crates.io: the manifest's crates version is the max published
 crate = get("https://crates.io/api/v1/crates/parsanol")["crate"]["max_version"]
 expect("crates", crate, MANIFEST["crates"])
@@ -47,17 +52,22 @@ if commit != MANIFEST["engine_commit"]:
     failures.append(f"tag parsanol-v{MANIFEST['crates']}: points at {commit[:12]}, "
                     f"manifest says {MANIFEST['engine_commit'][:12]}")
 
-# npm: the parsanol package's latest is the manifest's npm version
-npm = get("https://registry.npmjs.org/parsanol")["dist-tags"]["latest"]
-expect("npm", npm, MANIFEST["npm"])
+# npm / rubygems / pypi: the manifest's runtime version EXISTS on the
+# registry. The runtime versions follow the engine-linked scheme
+# ({engine-semver}.{runtime-digit}; npm: the engine semver) -- a scheme
+# change's legacy-line versions can sort ABOVE the new scheme forever
+# (e.g. rubygems 1.3.151 > 0.20.23.0), so a max/latest comparison is
+# wrong here: what the train guarantees is that the manifest's version
+# is published, and the `latest` caveat for bare installs is documented
+# in the manifest comment.
+npm_versions = list(get("https://registry.npmjs.org/parsanol")["versions"])
+expect_in("npm", MANIFEST["npm"], npm_versions)
 
-# rubygems: the parsanol gem's latest is the manifest's rubygems version
-gems = get("https://rubygems.org/api/v1/versions/parsanol/latest.json")
-expect("rubygems", gems["version"], MANIFEST["rubygems"])
+gems = get("https://rubygems.org/api/v1/versions/parsanol.json")
+expect_in("rubygems", MANIFEST["rubygems"], [g["number"] for g in gems])
 
-# pypi: the parsanol package's latest is the manifest's pypi version
-pypi = get("https://pypi.org/pypi/parsanol/json")["info"]["version"]
-expect("pypi", pypi, MANIFEST["pypi"])
+pypi_versions = list(get("https://pypi.org/pypi/parsanol/json")["releases"])
+expect_in("pypi", MANIFEST["pypi"], pypi_versions)
 
 if failures:
     print("\n".join(failures), file=sys.stderr)
