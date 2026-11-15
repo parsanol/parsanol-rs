@@ -20,13 +20,9 @@ dependencies_update = true
 [changelog]
 # Include commit body in changelog
 body = """
-{% for group, commits in commits | group_by(attribute="group") %}
-### {{ group | upper_first }}
 {% for commit in commits %}
 - {{ commit.message | upper_first }}\
 {% if commit.breaking %} (BREAKING){% endif %}\
-{% if commit.author != "github-actions[bot]" %} by @{{ commit.author }}{% endif %}\
-{% endfor %}
 {% endfor %}
 """
 
