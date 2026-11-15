@@ -109,6 +109,7 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ## [Unreleased]
 
+- Release v1.5.0
 - Align the internal parsanol-derive requirement to 1.5.0
 - Release v0.20.23
 - Box the pending frame payload: keep the recursion stack footprint
