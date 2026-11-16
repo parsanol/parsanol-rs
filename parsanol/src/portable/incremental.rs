@@ -345,12 +345,44 @@ pub struct IncrementalParser<'a> {
     /// retained post-parse (they are already in the new coordinates).
     /// usize::MAX when no shift applied.
     applied_suffix_floor: usize,
+
+    /// The path-splice's persisted item bounds (the spine list's
+    /// items, current-input coordinates). Seeded by one drain after a
+    /// full parse; every later keystroke derives its bounds by shift
+    /// (below unchanged, above += delta) plus ONE bridge probe for the
+    /// edited item — no per-keystroke drain, no memo dependency (the
+    /// body atom carries none).
+    path_chain: Vec<(u32, u32)>,
+
+    /// The applied single edit (cutoff = edit start, edit end in OLD
+    /// coordinates, delta), stashed by the shift retention for the
+    /// splice's chain derivation. None when no shift applied.
+    last_edit: Option<(usize, u32, i64)>,
 }
 
 /// A persistent output arena past this budget is reset wholesale
 /// between retained parses (retention dropped, next parse runs cold)
 /// instead of growing without bound across an edit session.
 const OUTPUT_ARENA_BUDGET: usize = 64 * 1024 * 1024;
+
+/// The body's anchor byte: its first single-byte Str literal (the
+/// comma in list grammars). Probes at anchors only — a per-byte scan
+/// pays a failing parse per position.
+fn anchor_byte_of(grammar: &Grammar, body: usize) -> Option<u8> {
+    let atom = grammar.get_atom(body)?;
+    let atoms = match atom {
+        Atom::Sequence { atoms } => atoms,
+        _ => return None,
+    };
+    for &a in atoms {
+        if let Some(Atom::Str { pattern }) = grammar.get_atom(a) {
+            if pattern.len() == 1 {
+                return Some(pattern.as_bytes()[0]);
+            }
+        }
+    }
+    None
+}
 
 impl<'a> IncrementalParser<'a> {
     /// Create a new incremental parser
@@ -369,6 +401,8 @@ impl<'a> IncrementalParser<'a> {
             prev_input_len: 0,
             pending_shift: None,
             applied_suffix_floor: usize::MAX,
+            path_chain: Vec::new(),
+            last_edit: None,
         }
     }
 
@@ -389,6 +423,8 @@ impl<'a> IncrementalParser<'a> {
             prev_input_len: 0,
             pending_shift: None,
             applied_suffix_floor: usize::MAX,
+            path_chain: Vec::new(),
+            last_edit: None,
         }
     }
 
@@ -425,6 +461,7 @@ impl<'a> IncrementalParser<'a> {
             return;
         };
         self.applied_suffix_floor = (edit_end_old as i64 + delta).max(0) as usize;
+        self.last_edit = Some((cutoff, edit_end_old, delta));
         self.cache.retain(|entry| {
             let entry_end = entry.end_pos as usize;
             let is_root_at_start = entry.pos == 0 && entry.atom_id == root_atom;
@@ -475,6 +512,7 @@ impl<'a> IncrementalParser<'a> {
             self.retain_suffix_shift(cutoff, root_atom, input_len_changed);
         } else {
             self.applied_suffix_floor = usize::MAX;
+            self.last_edit = None;
             self.cache.retain(|entry| {
                 let entry_end = entry.end_pos as usize;
                 let is_root_at_start = entry.pos == 0 && entry.atom_id == root_atom;
@@ -697,6 +735,7 @@ impl<'a> IncrementalParser<'a> {
             self.retain_suffix_shift(cutoff, root_atom, input_len_changed);
         } else {
             self.applied_suffix_floor = usize::MAX;
+            self.last_edit = None;
             self.cache.retain(|entry| {
                 let entry_end = entry.end_pos as usize;
                 let is_root_at_start = entry.pos == 0 && entry.atom_id == root_atom;
@@ -1016,61 +1055,61 @@ impl<'a> IncrementalParser<'a> {
         if spliced.is_none() {
             if let (Some(plan), Some(spine)) = (path_plan.as_ref(), spine_kept.as_ref()) {
                 let body = plan.body;
-                // Bounds from the probe drain: the body atom sits in
-                // the no_cache set (late-flattened atoms carry no memo
-                // entries), so the chain cannot come from the cache.
-                // The drain's cost concentrates on the edited member;
-                // probes above the edit ride the shifted memo (hits).
+                // Bounds from the PERSISTED chain: seeded by one drain
+                // after a full parse (the body atom carries no memo —
+                // late-flattened atoms hold none — so bounds cannot
+                // come from the cache). Each keystroke shifts the
+                // chain (below unchanged, above += delta) and probes
+                // ONCE at the bridge: the edited item's new span.
                 let mut bounds: Vec<(usize, usize)> = Vec::new();
-                // The body anchors at its fixed literal (the comma in
-                // list grammars) — probe at anchors only. A per-byte
-                // scan pays a failing try_atom_impl at every position
-                // (the deferred failure tracker records each one);
-                // memchr over the anchor byte is O(anchors).
-                let bytes = input.as_bytes();
-                let anchor = {
-                    // The body's anchor: its first Str literal, read
-                    // once from the grammar.
-                    fn anchor_byte(grammar: &Grammar, body: usize) -> Option<u8> {
-                        let atom = grammar.get_atom(body)?;
-                        let atoms = match atom {
-                            Atom::Sequence { atoms } => atoms,
-                            _ => return None,
-                        };
-                        for &a in atoms {
-                            if let Some(Atom::Str { pattern }) = grammar.get_atom(a) {
-                                if pattern.len() == 1 {
-                                    return Some(pattern.as_bytes()[0]);
-                                }
+                if self.path_chain.is_empty() {
+                    // Seed: one anchor-byte drain after a full parse.
+                    let bytes = input.as_bytes();
+                    let anchor = anchor_byte_of(&self.grammar, body);
+                    let mut scan = 0usize;
+                    while scan < input.len() {
+                        if let Some(byte) = anchor {
+                            match bytes[scan..].iter().position(|&b| b == byte) {
+                                Some(off) => scan += off,
+                                None => break,
                             }
                         }
-                        None
-                    }
-                    anchor_byte(&self.grammar.clone(), body)
-                };
-                let mut probe_cursor = 0usize;
-                let mut first_found = false;
-                while probe_cursor < input.len() {
-                    // Advance to the next anchor byte (or probe when
-                    // the body has none).
-                    if let Some(byte) = anchor {
-                        match bytes[probe_cursor..].iter().position(|&b| b == byte) {
-                            Some(off) => probe_cursor += off,
-                            None => break,
+                        match parser.try_atom_impl(body, scan, false) {
+                            Ok(r) if r.end_pos > scan => {
+                                bounds.push((scan, r.end_pos));
+                                scan = r.end_pos;
+                            }
+                            _ => scan += 1,
                         }
                     }
-                    match parser.try_atom_impl(body, probe_cursor, false) {
-                        Ok(r) if r.end_pos > probe_cursor => {
-                            bounds.push((probe_cursor, r.end_pos));
-                            probe_cursor = r.end_pos;
-                            first_found = true;
+                } else if let Some((edit_start, edit_end_old, delta)) = self.last_edit {
+                    // Below the edit: unchanged. Above: shifted. The
+                    // straddling item gets ONE bridge probe.
+                    let mut bridge_at = None;
+                    for &(p, e) in &self.path_chain {
+                        let (p, e) = (p as usize, e as usize);
+                        if e <= edit_start {
+                            bounds.push((p, e));
+                        } else if (p as i64) >= edit_end_old as i64 {
+                            bounds.push((
+                                (p as i64 + delta).max(0) as usize,
+                                (e as i64 + delta).max(0) as usize,
+                            ));
+                        } else if bridge_at.is_none() {
+                            bridge_at = Some(e);
                         }
-                        _ => {
-                            probe_cursor += 1;
+                    }
+                    if let Some(start) = bridge_at {
+                        // The edited item's span in NEW coordinates.
+                        if let Ok(r) = parser.try_atom_impl(body, start, false) {
+                            if r.end_pos > start {
+                                bounds.push((start, r.end_pos));
+                            }
                         }
+                        bounds.sort_unstable();
+                        bounds.retain(|&(p, e)| e > p);
                     }
                 }
-                let _ = first_found;
                 // The probe and the previous tree must agree on the
                 // item count (the tree carries one item per iteration).
                 if !bounds.is_empty() && bounds.len() == plan.items_prev.len() {
@@ -1116,6 +1155,11 @@ impl<'a> IncrementalParser<'a> {
                         }
                     }
                     if tails_ok && tail_cursor == input.len() {
+                        // The chain persists in the new coordinates:
+                        // the next keystroke derives from it without a
+                        // drain.
+                        self.path_chain =
+                            bounds.iter().map(|&(p, e)| (p as u32, e as u32)).collect();
                         path_data = Some((k, suffix, tails));
                     }
                 }
@@ -1196,6 +1240,9 @@ impl<'a> IncrementalParser<'a> {
                 None => {
                     let r = parser.parse();
                     self.last_spine_trace = std::mem::take(&mut parser.spine_trace);
+                    // Stale coordinates: the next splice re-seeds by
+                    // drain.
+                    self.path_chain.clear();
                     self.cache = parser.into_cache();
                     r
                 }
@@ -1288,6 +1335,7 @@ impl<'a> IncrementalParser<'a> {
         self.output_arena = AstArena::new();
         self.last_root = None;
         self.body_chain.clear();
+        self.path_chain.clear();
         self.spliced_parses = 0;
         self.dirty_tracker.clear();
         self.prev_input_len = 0;
