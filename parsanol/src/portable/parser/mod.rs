@@ -278,6 +278,9 @@ pub struct PortableParser<'a> {
     /// prefix entry can change legacy ordered-choice results, so these
     /// entries use the parser's resource governor rather than eviction.
     legacy_cache: std::collections::HashMap<(usize, usize), LegacyCacheEntry>,
+    /// Exact source-compiler-witnessed memo identity per atom; absent unless
+    /// the PARG adapter verified the compiled graph matches the artifact.
+    legacy_memo_identity: Vec<usize>,
     legacy_diagnostic_bytes: usize,
 
     // ========================================================================
@@ -601,6 +604,7 @@ impl<'a> PortableParser<'a> {
             diagnostics_policy: DiagnosticsPolicy::Legacy,
             ascii_state_match_atoms: Vec::new(),
             legacy_cache: std::collections::HashMap::new(),
+            legacy_memo_identity: Vec::new(),
             legacy_diagnostic_bytes: 0,
             governor,
             capture_state: CaptureState::new(),
@@ -688,6 +692,7 @@ impl<'a> PortableParser<'a> {
             diagnostics_policy: DiagnosticsPolicy::Legacy,
             ascii_state_match_atoms: Vec::new(),
             legacy_cache: std::collections::HashMap::new(),
+            legacy_memo_identity: Vec::new(),
             legacy_diagnostic_bytes: 0,
             governor,
             capture_state: CaptureState::new(),
@@ -746,6 +751,7 @@ impl<'a> PortableParser<'a> {
             return Ok(());
         }
         self.compatibility = compatibility;
+        self.legacy_memo_identity.clear();
         self.reset_policy_state(compatibility);
         Ok(())
     }
@@ -1508,6 +1514,14 @@ impl<'a> PortableParser<'a> {
         }
     }
 
+    /// Install identities witnessed by the PARG compiler, before parsing.
+    /// Structural equality alone cannot establish source object identity.
+    pub(crate) fn set_legacy_rule_identity(&mut self, identity: &[usize]) {
+        debug_assert_eq!(identity.len(), self.grammar.atoms.len());
+        debug_assert!(identity.iter().all(|&id| id < identity.len()));
+        self.legacy_memo_identity = identity.to_vec();
+    }
+
     /// Parslet-compatible raw-outcome memoization. The consumption check
     /// deliberately runs after both cache lookup and raw outcome storage.
     /// Incomplete success is not stored as a failed raw application.
@@ -1517,7 +1531,12 @@ impl<'a> PortableParser<'a> {
         pos: usize,
         consume_all: bool,
     ) -> Result<AtomResult, ParseError> {
-        let key = (atom_id, pos);
+        let identity = self
+            .legacy_memo_identity
+            .get(atom_id)
+            .copied()
+            .unwrap_or(atom_id);
+        let key = (identity, pos);
         let cached = self.legacy_cache.get(&key).filter(|entry| {
             !entry.outcome.success || entry.outcome.generation == self.arena.generation()
         });
