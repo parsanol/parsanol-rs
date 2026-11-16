@@ -28,11 +28,18 @@ victories is marketing, not measurement.
   - `runners/parsanol/` — the parsanol runner (`vm|interpreter` engines).
   - `runners/ts-rust/` — tree-sitter via the Rust binding.
   - `runners/run_lark.py` — Lark LALR via the Python binding.
+  - `runners/antlr/` — ANTLR 4.13.2, python3 target (grammars-v4
+    JSON.g4); its venv pins antlr4-python3-runtime==4.13.2.
   - `run_tree_sitter.js` — node binding runner (kept for reference: the
     node binding throws `Invalid argument` on inputs ≥ ~150 KB, so the
     Rust binding is the benchmark path).
 - `bench.py <corpus> <artifact> <entry> <rounds>` — the driver; emits
-  the receipts markdown table.
+  the receipts markdown table (all five engines).
+- `corrupt.py <corpus> <out> <seed>` — the seeded corruption harness
+  for the recovery receipts (rs#527); committed corrupted corpora +
+  manifest under `corpora/<lang>-corrupted/`.
+- `score_recovery.py <manifest> <parsanol-out> <ts-out>` — the recovery
+  scorer (diagnostic distance + suffix recovery per class/depth).
 - `results/` — dated receipts.
 
 ## Running
