@@ -3,7 +3,7 @@
 
 # Files to check
 [files]
-extend-exclude = ["target/", ".git/", "parsanol/tests/fixtures/"]
+extend-exclude = ["target/", ".git/", "parsanol/tests/fixtures/", "benchmarks/sota/corpora/"]
 
 # Custom words that typos should ignore
 [default.extend-words]
