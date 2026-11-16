@@ -110,7 +110,7 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 ## [Unreleased]
 
 - Span the ws shape: merged-choice bodies take the vectorized run
-- Reword the rejection input so the spell check passes (ba -> b a; still not ws-adjacent-to-a)
+- Reword the rejection input so the spell check passes (the literal is spelled with a space; still not ws-adjacent-to-a)
 - Single-byte choice merge: the ws shape compiles to one charset
 - Relocate the lead-byte helper above the test module (clippy items_after_test_module)
 - Determinism dispatch round: singleton-class decode, folded-literal first sets, the repetition cost gate (rs#533 TODO.perf/11)
