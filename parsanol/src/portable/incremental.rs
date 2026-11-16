@@ -743,7 +743,7 @@ impl<'a> IncrementalParser<'a> {
         struct PathPlan {
             body: usize,
             items_prev: Vec<AstNode>,
-            befores: Vec<Vec<AstNode>>,
+            leading_siblings: Vec<Vec<AstNode>>,
         }
         let mut path_plan: Option<PathPlan> = None;
         let mut spine_kept: Option<crate::portable::spine::Spine> = None;
@@ -760,7 +760,7 @@ impl<'a> IncrementalParser<'a> {
             if let Some(spine) = spine {
                 if !spine.path.is_empty() {
                     let mut current = self.last_root.clone();
-                    let mut befores: Vec<Vec<AstNode>> = Vec::new();
+                    let mut leading_siblings: Vec<Vec<AstNode>> = Vec::new();
                     let mut ok = current.is_some();
                     for step in &spine.path {
                         let node = current.take();
@@ -784,7 +784,7 @@ impl<'a> IncrementalParser<'a> {
                                     .get_array(pool_index as usize, length as usize);
                                 ok = *index < children.len();
                                 if ok {
-                                    befores.push(children[..*index].to_vec());
+                                    leading_siblings.push(children[..*index].to_vec());
                                     current = Some(children[*index].clone());
                                 }
                             }
@@ -824,7 +824,7 @@ impl<'a> IncrementalParser<'a> {
                         path_plan = Some(PathPlan {
                             body: spine.body,
                             items_prev,
-                            befores,
+                            leading_siblings,
                         });
                         spine_kept = Some(spine);
                     }
@@ -1114,7 +1114,8 @@ impl<'a> IncrementalParser<'a> {
             for step in spine.path.iter().rev() {
                 match step {
                     crate::portable::spine::SpineStep::Sequence { .. } => {
-                        let before = &plan.befores[seq_ordinals[seq_ordinals.len() - 1 - rev_seq]];
+                        let before =
+                            &plan.leading_siblings[seq_ordinals[seq_ordinals.len() - 1 - rev_seq]];
                         let after = &tails[rev_seq];
                         rev_seq += 1;
                         let mut children: Vec<AstNode> = before.to_vec();
