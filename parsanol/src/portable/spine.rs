@@ -16,27 +16,37 @@ use std::collections::{HashMap, HashSet, VecDeque};
 /// lands only the discovery runs, so the step shapes sit quiet.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(dead_code)]
-pub(crate) enum SpineStep {
+pub enum SpineStep {
     /// A Named wrapper: rebuild wraps the inner node in `{name: inner}`.
-    Named { name: String },
+    Named {
+        /// The wrapper's capture name.
+        name: String,
+    },
     /// A Sequence: the spine repetition sits at `index`; the sibling
     /// atoms before and after are re-parsed fresh on rebuild (their
     /// fixed literals delimit the container).
     Sequence {
+        /// The spine repetition's position among the sequence's atoms.
         index: usize,
+        /// The atom ids before the repetition (re-parsed fresh on a
+        /// splice rebuild — the container's opening delimiters).
         siblings_before: Vec<usize>,
+        /// The atom ids after it (the closing delimiters).
         siblings_after: Vec<usize>,
     },
     /// An Alternative: the spine sits in branch `index`. The branch is
     /// confirmed against the previous parse's tree shape before a
     /// splice (a different branch aborts to the full parse — sound).
-    Alternative { index: usize },
+    Alternative {
+        /// The branch the spine sits behind.
+        index: usize,
+    },
 }
 
 /// The spine body plus the structural path from the root down to it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(dead_code)]
-pub(crate) struct Spine {
+pub struct Spine {
     /// The spine repetition's body atom — the iteration granularity.
     pub body: usize,
     /// Root-to-spine steps; empty when the root itself is the spine
@@ -107,8 +117,7 @@ fn substantial(grammar: &Grammar, body: usize) -> bool {
 /// separators). The path records how the root reaches the spine; an
 /// alternative on the path is recorded as a branch index the splice
 /// confirms against the previous tree.
-#[allow(dead_code)] // the suite consumes the body; the splice takes the path next
-pub(crate) fn discover_spine(grammar: &Grammar) -> Option<Spine> {
+pub fn discover_spine(grammar: &Grammar) -> Option<Spine> {
     let mut visited = HashSet::new();
     let mut queue = VecDeque::new();
     // (atom, parent_atom, child_position) — parent None at the root.
