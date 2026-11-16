@@ -735,6 +735,103 @@ impl<'a> IncrementalParser<'a> {
             }
         };
 
+        // The generalized splice plan (rs#542 slice 2b): the spine
+        // sits BELOW the root. The previous tree navigates the
+        // structural path (portable::spine) down to the spine array;
+        // everything here is clone-out before the parser takes the
+        // arena. Any mismatch aborts to the full parse — sound.
+        struct PathPlan {
+            body: usize,
+            items_prev: Vec<AstNode>,
+            befores: Vec<Vec<AstNode>>,
+        }
+        let mut path_plan: Option<PathPlan> = None;
+        let mut spine_kept: Option<crate::portable::spine::Spine> = None;
+        if !fresh
+            && self.dirty_tracker.regions().len() == 1
+            && !self
+                .grammar
+                .atoms
+                .iter()
+                .any(|a| matches!(a, Atom::Dynamic { .. }))
+            && splice.is_none()
+        {
+            let spine = crate::portable::spine::discover_spine(&self.grammar);
+            if let Some(spine) = spine {
+                if !spine.path.is_empty() {
+                    let mut current = self.last_root.clone();
+                    let mut befores: Vec<Vec<AstNode>> = Vec::new();
+                    let mut ok = current.is_some();
+                    for step in &spine.path {
+                        let node = current.take();
+                        match (step, node) {
+                            (
+                                crate::portable::spine::SpineStep::Named { name },
+                                Some(AstNode::Hash { pool_index, length }),
+                            ) => {
+                                let items = self
+                                    .output_arena
+                                    .get_hash_items(pool_index as usize, length as usize);
+                                ok = items.first().is_some_and(|(k, _)| k == name);
+                                current = items.into_iter().next().map(|(_, v)| v);
+                            }
+                            (
+                                crate::portable::spine::SpineStep::Sequence { index, .. },
+                                Some(AstNode::Array { pool_index, length }),
+                            ) => {
+                                let children = self
+                                    .output_arena
+                                    .get_array(pool_index as usize, length as usize);
+                                ok = *index < children.len();
+                                if ok {
+                                    befores.push(children[..*index].to_vec());
+                                    current = Some(children[*index].clone());
+                                }
+                            }
+                            (
+                                crate::portable::spine::SpineStep::Alternative { index },
+                                Some(AstNode::Array { pool_index, length }),
+                            ) => {
+                                let children = self
+                                    .output_arena
+                                    .get_array(pool_index as usize, length as usize);
+                                ok = *index < children.len();
+                                if ok {
+                                    current = Some(children[*index].clone());
+                                }
+                            }
+                            _ => {
+                                ok = false;
+                                current = None;
+                            }
+                        }
+                        if !ok {
+                            break;
+                        }
+                    }
+                    // Landed: the spine items array (tagged — the tag
+                    // rides slot 0).
+                    let items_prev: Vec<AstNode> = match current {
+                        Some(AstNode::Array { pool_index, length }) => self
+                            .output_arena
+                            .get_array(pool_index as usize, length as usize)
+                            .into_iter()
+                            .skip(1)
+                            .collect(),
+                        _ => Vec::new(),
+                    };
+                    if ok && !items_prev.is_empty() {
+                        path_plan = Some(PathPlan {
+                            body: spine.body,
+                            items_prev,
+                            befores,
+                        });
+                        spine_kept = Some(spine);
+                    }
+                }
+            }
+        }
+
         // The repetition-spine body (root Repetition, optionally behind
         // one Named) — none only when the grammar has no spine. The
         // splice path parses its suffix; every parse records the root
@@ -909,34 +1006,166 @@ impl<'a> IncrementalParser<'a> {
             }
         }
 
-        let was_spliced = spliced.is_some();
-        let result = match spliced {
-            Some((tag_str, items)) => {
-                // Consume the parser FIRST so the arena borrow ends,
-                // then rebuild the root from grafted + new items.
-                self.cache = parser.into_cache();
-                self.spliced_parses += 1;
-                let (pool_idx, len) = self.output_arena.store_tagged_array(tag_str, &items);
-                let array = AstNode::Array {
-                    pool_index: pool_idx,
-                    length: len,
-                };
-                match root_name.as_deref() {
-                    Some(name) => {
-                        let (hp, hl) = self.output_arena.store_hash(&[(name, array)]);
-                        Ok(AstNode::Hash {
-                            pool_index: hp,
-                            length: hl,
-                        })
+        // The generalized splice (rs#542 slice 2b): the v1 root-splice
+        // did not engage, but the spine sits below the root. Probe-drain
+        // the outer list's bounds against the warm memo, split at the
+        // edit, replay the suffix items, parse the path's sibling tails
+        // fresh. Any mismatch yields None — the full-parse fallback,
+        // never speculative.
+        let mut path_data: Option<(usize, Vec<AstNode>, Vec<Vec<AstNode>>)> = None;
+        if spliced.is_none() {
+            if let (Some(plan), Some(spine)) = (path_plan.as_ref(), spine_kept.as_ref()) {
+                let body = plan.body;
+                let mut bounds: Vec<(usize, usize)> = Vec::new();
+                let mut scan = 0usize;
+                while scan < input.len() {
+                    if let Ok(r) = parser.try_atom_impl(body, scan, false) {
+                        if r.end_pos > scan {
+                            break;
+                        }
                     }
-                    None => Ok(array),
+                    scan += 1;
+                }
+                let mut cursor = scan;
+                while cursor < input.len() {
+                    match parser.try_atom_impl(body, cursor, false) {
+                        Ok(r) if r.end_pos > cursor => {
+                            bounds.push((cursor, r.end_pos));
+                            cursor = r.end_pos;
+                        }
+                        _ => break,
+                    }
+                }
+                // The probe and the previous tree must agree on the
+                // item count (the tree carries one item per iteration).
+                if !bounds.is_empty() && bounds.len() == plan.items_prev.len() {
+                    let k = bounds.iter().take_while(|(_, end)| *end < cutoff).count();
+                    let splice_pos = if k > 0 { bounds[k - 1].1 } else { bounds[0].0 };
+                    let mut suffix: Vec<AstNode> = Vec::new();
+                    let mut s_pos = splice_pos;
+                    while s_pos < input.len() {
+                        match parser.try_atom_impl(body, s_pos, false) {
+                            Ok(r) if r.end_pos > s_pos => {
+                                suffix.push(r.value.clone());
+                                s_pos = r.end_pos;
+                            }
+                            _ => break,
+                        }
+                    }
+                    // The path's sibling tails, innermost first.
+                    let mut tails: Vec<Vec<AstNode>> = Vec::new();
+                    let mut tail_cursor = s_pos;
+                    let mut tails_ok = true;
+                    for step in spine.path.iter().rev() {
+                        if let crate::portable::spine::SpineStep::Sequence {
+                            siblings_after, ..
+                        } = step
+                        {
+                            let mut vals = Vec::new();
+                            for &atom in siblings_after.iter() {
+                                match parser.try_atom_impl(atom, tail_cursor, false) {
+                                    Ok(r) => {
+                                        vals.push(r.value.clone());
+                                        tail_cursor = r.end_pos;
+                                    }
+                                    Err(_) => {
+                                        tails_ok = false;
+                                        break;
+                                    }
+                                }
+                            }
+                            tails.push(vals);
+                        }
+                        if !tails_ok {
+                            break;
+                        }
+                    }
+                    if tails_ok && tail_cursor == input.len() {
+                        path_data = Some((k, suffix, tails));
+                    }
                 }
             }
-            None => {
-                let r = parser.parse();
-                self.last_spine_trace = std::mem::take(&mut parser.spine_trace);
-                self.cache = parser.into_cache();
-                r
+        }
+
+        let was_spliced = spliced.is_some() || path_data.is_some();
+        let result = if let Some((k, suffix, tails)) = path_data {
+            // Consume the parser first so the arena borrow ends (the
+            // v1 splice's discipline), then rebuild walking the path
+            // in reverse.
+            let plan = path_plan.as_ref().expect("path data implies a plan");
+            let spine = spine_kept.as_ref().expect("path data implies a spine");
+            self.cache = parser.into_cache();
+            self.spliced_parses += 1;
+            let mut all: Vec<AstNode> = plan.items_prev.iter().take(k).cloned().collect();
+            all.extend(suffix);
+            let (pool, len) = self.output_arena.store_tagged_array(":repetition", &all);
+            let mut inner = AstNode::Array {
+                pool_index: pool,
+                length: len,
+            };
+            let seq_ordinals: Vec<usize> = spine
+                .path
+                .iter()
+                .enumerate()
+                .filter(|(_, s)| matches!(s, crate::portable::spine::SpineStep::Sequence { .. }))
+                .map(|(i, _)| i)
+                .collect();
+            let mut rev_seq = 0usize;
+            for step in spine.path.iter().rev() {
+                match step {
+                    crate::portable::spine::SpineStep::Sequence { .. } => {
+                        let before = &plan.befores[seq_ordinals[seq_ordinals.len() - 1 - rev_seq]];
+                        let after = &tails[rev_seq];
+                        rev_seq += 1;
+                        let mut children: Vec<AstNode> = before.to_vec();
+                        children.push(inner);
+                        children.extend(after.iter().cloned());
+                        let (p, l) = self.output_arena.store_array(&children);
+                        inner = AstNode::Array {
+                            pool_index: p,
+                            length: l,
+                        };
+                    }
+                    crate::portable::spine::SpineStep::Named { name } => {
+                        let (hp, hl) = self.output_arena.store_hash(&[(name, inner)]);
+                        inner = AstNode::Hash {
+                            pool_index: hp,
+                            length: hl,
+                        };
+                    }
+                    crate::portable::spine::SpineStep::Alternative { .. } => {}
+                }
+            }
+            Ok(inner)
+        } else {
+            match spliced {
+                Some((tag_str, items)) => {
+                    // Consume the parser FIRST so the arena borrow ends,
+                    // then rebuild the root from grafted + new items.
+                    self.cache = parser.into_cache();
+                    self.spliced_parses += 1;
+                    let (pool_idx, len) = self.output_arena.store_tagged_array(tag_str, &items);
+                    let array = AstNode::Array {
+                        pool_index: pool_idx,
+                        length: len,
+                    };
+                    match root_name.as_deref() {
+                        Some(name) => {
+                            let (hp, hl) = self.output_arena.store_hash(&[(name, array)]);
+                            Ok(AstNode::Hash {
+                                pool_index: hp,
+                                length: hl,
+                            })
+                        }
+                        None => Ok(array),
+                    }
+                }
+                None => {
+                    let r = parser.parse();
+                    self.last_spine_trace = std::mem::take(&mut parser.spine_trace);
+                    self.cache = parser.into_cache();
+                    r
+                }
             }
         };
         let post_parse = self.cache.len();
