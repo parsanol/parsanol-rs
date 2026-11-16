@@ -277,3 +277,17 @@ engagement results (rs#271: 5/5 spliced, sub-ms) plus the collapse
 analysis in rs#258 carry over. The second lever is per-step fixed
 cost (snapshot adoption + budget checks) — the incremental session's
 machinery currently eats what the memo saves.
+
+## Round 2026-11-16 (2): the reused-0 decoded (rs#542)
+
+Instrumented session on the doc3 keystroke trace: the v1 splice is
+ineligible (`rep=false` — json's root is not a repetition spine), and
+the memo-window reuse collapses because the retention cutoff drops
+every entry above each new edit while the suffix is never
+length-shift-reused (tree-sitter reuses BOTH sides; the accounting:
+step 1 kept 706, step 2 kept 0, all steps after kept 0). The gate
+path is filed as rs#542 with the full accounting; suffix key-shift
+(`pos' = pos + delta` above the edit) is the named lever and it
+composes with the existing spine splice. Identity held 400/400
+throughout the instrumented session; the engine is correct, the
+retention policy is the gap.
