@@ -97,3 +97,47 @@ fn singleton_classes_decode_to_ranges() {
         assert_eq!(first, vec![expected], "{pattern} first bytes");
     }
 }
+
+/// A single-byte choice inside a repetition (json's ws shape) merges to
+/// ONE charset — same bytes consumed, same span values, so it is sound
+/// at any depth (unlike ByteDispatch). The ws rule compiles with no
+/// Choice machinery and the merged grammar accepts exactly the same
+/// inputs.
+#[test]
+fn single_byte_choices_merge_to_charsets_inside_repetitions() {
+    let source = "grammar Shape version \"1.0.0\" edition 2 {
+      ws = *( %x20 / %x09 / %x0A / %x0D )
+      doc = ws \"a\" ws
+      entry main: doc
+    }";
+    let program = compile_program(source);
+    let mut charsets = 0;
+    let mut i = 0;
+    while let Some(instr) = program.get_instruction(i) {
+        if let Instruction::CharSet { .. } = instr {
+            charsets += 1;
+        }
+        i += 1;
+    }
+    assert_eq!(
+        charsets, 1,
+        "the ws single-byte choice must merge to exactly ONE charset (the loop's own Choice is iteration control, not the alternatives)"
+    );
+
+    // acceptance identical: the merged grammar still parses 'a' with
+    // mixed whitespace and rejects non-whitespace around it
+    let artifact_text = {
+        let envelope = envelope::compile_source(source).expect("grammar compiles");
+        serde_json::to_string(&envelope).expect("envelope serializes")
+    };
+    let artifact = parsanol::PargArtifact::from_json(&artifact_text).expect("artifact loads");
+    for (input, ok) in [("  a  ", true), ("\ta\n", true), ("ba", false), ("a", true)] {
+        let parsed = artifact.parse_shape("main", input).is_ok();
+        assert_eq!(
+            parsed,
+            ok,
+            "{input:?} must {}parse",
+            if ok { "" } else { "not " }
+        );
+    }
+}
