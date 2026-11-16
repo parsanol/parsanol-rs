@@ -46,6 +46,29 @@ fn count_error_bytes(root: tree_sitter::Node) -> (usize, Option<usize>) {
     (err_region.saturating_sub(recovered_inside), first_err)
 }
 
+fn named_node_offsets(node: tree_sitter::Node, out: &mut Vec<u32>) {
+    // Sorted start offsets of NAMED non-error nodes (the structure the
+    // recovery metric compares against the ground-truth value spans;
+    // anonymous tokens and ERROR/missing nodes are excluded).
+    let mut stack = vec![node];
+    while let Some(n) = stack.pop() {
+        if !n.is_error() && !n.is_missing() && n.is_named() {
+            out.push(n.start_byte() as u32);
+        }
+        let mut cursor = n.walk();
+        if cursor.goto_first_child() {
+            loop {
+                stack.push(cursor.node());
+                if !cursor.goto_next_sibling() {
+                    break;
+                }
+            }
+        }
+    }
+    out.sort_unstable();
+    out.dedup();
+}
+
 fn recovery_mode(corpus_dir: &str) {
     let corpus = std::path::Path::new(corpus_dir);
     let mut parser = tree_sitter::Parser::new();
@@ -70,11 +93,15 @@ fn recovery_mode(corpus_dir: &str) {
         }
         let (err_bytes, first_err) = count_error_bytes(root);
         let covered = input.len() - err_bytes.min(input.len());
+        let mut offsets = Vec::new();
+        named_node_offsets(root, &mut offsets);
+        let joined: Vec<String> = offsets.iter().map(|o| o.to_string()).collect();
         println!(
-            "{name} {} {} {} false",
+            "{name} {} {} {} false {}",
             input.len(),
             covered,
-            first_err.unwrap_or(0)
+            first_err.unwrap_or(0),
+            joined.join(",")
         );
     }
 }
