@@ -225,7 +225,7 @@ pub struct DenseCache {
     slots: Vec<i32>,
 
     /// Cache entries (stored contiguously for cache efficiency)
-    pub(crate) entries: Vec<CacheEntry>,
+    entries: Vec<CacheEntry>,
 
     /// Number of slots in the hash table
     capacity: usize,
