@@ -971,6 +971,16 @@ impl Compiler {
                 set.add(pattern.as_bytes()[0]);
                 Some(self.program.add_char_set(set))
             }
+            Atom::Alternative { atoms } => {
+                // A choice of bare distinct single-byte matches consumes
+                // the same run as one charset of the union (the strict
+                // extractor refuses wrapped atoms and overlapping
+                // bytes, so ordered-choice semantics are untouched) —
+                // the Span fast path applies with the union. This is
+                // json's ws shape: *( %x20 / %x09 / %x0A / %x0D ).
+                self.single_byte_choice_set(atoms)
+                    .map(|set| self.program.add_char_set(set))
+            }
             _ => None,
         }
     }
