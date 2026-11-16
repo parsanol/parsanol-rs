@@ -318,6 +318,13 @@ pub struct Compiler<'a> {
     /// uses (rs#334: this is what lets a mutually recursive grammar
     /// terminate byte-identically).
     atom_ids: BTreeMap<(String, Vec<u32>), usize>,
+    /// Re-entrant wire copies of the same compiler rule/path identity.
+    atom_aliases: Vec<(usize, usize)>,
+    /// Only empty-stack nullable queries are context-independent. Bounded by
+    /// the rule count; recursive cycle-guard behavior remains unchanged.
+    nullable_roots: std::sync::Mutex<BTreeMap<String, bool>>,
+    nullable_contexts: std::sync::Mutex<BTreeMap<(String, Vec<String>), bool>>,
+    nullable_recursive: std::sync::OnceLock<std::collections::BTreeSet<String>>,
     skip_wrap: Option<INode>,
     /// The memoized wrapper's emitted index: the Ruby wire serializes
     /// the (single, shared) skip wrapper object once — every
@@ -343,6 +350,7 @@ impl<'a> Compiler<'a> {
         atomic_rules: &[String],
         mode: Option<&str>,
         glue_rules: &[String],
+        diagnostics: bool,
     ) -> Result<Self, CompileError> {
         // Edition 2 is the only edition: the modern wrap is
         // unconditional, and a legacy mode spelling is rejected.
@@ -366,6 +374,10 @@ impl<'a> Compiler<'a> {
             building: Vec::new(),
             rule_indices: BTreeMap::new(),
             atom_ids: BTreeMap::new(),
+            atom_aliases: Vec::new(),
+            nullable_roots: std::sync::Mutex::new(BTreeMap::new()),
+            nullable_contexts: std::sync::Mutex::new(BTreeMap::new()),
+            nullable_recursive: std::sync::OnceLock::new(),
             skip_wrap: None,
             skip_wrap_index: None,
             order_warnings: Vec::new(),
@@ -385,13 +397,15 @@ impl<'a> Compiler<'a> {
         for name in &names {
             compiler.rule_tree(name)?;
         }
-        let errors = compiler.alternatives_errors();
-        if !errors.is_empty() {
-            return Err(CompileError {
-                message: errors.join("\n"),
-            });
+        if diagnostics {
+            let errors = compiler.alternatives_errors();
+            if !errors.is_empty() {
+                return Err(CompileError {
+                    message: errors.join("\n"),
+                });
+            }
+            compiler.order_warnings = compiler.alternatives_order_warnings();
         }
-        compiler.order_warnings = compiler.alternatives_order_warnings();
         Ok(compiler)
     }
 
@@ -1248,6 +1262,9 @@ impl<'a> Compiler<'a> {
     }
 
     fn set_rule(&mut self, name: &str, node: Node) {
+        self.nullable_roots.get_mut().unwrap().clear();
+        self.nullable_contexts.get_mut().unwrap().clear();
+        self.nullable_recursive.take();
         if let Some(slot) = self.rules.iter_mut().find(|(n, _)| n == name) {
             slot.1 = node;
         } else {
@@ -1312,6 +1329,72 @@ impl<'a> Compiler<'a> {
         self.node_first_epsp(node, &mut Vec::new())
     }
 
+    // Only nullable-dependency cycles make a result depend on the caller
+    // stack. Repetition/optional and negative predicates do not inspect their
+    // children in this analysis, so their syntax edges are deliberately absent.
+    fn nullable_recursive_rules(&self) -> &std::collections::BTreeSet<String> {
+        fn refs(node: &Node, names: &mut std::collections::BTreeSet<String>) {
+            match node.kind.as_str() {
+                "ref" => {
+                    if let Some(name) = &node.name {
+                        names.insert(name.clone());
+                    }
+                }
+                "seq" => {
+                    for child in node.items.as_deref().unwrap_or_default() {
+                        refs(child, names);
+                    }
+                }
+                "alt" => {
+                    for child in node.branches.as_deref().unwrap_or_default() {
+                        refs(child, names);
+                    }
+                }
+                "cap" => {
+                    if let Some(child) = node.child.as_deref() {
+                        refs(child, names);
+                    }
+                }
+                "pred" if node.behind != Some(true) && node.positive.unwrap_or(false) => {
+                    if let Some(child) = node.child.as_deref() {
+                        refs(child, names);
+                    }
+                }
+                _ => {}
+            }
+        }
+        self.nullable_recursive.get_or_init(|| {
+            let graph: BTreeMap<_, _> = self
+                .rules
+                .iter()
+                .map(|(name, node)| {
+                    let mut names = std::collections::BTreeSet::new();
+                    refs(node, &mut names);
+                    (name.clone(), names)
+                })
+                .collect();
+            graph
+                .keys()
+                .filter(|root| {
+                    let mut todo: Vec<_> = graph[*root].iter().cloned().collect();
+                    let mut seen = std::collections::BTreeSet::new();
+                    while let Some(next) = todo.pop() {
+                        if &next == *root {
+                            return true;
+                        }
+                        if seen.insert(next.clone()) {
+                            if let Some(children) = graph.get(&next) {
+                                todo.extend(children.iter().cloned());
+                            }
+                        }
+                    }
+                    false
+                })
+                .cloned()
+                .collect()
+        })
+    }
+
     fn node_first_epsp(&self, node: &Node, stack: &mut Vec<String>) -> bool {
         match node.kind.as_str() {
             "lit" => node.text.as_deref().unwrap_or_default().is_empty(),
@@ -1353,13 +1436,35 @@ impl<'a> Compiler<'a> {
                 if stack.contains(&name) {
                     return true; // ANY + EPS at the cycle guard
                 }
+                let cacheable =
+                    stack.is_empty() || !self.nullable_recursive_rules().contains(&name);
+                if cacheable {
+                    let cached = self.nullable_roots.lock().unwrap().get(&name).copied();
+                    if let Some(nullable) = cached {
+                        return nullable;
+                    }
+                }
+                // Recursive results depend on the active caller chain. Reuse
+                // only an identical context; never conflate cycle-guard results.
+                let context = (!cacheable).then(|| (name.clone(), stack.clone()));
+                if let Some(key) = context.as_ref() {
+                    let cached = self.nullable_contexts.lock().unwrap().get(key).copied();
+                    if let Some(nullable) = cached {
+                        return nullable;
+                    }
+                }
                 stack.push(name);
                 let epsp = self
                     .rules
                     .iter()
                     .find(|(n, _)| *n == stack[stack.len() - 1])
                     .is_some_and(|(_, rule)| self.node_first_epsp(rule, stack));
-                stack.pop();
+                let name = stack.pop().unwrap();
+                if cacheable {
+                    self.nullable_roots.lock().unwrap().insert(name, epsp);
+                } else if let Some(key) = context {
+                    self.nullable_contexts.lock().unwrap().insert(key, epsp);
+                }
                 epsp
             }
             _ => false,
@@ -1426,6 +1531,7 @@ impl<'a> Compiler<'a> {
         self.atoms.clear();
         self.rule_indices.clear();
         self.atom_ids.clear();
+        self.atom_aliases.clear();
         self.skip_wrap_index = None;
         let mut path = Vec::new();
         let root = self.walk(tree, owner, &mut path)?;
@@ -1434,6 +1540,24 @@ impl<'a> Compiler<'a> {
             root,
             no_cache: Vec::new(),
         })
+    }
+
+    /// Memo identities of this entry's exact source objects. Equal syntax in
+    /// different rules or body positions is deliberately not an alias.
+    pub(crate) fn legacy_rule_identity(&self, atom_count: usize) -> Vec<usize> {
+        fn root(parent: &[usize], mut id: usize) -> usize {
+            while parent[id] != id {
+                id = parent[id];
+            }
+            id
+        }
+        let mut parent: Vec<_> = (0..atom_count).collect();
+        for &(left, right) in &self.atom_aliases {
+            let left = root(&parent, left);
+            let right = root(&parent, right);
+            parent[left.max(right)] = left.min(right);
+        }
+        (0..atom_count).map(|id| root(&parent, id)).collect()
     }
 
     fn push(&mut self, atom: Atom) -> usize {
@@ -1469,7 +1593,11 @@ impl<'a> Compiler<'a> {
             return Ok(index);
         }
         let index = self.walk_new(node, owner, path, &key)?;
-        self.atom_ids.insert(key, index);
+        if let Some(previous) = self.atom_ids.insert(key, index) {
+            if previous != index {
+                self.atom_aliases.push((previous, index));
+            }
+        }
         Ok(index)
     }
 
@@ -2083,7 +2211,7 @@ pub fn compile_entry_mode_glue(
             message: format!("unknown entry {entry:?}"),
         })?;
 
-    let mut compiler = Compiler::new_mode(document, tables, atomic_rules, mode, glue_rules)?;
+    let mut compiler = Compiler::new_mode(document, tables, atomic_rules, mode, glue_rules, true)?;
     let tree = compiler.rule_tree(&rule)?;
     compiler.flatten(&tree, &rule)
 }
@@ -2139,7 +2267,20 @@ pub fn compiler_for_mode_glue<'a>(
     mode: Option<&str>,
     glue_rules: &[String],
 ) -> Result<Compiler<'a>, CompileError> {
-    Compiler::new_mode(document, tables, atomic_rules, mode, glue_rules)
+    Compiler::new_mode(document, tables, atomic_rules, mode, glue_rules, true)
+}
+
+/// Reconstruct identities for an already loaded artifact. Normal compilation
+/// still runs every diagnostic; this path must verify the emitted grammar
+/// against the artifact before using any identities.
+pub(crate) fn compiler_for_legacy_identity<'a>(
+    document: &'a Document,
+    tables: &'a Tables,
+    atomic_rules: &[String],
+    mode: Option<&str>,
+    glue_rules: &[String],
+) -> Result<Compiler<'a>, CompileError> {
+    Compiler::new_mode(document, tables, atomic_rules, mode, glue_rules, false)
 }
 
 #[cfg(test)]
@@ -2157,5 +2298,114 @@ mod whitespace_class_tests {
         assert!(!whitespace_class("[^ ]"));
         assert!(!whitespace_class("(?i:abc)"));
         assert!(!whitespace_class("[a-z]"));
+    }
+}
+
+#[cfg(test)]
+mod nullable_root_cache_tests {
+    use super::*;
+
+    #[test]
+    fn nullable_root_cache_is_invalidated_when_a_rule_changes() {
+        let source = r#"grammar NullableCache version "0.1.0" {
+            token = "a"
+            entry main: token
+        }"#;
+        let (parsed, mode, glue) =
+            crate::parg::frontend::parser::parse_grammar_mode_glue(source).unwrap();
+        let tables = Tables::default();
+        let mut compiler = compiler_for_mode_glue(
+            &parsed.document,
+            &tables,
+            &parsed.atomic_rules,
+            mode.as_deref(),
+            &glue,
+        )
+        .unwrap();
+        let reference = Node {
+            kind: "ref".into(),
+            name: Some("token".into()),
+            ..Node::default()
+        };
+        assert!(!compiler.node_nullable(&reference));
+        assert_eq!(
+            compiler.nullable_roots.lock().unwrap().get("token"),
+            Some(&false)
+        );
+        compiler.set_rule(
+            "token",
+            Node {
+                kind: "lit".into(),
+                text: Some(String::new()),
+                ..Node::default()
+            },
+        );
+        assert!(compiler.node_nullable(&reference));
+    }
+    #[test]
+    fn recursive_nullable_result_retains_its_caller_stack() {
+        let source = r#"grammar NullableContext version "0.1.0" {
+            a = "a"
+            b = "b"
+            entry main: a
+        }"#;
+        let (parsed, mode, glue) =
+            crate::parg::frontend::parser::parse_grammar_mode_glue(source).unwrap();
+        let tables = Tables::default();
+        let mut compiler = compiler_for_mode_glue(
+            &parsed.document,
+            &tables,
+            &parsed.atomic_rules,
+            mode.as_deref(),
+            &glue,
+        )
+        .unwrap();
+        let a = Node {
+            kind: "ref".into(),
+            name: Some("a".into()),
+            ..Node::default()
+        };
+        let b = Node {
+            kind: "ref".into(),
+            name: Some("b".into()),
+            ..Node::default()
+        };
+        compiler.set_rule("a", b);
+        compiler.set_rule(
+            "b",
+            Node {
+                kind: "seq".into(),
+                items: Some(vec![
+                    a.clone(),
+                    Node {
+                        kind: "lit".into(),
+                        text: Some("x".into()),
+                        ..Node::default()
+                    },
+                ]),
+                ..Node::default()
+            },
+        );
+        assert!(!compiler.node_nullable(&a));
+        assert!(compiler.node_first_epsp(&a, &mut vec!["b".into()]));
+        assert!(!compiler.node_nullable(&a));
+        assert_eq!(
+            compiler
+                .nullable_contexts
+                .lock()
+                .unwrap()
+                .get(&("a".into(), vec!["b".into()])),
+            Some(&true)
+        );
+        compiler.set_rule(
+            "a",
+            Node {
+                kind: "lit".into(),
+                text: Some("x".into()),
+                ..Node::default()
+            },
+        );
+        assert!(compiler.nullable_contexts.lock().unwrap().is_empty());
+        assert!(!compiler.node_first_epsp(&a, &mut vec!["b".into()]));
     }
 }

@@ -259,6 +259,7 @@ pub const SUPPORTED_BINDING_VERSION: i64 = 2;
 #[derive(Debug, Clone)]
 pub struct PargArtifact {
     envelope: Value,
+    legacy_rule_identities: std::sync::OnceLock<std::collections::BTreeMap<String, Vec<usize>>>,
 }
 
 /// The edition spellings this runtime loads: edition 2 (named trees +
@@ -304,6 +305,81 @@ fn collect_terminals(atoms: &[Value], terms: &mut Vec<String>) {
 }
 
 impl PargArtifact {
+    /// Recover only identities witnessed by the exact source compiler. The
+    /// wire graph stays untouched. Old/uncompilable sources or a different
+    /// emitter graph retain the original per-atom memo behavior.
+    fn legacy_rule_identity(&self, entry: &str) -> Option<&[usize]> {
+        self.legacy_rule_identities
+            .get_or_init(|| {
+                let mut identities = std::collections::BTreeMap::new();
+                let Some(source) = self.envelope.get("source").and_then(Value::as_str) else {
+                    return identities;
+                };
+                let Ok((mut parsed, mode, glue)) =
+                    frontend::parser::parse_grammar_mode_glue(source)
+                else {
+                    return identities;
+                };
+                if frontend::imports::merge_with_atomic(
+                    &mut parsed.document,
+                    &[],
+                    &mut parsed.atomic_rules,
+                )
+                .is_err()
+                {
+                    return identities;
+                }
+                // Some producer versions place entry declarations after the
+                // grammar block. Their verified envelope retains the roots even
+                // when this frontend version parses only the block itself.
+                if let Some(entries) = self.envelope.get("entries").and_then(Value::as_object) {
+                    for (name, entry) in entries {
+                        if !parsed.document.entries.iter().any(|(n, _)| n == name) {
+                            if let Some(root) = entry.get("root").and_then(Value::as_str) {
+                                parsed
+                                    .document
+                                    .entries
+                                    .push((name.clone(), root.to_owned()));
+                            }
+                        }
+                    }
+                }
+                let tables = frontend::compile::Tables::default();
+                let Ok(mut compiler) = frontend::compile::compiler_for_legacy_identity(
+                    &parsed.document,
+                    &tables,
+                    &parsed.atomic_rules,
+                    mode.as_deref(),
+                    &glue,
+                ) else {
+                    return identities;
+                };
+                for (name, rule) in &parsed.document.entries {
+                    let Ok(grammar) = compiler.compile_entry_grammar(rule) else {
+                        continue;
+                    };
+                    let Ok(wire) = serde_json::to_value(&grammar) else {
+                        continue;
+                    };
+                    if self
+                        .envelope
+                        .get("entries")
+                        .and_then(|v| v.get(name))
+                        .and_then(|v| v.get("grammar"))
+                        == Some(&wire)
+                    {
+                        identities.insert(
+                            name.clone(),
+                            compiler.legacy_rule_identity(grammar.atoms.len()),
+                        );
+                    }
+                }
+                identities
+            })
+            .get(entry)
+            .map(Vec::as_slice)
+    }
+
     /// Parse and verify an envelope from its JSON text. When the bake
     /// sealed the file (parsanol-ruby#443), the byte-level checksum is
     /// verified first: a zero-hole sha256 over the exact input text, one
@@ -339,7 +415,10 @@ impl PargArtifact {
              recompile the grammar with edition \"v2\" (named trees + spans)",
         ))?;
         verify_checksum(&envelope)?;
-        Ok(Self { envelope })
+        Ok(Self {
+            envelope,
+            legacy_rule_identities: std::sync::OnceLock::new(),
+        })
     }
 
     /// The language edition the artifact's trees carry (ruby#357):
@@ -737,5 +816,46 @@ mod float_tests {
         for (value, text) in cases {
             assert_eq!(&ruby_json_float(*value), *text, "value {value:?}");
         }
+    }
+}
+
+#[cfg(test)]
+mod legacy_identity_source_tests {
+    use super::*;
+
+    #[test]
+    fn identity_reconstruction_restores_trailing_entry_roots() {
+        let source = r#"grammar IdentityEntries version "0.1.0" {
+          tree = (t) as tree
+          t = (e ((o) as other)) / e / (e " " ((t) as expr))
+          e = (("a" "b") as s) / ([("a") as f] (("b c") as p)) / (("c") as c) / ("(" t ")")
+          o = "!"
+          entry main: tree
+        }"#;
+        let wire = frontend::envelope::compile_source(source).unwrap();
+        let mut artifact = PargArtifact::from_json(&wire.to_string()).unwrap();
+        // Model the producer's equivalent trailing-declaration source spelling.
+        artifact.envelope["source"] = Value::String(format!(
+            "{}\nentry main: tree\n",
+            source.replace("entry main: tree", "")
+        ));
+        let identity = artifact.legacy_rule_identity("main").unwrap();
+        let classes: std::collections::BTreeSet<_> = identity.iter().collect();
+        assert!(
+            classes.len() < identity.len(),
+            "mutual recursion must preserve duplicate identities"
+        );
+        let legacy = artifact
+            .parse_shape_with_compatibility(
+                "main",
+                "ab c",
+                crate::portable::parser::ParserCompatibility::Parslet,
+            )
+            .unwrap();
+        assert!(legacy["tree"].get("s").is_some());
+        assert!(legacy["tree"].get("expr").is_some());
+        let strict = artifact.parse_shape("main", "ab c").unwrap();
+        assert!(strict["tree"].get("f").is_some());
+        assert!(strict["tree"].get("p").is_some());
     }
 }

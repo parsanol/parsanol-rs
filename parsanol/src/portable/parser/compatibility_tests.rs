@@ -931,6 +931,18 @@ fn legacy_memo_replays_across_copies_of_one_rule() {
     parser
         .set_compatibility(ParserCompatibility::Parslet)
         .unwrap();
+    // A bare graph does not establish whether equal rules share identity.
+    assert_eq!(parsed_keys(&mut parser).unwrap(), vec!["f", "p"]);
+    let mut arena = AstArena::new();
+    let mut parser = PortableParser::new(&grammar, "ab c", &mut arena);
+    parser
+        .set_compatibility(ParserCompatibility::Parslet)
+        .unwrap();
+    let mut identity: Vec<_> = (0..grammar.atoms.len()).collect();
+    for id in [bare, lead, tail] {
+        identity[id] = first;
+    }
+    parser.set_legacy_rule_identity(&identity);
     assert_eq!(parsed_keys(&mut parser).unwrap(), vec!["expr", "s"]);
     assert_eq!(parser.legacy_memo_identity[bare], first);
     assert_eq!(parser.legacy_memo_identity[tail], first);
@@ -938,4 +950,45 @@ fn legacy_memo_replays_across_copies_of_one_rule() {
     let mut strict_arena = AstArena::new();
     let mut strict = PortableParser::new(&grammar, "ab c", &mut strict_arena);
     assert_eq!(parsed_keys(&mut strict).unwrap(), vec!["f", "p"]);
+}
+
+#[test]
+fn parg_legacy_memo_uses_exact_source_identity() {
+    use crate::parg::{frontend::envelope::compile_source, PargArtifact};
+    let source = r#"grammar MemoReplay version "0.1.0" {
+      tree = (t) as tree
+      t = (e ((o) as other)) / e / (e " " ((t) as expr))
+      e = (("a" "b") as s) / ([("a") as f] (("b c") as p)) / (("c") as c)
+      o = "!"
+      entry main: tree
+    }"#;
+    let wire = compile_source(source).unwrap();
+    let artifact = PargArtifact::from_json(&wire.to_string()).unwrap();
+    let legacy = artifact
+        .parse_shape_with_compatibility("main", "ab c", ParserCompatibility::Parslet)
+        .unwrap();
+    let tree = legacy["tree"].as_object().unwrap();
+    assert!(tree.contains_key("s") && tree.contains_key("expr"));
+    let strict = artifact.parse_shape("main", "ab c").unwrap();
+    let tree = strict["tree"].as_object().unwrap();
+    assert!(tree.contains_key("f") && tree.contains_key("p"));
+}
+
+#[test]
+fn parg_legacy_memo_does_not_merge_distinct_equal_rules() {
+    use crate::parg::{frontend::envelope::compile_source, PargArtifact};
+    let source = r#"grammar DistinctRules version "0.1.0" {
+      tree = (t) as tree
+      t = (e "!") / other_e
+      e = (("a" "b") as s) / ([("a") as f] (("b c") as p))
+      other_e = (("a" "b") as s) / ([("a") as f] (("b c") as p))
+      entry main: tree
+    }"#;
+    let wire = compile_source(source).unwrap();
+    let artifact = PargArtifact::from_json(&wire.to_string()).unwrap();
+    let parsed = artifact
+        .parse_shape_with_compatibility("main", "ab c", ParserCompatibility::Parslet)
+        .unwrap();
+    let tree = parsed["tree"].as_object().unwrap();
+    assert!(tree.contains_key("f") && tree.contains_key("p"));
 }

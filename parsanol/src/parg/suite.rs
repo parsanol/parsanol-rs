@@ -282,6 +282,11 @@ impl PargArtifact {
         parser
             .set_compatibility(compatibility)
             .map_err(|err| PargError::ParseFailed(err.to_string()))?;
+        if compatibility == crate::portable::parser::ParserCompatibility::Parslet {
+            if let Some(identity) = self.legacy_rule_identity(entry) {
+                parser.set_legacy_rule_identity(identity);
+            }
+        }
         let raw = parser.parse().map_err(|err| {
             if err.is_abort() {
                 // Resource and runtime aborts are not syntax expectations:
