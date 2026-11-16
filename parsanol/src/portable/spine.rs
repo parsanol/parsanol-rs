@@ -95,6 +95,7 @@ fn char_matcher_body(grammar: &Grammar, idx: usize, seen: &mut HashSet<usize>) -
     }
 }
 
+#[allow(dead_code)] // read by discover_spine (suite consumes the body today)
 fn substantial(grammar: &Grammar, body: usize) -> bool {
     anchors_iteration(grammar, body, &mut HashSet::new())
         && !char_matcher_body(grammar, body, &mut HashSet::new())
@@ -106,6 +107,7 @@ fn substantial(grammar: &Grammar, body: usize) -> bool {
 /// separators). The path records how the root reaches the spine; an
 /// alternative on the path is recorded as a branch index the splice
 /// confirms against the previous tree.
+#[allow(dead_code)] // the suite consumes the body; the splice takes the path next
 pub(crate) fn discover_spine(grammar: &Grammar) -> Option<Spine> {
     let mut visited = HashSet::new();
     let mut queue = VecDeque::new();
@@ -167,14 +169,9 @@ pub(crate) fn discover_spine(grammar: &Grammar) -> Option<Spine> {
     // the came[] chain back to the root, building the path forward.
     let mut chain: Vec<(usize, usize)> = Vec::new(); // (child, pos_in_parent)
     let mut cursor = rep_idx;
-    loop {
-        match came.get(&cursor) {
-            Some(&(parent, pos)) => {
-                chain.push((cursor, pos));
-                cursor = parent;
-            }
-            None => break, // the root
-        }
+    while let Some(&(parent, pos)) = came.get(&cursor) {
+        chain.push((cursor, pos));
+        cursor = parent;
     }
     chain.reverse();
 
