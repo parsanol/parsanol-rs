@@ -15,7 +15,7 @@ decomposition of everything left on parsanol performance:
 | 7 | Dense rule-call memo for the VM | follow-up of the phase-2 wiring | measured negative; reverted (see item) |
 | 8 | Incremental latency benchmark | follow-up of 4 | SHIPPED (this round) |
 | 9 | Prefix-tree reuse | the measured ceiling of 4/8 | RECEIPT-ELEVATED (rs#528: reused 0/200 on JSON; the named fix) |
-| 10 | Success-path diagnostics overhead | rs#533 receipt (VM tracks every failed alternative) | this campaign |
+| 10 | Success-path diagnostics overhead | rs#533 receipt (VM tracks every failed alternative) | SHIPPED (VM 6.2x) |
 | 11 | Determinism dispatch: Switch tables + Scan runs | rs#533 receipt (Lark 3.1x ahead = strategy tax) | this campaign |
 | 12 | Recognition/construction split + pooled tree writes | rs#533 receipt | this campaign |
 | 13 | Deterministic-subset codegen (LR tables / native SM) | item 3's codegen line; the tree-sitter endgame | specced |
