@@ -52,13 +52,17 @@ jobs:
         with:
           node-version: '24'
 
-      - name: Exercise explicit selector in a real browser
+      - name: Pack runtime and exercise Node and real browser
         shell: bash
+        env:
+          SOURCE_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           bindgen=$(python3 tools/fetch-wasm-bindgen.py --lockfile Cargo.lock --output "$RUNNER_TEMP/wasm-bindgen")
           "$bindgen" target/wasm32-unknown-unknown/release/parsanol.wasm --target web --out-dir "$RUNNER_TEMP/parsanol-web"
-          node tools/check-wasm-node.mjs "$RUNNER_TEMP/parsanol-web"
-          python3 tools/check-wasm-compatibility.py --web-dir "$RUNNER_TEMP/parsanol-web" --evidence-dir "$RUNNER_TEMP/wasm-compatibility-evidence"
+          python3 tools/package-wasm-ci.py --web-dir "$RUNNER_TEMP/parsanol-web" --output-dir "$RUNNER_TEMP/parsanol-wasm-runtime" --source-head "$SOURCE_HEAD_SHA" --bindgen "$bindgen"
+          mkdir -p "$RUNNER_TEMP/wasm-compatibility-evidence"
+          node tools/check-wasm-node.mjs "$RUNNER_TEMP/parsanol-wasm-runtime/package" | tee "$RUNNER_TEMP/wasm-compatibility-evidence/node.json"
+          python3 tools/check-wasm-compatibility.py --web-dir "$RUNNER_TEMP/parsanol-wasm-runtime/package" --evidence-dir "$RUNNER_TEMP/wasm-compatibility-evidence"
 
       - name: Upload browser compatibility evidence
         if: always()
@@ -76,3 +80,10 @@ jobs:
 
       - name: Run artifact and C ABI compatibility tests
         run: cargo test -p parsanol --no-default-features --test parg_compatibility
+
+      - name: Upload tested WASM runtime
+        uses: actions/upload-artifact@v7
+        with:
+          name: parsanol-wasm-runtime
+          path: ${{ runner.temp }}/parsanol-wasm-runtime
+          if-no-files-found: error

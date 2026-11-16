@@ -39,6 +39,20 @@ pub enum ParserCompatibility {
     Parslet,
 }
 
+/// Which failed applications contribute to the reported diagnostic.
+/// This affects reporting only, never ordered choices or memo outcomes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum FailureReporter {
+    /// Preserve the existing diagnostic policy: causal trees in Parslet mode
+    /// and global terminal failures in Strict mode.
+    #[default]
+    Default,
+    /// Retain reporter-visible failures from speculative applications, even
+    /// when their enclosing alternative, optional, or predicate succeeds.
+    /// Mirrors the explicit Ruby Deepest reporter's refusal-position policy.
+    Deepest,
+}
+
 /// The failure-diagnostics storage policy (rs#498 v2 surface).
 ///
 /// Legacy keeps the ordered `Arc` buffers live during the parse and

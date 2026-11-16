@@ -882,3 +882,206 @@ fn successful_dynamic_fragments_follow_the_selected_diagnostic_policy() {
         assert_eq!(parser.failure_diagnostics().unwrap().0, expected);
     }
 }
+
+/// One copy of `e = ("ab") as s / ("a") as f ("b c") as p / ("c") as c`,
+/// with fresh atoms: a lowered PARG graph emits such a copy for each
+/// reference to a recursive rule.
+fn copied_rule(grammar: &mut Grammar) -> usize {
+    let ab = literal(grammar, "ab");
+    let s = named(grammar, ab, "s");
+    let a = literal(grammar, "a");
+    let f = named(grammar, a, "f");
+    let rest = literal(grammar, "b c");
+    let p = named(grammar, rest, "p");
+    let split = grammar.add_atom(Atom::Sequence { atoms: vec![f, p] });
+    let c = literal(grammar, "c");
+    let c = named(grammar, c, "c");
+    let body = grammar.add_atom(Atom::Alternative {
+        atoms: vec![s, split, c],
+    });
+    grammar.add_atom(Atom::Entity { atom: body })
+}
+
+#[test]
+fn legacy_memo_replays_across_copies_of_one_rule() {
+    // t = e ("!") as other / e / e " " (e) as expr, every `e` its own copy.
+    // Parslet replays the prefix result of `e` ("ab") at the second
+    // reference, so the bare `e` fails its consume_all check and the third
+    // branch wins; recomputing the copy would instead take `f p`.
+    let mut grammar = Grammar::new();
+    let first = copied_rule(&mut grammar);
+    let bang = literal(&mut grammar, "!");
+    let other = named(&mut grammar, bang, "other");
+    let shadowing = grammar.add_atom(Atom::Sequence {
+        atoms: vec![first, other],
+    });
+    let bare = copied_rule(&mut grammar);
+    let lead = copied_rule(&mut grammar);
+    let space = literal(&mut grammar, " ");
+    let tail = copied_rule(&mut grammar);
+    let expr = named(&mut grammar, tail, "expr");
+    let spaced = grammar.add_atom(Atom::Sequence {
+        atoms: vec![lead, space, expr],
+    });
+    grammar.root = grammar.add_atom(Atom::Alternative {
+        atoms: vec![shadowing, bare, spaced],
+    });
+    let mut arena = AstArena::new();
+    let mut parser = PortableParser::new(&grammar, "ab c", &mut arena);
+    parser
+        .set_compatibility(ParserCompatibility::Parslet)
+        .unwrap();
+    // A bare graph does not establish whether equal rules share identity.
+    assert_eq!(parsed_keys(&mut parser).unwrap(), vec!["f", "p"]);
+    let mut arena = AstArena::new();
+    let mut parser = PortableParser::new(&grammar, "ab c", &mut arena);
+    parser
+        .set_compatibility(ParserCompatibility::Parslet)
+        .unwrap();
+    let mut identity: Vec<_> = (0..grammar.atoms.len()).collect();
+    for id in [bare, lead, tail] {
+        identity[id] = first;
+    }
+    parser.set_legacy_rule_identity(&identity);
+    assert_eq!(parsed_keys(&mut parser).unwrap(), vec!["expr", "s"]);
+    assert_eq!(parser.legacy_memo_identity[bare], first);
+    assert_eq!(parser.legacy_memo_identity[tail], first);
+
+    let mut strict_arena = AstArena::new();
+    let mut strict = PortableParser::new(&grammar, "ab c", &mut strict_arena);
+    assert_eq!(parsed_keys(&mut strict).unwrap(), vec!["f", "p"]);
+}
+
+#[test]
+fn parg_legacy_memo_uses_exact_source_identity() {
+    use crate::parg::{frontend::envelope::compile_source, PargArtifact};
+    let source = r#"grammar MemoReplay version "0.1.0" {
+      tree = (t) as tree
+      t = (e ((o) as other)) / e / (e " " ((t) as expr))
+      e = (("a" "b") as s) / ([("a") as f] (("b c") as p)) / (("c") as c)
+      o = "!"
+      entry main: tree
+    }"#;
+    let wire = compile_source(source).unwrap();
+    let artifact = PargArtifact::from_json(&wire.to_string()).unwrap();
+    let legacy = artifact
+        .parse_shape_with_compatibility("main", "ab c", ParserCompatibility::Parslet)
+        .unwrap();
+    let tree = legacy["tree"].as_object().unwrap();
+    assert!(tree.contains_key("s") && tree.contains_key("expr"));
+    let strict = artifact.parse_shape("main", "ab c").unwrap();
+    let tree = strict["tree"].as_object().unwrap();
+    assert!(tree.contains_key("f") && tree.contains_key("p"));
+}
+
+#[test]
+fn parg_legacy_memo_does_not_merge_distinct_equal_rules() {
+    use crate::parg::{frontend::envelope::compile_source, PargArtifact};
+    let source = r#"grammar DistinctRules version "0.1.0" {
+      tree = (t) as tree
+      t = (e "!") / other_e
+      e = (("a" "b") as s) / ([("a") as f] (("b c") as p))
+      other_e = (("a" "b") as s) / ([("a") as f] (("b c") as p))
+      entry main: tree
+    }"#;
+    let wire = compile_source(source).unwrap();
+    let artifact = PargArtifact::from_json(&wire.to_string()).unwrap();
+    let parsed = artifact
+        .parse_shape_with_compatibility("main", "ab c", ParserCompatibility::Parslet)
+        .unwrap();
+    let tree = parsed["tree"].as_object().unwrap();
+    assert!(tree.contains_key("f") && tree.contains_key("p"));
+}
+
+#[test]
+fn explicit_deepest_reporter_retains_speculative_causes_without_changing_memo() {
+    // Measured against Ruby 1.3.131 Deepest for all three constructs and both
+    // byte widths: speculative 'c' is retained at byte 2/3, versus the default
+    // causal reporter's actual '!' at byte 1/2.
+    for prefix in ["a", "α"] {
+        for kind in ["negative", "optional", "alternative"] {
+            for storage in [DiagnosticsPolicy::Legacy, DiagnosticsPolicy::Pending] {
+                let mut grammar = Grammar::new();
+                let ab = literal(&mut grammar, &format!("{prefix}b"));
+                let c = literal(&mut grammar, "c");
+                let inspected = grammar.add_atom(Atom::Sequence { atoms: vec![ab, c] });
+                let a = literal(&mut grammar, prefix);
+                let speculative = match kind {
+                    "negative" => grammar.add_atom(Atom::Lookahead {
+                        atom: inspected,
+                        positive: false,
+                    }),
+                    "optional" => grammar.add_atom(Atom::Repetition {
+                        atom: inspected,
+                        min: 0,
+                        max: Some(1),
+                        tag: RepetitionTag::Maybe,
+                    }),
+                    _ => grammar.add_atom(Atom::Alternative {
+                        atoms: vec![inspected, a],
+                    }),
+                };
+                let bang = literal(&mut grammar, "!");
+                let mut atoms = vec![speculative];
+                if kind != "alternative" {
+                    atoms.push(a);
+                }
+                atoms.push(bang);
+                grammar.root = grammar.add_atom(Atom::Sequence { atoms });
+                let input = format!("{prefix}b?");
+                let mut arena = AstArena::new();
+                let mut parser = PortableParser::new(&grammar, &input, &mut arena);
+                parser
+                    .set_compatibility(ParserCompatibility::Parslet)
+                    .unwrap();
+                parser.set_diagnostics_policy(storage).unwrap();
+                assert!(parser.parse().is_err());
+                assert_eq!(parser.failure_wire().unwrap().0, prefix.len());
+                parser.set_failure_reporter(FailureReporter::Deepest);
+                assert!(parser.legacy_cache.is_empty());
+                for _ in 0..2 {
+                    assert!(
+                        matches!(parser.parse(), Err(ParseError::Failed { position }) if position == prefix.len() + 1)
+                    );
+                    assert_eq!(parser.failure_wire().unwrap().0, prefix.len() + 1);
+                    assert!(parser.failure_wire().unwrap().1.contains(&"'c'".to_owned()));
+                    assert!(parser.legacy_cache.contains_key(&(c, prefix.len() + 1)));
+                }
+                parser.set_failure_reporter(FailureReporter::Default);
+                assert!(parser.parse().is_err());
+                assert_eq!(parser.failure_wire().unwrap().0, prefix.len());
+            }
+        }
+    }
+}
+
+#[test]
+fn artifact_deepest_reporter_is_explicit_and_preserves_accepted_tree() {
+    use crate::parg::{frontend::envelope::compile_source, PargArtifact, PargError};
+    let source = r#"grammar ExplicitReporter version "0.1.0" {
+      tree = ([("ab" "c")] "a" "!") as tree
+      entry main: tree
+    }"#;
+    let wire = compile_source(source).unwrap();
+    let artifact = PargArtifact::from_json(&wire.to_string()).unwrap();
+    let policy = ParserCompatibility::Parslet;
+    assert!(matches!(
+        artifact.parse_shape_with_compatibility("main", "ab?", policy),
+        Err(PargError::ParseWire { offset: 1, .. })
+    ));
+    assert!(matches!(
+        artifact.parse_shape_with_reporter("main", "ab?", policy, FailureReporter::Deepest),
+        Err(PargError::ParseWire { offset: 2, .. })
+    ));
+    for policy in [ParserCompatibility::Strict, ParserCompatibility::Parslet] {
+        let accepted = artifact
+            .parse_shape_with_compatibility("main", "a!", policy)
+            .unwrap();
+        assert_eq!(
+            artifact
+                .parse_shape_with_reporter("main", "a!", policy, FailureReporter::Deepest)
+                .unwrap(),
+            accepted
+        );
+    }
+}

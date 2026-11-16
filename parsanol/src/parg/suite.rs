@@ -268,14 +268,33 @@ impl PargArtifact {
         input: &str,
         compatibility: crate::portable::parser::ParserCompatibility,
     ) -> Result<Value, PargError> {
-        with_parser_stack(|| self.parse_shape_inner(entry, input, compatibility))
+        self.parse_shape_with_reporter(
+            entry,
+            input,
+            compatibility,
+            crate::portable::parser::FailureReporter::Default,
+        )
+    }
+    /// Parse with an explicit diagnostic reporter. Deepest retains failures
+    /// from successful speculative applications, matching an explicit Ruby
+    /// Deepest reporting pass. Acceptance and memo semantics are unchanged.
+    pub fn parse_shape_with_reporter(
+        &self,
+        entry: &str,
+        input: &str,
+        compatibility: crate::portable::parser::ParserCompatibility,
+        reporter: crate::portable::parser::FailureReporter,
+    ) -> Result<Value, PargError> {
+        with_parser_stack(|| self.parse_shape_inner(entry, input, compatibility, reporter))
             .map_err(PargError::ParseFailed)?
     }
+
     fn parse_shape_inner(
         &self,
         entry: &str,
         input: &str,
         compatibility: crate::portable::parser::ParserCompatibility,
+        reporter: crate::portable::parser::FailureReporter,
     ) -> Result<Value, PargError> {
         let decoded = self.decoded_entry(entry)?;
         // The shaped tree can dwarf the input (large grammars bind few
@@ -289,6 +308,12 @@ impl PargArtifact {
         parser
             .set_compatibility(compatibility)
             .map_err(|err| PargError::ParseFailed(err.to_string()))?;
+        parser.set_failure_reporter(reporter);
+        if compatibility == crate::portable::parser::ParserCompatibility::Parslet {
+            if let Some(identity) = self.legacy_rule_identity(entry) {
+                parser.set_legacy_rule_identity(identity);
+            }
+        }
         let raw = parser.parse().map_err(|err| {
             if err.is_abort() {
                 // Resource and runtime aborts are not syntax expectations:
