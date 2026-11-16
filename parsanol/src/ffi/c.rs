@@ -814,8 +814,28 @@ pub unsafe extern "C" fn parsanol_parg_parse_with_compatibility(
     input: *const c_char,
     compatibility: u32,
 ) -> *mut c_char {
+    parsanol_parg_parse_with_reporter(artifact_json, entry, input, compatibility, 0)
+}
+
+/// Parse with explicit compatibility (0 = Strict, 1 = Parslet) and failure
+/// reporter (0 = existing default, 1 = Deepest). Deepest retains speculative
+/// reporter-visible failures without changing acceptance or memo ordering.
+/// Ownership, envelope shape and error handling match
+/// `parsanol_parg_parse_with_compatibility`; unknown values return NULL.
+///
+/// # Safety
+/// Artifact, entry and input must be non-NULL valid UTF-8 C strings.
+/// Free a non-NULL result exactly once with `parsanol_parg_free`.
+#[no_mangle]
+pub unsafe extern "C" fn parsanol_parg_parse_with_reporter(
+    artifact_json: *const c_char,
+    entry: *const c_char,
+    input: *const c_char,
+    compatibility: u32,
+    reporter: u32,
+) -> *mut c_char {
     let result = (|| -> Result<serde_json::Value, String> {
-        use crate::portable::parser::ParserCompatibility;
+        use crate::portable::parser::{FailureReporter, ParserCompatibility};
         if artifact_json.is_null() || entry.is_null() || input.is_null() {
             return Err("artifact, entry and input must be non-NULL".into());
         }
@@ -824,13 +844,18 @@ pub unsafe extern "C" fn parsanol_parg_parse_with_compatibility(
             1 => ParserCompatibility::Parslet,
             _ => return Err("unknown parsing compatibility policy".into()),
         };
+        let reporter = match reporter {
+            0 => FailureReporter::Default,
+            1 => FailureReporter::Deepest,
+            _ => return Err("unknown failure reporter".into()),
+        };
         let text = CStr::from_ptr(artifact_json)
             .to_str()
             .map_err(|e| e.to_string())?;
         let entry = CStr::from_ptr(entry).to_str().map_err(|e| e.to_string())?;
         let input = CStr::from_ptr(input).to_str().map_err(|e| e.to_string())?;
         let artifact = crate::parg::PargArtifact::from_json(text).map_err(|e| e.to_string())?;
-        match artifact.parse_shape_with_compatibility(entry, input, policy) {
+        match artifact.parse_shape_with_reporter(entry, input, policy, reporter) {
             Ok(shape) => Ok(serde_json::json!({"ok": true, "shape": shape})),
             Err(crate::parg::PargError::ParseWire { offset, ranked, .. }) => {
                 Ok(serde_json::json!({"ok": false, "error": {"offset": offset, "ranked": ranked}}))

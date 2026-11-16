@@ -26,8 +26,8 @@ mod stack_tests;
 mod tests;
 
 pub use config::{
-    ParserCompatibility, ParserConfig, DEFAULT_MAX_CALL_DEPTH, DEFAULT_MAX_INPUT_SIZE,
-    DEFAULT_MAX_RECURSION_DEPTH,
+    FailureReporter, ParserCompatibility, ParserConfig, DEFAULT_MAX_CALL_DEPTH,
+    DEFAULT_MAX_INPUT_SIZE, DEFAULT_MAX_RECURSION_DEPTH,
 };
 pub use context::ParseContext;
 pub use governor::ResourceGovernor;
@@ -255,6 +255,47 @@ struct LegacyFailure {
 }
 
 impl LegacyFailure {
+    /// Record one terminal failure: deepest position with its labels plus the
+    /// bounded ranked list, with the same ordering as the global surface.
+    fn note(&mut self, pos: usize, label: &str) {
+        if !self.present || pos > self.position {
+            self.present = true;
+            self.position = pos;
+            match std::sync::Arc::get_mut(&mut self.labels) {
+                Some(labels) => PortableParser::replace_with_label(labels, label),
+                None => self.labels = std::sync::Arc::new(vec![label.to_owned()]),
+            }
+        } else if pos == self.position
+            && !self
+                .labels
+                .iter()
+                .any(|l| PortableParser::same_label(l, label))
+        {
+            std::sync::Arc::make_mut(&mut self.labels).push(label.to_owned());
+        }
+        let ranks = std::sync::Arc::make_mut(&mut self.ranks);
+        if ranks.len() >= MAX_RANKED_FAILURES && ranks.last().is_some_and(|(p, _)| *p > pos) {
+            return;
+        }
+        match ranks.iter_mut().find(|(p, _)| *p == pos) {
+            Some((_, labels)) => {
+                if !labels.iter().any(|l| PortableParser::same_label(l, label)) {
+                    labels.push(label.to_owned());
+                }
+            }
+            None => {
+                let mut labels = if ranks.len() >= MAX_RANKED_FAILURES {
+                    ranks.pop().map(|(_, l)| l).unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
+                PortableParser::replace_with_label(&mut labels, label);
+                let at = ranks.partition_point(|(p, _)| *p > pos);
+                ranks.insert(at, (pos, labels));
+            }
+        }
+    }
+
     fn memory_usage(&self) -> usize {
         self.labels.capacity() * std::mem::size_of::<String>()
             + self.labels.iter().map(String::capacity).sum::<usize>()
@@ -334,6 +375,11 @@ pub struct PortableParser<'a> {
     cache: DenseCache,
     /// Explicit legacy policy; strict remains the default.
     compatibility: ParserCompatibility,
+    failure_reporter: FailureReporter,
+    // Reporter state belongs to the whole reporting pass, independently of
+    // causal application frames and raw memo outcomes. Ruby Deepest#succ is
+    // a no-op: successful speculative applications do not rewind this state.
+    reporter_failure: LegacyFailure,
     /// Explicit executable-grammar policy; public Atom shape stays unchanged.
     ascii_state_match_atoms: Vec<bool>,
     /// Eager legacy memo retained for this parser's lifetime. Recycling a
@@ -606,6 +652,8 @@ impl<'a> PortableParser<'a> {
             arena,
             cache,
             compatibility: ParserCompatibility::Strict,
+            failure_reporter: FailureReporter::Default,
+            reporter_failure: LegacyFailure::default(),
             ascii_state_match_atoms: Vec::new(),
             legacy_cache: std::collections::HashMap::new(),
             legacy_memo_identity: Vec::new(),
@@ -670,6 +718,8 @@ impl<'a> PortableParser<'a> {
             arena,
             cache,
             compatibility: ParserCompatibility::Strict,
+            failure_reporter: FailureReporter::Default,
+            reporter_failure: LegacyFailure::default(),
             ascii_state_match_atoms: Vec::new(),
             legacy_cache: std::collections::HashMap::new(),
             legacy_memo_identity: Vec::new(),
@@ -727,6 +777,21 @@ impl<'a> PortableParser<'a> {
         Ok(())
     }
 
+    /// Select an explicit failure reporter before parsing. Changing it clears
+    /// warmed memo outcomes and diagnostics, just like changing compatibility.
+    /// The default reporter and Strict parsing remain unchanged.
+    pub fn set_failure_reporter(&mut self, reporter: FailureReporter) {
+        if self.failure_reporter != reporter {
+            self.failure_reporter = reporter;
+            self.reset_policy_state(self.compatibility);
+        }
+    }
+
+    /// The explicitly selected failure reporter.
+    pub fn failure_reporter(&self) -> FailureReporter {
+        self.failure_reporter
+    }
+
     fn reset_policy_state(&mut self, compatibility: ParserCompatibility) {
         self.cache.clear();
         self.legacy_cache.clear();
@@ -738,6 +803,7 @@ impl<'a> PortableParser<'a> {
         self.has_failure = false;
         self.expected_labels = self.empty_legacy_failure.labels.clone();
         self.ranked_failures = self.empty_legacy_failure.ranks.clone();
+        self.reporter_failure = LegacyFailure::default();
         self.max_end_pos = 0;
         self.partial_stash = None;
         self.spine_trace.clear();
@@ -838,7 +904,10 @@ impl<'a> PortableParser<'a> {
     /// Get memory usage
     #[inline]
     pub fn memory_usage(&self) -> usize {
-        self.arena.memory_usage() + self.cache.memory_usage() + self.legacy_cache_memory_usage()
+        self.arena.memory_usage()
+            + self.cache.memory_usage()
+            + self.legacy_cache_memory_usage()
+            + self.reporter_failure.memory_usage()
     }
 
     /// Cache-only memory usage. The default dense tier is hard-bounded
@@ -940,10 +1009,12 @@ impl<'a> PortableParser<'a> {
     fn check_resources(&mut self) -> Result<(), ParseError> {
         let (arena, cache, legacy) = (&self.arena, &self.cache, &self.legacy_cache);
         let legacy_bytes = self.legacy_diagnostic_bytes;
+        let reporter_bytes = self.reporter_failure.memory_usage();
         self.governor.check_resources_lazy(|| {
             arena.memory_usage()
                 + cache.memory_usage()
                 + Self::legacy_cache_bytes(legacy, legacy_bytes)
+                + reporter_bytes
         })
     }
 
@@ -999,7 +1070,9 @@ impl<'a> PortableParser<'a> {
             self.grammar.root
         );
 
-        match self.try_atom_impl(self.grammar.root, 0, true) {
+        let outcome = self.try_atom_impl(self.grammar.root, 0, true);
+        self.sync_failure_surface();
+        match outcome {
             Ok(result) => {
                 if result.end_pos == self.input.len() {
                     log_debug!("Parse successful");
@@ -1030,8 +1103,11 @@ impl<'a> PortableParser<'a> {
     pub fn parse_with_end_pos(&mut self) -> Result<ParseResult, ParseError> {
         self.check_input_size()?;
         self.start_timeout_timer();
-        self.try_atom_impl(self.grammar.root, 0, false)
-            .map(Into::into)
+        let outcome = self
+            .try_atom_impl(self.grammar.root, 0, false)
+            .map(Into::into);
+        self.sync_failure_surface();
+        outcome
     }
 
     /// Parse with custom config
@@ -1545,6 +1621,19 @@ impl<'a> PortableParser<'a> {
         result
     }
 
+    /// Publish the reporter pass's diagnostics on the public failure surface
+    /// when the explicit Deepest reporter is selected. Default is untouched.
+    fn sync_failure_surface(&mut self) {
+        if self.failure_reporter != FailureReporter::Deepest {
+            return;
+        }
+        let failure = &self.reporter_failure;
+        self.has_failure = failure.present;
+        self.deepest_failure_pos = failure.position;
+        self.expected_labels = failure.labels.clone();
+        self.ranked_failures = failure.ranks.clone();
+    }
+
     fn snapshot_legacy_failure(&self) -> LegacyFailure {
         LegacyFailure {
             position: self.deepest_failure_pos,
@@ -1946,6 +2035,12 @@ impl<'a> PortableParser<'a> {
     /// ranked list is dropped before any label is copied.
     fn note_failure_ref(&mut self, pos: usize, label: &str) {
         perf_count!(self.note_failure);
+        // The Ruby Context does not call its reporter for injected trivia.
+        // These notes survive successful speculative frames. Cached failures
+        // were already observed when first evaluated in this same pass.
+        if self.failure_reporter == FailureReporter::Deepest && self.trivia_depth == 0 {
+            self.reporter_failure.note(pos, label);
+        }
         // rs#171: the deepest POSITION is tracked regardless of trivia
         // nesting — the ruby engine's deepest-failure reporting sees
         // failures inside injected trivia (their terminals fail at
@@ -3252,6 +3347,11 @@ impl<'a> PortableParser<'a> {
             PortableParser::new(temp_grammar, self.input, &mut temp_arena)
         };
         temp_parser.set_compatibility(self.compatibility)?;
+        temp_parser.set_failure_reporter(self.failure_reporter);
+        if self.failure_reporter == FailureReporter::Deepest {
+            temp_parser.trivia_depth = self.trivia_depth;
+        }
+        temp_parser.reporter_failure = std::mem::take(&mut self.reporter_failure);
         // Seed the fragment's visible capture state wholesale
         // (rs#174 round 2): the per-name store loop pushed two undo-log
         // entries per capture per boundary crossing, and the merge-back
@@ -3273,6 +3373,7 @@ impl<'a> PortableParser<'a> {
         temp_parser.pending_trivia = std::mem::take(&mut self.pending_trivia);
 
         let result = temp_parser.try_atom_impl(temp_atom_id, pos, false);
+        self.reporter_failure = std::mem::take(&mut temp_parser.reporter_failure);
         self.call_depth_limit_hit |= temp_parser.call_depth_limit_hit;
         // Dynamic fragments evaluate against the full input, so their cause
         // positions are already absolute byte offsets. Preserve those causes

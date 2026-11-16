@@ -364,7 +364,26 @@ impl PargArtifactJs {
         input: &str,
         compatibility: &str,
     ) -> Result<JsString, JsValue> {
-        use crate::portable::parser::ParserCompatibility;
+        self.parse_shape_with_reporter(entry, input, compatibility, "default")
+    }
+
+    /// Explicit reporter without changing existing parseShape defaults.
+    /// Compatibility is "strict" or "parslet"; reporter is "default" or
+    /// "deepest". The owned JSON result uses the existing shape/error envelope.
+    #[wasm_bindgen(js_name = parseShapeWithReporter)]
+    pub fn parse_shape_with_reporter(
+        &self,
+        entry: &str,
+        input: &str,
+        compatibility: &str,
+        reporter: &str,
+    ) -> Result<JsString, JsValue> {
+        use crate::portable::parser::{FailureReporter, ParserCompatibility};
+        let reporter = match reporter {
+            "default" => FailureReporter::Default,
+            "deepest" => FailureReporter::Deepest,
+            _ => return Err(JsValue::from_str("unknown failure reporter")),
+        };
         let policy = match compatibility {
             "strict" => ParserCompatibility::Strict,
             "parslet" => ParserCompatibility::Parslet,
@@ -372,7 +391,7 @@ impl PargArtifactJs {
         };
         let value = match self
             .artifact
-            .parse_shape_with_compatibility(entry, input, policy)
+            .parse_shape_with_reporter(entry, input, policy, reporter)
         {
             Ok(shape) => serde_json::json!({"ok": true, "shape": shape}),
             Err(crate::parg::PargError::ParseWire { offset, ranked, .. }) => {
