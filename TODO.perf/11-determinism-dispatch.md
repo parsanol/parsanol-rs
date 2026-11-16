@@ -38,3 +38,27 @@ specs pin both sides in `dispatch_shape.rs`). VM 0.153 -> 0.125 us/B
 on the JSON receipt. Open from this item: the Scan instruction for
 class-run repetitions (the profile's remaining per-char dispatch).
 Receipt: `benchmarks/sota/results/2026-11-16-determinism-dispatch.md`.
+
+## Scan instruction design (next round, 2026-11-16)
+
+Target: UNCAPTURED repetitions whose body is a single single-char atom
+(CharSet, singleton Char/Regex-class, or a Choice of single-char
+classes) — json's `ws = *( %x20 / %x09 / %x0A / %x0D )`, `*digit`,
+string-content runs. Lowering: `rep_open; Scan(class_table);
+build_rep` replaces the per-char Choice/loop machinery — the maximal
+run is consumed word-at-a-time.
+
+Soundness gates (identity by construction):
+1. The repetition must be VALUE-INVISIBLE: no Capture/Named/Scope
+   wrapper reaches it. compile_repetition cannot see its parents —
+   thread a `captured: bool` through the wrapper arms (Ignore/Trivia
+   force false; Named/Capture/Scope force true; Entity follows the
+   referenced rule's wrapper state).
+2. Single-char body only (maximal-run == zero-or-more loop semantics
+   exactly).
+3. Corpus gates byte-identical (48 flavors x 3 engines) + the rs#533
+   harness receipt.
+
+Expected: ws/string-content/digit loops drop the per-char Choice +
+loop machinery — the profile's remaining recognition dominator after
+the ~11% construction split (TODO.perf/12).
