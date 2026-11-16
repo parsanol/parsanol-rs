@@ -79,8 +79,135 @@ fn recovery_mode(corpus_dir: &str) {
     }
 }
 
+fn tree_hash(node: tree_sitter::Node, hasher: &mut std::collections::hash_map::DefaultHasher) {
+    use std::hash::{Hash, Hasher};
+    let mut cursor = node.walk();
+    loop {
+        let n = cursor.node();
+        n.kind().hash(hasher);
+        n.start_byte().hash(hasher);
+        n.end_byte().hash(hasher);
+        n.is_missing().hash(hasher);
+        if cursor.goto_first_child() {
+            continue;
+        }
+        if cursor.goto_next_sibling() {
+            continue;
+        }
+        loop {
+            if !cursor.goto_parent() {
+                return;
+            }
+            if cursor.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+}
+
+fn point_at(text: &str, offset: usize) -> tree_sitter::Point {
+    let bytes = text.as_bytes();
+    let mut row = 0usize;
+    let mut col = 0usize;
+    for &b in &bytes[..offset] {
+        if b == b'\n' {
+            row += 1;
+            col = 0;
+        } else {
+            col += 1;
+        }
+    }
+    tree_sitter::Point::new(row, col)
+}
+
+fn incremental_mode(trace_path: &str, source_path: &str) {
+    use std::time::Instant;
+
+    let trace: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(trace_path).expect("trace")).expect("trace json");
+    let mut text = std::fs::read_to_string(source_path).expect("source");
+    let edits = trace["edits"].as_array().expect("edits").clone();
+
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&tree_sitter_json::LANGUAGE.into())
+        .expect("json grammar loads");
+
+    let mut old_tree = parser.parse(text.as_bytes(), None).expect("initial parse");
+    println!("0 0 identity_ok");
+
+    let mut latencies: Vec<u128> = Vec::new();
+    let mut fresh_latencies: Vec<u128> = Vec::new();
+    let mut identity_failures = 0usize;
+    for (i, e) in edits.iter().enumerate() {
+        let pos = e["pos"].as_u64().expect("pos") as usize;
+        let del = e["del"].as_u64().expect("del") as usize;
+        let ins = e["text"].as_str().expect("text").to_string();
+        let mut next = String::with_capacity(text.len() + ins.len());
+        next.push_str(&text[..pos]);
+        next.push_str(&ins);
+        next.push_str(&text[pos + del..]);
+
+        // The editor's bookkeeping: splice the text, then mark the old
+        // tree's changed range before reuse (without this, reused
+        // boundaries stay stale and the tree is wrong).
+        old_tree.edit(&tree_sitter::InputEdit {
+            start_byte: pos,
+            old_end_byte: pos + del,
+            new_end_byte: pos + ins.len(),
+            start_position: point_at(&text, pos),
+            old_end_position: point_at(&text, pos + del),
+            new_end_position: point_at(&next, pos + ins.len()),
+        });
+
+        let t = Instant::now();
+        let new_tree = parser
+            .parse(next.as_bytes(), Some(&old_tree))
+            .expect("incremental parse");
+        let ns = t.elapsed().as_nanos();
+        latencies.push(ns);
+
+        let tf = Instant::now();
+        let fresh_tree = parser.parse(next.as_bytes(), None).expect("fresh parse");
+        let fresh_ns = tf.elapsed().as_nanos();
+        fresh_latencies.push(fresh_ns);
+        let mut h1 = std::collections::hash_map::DefaultHasher::new();
+        let mut h2 = std::collections::hash_map::DefaultHasher::new();
+        tree_hash(new_tree.root_node(), &mut h1);
+        tree_hash(fresh_tree.root_node(), &mut h2);
+        let ok = !new_tree.root_node().has_error()
+            && std::hash::Hasher::finish(&h1) == std::hash::Hasher::finish(&h2);
+        if !ok {
+            identity_failures += 1;
+        }
+        println!("{} {} {}", i + 1, ns, if ok { "identity_ok" } else { "IDENTITY_FAIL" });
+        old_tree = new_tree;
+        text = next;
+    }
+
+    latencies.sort();
+    fresh_latencies.sort();
+    let n = latencies.len();
+    let p = |q: f64, v: &[u128]| v[((q * (v.len() - 1) as f64).round()) as usize];
+    println!(
+        "SUMMARY steps {} incr_p50 {} incr_p95 {} incr_max {} fresh_p50 {} fresh_p95 {} fresh_max {} identity_failures {}",
+        n,
+        p(0.50, &latencies),
+        p(0.95, &latencies),
+        latencies[n - 1],
+        p(0.50, &fresh_latencies),
+        p(0.95, &fresh_latencies),
+        fresh_latencies[n - 1],
+        identity_failures,
+    );
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    if args.len() == 4 && args[1] == "incremental" {
+        incremental_mode(&args[2], &args[3]);
+        return;
+    }
     if args.len() == 3 && args[1] == "recovery" {
         recovery_mode(&args[2]);
         return;

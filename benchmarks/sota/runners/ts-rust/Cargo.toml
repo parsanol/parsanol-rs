@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 tree-sitter = "0.25"
 tree-sitter-json = "0.24"
+serde_json = "1"
 
 [[bin]]
 name = "run_ts"
