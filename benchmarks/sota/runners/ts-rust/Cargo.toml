@@ -1,0 +1,17 @@
+[package]
+name = "sota-bench-ts"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tree-sitter = "0.25"
+tree-sitter-json = "0.24"
+
+[[bin]]
+name = "run_ts"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = 3
+
+[workspace]

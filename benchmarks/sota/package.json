@@ -1,0 +1,17 @@
+{
+  "name": "sota",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "tree-sitter": "^0.21.1",
+    "tree-sitter-json": "^0.24.8"
+  }
+}
