@@ -111,17 +111,24 @@ fn single_byte_choices_merge_to_charsets_inside_repetitions() {
       entry main: doc
     }";
     let program = compile_program(source);
-    let mut charsets = 0;
+    let mut spans = 0;
+    let mut choices = 0;
     let mut i = 0;
     while let Some(instr) = program.get_instruction(i) {
-        if let Instruction::CharSet { .. } = instr {
-            charsets += 1;
+        match instr {
+            Instruction::Span { .. } => spans += 1,
+            Instruction::Choice { .. } => choices += 1,
+            _ => {}
         }
         i += 1;
     }
     assert_eq!(
-        charsets, 1,
-        "the ws single-byte choice must merge to exactly ONE charset (the loop's own Choice is iteration control, not the alternatives)"
+        spans, 1,
+        "the ws single-byte choice must lower to ONE Span (the bulk run)"
+    );
+    assert_eq!(
+        choices, 0,
+        "no per-character choice machinery may remain (the loop's own iteration Choice included — the Span run replaces it)"
     );
 
     // acceptance identical: the merged grammar still parses 'a' with
@@ -131,7 +138,12 @@ fn single_byte_choices_merge_to_charsets_inside_repetitions() {
         serde_json::to_string(&envelope).expect("envelope serializes")
     };
     let artifact = parsanol::PargArtifact::from_json(&artifact_text).expect("artifact loads");
-    for (input, ok) in [("  a  ", true), ("\ta\n", true), ("b a", false), ("a", true)] {
+    for (input, ok) in [
+        ("  a  ", true),
+        ("\ta\n", true),
+        ("b a", false),
+        ("a", true),
+    ] {
         let parsed = artifact.parse_shape("main", input).is_ok();
         assert_eq!(
             parsed,

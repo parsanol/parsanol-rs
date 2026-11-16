@@ -69,9 +69,10 @@ The ws shape's interleaved per-character choice compiles to ONE
 charset (bare distinct single-byte branches only; strict compile-time
 extraction — Str-of-one-byte or a 256-probe-exact class; sound at any
 depth because consumed bytes and span values are identical by
-construction). VM 0.125 -> 0.078 us/B; recovery harness
-byte-identical; spec `single_byte_choices_merge_to_charsets_inside_
-repetitions`. The remaining per-char cost is the repetition loop's
+construction). VM 0.125 -> 0.074 us/B (the second half extends the EXISTING Span
+fast path to merged-choice bodies — the whole bulk-run machinery was
+already there, json's ws just missed the guard); recovery harness
+byte-identical; spec pins ONE Span + ZERO Choices for the ws shape. The remaining per-char cost is the repetition loop's
 own iteration control (Choice/RepCount/PartialCommit) — the Scan
 instruction (bulk runs) removes it.
 Receipt: `benchmarks/sota/results/2026-11-16-charset-merge.md`.
