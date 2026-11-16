@@ -23,9 +23,9 @@ current tables.
 | engine | µs/byte | relative |
 |---|---|---|
 | tree-sitter 0.25 (rust binding) | 0.029 | 37× |
-| parsanol VM — Phase-0 hot-path build (2026-11-16) | 0.153 | 7.1× |
+| parsanol VM — determinism-dispatch build (2026-11-16) | 0.125 | 8.7× |
 | Lark 1.x LALR (python) | 0.344 | 3.1× |
-| parsanol interpreter — Phase-0 hot-path build | 0.464 | 1.8× |
+| parsanol interpreter — determinism-dispatch build | 0.457 | 1.8× |
 | parsanol 1.5.1 interpreter (1.5.1 release) | 0.828 | 1.30× |
 | parsanol 1.5.1 VM (1.5.1 release) | 1.073 | 1.0 (baseline) |
 | ANTLR 4.13.2 (python3 target) | 1.860 | 0.58× |
