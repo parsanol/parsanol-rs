@@ -1,0 +1,913 @@
+{
+ "seed": 20261115,
+ "cases": [
+  {
+   "source": "doc0.json",
+   "class": "delete",
+   "depth": 1,
+   "file": "doc0.delete-1.json",
+   "corruption_sites": [
+    1935
+   ]
+  },
+  {
+   "source": "doc0.json",
+   "class": "delete",
+   "depth": 5,
+   "file": "doc0.delete-5.json",
+   "corruption_sites": [
+    4303,
+    5846,
+    8200,
+    9294,
+    12631
+   ]
+  },
+  {
+   "source": "doc0.json",
+   "class": "delete",
+   "depth": 20,
+   "file": "doc0.delete-20.json",
+   "corruption_sites": [
+    349,
+    4018,
+    4223,
+    4609,
+    4762,
+    4957,
+    6038,
+    6070,
+    6099,
+    6397,
+    6409,
+    8561,
+    8869,
+    9634,
+    9803,
+    10079,
+    10108,
+    10539,
+    10589,
+    10869
+   ]
+  },
+  {
+   "source": "doc0.json",
+   "class": "insert",
+   "depth": 1,
+   "file": "doc0.insert-1.json",
+   "corruption_sites": [
+    1142
+   ]
+  },
+  {
+   "source": "doc0.json",
+   "class": "insert",
+   "depth": 5,
+   "file": "doc0.insert-5.json",
+   "corruption_sites": [
+    2629,
+    4198,
+    9649,
+    11254,
+    12285
+   ]
+  },
+  {
+   "source": "doc0.json",
+   "class": "insert",
+   "depth": 20,
+   "file": "doc0.insert-20.json",
+   "corruption_sites": [
+    337,
+    1952,
+    2991,
+    4419,
+    4973,
+    6084,
+    6307,
+    6946,
+    7546,
+    7739,
+    8339,
+    9959,
+    10088,
+    10197,
+    10467,
+    11091,
+    11663,
+    11760,
+    12497,
+    12754
+   ]
+  },
+  {
+   "source": "doc0.json",
+   "class": "mutate",
+   "depth": 1,
+   "file": "doc0.mutate-1.json",
+   "corruption_sites": [
+    3558
+   ]
+  },
+  {
+   "source": "doc0.json",
+   "class": "mutate",
+   "depth": 5,
+   "file": "doc0.mutate-5.json",
+   "corruption_sites": [
+    2399,
+    4333,
+    7678,
+    9893,
+    12924
+   ]
+  },
+  {
+   "source": "doc0.json",
+   "class": "mutate",
+   "depth": 20,
+   "file": "doc0.mutate-20.json",
+   "corruption_sites": [
+    830,
+    985,
+    1541,
+    2115,
+    5065,
+    5106,
+    5511,
+    5683,
+    7682,
+    7988,
+    8141,
+    8666,
+    8919,
+    8945,
+    8955,
+    10279,
+    12243,
+    12682,
+    12847,
+    13031
+   ]
+  },
+  {
+   "source": "doc0.json",
+   "class": "truncate",
+   "depth": 1,
+   "file": "doc0.truncate-1.json",
+   "corruption_sites": [
+    509
+   ]
+  },
+  {
+   "source": "doc0.json",
+   "class": "truncate",
+   "depth": 5,
+   "file": "doc0.truncate-5.json",
+   "corruption_sites": [
+    10208
+   ]
+  },
+  {
+   "source": "doc0.json",
+   "class": "truncate",
+   "depth": 20,
+   "file": "doc0.truncate-20.json",
+   "corruption_sites": [
+    7779
+   ]
+  },
+  {
+   "source": "doc0.json",
+   "class": "unterminated",
+   "depth": 1,
+   "file": "doc0.unterminated-1.json",
+   "corruption_sites": [
+    2224
+   ]
+  },
+  {
+   "source": "doc0.json",
+   "class": "unterminated",
+   "depth": 5,
+   "file": "doc0.unterminated-5.json",
+   "corruption_sites": [
+    4538,
+    5375,
+    5509,
+    7999,
+    9751
+   ]
+  },
+  {
+   "source": "doc0.json",
+   "class": "unterminated",
+   "depth": 20,
+   "file": "doc0.unterminated-20.json",
+   "corruption_sites": [
+    286,
+    490,
+    779,
+    1104,
+    1453,
+    1773,
+    2141,
+    3331,
+    3830,
+    4317,
+    5072,
+    7671,
+    7736,
+    8201,
+    8668,
+    8961,
+    9209,
+    9768,
+    11694,
+    13047
+   ]
+  },
+  {
+   "source": "doc1.json",
+   "class": "delete",
+   "depth": 1,
+   "file": "doc1.delete-1.json",
+   "corruption_sites": [
+    31849
+   ]
+  },
+  {
+   "source": "doc1.json",
+   "class": "delete",
+   "depth": 5,
+   "file": "doc1.delete-5.json",
+   "corruption_sites": [
+    31266,
+    69836,
+    150121,
+    193759,
+    266424
+   ]
+  },
+  {
+   "source": "doc1.json",
+   "class": "delete",
+   "depth": 20,
+   "file": "doc1.delete-20.json",
+   "corruption_sites": [
+    2305,
+    10147,
+    27775,
+    33724,
+    39404,
+    59489,
+    59995,
+    69982,
+    72247,
+    116475,
+    119362,
+    129503,
+    136184,
+    144630,
+    160538,
+    190898,
+    214223,
+    251574,
+    253594,
+    254520
+   ]
+  },
+  {
+   "source": "doc1.json",
+   "class": "insert",
+   "depth": 1,
+   "file": "doc1.insert-1.json",
+   "corruption_sites": [
+    112528
+   ]
+  },
+  {
+   "source": "doc1.json",
+   "class": "insert",
+   "depth": 5,
+   "file": "doc1.insert-5.json",
+   "corruption_sites": [
+    94452,
+    187149,
+    197576,
+    200165,
+    243820
+   ]
+  },
+  {
+   "source": "doc1.json",
+   "class": "insert",
+   "depth": 20,
+   "file": "doc1.insert-20.json",
+   "corruption_sites": [
+    16469,
+    18250,
+    31274,
+    33793,
+    55364,
+    59364,
+    69693,
+    108227,
+    121674,
+    130299,
+    173136,
+    187387,
+    190173,
+    201344,
+    216568,
+    217891,
+    235172,
+    244175,
+    255746,
+    272997
+   ]
+  },
+  {
+   "source": "doc1.json",
+   "class": "mutate",
+   "depth": 1,
+   "file": "doc1.mutate-1.json",
+   "corruption_sites": [
+    120928
+   ]
+  },
+  {
+   "source": "doc1.json",
+   "class": "mutate",
+   "depth": 5,
+   "file": "doc1.mutate-5.json",
+   "corruption_sites": [
+    30431,
+    170424,
+    173019,
+    248343,
+    275751
+   ]
+  },
+  {
+   "source": "doc1.json",
+   "class": "mutate",
+   "depth": 20,
+   "file": "doc1.mutate-20.json",
+   "corruption_sites": [
+    31612,
+    40817,
+    72165,
+    80222,
+    92807,
+    120182,
+    135538,
+    163138,
+    200666,
+    208809,
+    213017,
+    215436,
+    217795,
+    219124,
+    220312,
+    221936,
+    236323,
+    245844,
+    247882,
+    261473
+   ]
+  },
+  {
+   "source": "doc1.json",
+   "class": "truncate",
+   "depth": 1,
+   "file": "doc1.truncate-1.json",
+   "corruption_sites": [
+    366
+   ]
+  },
+  {
+   "source": "doc1.json",
+   "class": "truncate",
+   "depth": 5,
+   "file": "doc1.truncate-5.json",
+   "corruption_sites": [
+    142174
+   ]
+  },
+  {
+   "source": "doc1.json",
+   "class": "truncate",
+   "depth": 20,
+   "file": "doc1.truncate-20.json",
+   "corruption_sites": [
+    193218
+   ]
+  },
+  {
+   "source": "doc1.json",
+   "class": "unterminated",
+   "depth": 1,
+   "file": "doc1.unterminated-1.json",
+   "corruption_sites": [
+    181166
+   ]
+  },
+  {
+   "source": "doc1.json",
+   "class": "unterminated",
+   "depth": 5,
+   "file": "doc1.unterminated-5.json",
+   "corruption_sites": [
+    141524,
+    213779,
+    243671,
+    250390,
+    269374
+   ]
+  },
+  {
+   "source": "doc1.json",
+   "class": "unterminated",
+   "depth": 20,
+   "file": "doc1.unterminated-20.json",
+   "corruption_sites": [
+    1680,
+    3653,
+    11073,
+    27747,
+    46301,
+    83487,
+    92186,
+    146206,
+    157624,
+    160403,
+    161172,
+    179690,
+    189092,
+    198713,
+    201001,
+    219213,
+    234529,
+    237988,
+    262854,
+    276449
+   ]
+  },
+  {
+   "source": "doc2.json",
+   "class": "delete",
+   "depth": 1,
+   "file": "doc2.delete-1.json",
+   "corruption_sites": [
+    1381
+   ]
+  },
+  {
+   "source": "doc2.json",
+   "class": "delete",
+   "depth": 5,
+   "file": "doc2.delete-5.json",
+   "corruption_sites": [
+    319,
+    357,
+    551,
+    587,
+    831
+   ]
+  },
+  {
+   "source": "doc2.json",
+   "class": "delete",
+   "depth": 20,
+   "file": "doc2.delete-20.json",
+   "corruption_sites": [
+    64,
+    85,
+    97,
+    382,
+    528,
+    837,
+    900,
+    912,
+    979,
+    993,
+    1014,
+    1064,
+    1088,
+    1170,
+    1192,
+    1296,
+    1321,
+    1365,
+    1380,
+    1465
+   ]
+  },
+  {
+   "source": "doc2.json",
+   "class": "insert",
+   "depth": 1,
+   "file": "doc2.insert-1.json",
+   "corruption_sites": [
+    515
+   ]
+  },
+  {
+   "source": "doc2.json",
+   "class": "insert",
+   "depth": 5,
+   "file": "doc2.insert-5.json",
+   "corruption_sites": [
+    139,
+    192,
+    384,
+    498,
+    1090
+   ]
+  },
+  {
+   "source": "doc2.json",
+   "class": "insert",
+   "depth": 20,
+   "file": "doc2.insert-20.json",
+   "corruption_sites": [
+    3,
+    78,
+    86,
+    121,
+    172,
+    189,
+    219,
+    327,
+    418,
+    501,
+    593,
+    714,
+    797,
+    811,
+    890,
+    952,
+    1057,
+    1253,
+    1276,
+    1432
+   ]
+  },
+  {
+   "source": "doc2.json",
+   "class": "mutate",
+   "depth": 1,
+   "file": "doc2.mutate-1.json",
+   "corruption_sites": [
+    1042
+   ]
+  },
+  {
+   "source": "doc2.json",
+   "class": "mutate",
+   "depth": 5,
+   "file": "doc2.mutate-5.json",
+   "corruption_sites": [
+    933,
+    1144,
+    1203,
+    1352,
+    1374
+   ]
+  },
+  {
+   "source": "doc2.json",
+   "class": "mutate",
+   "depth": 20,
+   "file": "doc2.mutate-20.json",
+   "corruption_sites": [
+    5,
+    68,
+    127,
+    131,
+    143,
+    197,
+    240,
+    458,
+    626,
+    651,
+    821,
+    828,
+    930,
+    932,
+    1003,
+    1179,
+    1189,
+    1270,
+    1303,
+    1434
+   ]
+  },
+  {
+   "source": "doc2.json",
+   "class": "truncate",
+   "depth": 1,
+   "file": "doc2.truncate-1.json",
+   "corruption_sites": [
+    656
+   ]
+  },
+  {
+   "source": "doc2.json",
+   "class": "truncate",
+   "depth": 5,
+   "file": "doc2.truncate-5.json",
+   "corruption_sites": [
+    1090
+   ]
+  },
+  {
+   "source": "doc2.json",
+   "class": "truncate",
+   "depth": 20,
+   "file": "doc2.truncate-20.json",
+   "corruption_sites": [
+    665
+   ]
+  },
+  {
+   "source": "doc2.json",
+   "class": "unterminated",
+   "depth": 1,
+   "file": "doc2.unterminated-1.json",
+   "corruption_sites": [
+    1216
+   ]
+  },
+  {
+   "source": "doc2.json",
+   "class": "unterminated",
+   "depth": 5,
+   "file": "doc2.unterminated-5.json",
+   "corruption_sites": [
+    109,
+    157,
+    760,
+    1450,
+    1486
+   ]
+  },
+  {
+   "source": "doc2.json",
+   "class": "unterminated",
+   "depth": 20,
+   "file": "doc2.unterminated-20.json",
+   "corruption_sites": [
+    9,
+    33,
+    36,
+    91,
+    109,
+    126,
+    268,
+    282,
+    297,
+    340,
+    354,
+    434,
+    771,
+    806,
+    870,
+    1038,
+    1071,
+    1169,
+    1235,
+    1505
+   ]
+  },
+  {
+   "source": "doc3.json",
+   "class": "delete",
+   "depth": 1,
+   "file": "doc3.delete-1.json",
+   "corruption_sites": [
+    88311
+   ]
+  },
+  {
+   "source": "doc3.json",
+   "class": "delete",
+   "depth": 5,
+   "file": "doc3.delete-5.json",
+   "corruption_sites": [
+    37301,
+    50271,
+    107549,
+    109515,
+    121505
+   ]
+  },
+  {
+   "source": "doc3.json",
+   "class": "delete",
+   "depth": 20,
+   "file": "doc3.delete-20.json",
+   "corruption_sites": [
+    2831,
+    18659,
+    32958,
+    37393,
+    48677,
+    58546,
+    58651,
+    62140,
+    70191,
+    75188,
+    86533,
+    86972,
+    87041,
+    91791,
+    95085,
+    110738,
+    128576,
+    134508,
+    140344,
+    147625
+   ]
+  },
+  {
+   "source": "doc3.json",
+   "class": "insert",
+   "depth": 1,
+   "file": "doc3.insert-1.json",
+   "corruption_sites": [
+    75788
+   ]
+  },
+  {
+   "source": "doc3.json",
+   "class": "insert",
+   "depth": 5,
+   "file": "doc3.insert-5.json",
+   "corruption_sites": [
+    34143,
+    98212,
+    136432,
+    141004,
+    146681
+   ]
+  },
+  {
+   "source": "doc3.json",
+   "class": "insert",
+   "depth": 20,
+   "file": "doc3.insert-20.json",
+   "corruption_sites": [
+    9524,
+    23297,
+    24753,
+    37052,
+    39085,
+    61925,
+    70094,
+    79197,
+    86392,
+    86945,
+    92092,
+    93468,
+    112189,
+    113092,
+    125079,
+    131661,
+    133063,
+    142483,
+    143937,
+    149261
+   ]
+  },
+  {
+   "source": "doc3.json",
+   "class": "mutate",
+   "depth": 1,
+   "file": "doc3.mutate-1.json",
+   "corruption_sites": [
+    95310
+   ]
+  },
+  {
+   "source": "doc3.json",
+   "class": "mutate",
+   "depth": 5,
+   "file": "doc3.mutate-5.json",
+   "corruption_sites": [
+    11486,
+    27209,
+    55502,
+    79031,
+    80341
+   ]
+  },
+  {
+   "source": "doc3.json",
+   "class": "mutate",
+   "depth": 20,
+   "file": "doc3.mutate-20.json",
+   "corruption_sites": [
+    10464,
+    16656,
+    50643,
+    52045,
+    55320,
+    65293,
+    77593,
+    81401,
+    82163,
+    90418,
+    93140,
+    94229,
+    101459,
+    109464,
+    111710,
+    118535,
+    121122,
+    128169,
+    130888,
+    131760
+   ]
+  },
+  {
+   "source": "doc3.json",
+   "class": "truncate",
+   "depth": 1,
+   "file": "doc3.truncate-1.json",
+   "corruption_sites": [
+    89745
+   ]
+  },
+  {
+   "source": "doc3.json",
+   "class": "truncate",
+   "depth": 5,
+   "file": "doc3.truncate-5.json",
+   "corruption_sites": [
+    88030
+   ]
+  },
+  {
+   "source": "doc3.json",
+   "class": "truncate",
+   "depth": 20,
+   "file": "doc3.truncate-20.json",
+   "corruption_sites": [
+    60885
+   ]
+  },
+  {
+   "source": "doc3.json",
+   "class": "unterminated",
+   "depth": 1,
+   "file": "doc3.unterminated-1.json",
+   "corruption_sites": [
+    37042
+   ]
+  },
+  {
+   "source": "doc3.json",
+   "class": "unterminated",
+   "depth": 5,
+   "file": "doc3.unterminated-5.json",
+   "corruption_sites": [
+    103355,
+    104070,
+    112028,
+    131948,
+    149541
+   ]
+  },
+  {
+   "source": "doc3.json",
+   "class": "unterminated",
+   "depth": 20,
+   "file": "doc3.unterminated-20.json",
+   "corruption_sites": [
+    4,
+    8336,
+    14724,
+    19869,
+    26316,
+    33073,
+    34007,
+    44636,
+    62793,
+    69166,
+    70372,
+    79888,
+    88764,
+    97295,
+    98347,
+    119891,
+    137150,
+    145689,
+    150038,
+    151715
+   ]
+  }
+ ]
+}

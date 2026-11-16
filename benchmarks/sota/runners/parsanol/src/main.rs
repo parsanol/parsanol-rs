@@ -16,8 +16,46 @@ use parsanol::portable::{AstArena, Grammar, PortableParser};
 use std::hint::black_box;
 use std::time::Instant;
 
+fn recovery_mode(corpus_dir: &str) {
+    // Per corrupted case: `<file> <diag_pos> <len> <ok>` — diag_pos is the
+    // deepest-failure position (0 = parse succeeded with full consumption
+    // when ok=true). The scorer joins against the corruption manifest.
+    let corpus = std::path::Path::new(corpus_dir);
+    let artifact_text = std::fs::read_to_string("json-artifact.json").expect("artifact");
+    let artifact = parsanol::PargArtifact::from_json(&artifact_text).expect("artifact loads");
+    let grammar = artifact.grammar("main").expect("the entry decodes");
+    let program = compile(grammar.clone()).expect("the program compiles");
+
+    let mut paths: Vec<std::path::PathBuf> = std::fs::read_dir(corpus)
+        .expect("corpus dir")
+        .map(|e| e.expect("entry").path())
+        .filter(|p| p.extension().is_some_and(|x| x == "json"))
+        .collect();
+    paths.sort();
+    for path in paths {
+        let input = std::fs::read_to_string(&path).expect("doc");
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        let mut arena = AstArena::for_input(input.len());
+        let (result, diag) = parse_with_vm_diag(&program, &input, &mut arena);
+        match result {
+            Ok(r) => {
+                let full = r.end_pos == input.len();
+                println!("{name} {} {} {}", input.len(), if full { 0 } else { r.end_pos }, full);
+            }
+            Err(_) => {
+                let (pos, _labels) = diag.expect("failed parse carries diagnostics");
+                println!("{name} {} {} false", input.len(), pos);
+            }
+        }
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    if args.len() == 3 && args[1] == "recovery" {
+        recovery_mode(&args[2]);
+        return;
+    }
     if args.len() != 6 {
         eprintln!("usage: run_parsanol <artifact.json> <entry> <corpus-dir> <rounds> <vm|interpreter>");
         std::process::exit(2);
