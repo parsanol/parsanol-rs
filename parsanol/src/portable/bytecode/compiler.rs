@@ -1206,6 +1206,42 @@ fn ascii_class_set(pattern: &str) -> Option<CharSet> {
     Some(set)
 }
 
+/// The UTF-8 lead bytes of any code point in [lo, hi]. Within one
+/// encoding size class the lead byte is monotonic in the code point, so
+/// the class-intersection bounds give the exact inclusive lead range —
+/// sound by construction (no over- or under-approximation).
+fn utf8_first_bytes_range(lo: u32, hi: u32) -> Vec<u8> {
+    let lead = |cp: u32| -> u8 {
+        if cp < 0x80 {
+            cp as u8
+        } else if cp < 0x800 {
+            (0xC0 | (cp >> 6)) as u8
+        } else if cp < 0x10000 {
+            (0xE0 | (cp >> 12)) as u8
+        } else {
+            (0xF0 | (cp >> 18)) as u8
+        }
+    };
+    let mut out = Vec::new();
+    if lo < 0x80 {
+        for b in (lo as u8)..=(hi.min(0x7F) as u8) {
+            out.push(b);
+        }
+    }
+    for (clo, chi) in [(0x80u32, 0x7FFu32), (0x800, 0xFFFF), (0x10000, 0x10FFFF)] {
+        let a = lo.max(clo);
+        let b = hi.min(chi);
+        if a <= b {
+            for lead_b in lead(a)..=lead(b) {
+                if !out.contains(&lead_b) {
+                    out.push(lead_b);
+                }
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1348,40 +1384,4 @@ mod tests {
         assert!(disasm.contains("String"));
         assert!(disasm.contains("End"));
     }
-}
-
-/// The UTF-8 lead bytes of any code point in [lo, hi]. Within one
-/// encoding size class the lead byte is monotonic in the code point, so
-/// the class-intersection bounds give the exact inclusive lead range —
-/// sound by construction (no over- or under-approximation).
-fn utf8_first_bytes_range(lo: u32, hi: u32) -> Vec<u8> {
-    let lead = |cp: u32| -> u8 {
-        if cp < 0x80 {
-            cp as u8
-        } else if cp < 0x800 {
-            (0xC0 | (cp >> 6)) as u8
-        } else if cp < 0x10000 {
-            (0xE0 | (cp >> 12)) as u8
-        } else {
-            (0xF0 | (cp >> 18)) as u8
-        }
-    };
-    let mut out = Vec::new();
-    if lo < 0x80 {
-        for b in (lo as u8)..=(hi.min(0x7F) as u8) {
-            out.push(b);
-        }
-    }
-    for (clo, chi) in [(0x80u32, 0x7FFu32), (0x800, 0xFFFF), (0x10000, 0x10FFFF)] {
-        let a = lo.max(clo);
-        let b = hi.min(chi);
-        if a <= b {
-            for lead_b in lead(a)..=lead(b) {
-                if !out.contains(&lead_b) {
-                    out.push(lead_b);
-                }
-            }
-        }
-    }
-    out
 }
