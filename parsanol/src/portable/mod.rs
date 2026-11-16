@@ -72,6 +72,7 @@ pub mod regex_cache;
 pub mod scan;
 pub mod source_location;
 pub mod source_map;
+pub mod spine;
 pub mod streaming;
 pub mod streaming_builder;
 pub mod transform;
