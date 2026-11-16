@@ -104,12 +104,6 @@ pub struct ErrorTracker {
     pub furthest_position: usize,
     /// All failures at the furthest position
     pub contexts: Vec<ErrorContext>,
-    /// Deferred events: (position, instruction ip) pairs recorded on the
-    /// hot path WITHOUT materializing their `Expected` — the label
-    /// construction (format!/char-set scans) only ever matters for the
-    /// furthest failure, so it happens once at parse end via
-    /// `materialize_deferred`.
-    pub deferred: Vec<(usize, usize)>,
 }
 
 impl ErrorTracker {
@@ -119,7 +113,6 @@ impl ErrorTracker {
         Self {
             furthest_position: 0,
             contexts: Vec::new(),
-            deferred: Vec::new(),
         }
     }
 
@@ -145,52 +138,10 @@ impl ErrorTracker {
         }
     }
 
-    /// Record a failure at the given position, deferring the `Expected`
-    /// construction to `materialize_deferred`. Mirrors `record_failure`'s
-    /// furthest-position bookkeeping; the label dedup happens at
-    /// materialization, preserving the same observable output.
-    #[inline]
-    pub fn record_failure_ip(&mut self, position: usize, instruction_ip: usize) {
-        if position > self.furthest_position {
-            self.furthest_position = position;
-            self.deferred.clear();
-            self.deferred.push((position, instruction_ip));
-        } else if position == self.furthest_position && !self.deferred.is_empty() {
-            // The `!is_empty` guard mirrors `record_failure`: a first
-            // failure AT position 0 (furthest still 0) was never recorded
-            // by the eager path either.
-            self.deferred.push((position, instruction_ip));
-        }
-    }
-
-    /// Materialize the deferred (position, ip) events into `contexts`,
-    /// deduplicating by `Expected` exactly like `record_failure` does.
-    /// The deferred events are all at `furthest_position` by construction
-    /// (the vector clears on every advance).
-    pub fn materialize_deferred(&mut self, program: &Program) {
-        if self.deferred.is_empty() {
-            return;
-        }
-        let events = std::mem::take(&mut self.deferred);
-        for (position, ip) in events {
-            if let Some(instr) = program.get_instruction(ip) {
-                let expected = instruction_to_expected(instr, program);
-                let is_duplicate = self
-                    .contexts
-                    .iter()
-                    .any(|ctx| ctx.position == position && ctx.expected == expected);
-                if !is_duplicate {
-                    self.contexts
-                        .push(ErrorContext::new(position, expected, ip));
-                }
-            }
-        }
-    }
-
     /// Check if any failures were recorded
     #[inline]
     pub fn has_failures(&self) -> bool {
-        !self.contexts.is_empty() || !self.deferred.is_empty()
+        !self.contexts.is_empty()
     }
 
     /// Get the furthest failure position
