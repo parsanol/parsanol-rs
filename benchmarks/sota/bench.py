@@ -88,6 +88,14 @@ def main():
         "tree-sitter (rust)",
         expected,
     )
+    run(
+        [
+            str(HERE / "runners/antlr/.venv/bin/python"),
+            str(HERE / "runners/antlr/run_antlr.py"), str(corpus), rounds,
+        ],
+        "ANTLR 4.13 (python3 target)",
+        expected,
+    )
 
 
 if __name__ == "__main__":
