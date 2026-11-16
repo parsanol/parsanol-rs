@@ -366,7 +366,8 @@ pub fn parse_handle(handle: u64, input: RString) -> Result<Value, Error> {
     }
 }
 
-/// Parse by registered handle with an explicit compatibility policy.
+/// Parse by registered handle with an explicit compatibility policy
+/// and an explicit diagnostics storage policy.
 ///
 /// The ordinary handle entry point remains strict. Parslet compatibility
 /// uses the native packrat walker at every input size: the bytecode VM
@@ -374,19 +375,36 @@ pub fn parse_handle(handle: u64, input: RString) -> Result<Value, Error> {
 /// parser as a recovery path and never changes the handle's VM policy.
 /// The host must pass an explicit string policy and reject a missing seam
 /// rather than silently discard a requested compatibility policy.
+/// `diagnostics` ("legacy" | "pending", rs#498) selects the failure-label
+/// storage: pending holds note-ordered inline labels with hash-first
+/// dedup and materializes at parse end — observable-identical output,
+/// measured −29% allocations on label-heavy grammars. The VM fast path
+/// ignores it (a successful VM parse materializes no labels anyway; VM
+/// failures fall through to the walker, where the policy applies).
 pub fn parse_handle_with_compatibility(
     handle: u64,
     input: RString,
     compatibility: String,
+    diagnostics: String,
 ) -> Result<Value, Error> {
     let ruby = Ruby::get().unwrap();
     let policy = match compatibility.as_str() {
-        "strict" => return parse_handle(handle, input),
+        "strict" => ParserCompatibility::Strict,
         "parslet" => ParserCompatibility::Parslet,
         _ => {
             return Err(Error::new(
                 ruby.exception_arg_error(),
                 format!("unknown parsing compatibility: {compatibility}"),
+            ))
+        }
+    };
+    let diagnostics_policy = match diagnostics.as_str() {
+        "legacy" => DiagnosticsPolicy::Legacy,
+        "pending" => DiagnosticsPolicy::Pending,
+        _ => {
+            return Err(Error::new(
+                ruby.exception_arg_error(),
+                format!("unknown diagnostics policy: {diagnostics}"),
             ))
         }
     };
@@ -409,6 +427,7 @@ pub fn parse_handle_with_compatibility(
             &owned,
             &entry.vm_disabled,
             policy,
+            diagnostics_policy,
         )
     } else {
         parse_with_grammar_compatibility(
@@ -418,6 +437,7 @@ pub fn parse_handle_with_compatibility(
             input_str,
             &entry.vm_disabled,
             policy,
+            diagnostics_policy,
         )
     }
 }
@@ -635,6 +655,7 @@ fn parse_with_grammar(
         input,
         vm_disabled,
         ParserCompatibility::Strict,
+        DiagnosticsPolicy::Legacy,
     )
 }
 
@@ -645,6 +666,7 @@ fn parse_with_grammar_compatibility(
     input: &str,
     vm_disabled: &std::sync::atomic::AtomicBool,
     compatibility: ParserCompatibility,
+    diagnostics: DiagnosticsPolicy,
 ) -> Result<Value, Error> {
     // Large inputs run on the precompiled bytecode VM (TODO.max-perf/4
     // phase 2): byte-identical trees per the differential gate, 2.76x
@@ -687,6 +709,9 @@ fn parse_with_grammar_compatibility(
     let mut parser = PortableParser::new(grammar, input, &mut arena);
     parser
         .set_compatibility(compatibility)
+        .map_err(|error| Error::new(ruby.exception_arg_error(), error.to_string()))?;
+    parser
+        .set_diagnostics_policy(diagnostics)
         .map_err(|error| Error::new(ruby.exception_arg_error(), error.to_string()))?;
 
     let ast = match parser.parse() {
