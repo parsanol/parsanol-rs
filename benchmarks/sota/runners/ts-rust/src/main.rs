@@ -46,14 +46,14 @@ fn count_error_bytes(root: tree_sitter::Node) -> (usize, Option<usize>) {
     (err_region.saturating_sub(recovered_inside), first_err)
 }
 
-fn named_node_offsets(node: tree_sitter::Node, out: &mut Vec<u32>) {
-    // Sorted start offsets of NAMED non-error nodes (the structure the
-    // recovery metric compares against the ground-truth value spans;
-    // anonymous tokens and ERROR/missing nodes are excluded).
+fn named_node_offsets(node: tree_sitter::Node, out: &mut Vec<String>) {
+    // NAMED non-error nodes as `start:end` byte spans (the structure
+    // the recovery metric compares against the ground-truth value
+    // spans; anonymous tokens and ERROR/missing nodes are excluded).
     let mut stack = vec![node];
     while let Some(n) = stack.pop() {
         if !n.is_error() && !n.is_missing() && n.is_named() {
-            out.push(n.start_byte() as u32);
+            out.push(format!("{}:{}", n.start_byte(), n.end_byte()));
         }
         let mut cursor = n.walk();
         if cursor.goto_first_child() {

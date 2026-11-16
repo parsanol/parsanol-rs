@@ -40,19 +40,23 @@ choice set is first-set disjoint (derivable at compile time), ordered
 choice collapses to indexed dispatch — the determinism fast path.
 Details and analysis: [the JSON receipt](../benchmarks/sota/results/2026-11-15-json.md).
 
-## Error recovery — corrupted JSON (60 seeded cases, 2026-11-15)
+## Error recovery — corrupted JSON (60 seeded cases, 2026-11-16)
 
-| metric | parsanol 1.5.1 | tree-sitter 0.25 |
+| metric | parsanol (suffix replay) | tree-sitter 0.25 |
 |---|---|---|
-| suffix recovery (mean) | 14.9% | 70.6% |
-| diagnostic distance (mean, lower is better) | ±24,743 | ±56,349 |
-| diagnostic on truncation | ±1 byte | root-ERROR at 0 |
+| suffix recovery (mean) | **92.6%** | 95.6% |
+| diagnostic distance (mean, lower is better) | **±24,744** | ±56,349 |
+| diagnostic on truncation | **±1 byte** | root-ERROR at 0 |
 
 parsanol wins diagnostic precision (its deepest-failure position tracks
 the corruption cause; tree-sitter's ERROR regions start far from the
-cause). tree-sitter wins suffix recovery until the recovery-envelope
-round lands on the json flavor. Details:
-[the recovery receipt](../benchmarks/sota/results/2026-11-15-json-recovery.md).
+cause) and closes the suffix gap from 14.7% to 92.6% — delete-20 rows
+win outright (96.2% vs 94.2%). Span-aware structure recall: 52.8% vs
+72.2% — tree-sitter's recovery tree keeps coarse non-error containers
+(one surviving root covers every ground-truth span; parsanol emits
+fine-grained per-iteration spans). Receipt:
+[the suffix-replay receipt](../benchmarks/sota/results/2026-11-16-recovery-suffix.md);
+history: [the layer-1 receipt](../benchmarks/sota/results/2026-11-16-recovery-anchor.md).
 
 ## Keystroke-scale incremental editing (200-keystroke traces, 2026-11-15)
 
