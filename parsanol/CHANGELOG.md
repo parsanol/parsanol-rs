@@ -109,6 +109,15 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ## [Unreleased]
 
+- Span the ws shape: merged-choice bodies take the vectorized run
+- Reword the rejection input so the spell check passes (ba -> b a; still not ws-adjacent-to-a)
+- Single-byte choice merge: the ws shape compiles to one charset
+- Relocate the lead-byte helper above the test module (clippy items_after_test_module)
+- Determinism dispatch round: singleton-class decode, folded-literal first sets, the repetition cost gate (rs#533 TODO.perf/11)
+- VM-local regex predecode + the exact deferred-bookkeeping spec
+- Keep the public API surface: deferred buffer on the VM, tracker untouched
+- Rustfmt
+- VM hot-path round: deferred diagnostics, periodic timeout, Arc regex caches
 - Release v1.5.0
 - Align the internal parsanol-derive requirement to 1.5.0
 - Release v0.20.23
