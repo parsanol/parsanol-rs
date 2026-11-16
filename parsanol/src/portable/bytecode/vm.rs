@@ -109,6 +109,13 @@ struct BacktrackFrame {
     memo_rule: Option<usize>,
 }
 
+/// A `Regex` instruction's once-per-parse resolution: validity plus the
+/// decoded single-class fast path when the pattern is one.
+#[derive(Clone)]
+struct ResolvedRegex {
+    class: Option<std::sync::Arc<crate::portable::char_class::CharRanges>>,
+}
+
 /// The bytecode virtual machine
 pub struct BytecodeVM<'a> {
     /// The program to execute
@@ -147,6 +154,12 @@ pub struct BytecodeVM<'a> {
     /// Error tracker for detailed error messages
     error_tracker: ErrorTracker,
 
+    /// Per-parse resolution of `Regex` instructions: the TLS caches
+    /// (compile + HIR class decode) hash the pattern STRING per lookup,
+    /// which on class-dense grammars ran per character. Resolved once
+    /// per distinct regex_idx per parse instead.
+    regex_state: Vec<Option<ResolvedRegex>>,
+
     /// Deferred failure events: (position, ip) pairs recorded on the hot
     /// path WITHOUT materializing their `Expected` labels — the label
     /// construction (format!/char-set scans) only ever matters for the
@@ -154,6 +167,11 @@ pub struct BytecodeVM<'a> {
     /// `materialize_deferred_failures`). Kept here, not on ErrorTracker,
     /// so the tracker's public surface is unchanged.
     deferred_failures: Vec<(usize, usize)>,
+
+    /// The deferred buffer's own furthest position (independent of
+    /// `furthest_failure`, which the contextless `track_failure()` also
+    /// advances).
+    deferred_failure_furthest: usize,
 
     /// Capture state for generational scopes
     capture_state: CaptureState,
@@ -228,6 +246,8 @@ impl<'a> BytecodeVM<'a> {
             furthest_failure: 0,
             error_tracker: ErrorTracker::new(),
             deferred_failures: Vec::new(),
+            deferred_failure_furthest: 0,
+            regex_state: Vec::new(),
             capture_state: CaptureState::new(),
             value_stack: Vec::with_capacity(64),
             rep_registers: Vec::with_capacity(16),
@@ -527,10 +547,27 @@ impl<'a> BytecodeVM<'a> {
                             message: format!("Invalid regex index: {}", regex_idx),
                         })?;
 
-                // Use the regex cache
-                regex_cache::get_or_compile(pattern).ok_or_else(|| ParseError::Internal {
-                    message: format!("Failed to compile regex: {}", pattern),
-                })?;
+                // Resolve once per distinct regex_idx per parse: the
+                // TLS caches hash the pattern string per lookup, which
+                // on class-dense grammars ran per character.
+                let idx = *regex_idx as usize;
+                if idx >= self.regex_state.len() {
+                    self.regex_state.resize_with(idx + 1, || None);
+                }
+                if self.regex_state[idx].is_none() {
+                    match regex_cache::get_or_compile(pattern) {
+                        None => {
+                            return Err(ParseError::Internal {
+                                message: format!("Failed to compile regex: {}", pattern),
+                            });
+                        }
+                        Some(_) => {
+                            let class = regex_cache::get_or_decode_class(pattern);
+                            self.regex_state[idx] = Some(ResolvedRegex { class });
+                        }
+                    }
+                }
+                let class = self.regex_state[idx].as_ref().and_then(|r| r.class.clone());
 
                 // The tree-walker rejects regexes at end-of-input (even
                 // zero-width-matchable ones) — parity requires the same.
@@ -545,7 +582,7 @@ impl<'a> BytecodeVM<'a> {
                 // lazy-DFA determinization is catastrophic per character,
                 // and the keyword spellings lower to per-char class
                 // patterns, so this is the VM's dominant corpus cost.
-                if let Some(class) = regex_cache::get_or_decode_class(pattern) {
+                if let Some(class) = class {
                     if let Some(char_len) = class.match_at(self.input, self.position) {
                         let start = self.position;
                         self.position += char_len;
@@ -1386,14 +1423,23 @@ impl<'a> BytecodeVM<'a> {
         // `ErrorTracker::record_failure` exactly (including dropping a
         // first failure AT position 0), so the drained events replay
         // through the eager `record_failure` byte-identically.
-        let prev_furthest = self.furthest_failure;
-        if self.position >= prev_furthest {
-            if self.position > prev_furthest {
+        // The buffer's furthest is tracked SEPARATELY from
+        // `self.furthest_failure`: the contextless `track_failure()` also
+        // advances the latter, and the first context event AT that
+        // position must still be recorded (this is `record_failure_ip`'s
+        // exact bookkeeping, verbatim).
+        if self.position >= self.furthest_failure {
+            if self.position > self.deferred_failure_furthest {
+                self.deferred_failure_furthest = self.position;
                 self.deferred_failures.clear();
                 self.deferred_failures.push((self.position, self.ip));
-            } else if !self.deferred_failures.is_empty() {
+            } else if self.position == self.deferred_failure_furthest
+                && !self.deferred_failures.is_empty()
+            {
                 self.deferred_failures.push((self.position, self.ip));
             }
+        }
+        if self.position > self.furthest_failure {
             self.furthest_failure = self.position;
         }
     }
@@ -1619,6 +1665,40 @@ mod tests {
         let mut vm = BytecodeVM::new(&program, "b", &mut arena, config);
         let result = vm.run().unwrap();
         assert_eq!(result.end_pos, 1);
+    }
+
+    #[test]
+    fn test_deferred_diag_recorded_after_contextless_advance() {
+        // Regression (the 2026-11-16 deferred-diagnostics round): the
+        // contextless `track_failure()` in the Regex-class path advances
+        // `furthest_failure`; the FIRST context event AT that furthest
+        // must still be recorded even though the deferred buffer is
+        // empty. The buggy first rewrite dropped it, so a failing parse
+        // reported `failure_diagnostics() == None` and consumers
+        // expecting `(position, labels)` panicked (caught by the rs#533
+        // corrupted corpus, doc2.insert-20 — not by the crate suite).
+        let mut program = make_test_program();
+        // input "1z": branch A matches '1' then fails the class at pos 1
+        // (contextless advance to furthest 1); the backtrack re-enters at
+        // branch B, matches '1', then fails Char '2' AT pos 1 with
+        // context — recorded against an empty buffer.
+        let regex_idx = program.add_regex("[ab]");
+        program.add_instruction(Instruction::Choice { offset: 3 }); // ip 0 -> alt 4
+        program.add_instruction(Instruction::char(b'1')); // ip 1
+        program.add_instruction(Instruction::regex(regex_idx)); // ip 2
+        program.add_instruction(Instruction::Fail); // ip 3 (unreached)
+        program.add_instruction(Instruction::char(b'1')); // ip 4
+        program.add_instruction(Instruction::char(b'2')); // ip 5
+        program.add_instruction(Instruction::end()); // ip 6
+        program.set_entry_point(0);
+
+        let mut arena = AstArena::new();
+        let mut vm = BytecodeVM::new(&program, "1z", &mut arena, VMConfig::default());
+        assert!(vm.run().is_err(), "the parse must fail");
+        vm.materialize_deferred_failures();
+        let (pos, labels) = vm.failure_diagnostics();
+        assert_eq!(pos, 1, "the deepest failure is at the Char '2' position");
+        assert_eq!(labels, vec!["2".to_string()]);
     }
 
     #[test]
