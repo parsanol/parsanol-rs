@@ -1,16 +1,18 @@
 //! Packrat cache memory bound (TODO.sota/6).
 //!
-//! The cache is the hard-bounded tier: entries (24 B) plus the slot table
-//! (4 B/slot, power-of-two) clamp at ~62 MiB regardless of input size
-//! (see `DenseCache::for_input`). The arena is a separate, uncapped tier:
-//! total parse memory stays input-proportional unless a governor limit is
-//! configured with `set_max_memory`.
+//! The cache is the hard-bounded tier: entries (24 B) plus the slot
+//! table (4 B/slot, power-of-two) clamp at the memo window
+//! (`DenseCache::WORKING_WINDOW_ENTRIES`, ~2 MiB) for large inputs,
+//! regardless of how big the nominal packrat surface is (see
+//! `DenseCache::for_input`). The arena is a separate, uncapped tier:
+//! total parse memory stays input-proportional unless a governor limit
+//! is configured with `set_max_memory`.
 
 use parsanol::portable::arena::AstArena;
 use parsanol::portable::grammar::Grammar;
 use parsanol::portable::parser::PortableParser;
 
-const CACHE_CEILING: usize = 65 * 1024 * 1024;
+const CACHE_CEILING: usize = 4 * 1024 * 1024;
 
 fn rep_grammar() -> String {
     let atoms = serde_json::json!([
@@ -23,7 +25,9 @@ fn rep_grammar() -> String {
 #[test]
 fn giant_input_stays_under_the_cache_ceiling() {
     // 600 KB input: input_len * atom_count sizes the cache from the
-    // full packrat surface before parsing starts.
+    // full packrat surface before parsing starts, and the memo window
+    // floors the working set so the tables stay cache-resident on the
+    // linear scan.
     let input = "a".repeat(600_000);
     let grammar = Grammar::from_json(&rep_grammar()).expect("grammar compiles");
     let mut arena = AstArena::for_input(input.len());
@@ -33,12 +37,12 @@ fn giant_input_stays_under_the_cache_ceiling() {
 
     let cache = parser.cache_memory_usage();
     assert!(
-        cache > 10 * 1024 * 1024,
+        cache > 1 * 1024 * 1024,
         "expected a populated packrat cache on a giant input, got {cache} bytes"
     );
     assert!(
         cache <= CACHE_CEILING,
-        "cache exceeded its documented bound: {cache} bytes"
+        "cache exceeded its documented window bound: {cache} bytes"
     );
     assert!(
         parser.memory_usage() >= cache,

@@ -251,6 +251,14 @@ impl Default for DenseCache {
 }
 
 impl DenseCache {
+    /// The bounded memo window for large inputs (`for_input` clamps its
+    /// sizing to this). Entries are appended in parse order, so a cap hit
+    /// recycles the oldest half and keeps the newest half — the slice the
+    /// backtracking parse is still revisiting. Window-sized tables stay
+    /// cache-resident, which is what makes probes cheap on linear-scan
+    /// corpora (see `for_input`).
+    pub const WORKING_WINDOW_ENTRIES: usize = 1 << 16;
+
     /// Create a new cache with estimated capacity
     #[inline]
     pub fn new(estimated_entries: usize) -> Self {
@@ -285,16 +293,20 @@ impl DenseCache {
     ///
     /// # Memory bound
     ///
-    /// With `E = clamp(input_len * atom_count, 4096, 2_000_000)` entries:
+    /// With `E = clamp(input_len * atom_count, 4096, 2_000_000)` entries,
+    /// then floored to the memo window (`WORKING_WINDOW_ENTRIES`) for
+    /// large inputs:
     ///
     /// | component | bound |
     /// |---|---|
-    /// | slot table | `4 B * next_pow2(E)`, doubled once when the 0.75 load factor is crossed: <= 16 MiB |
-    /// | entries | `24 B * E`: <= 48 MB (45.8 MiB) |
+    /// | slot table | `4 B * next_pow2(E)`, doubled once when the 0.75 load factor is crossed: <= 16 MiB unwindowsized, 0.25 MiB at the window |
+    /// | entries | `24 B * E`: <= 48 MB (45.8 MiB) unwindowsized, ~1.6 MiB at the window |
     ///
-    /// So the cache itself is bounded at **~62 MiB per parser**, independent of
-    /// input size. That is the only hard-bounded allocation in a plain parse:
-    /// the arena is not included here and is **uncapped by default**
+    /// So the cache itself is bounded at **~62 MiB per parser** for inputs
+    /// that fit under the window, and at **~2 MiB per parser** once the
+    /// window is in force, independent of input size. That is the only
+    /// hard-bounded allocation in a plain parse: the arena is not included
+    /// here and is **uncapped by default**
     /// (`ParserConfig::max_memory == 0`), so total parse memory stays
     /// input-proportional in the worst case. Call
     /// `PortableParser::set_max_memory` to make the governor enforce a ceiling.
@@ -303,6 +315,11 @@ impl DenseCache {
     /// arena is bounded by the 32 MiB snapshot budget, and the entry cap grows
     /// with the retained set (see `insert`), so the slot table does not double
     /// per insert.
+    ///
+    /// Large inputs additionally work inside a bounded **memo window**
+    /// (see [`Self::WORKING_WINDOW_ENTRIES`]): the slot table and the entry
+    /// buffer stay at window size, and the recycle keeps the newest half of
+    /// the window on every cap hit instead of only the snapshot set.
     #[inline]
     pub fn for_input(input_len: usize, atom_count: usize) -> Self {
         // For large grammars, we need significantly more cache capacity
@@ -320,6 +337,21 @@ impl DenseCache {
 
         let min_capacity = if atom_count > 100 { 10000 } else { 1000 };
         let sized = estimated.clamp(min_capacity, 2_000_000);
+
+        // The memo window (TODO.perf/12 round 2): inputs far above the
+        // window parse linearly forward — document tables, long repetition
+        // bodies — and their backtracking re-visits are local (within the
+        // alternative span under trial), so a bounded newest-first window
+        // serves the same hits as the full table at a fraction of the
+        // footprint. The old 2M-entry ceiling priced every probe against
+        // an 8 MiB slot table and a 48 MiB entry buffer (cold on every
+        // access) and cycled the whole non-snapshot set through
+        // retain + rebuild on every cap hit; the window keeps the tables
+        // L2-resident and drops only the oldest half per recycle. The
+        // window is never applied below the small-input floors: when the
+        // full surface fits, `sized.min(exact)` still sizes to it and
+        // nothing recycles.
+        let sized = sized.min(Self::WORKING_WINDOW_ENTRIES.max(min_capacity));
 
         // rs#486: the surface's exact ceiling. Memo keys are (position,
         // atom) pairs — at most (len+1) x atom_count of them — and each
@@ -418,23 +450,37 @@ impl DenseCache {
 
     /// Insert an entry into the cache
     ///
-    /// When the cache reaches `max_entries`, the oldest window of entries is
-    /// recycled and insertion continues. Silently freezing at the cap would
-    /// disable memoization for the rest of a large parse (the dominant cost in
-    /// parsanol-ruby#52); a reset keeps memory bounded while entries near the
-    /// current position — the ones backtracking re-visits — stay warm.
+    /// When the cache reaches `max_entries`, the oldest half of the window
+    /// is recycled and insertion continues. Silently freezing at the cap
+    /// would disable memoization for the rest of a large parse (the
+    /// dominant cost in parsanol-ruby#52); a reset keeps memory bounded
+    /// while entries near the current position — the ones backtracking
+    /// re-visits — stay warm. Recycling half instead of everything
+    /// non-snapshot keeps the recent window intact across the boundary:
+    /// a retry at a position just before the cap still replays, and the
+    /// rebuild cost is amortized over half a window of inserts.
     ///
-    /// Snapshot-marked entries survive the recycle: they are the
-    /// cross-parse retention of the incremental tiers (TODO.perf/4/9).
-    /// Wiping them turned every edit parse after the first into a cold
-    /// full parse (0 hits across a 100-keystroke session). When nothing
-    /// but snapshots remains, grow the slot table instead of recycling
-    /// in a loop.
+    /// Snapshot-marked entries survive the recycle wherever they sit:
+    /// they are the cross-parse retention of the incremental tiers
+    /// (TODO.perf/4/9). Wiping them turned every edit parse after the
+    /// first into a cold full parse (0 hits across a 100-keystroke
+    /// session). When nothing but snapshots remains, grow the slot table
+    /// instead of recycling in a loop.
     #[inline]
     pub fn insert(&mut self, entry: CacheEntry) {
         if self.entries.len() >= self.max_entries {
             let before = self.entries.len();
-            self.entries.retain(|e| e.is_snapshot());
+            // Keep snapshots (cross-parse retention) plus the newest half
+            // of the window (entries are in insertion order). The running
+            // index decides by position, so snapshots in the old half are
+            // retained too.
+            let half = before / 2;
+            let mut index = 0usize;
+            self.entries.retain(|e| {
+                let keep = e.is_snapshot() || index >= half;
+                index += 1;
+                keep
+            });
             let dropped = before - self.entries.len();
             if dropped > 0 {
                 self.drops += dropped as u64;
@@ -804,8 +850,15 @@ mod tests {
         // The first window is gone, but the most recent inserts must hit.
         assert!(cache.get(63, 1, 0).is_some(), "recent insert must hit");
         assert!(cache.get(63, 1, 0).is_some(), "repeat lookup must hit");
-        // Memory stays bounded at the cap.
-        assert!(cache.len() <= 8, "len must stay within the cap");
+        // Memory stays bounded at the recycle cap: new(8) rounds capacity
+        // to 16 and derives the cap from it, and the newest-half recycle
+        // keeps every post-warm-up len within that cap (the newest half
+        // plus the incoming insert can never exceed it).
+        assert!(
+            cache.len() <= 12,
+            "len must stay within the recycle cap: {}",
+            cache.len()
+        );
     }
 
     #[test]
@@ -940,17 +993,21 @@ mod tests {
             tiny.memory_usage()
         );
 
-        // input_len * atom_count clamps at 2M entries: 48 MB entries plus
-        // an 8-16 MiB slot table. 65 MiB is the documented ceiling.
+        // A giant input works inside the memo window now: the slot table
+        // and the entry tier clamp at WORKING_WINDOW_ENTRIES regardless
+        // of the nominal surface, so the whole cache stays ~2 MiB (see
+        // `for_input`). The old contract reserved the full 2M-entry tier
+        // (~62 MiB) — that reserve priced every probe against cold tables
+        // and bought nothing on linear-scan inputs.
         let giant = DenseCache::for_input(usize::MAX / 2, 10_000);
         assert!(
-            giant.memory_usage() > 40 * 1024 * 1024,
-            "giant cache should reserve the entry tier: {}",
+            giant.memory_usage() > 1 * 1024 * 1024,
+            "giant cache should still reserve the windowed tiers: {}",
             giant.memory_usage()
         );
         assert!(
-            giant.memory_usage() <= 65 * 1024 * 1024,
-            "cache exceeded its documented bound: {}",
+            giant.memory_usage() <= 8 * 1024 * 1024,
+            "cache exceeded its documented window bound: {}",
             giant.memory_usage()
         );
     }
