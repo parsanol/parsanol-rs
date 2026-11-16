@@ -4,7 +4,7 @@
 //! The VM uses a stack-based backtracking approach inspired by LPeg.
 
 use super::capture::{CaptureFrame, CaptureProcessor};
-use super::error::ErrorTracker;
+use super::error::{instruction_to_expected, ErrorTracker};
 use super::instruction::Instruction;
 use super::program::Program;
 use crate::portable::arena::AstArena;
@@ -147,6 +147,14 @@ pub struct BytecodeVM<'a> {
     /// Error tracker for detailed error messages
     error_tracker: ErrorTracker,
 
+    /// Deferred failure events: (position, ip) pairs recorded on the hot
+    /// path WITHOUT materializing their `Expected` labels — the label
+    /// construction (format!/char-set scans) only ever matters for the
+    /// furthest failure, so it happens once at parse end (see
+    /// `materialize_deferred_failures`). Kept here, not on ErrorTracker,
+    /// so the tracker's public surface is unchanged.
+    deferred_failures: Vec<(usize, usize)>,
+
     /// Capture state for generational scopes
     capture_state: CaptureState,
 
@@ -219,6 +227,7 @@ impl<'a> BytecodeVM<'a> {
             start_time: Instant::now(),
             furthest_failure: 0,
             error_tracker: ErrorTracker::new(),
+            deferred_failures: Vec::new(),
             capture_state: CaptureState::new(),
             value_stack: Vec::with_capacity(64),
             rep_registers: Vec::with_capacity(16),
@@ -252,15 +261,13 @@ impl<'a> BytecodeVM<'a> {
 
     /// Whether any terminal failure was tracked during the run.
     pub fn error_tracker_has_failures(&self) -> bool {
-        self.error_tracker.has_failures()
+        !self.deferred_failures.is_empty() || self.error_tracker.has_failures()
     }
 
     /// Deepest terminal failure: the furthest position and its expected
-    /// labels (see `parse_with_vm_diag`). Materializes the deferred
-    /// hot-path events once, at parse end — the only point where labels
-    /// are actually consumed.
-    pub fn failure_diagnostics(&mut self) -> (usize, Vec<String>) {
-        self.error_tracker.materialize_deferred(self.program);
+    /// labels (see `parse_with_vm_diag`). Callers that track via the hot
+    /// path must call `materialize_deferred_failures` first.
+    pub fn failure_diagnostics(&self) -> (usize, Vec<String>) {
         (
             self.error_tracker.furthest_position(),
             self.error_tracker.expected_labels_at_furthest(),
@@ -1371,16 +1378,39 @@ impl<'a> BytecodeVM<'a> {
     /// Track a failure with context about what was expected
     #[inline]
     fn track_failure_with_context(&mut self) {
-        if self.position >= self.furthest_failure {
-            // Hot path: record (position, ip) only. The Expected label
-            // construction (format!/char-set scans) is deferred to
-            // `failure_diagnostics` — on a successful parse it never
-            // runs, and on failure only the furthest event's labels
-            // are ever read.
-            self.error_tracker.record_failure_ip(self.position, self.ip);
-        }
-        if self.position > self.furthest_failure {
+        // Hot path: record (position, ip) only. The Expected label
+        // construction (format!/char-set scans) is deferred to
+        // `materialize_deferred_failures` — on a successful parse it
+        // never runs, and on failure only the furthest event's labels
+        // are ever read. The furthest bookkeeping below mirrors
+        // `ErrorTracker::record_failure` exactly (including dropping a
+        // first failure AT position 0), so the drained events replay
+        // through the eager `record_failure` byte-identically.
+        let prev_furthest = self.furthest_failure;
+        if self.position >= prev_furthest {
+            if self.position > prev_furthest {
+                self.deferred_failures.clear();
+                self.deferred_failures.push((self.position, self.ip));
+            } else if !self.deferred_failures.is_empty() {
+                self.deferred_failures.push((self.position, self.ip));
+            }
             self.furthest_failure = self.position;
+        }
+    }
+
+    /// Materialize the deferred (position, ip) events into the error
+    /// tracker through the eager `record_failure` — once per parse, and
+    /// only when a consumer actually reads the diagnostics.
+    fn materialize_deferred_failures(&mut self) {
+        if self.deferred_failures.is_empty() {
+            return;
+        }
+        let events = std::mem::take(&mut self.deferred_failures);
+        for (position, ip) in events {
+            if let Some(instr) = self.program.get_instruction(ip) {
+                let expected = instruction_to_expected(instr, self.program);
+                self.error_tracker.record_failure(position, expected, ip);
+            }
         }
     }
 
@@ -1442,6 +1472,7 @@ pub fn parse_with_vm_diag(
         capture_state: None,
     });
     let diagnostics = if vm.error_tracker_has_failures() {
+        vm.materialize_deferred_failures();
         Some(vm.failure_diagnostics())
     } else {
         None
@@ -1486,6 +1517,7 @@ pub fn parse_with_vm_capped(
         return VmCappedOutcome::BudgetExceeded;
     }
     let diagnostics = if vm.error_tracker_has_failures() {
+        vm.materialize_deferred_failures();
         Some(vm.failure_diagnostics())
     } else {
         None
