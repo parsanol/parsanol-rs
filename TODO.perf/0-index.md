@@ -16,7 +16,7 @@ decomposition of everything left on parsanol performance:
 | 8 | Incremental latency benchmark | follow-up of 4 | SHIPPED (this round) |
 | 9 | Prefix-tree reuse | the measured ceiling of 4/8 | RECEIPT-ELEVATED (rs#528: reused 0/200 on JSON; the named fix) |
 | 10 | Success-path diagnostics overhead | rs#533 receipt (VM tracks every failed alternative) | SHIPPED (VM 6.2x) |
-| 11 | Determinism dispatch: Switch tables + Scan runs | rs#533 receipt (Lark 3.1x ahead = strategy tax) | this campaign |
+| 11 | Determinism dispatch: Switch tables + Scan runs | rs#533 receipt (Lark 3.1x ahead = strategy tax) | dispatch LANDED (8.7x cum.); Scan open |
 | 12 | Recognition/construction split + pooled tree writes | rs#533 receipt | this campaign |
 | 13 | Deterministic-subset codegen (LR tables / native SM) | item 3's codegen line; the tree-sitter endgame | specced |
 
