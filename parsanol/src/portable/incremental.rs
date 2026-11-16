@@ -63,7 +63,7 @@
 use super::{
     arena::AstArena,
     ast::{AstNode, ParseError},
-    cache::DenseCache,
+    cache::{DenseCache, NodeTag},
     grammar::{Atom, Grammar, RepetitionTag},
 };
 
@@ -332,6 +332,13 @@ pub struct IncrementalParser<'a> {
 
     /// Previous input length (for position translation)
     prev_input_len: usize,
+
+    /// The pending single edit's suffix shift: (edit_end in OLD input
+    /// coordinates, length delta). Set by the single-edit re-parse
+    /// entrypoints; the retention pass keys the surviving suffix
+    /// entries at delta-shifted positions (rs#542). Multi-edit calls
+    /// leave it None and keep the cutoff-only window.
+    pending_shift: Option<(u32, i64)>,
 }
 
 /// A persistent output arena past this budget is reset wholesale
@@ -354,6 +361,7 @@ impl<'a> IncrementalParser<'a> {
             last_spine_trace: Vec::new(),
             spliced_parses: 0,
             prev_input_len: 0,
+            pending_shift: None,
         }
     }
 
@@ -372,6 +380,7 @@ impl<'a> IncrementalParser<'a> {
             last_spine_trace: Vec::new(),
             spliced_parses: 0,
             prev_input_len: 0,
+            pending_shift: None,
         }
     }
 
@@ -393,6 +402,39 @@ impl<'a> IncrementalParser<'a> {
         // entries.
         let (result, _, _) = self.parse_and_snapshot(input, arena);
         result
+    }
+
+    /// The single-edit suffix shift (rs#542): keep entries entirely
+    /// ABOVE the edit region, keyed at delta-shifted positions — the
+    /// suffix bytes are byte-identical between the old and new inputs,
+    /// so a match lying wholly within the suffix is equally valid at
+    /// shifted coordinates (tree-sitter's old-tree reuse, in memo-key
+    /// space). Only arena-free values shift: pool-backed entries
+    /// describe trees whose inner offsets cannot move coherently.
+    /// Consumes `pending_shift`.
+    fn retain_suffix_shift(&mut self, cutoff: usize, root_atom: u16, input_len_changed: bool) {
+        let Some((edit_end_old, delta)) = self.pending_shift.take() else {
+            return;
+        };
+        self.cache.retain(|entry| {
+            let entry_end = entry.end_pos as usize;
+            let is_root_at_start = entry.pos == 0 && entry.atom_id == root_atom;
+            let below = entry_end < cutoff && !(input_len_changed && is_root_at_start);
+            let shiftable = entry.pos as i64 >= edit_end_old as i64
+                && matches!(entry.node_tag, NodeTag::Nil | NodeTag::InputRef);
+            below || shiftable
+        });
+        for entry in self.cache.entries_mut() {
+            if entry.pos as i64 >= edit_end_old as i64 {
+                entry.pos = (entry.pos as i64 + delta) as u32;
+                entry.end_pos = (entry.end_pos as i64 + delta) as u32;
+                if entry.node_tag == NodeTag::InputRef {
+                    entry.node_data_a = (entry.node_data_a as i64 + delta) as u32;
+                }
+            }
+        }
+        // The keys moved: rebuild the slot table.
+        self.cache.retain(|_| true);
     }
 
     /// Parse against the retained cache, then convert the entries the
@@ -420,11 +462,15 @@ impl<'a> IncrementalParser<'a> {
         //
         // The surviving window is position-stable, so it replays
         // correctly.
-        self.cache.retain(|entry| {
-            let entry_end = entry.end_pos as usize;
-            let is_root_at_start = entry.pos == 0 && entry.atom_id == root_atom;
-            entry_end < cutoff && !(input_len_changed && is_root_at_start)
-        });
+        if self.pending_shift.is_some() {
+            self.retain_suffix_shift(cutoff, root_atom, input_len_changed);
+        } else {
+            self.cache.retain(|entry| {
+                let entry_end = entry.end_pos as usize;
+                let is_root_at_start = entry.pos == 0 && entry.atom_id == root_atom;
+                entry_end < cutoff && !(input_len_changed && is_root_at_start)
+            });
+        }
 
         let mut parser = super::parser::PortableParser::new_with_cache_and_snap(
             &self.grammar,
@@ -493,6 +539,10 @@ impl<'a> IncrementalParser<'a> {
         edit: Edit,
     ) -> Result<IncrementalResult, ParseError> {
         self.dirty_tracker.mark_edit(&edit);
+        self.pending_shift = Some((
+            edit.offset as u32 + edit.old_length as u32,
+            edit.delta() as i64,
+        ));
         self.finish_parse(input, arena)
     }
 
@@ -566,6 +616,10 @@ impl<'a> IncrementalParser<'a> {
         edit: Edit,
     ) -> Result<IncrementalResult, ParseError> {
         self.dirty_tracker.mark_edit(&edit);
+        self.pending_shift = Some((
+            edit.offset as u32 + edit.old_length as u32,
+            edit.delta() as i64,
+        ));
         self.finish_retained(input)
     }
 
@@ -601,7 +655,13 @@ impl<'a> IncrementalParser<'a> {
         // parse keeps the about-to-be-built tree valid.
         if self.output_arena.memory_usage() > OUTPUT_ARENA_BUDGET {
             self.output_arena = AstArena::new();
-            self.cache.clear();
+            // Pool-backed entries reference the reset arena and dangle;
+            // arena-free entries (terminals, failures) do not — keep
+            // them, or long sessions go cold every parse past the cap
+            // (the doc3 trace: 200 retained parses × 152 KB blew the
+            // budget, cleared the window, reused 0 forever).
+            self.cache
+                .retain(|entry| matches!(entry.node_tag, NodeTag::Nil | NodeTag::InputRef));
             // Stale tree nodes reference the reset arena — the splice
             // must not graft from them.
             self.last_root = None;
@@ -623,11 +683,15 @@ impl<'a> IncrementalParser<'a> {
         self.prev_input_len = input.len();
 
         // Same pre-parse invalidation as the snapshot tier.
-        self.cache.retain(|entry| {
-            let entry_end = entry.end_pos as usize;
-            let is_root_at_start = entry.pos == 0 && entry.atom_id == root_atom;
-            entry_end < cutoff && !(input_len_changed && is_root_at_start)
-        });
+        if self.pending_shift.is_some() {
+            self.retain_suffix_shift(cutoff, root_atom, input_len_changed);
+        } else {
+            self.cache.retain(|entry| {
+                let entry_end = entry.end_pos as usize;
+                let is_root_at_start = entry.pos == 0 && entry.atom_id == root_atom;
+                entry_end < cutoff && !(input_len_changed && is_root_at_start)
+            });
+        }
 
         // Splice eligibility (v1): a repetition-spine document — root
         // Repetition, optionally behind one Named — with no Dynamic
@@ -1379,6 +1443,91 @@ mod edit_sequence_tests {
             "expected substantial reuse, got {} reused / {} invalidated",
             result.reused_cache_entries,
             result.invalidated_cache_entries
+        );
+    }
+
+    #[test]
+    fn suffix_entries_survive_scattered_edits_on_non_spine_roots() {
+        // rs#542's window collapse: a non-spine root makes the splice
+        // ineligible, and the single-cutoff policy kept ZERO entries
+        // once an edit landed earlier than the previous one. The
+        // suffix shift keys the entries above the edit at shifted
+        // positions, so the window survives scattered edits.
+        let mut g = Grammar::new();
+        let key = g.add_atom(Atom::Re {
+            pattern: "[a-z][a-z0-9]*".to_string(),
+        });
+        let val = g.add_atom(Atom::Re {
+            pattern: "[0-9]+".to_string(),
+        });
+        let eq = g.add_atom(Atom::Str {
+            pattern: "=".to_string(),
+        });
+        let nl = g.add_atom(Atom::Str {
+            pattern: "\n".to_string(),
+        });
+        let pair = g.add_atom(Atom::Sequence {
+            atoms: vec![key, eq, val, nl],
+        });
+        let pairs = g.add_atom(Atom::Repetition {
+            atom: pair,
+            min: 0,
+            max: None,
+            tag: crate::portable::grammar::RepetitionTag::Repetition,
+        });
+        // A one-element Sequence root: NOT a Repetition/Named(Repetition),
+        // so the splice is ineligible and reuse rides the memo window.
+        let root = g.add_atom(Atom::Sequence { atoms: vec![pairs] });
+        g.root = root;
+
+        let input = doc(2000);
+        let mut inc = IncrementalParser::owned(g.clone());
+        inc.parse_retained(&input).expect("initial parse");
+
+        // Two scattered edits: a later line first, then an EARLIER
+        // one (the old policy's collapse case). Identity must hold on
+        // both, and the second (earlier) edit must still retain.
+        let mut text = input.clone();
+        let mut total_reused = 0;
+        for line_no in [1500, 300] {
+            let start = text
+                .lines()
+                .take(line_no)
+                .map(|l| l.len() + 1)
+                .sum::<usize>();
+            let old_line_len = text[start..].find('\n').map(|i| i + 1).unwrap_or(0);
+            let replacement = format!("zed{}=1\n", line_no);
+            let next = format!(
+                "{}{}{}",
+                &text[..start],
+                replacement,
+                &text[start + old_line_len..]
+            );
+            let result = inc
+                .parse_with_edit_retained(
+                    &next,
+                    Edit::replace(start, old_line_len, replacement.len()),
+                )
+                .expect("incremental parse");
+            total_reused += result.reused_cache_entries;
+            // Identity: the retained tree equals a fresh parse's tree.
+            let reference = full_parse(&g, &next).expect("reference parse");
+            let mut retained_strings = Vec::new();
+            walk_strings(
+                &result.ast,
+                inc.retained_arena(),
+                &next,
+                &mut retained_strings,
+            );
+            assert_eq!(
+                retained_strings, reference,
+                "line {line_no}: the retained tree diverged from the fresh parse"
+            );
+            text = next;
+        }
+        assert!(
+            total_reused > 100,
+            "scattered edits must retain the suffix window: {total_reused}"
         );
     }
 }
