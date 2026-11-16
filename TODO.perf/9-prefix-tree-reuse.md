@@ -261,3 +261,19 @@ shrink writes a fresh right-sized table sequentially and then all
 maintenance loops scan only what survives. Same maintenance problem,
 opposite data motion, opposite verdict. The strict-cutoff gates and
 the 40-edit sessions stayed green throughout (618 passed).
+
+## Round 2026-11-16: receipt-named THE lever (rs#528 first receipt)
+
+The rs#533 incremental receipt measured this design's current state on
+JSON keystroke traces: correct at 400/400 tree-identity checks, but
+**no speedup** — 0.93× own-fresh on 13.4 KB, 1.16× on 151.9 KB, while
+tree-sitter's old-tree reuse does 34–57×. The instrumentation shows
+why: `reused 0/200` steps on the large doc — the retention rule drops
+the ROOT memo entry whenever the input length changed, and a value
+grammar's root spans the entire document, so every keystroke
+invalidates the whole window. This item's splice design (deepest
+unchanged ancestor chain) is exactly the fix; the earlier KV
+engagement results (rs#271: 5/5 spliced, sub-ms) plus the collapse
+analysis in rs#258 carry over. The second lever is per-step fixed
+cost (snapshot adoption + budget checks) — the incremental session's
+machinery currently eats what the memo saves.
