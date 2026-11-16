@@ -1,0 +1,16 @@
+[package]
+name = "sota-bench-parsanol"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+parsanol = "1.5.1"
+
+[[bin]]
+name = "run_parsanol"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = 3
+
+[workspace]
