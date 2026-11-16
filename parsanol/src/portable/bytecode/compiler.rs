@@ -637,6 +637,48 @@ impl Compiler {
         Some((union, false))
     }
 
+    /// The exact single byte a branch atom matches, when the branch is
+    /// a bare one-byte match: Str of one byte, or an Re decoding to a
+    /// class that matches exactly one byte (probed over all 256 —
+    /// multi-byte codepoints fail the one-byte haystack). Anything
+    /// wrapped (Named/Capture/...) or multi-byte returns None.
+    fn single_byte_atom(&self, atom_idx: usize) -> Option<u8> {
+        match self.grammar.get_atom(atom_idx)? {
+            Atom::Str { pattern } if pattern.len() == 1 => Some(pattern.as_bytes()[0]),
+            Atom::Re { pattern } => {
+                let ranges = crate::portable::char_class::CharRanges::from_pattern(pattern)?;
+                let mut found: Option<u8> = None;
+                for b in 0..=255u8 {
+                    if ranges.match_at(&[b], 0) == Some(1) {
+                        if found.is_some() {
+                            return None;
+                        }
+                        found = Some(b);
+                    }
+                }
+                found
+            }
+            _ => None,
+        }
+    }
+
+    /// The merged charset for an alternative whose branches are all
+    /// bare distinct single-byte matches, or None.
+    fn single_byte_choice_set(&self, atoms: &[usize]) -> Option<CharSet> {
+        if atoms.len() < 2 {
+            return None;
+        }
+        let mut set = CharSet::new();
+        for &a in atoms {
+            let b = self.single_byte_atom(a)?;
+            if set.contains(b) {
+                return None; // overlapping branches: ordered choice semantics
+            }
+            set.add(b);
+        }
+        Some(set)
+    }
+
     /// Lead bytes of a regex we can prove: a character class, a literal,
     /// or an alternation/group of provable shapes. Case-insensitive
     /// literals lower to `(?i:...)` groups whose HIR is an alternation of
@@ -709,6 +751,21 @@ impl Compiler {
 
         if atoms.len() == 1 {
             return self.compile_atom(atoms[0]);
+        }
+
+        // Single-byte merge: every branch a bare single-byte match with
+        // pairwise-distinct bytes compiles to ONE charset — the same
+        // byte is consumed and the same span value produced whichever
+        // branch matches, so acceptance and trees are identical by
+        // construction. This is the per-character choice shape (json's
+        // ws = *( %x20 / %x09 / %x0A / %x0D )), where the interleaved
+        // choice costs a fail-branch per character; unlike ByteDispatch
+        // it is sound at any repetition depth (same consumed bytes, no
+        // per-alternative values to preserve).
+        if let Some(set) = self.single_byte_choice_set(atoms) {
+            let set_idx = self.program.add_char_set(set);
+            self.program.add_instruction(Instruction::charset(set_idx));
+            return Ok(entry);
         }
 
         // Shared-prefix split (TODO.perf/3): when every branch is a

@@ -62,3 +62,16 @@ Soundness gates (identity by construction):
 Expected: ws/string-content/digit loops drop the per-char Choice +
 loop machinery — the profile's remaining recognition dominator after
 the ~11% construction split (TODO.perf/12).
+
+## Round 2026-11-16 (2): single-byte choice merge — VM 13.9x cumulative
+
+The ws shape's interleaved per-character choice compiles to ONE
+charset (bare distinct single-byte branches only; strict compile-time
+extraction — Str-of-one-byte or a 256-probe-exact class; sound at any
+depth because consumed bytes and span values are identical by
+construction). VM 0.125 -> 0.078 us/B; recovery harness
+byte-identical; spec `single_byte_choices_merge_to_charsets_inside_
+repetitions`. The remaining per-char cost is the repetition loop's
+own iteration control (Choice/RepCount/PartialCommit) — the Scan
+instruction (bulk runs) removes it.
+Receipt: `benchmarks/sota/results/2026-11-16-charset-merge.md`.
