@@ -122,7 +122,7 @@ pub fn init(ruby: &Ruby) -> Result<(), Error> {
     native_module.define_module_function("_parse_handle", function!(parse_handle, 2))?;
     native_module.define_module_function(
         "_parse_handle_with_compatibility",
-        function!(parse_handle_with_compatibility, 3),
+        function!(parse_handle_with_compatibility, 4),
     )?;
 
     // B1 reference walker (TODO.sota/8): the plain recursive relation,
