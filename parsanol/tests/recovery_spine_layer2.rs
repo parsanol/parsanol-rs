@@ -131,19 +131,19 @@ fn member_iterations_consume_whole_members() {
 }
 
 #[test]
-fn declared_resync_engages_for_the_spines_rule() {
-    // `resync member` is declared on a non-root rule; the envelope's
-    // rule-atom table resolves the spine's rule call to it, and the
-    // skip spans become the declared junk runs (deterministic).
+fn non_root_resync_declaration_falls_back_and_still_recovers() {
+    // `resync member` is declared on a NON-root rule. The per-rule
+    // envelope resolution is parked (a rule->index table is
+    // order-dependent across compilers — both emit duplicate Entity
+    // copies per rule; see the mirror/envelope-members analysis), so
+    // the entry carries no rule_atoms/resyncs map and the spine-rule
+    // lookup falls through to the entry-level alias / the inferred
+    // scan. Recovery must still cover the clean suffix either way.
     let artifact = tiny_artifact(TINY_RESYNC);
     let entry = artifact.envelope_value()["entries"]["main"].clone();
     assert!(
-        entry["rule_atoms"]["member"].is_u64(),
-        "the rule-atom table carries the member rule"
-    );
-    assert!(
-        entry["resyncs"]["member"]["atoms"].is_array(),
-        "the declared member resync is baked into the entry"
+        entry.get("rule_atoms").is_none(),
+        "the rule-atom wire is parked — a fallback regression here means          the resolution started reading a wire member that no compiler          emits"
     );
     let (doc, _site) = members_doc(12, 40);
     let envelope = artifact
@@ -153,7 +153,7 @@ fn declared_resync_engages_for_the_spines_rule() {
     let last = spans.last().map(|(_, end)| *end).unwrap_or(0);
     assert!(
         last >= doc.len() - 2,
-        "declared resync must recover through to the end: last {last} of {}",
+        "recovery must reach the document end despite the parked wire:          last {last} of {}",
         doc.len()
     );
 }
