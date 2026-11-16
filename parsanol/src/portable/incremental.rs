@@ -339,6 +339,12 @@ pub struct IncrementalParser<'a> {
     /// entries at delta-shifted positions (rs#542). Multi-edit calls
     /// leave it None and keep the cutoff-only window.
     pending_shift: Option<(u32, i64)>,
+
+    /// The edit end in NEW coordinates after the shift applied — the
+    /// floor above which the parse's FRESH suffix entries stay
+    /// retained post-parse (they are already in the new coordinates).
+    /// usize::MAX when no shift applied.
+    applied_suffix_floor: usize,
 }
 
 /// A persistent output arena past this budget is reset wholesale
@@ -362,6 +368,7 @@ impl<'a> IncrementalParser<'a> {
             spliced_parses: 0,
             prev_input_len: 0,
             pending_shift: None,
+            applied_suffix_floor: usize::MAX,
         }
     }
 
@@ -381,6 +388,7 @@ impl<'a> IncrementalParser<'a> {
             spliced_parses: 0,
             prev_input_len: 0,
             pending_shift: None,
+            applied_suffix_floor: usize::MAX,
         }
     }
 
@@ -416,6 +424,7 @@ impl<'a> IncrementalParser<'a> {
         let Some((edit_end_old, delta)) = self.pending_shift.take() else {
             return;
         };
+        self.applied_suffix_floor = (edit_end_old as i64 + delta).max(0) as usize;
         self.cache.retain(|entry| {
             let entry_end = entry.end_pos as usize;
             let is_root_at_start = entry.pos == 0 && entry.atom_id == root_atom;
@@ -465,6 +474,7 @@ impl<'a> IncrementalParser<'a> {
         if self.pending_shift.is_some() {
             self.retain_suffix_shift(cutoff, root_atom, input_len_changed);
         } else {
+            self.applied_suffix_floor = usize::MAX;
             self.cache.retain(|entry| {
                 let entry_end = entry.end_pos as usize;
                 let is_root_at_start = entry.pos == 0 && entry.atom_id == root_atom;
@@ -686,6 +696,7 @@ impl<'a> IncrementalParser<'a> {
         if self.pending_shift.is_some() {
             self.retain_suffix_shift(cutoff, root_atom, input_len_changed);
         } else {
+            self.applied_suffix_floor = usize::MAX;
             self.cache.retain(|entry| {
                 let entry_end = entry.end_pos as usize;
                 let is_root_at_start = entry.pos == 0 && entry.atom_id == root_atom;
@@ -949,11 +960,20 @@ impl<'a> IncrementalParser<'a> {
         } else if spine_body.is_some() {
             self.body_chain = std::mem::take(&mut self.last_spine_trace);
         }
+        let suffix_floor = self.applied_suffix_floor;
         self.cache.retain_snapshot_adopt(
             |entry| {
                 let entry_end = entry.end_pos as usize;
                 let is_root_at_start = entry.pos == 0 && entry.atom_id == root_atom;
-                entry.success && entry_end < cutoff && !(input_len_changed && is_root_at_start)
+                let below =
+                    entry.success && entry_end < cutoff && !(input_len_changed && is_root_at_start);
+                // Fresh suffix entries the parse just inserted sit
+                // above the edit in the NEW coordinates — they are as
+                // valid as the below-window ones, and dropping them
+                // re-collapsed the window every keystroke (the doc3
+                // reused-0 tail of rs#542's slice-1 measurement).
+                let above = entry.success && entry.pos as usize >= suffix_floor;
+                below || above
             },
             |node| node.clone(),
         );
