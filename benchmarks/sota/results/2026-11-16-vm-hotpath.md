@@ -39,9 +39,21 @@ the packrat-differential and vm diagnostics specs untouched.
 | baseline (1.5.1 release, crates.io) | 1.086 | 0.828 |
 | + deferred diagnostics | 0.747 | 0.869 |
 | + Arc anchored cache + periodic timeout | 0.413 | 0.592 |
-| + Arc plain regex cache | **0.174** | **0.484** |
+| + Arc plain regex cache | 0.174 | 0.484 |
+| + VM-local regex predecode (final) | **0.153** | **0.464** |
 
-Cumulative: **VM 6.2×, interpreter 1.7×** — with zero grammar-language
+The final increment resolves each `Regex` instruction once per parse
+(compile + HIR class decode cached VM-locally by regex index): the TLS
+caches hash the pattern STRING per lookup, which on class-dense
+grammars ran per character. Its first version also exposed a real bug
+in fix 1 — the corrupted corpus caught what the crate suite missed:
+a contextless `track_failure()` advances `furthest_failure`, and the
+first context event AT that furthest was dropped (diagnostics `None`,
+doc2.insert-20). The buffer now keeps its own furthest —
+`record_failure_ip`'s bookkeeping verbatim — and the regression spec
+`test_deferred_diag_recorded_after_contextless_advance` pins it.
+
+Cumulative: **VM 7.1×, interpreter 1.8×** — with zero grammar-language
 or algorithm change. Context: Lark LALR 0.344, tree-sitter 0.029.
 The VM now beats every Python engine in the table and carries the
 typed-AST output tree-sitter doesn't build. The remaining 6× to
