@@ -1022,25 +1022,55 @@ impl<'a> IncrementalParser<'a> {
                 // The drain's cost concentrates on the edited member;
                 // probes above the edit ride the shifted memo (hits).
                 let mut bounds: Vec<(usize, usize)> = Vec::new();
-                let mut scan = 0usize;
-                while scan < input.len() {
-                    if let Ok(r) = parser.try_atom_impl(body, scan, false) {
-                        if r.end_pos > scan {
-                            break;
+                // The body anchors at its fixed literal (the comma in
+                // list grammars) — probe at anchors only. A per-byte
+                // scan pays a failing try_atom_impl at every position
+                // (the deferred failure tracker records each one);
+                // memchr over the anchor byte is O(anchors).
+                let bytes = input.as_bytes();
+                let anchor = {
+                    // The body's anchor: its first Str literal, read
+                    // once from the grammar.
+                    fn anchor_byte(grammar: &Grammar, body: usize) -> Option<u8> {
+                        let atom = grammar.get_atom(body)?;
+                        let atoms = match atom {
+                            Atom::Sequence { atoms } => atoms,
+                            _ => return None,
+                        };
+                        for &a in atoms {
+                            if let Some(Atom::Str { pattern }) = grammar.get_atom(a) {
+                                if pattern.len() == 1 {
+                                    return Some(pattern.as_bytes()[0]);
+                                }
+                            }
+                        }
+                        None
+                    }
+                    anchor_byte(&self.grammar.clone(), body)
+                };
+                let mut probe_cursor = 0usize;
+                let mut first_found = false;
+                while probe_cursor < input.len() {
+                    // Advance to the next anchor byte (or probe when
+                    // the body has none).
+                    if let Some(byte) = anchor {
+                        match bytes[probe_cursor..].iter().position(|&b| b == byte) {
+                            Some(off) => probe_cursor += off,
+                            None => break,
                         }
                     }
-                    scan += 1;
-                }
-                let mut probe_cursor = scan;
-                while probe_cursor < input.len() {
                     match parser.try_atom_impl(body, probe_cursor, false) {
                         Ok(r) if r.end_pos > probe_cursor => {
                             bounds.push((probe_cursor, r.end_pos));
                             probe_cursor = r.end_pos;
+                            first_found = true;
                         }
-                        _ => break,
+                        _ => {
+                            probe_cursor += 1;
+                        }
                     }
                 }
+                let _ = first_found;
                 // The probe and the previous tree must agree on the
                 // item count (the tree carries one item per iteration).
                 if !bounds.is_empty() && bounds.len() == plan.items_prev.len() {
