@@ -992,3 +992,96 @@ fn parg_legacy_memo_does_not_merge_distinct_equal_rules() {
     let tree = parsed["tree"].as_object().unwrap();
     assert!(tree.contains_key("f") && tree.contains_key("p"));
 }
+
+#[test]
+fn explicit_deepest_reporter_retains_speculative_causes_without_changing_memo() {
+    // Measured against Ruby 1.3.131 Deepest for all three constructs and both
+    // byte widths: speculative 'c' is retained at byte 2/3, versus the default
+    // causal reporter's actual '!' at byte 1/2.
+    for prefix in ["a", "α"] {
+        for kind in ["negative", "optional", "alternative"] {
+            for storage in [DiagnosticsPolicy::Legacy, DiagnosticsPolicy::Pending] {
+                let mut grammar = Grammar::new();
+                let ab = literal(&mut grammar, &format!("{prefix}b"));
+                let c = literal(&mut grammar, "c");
+                let inspected = grammar.add_atom(Atom::Sequence { atoms: vec![ab, c] });
+                let a = literal(&mut grammar, prefix);
+                let speculative = match kind {
+                    "negative" => grammar.add_atom(Atom::Lookahead {
+                        atom: inspected,
+                        positive: false,
+                    }),
+                    "optional" => grammar.add_atom(Atom::Repetition {
+                        atom: inspected,
+                        min: 0,
+                        max: Some(1),
+                        tag: RepetitionTag::Maybe,
+                    }),
+                    _ => grammar.add_atom(Atom::Alternative {
+                        atoms: vec![inspected, a],
+                    }),
+                };
+                let bang = literal(&mut grammar, "!");
+                let mut atoms = vec![speculative];
+                if kind != "alternative" {
+                    atoms.push(a);
+                }
+                atoms.push(bang);
+                grammar.root = grammar.add_atom(Atom::Sequence { atoms });
+                let input = format!("{prefix}b?");
+                let mut arena = AstArena::new();
+                let mut parser = PortableParser::new(&grammar, &input, &mut arena);
+                parser
+                    .set_compatibility(ParserCompatibility::Parslet)
+                    .unwrap();
+                parser.set_diagnostics_policy(storage).unwrap();
+                assert!(parser.parse().is_err());
+                assert_eq!(parser.failure_wire().unwrap().0, prefix.len());
+                parser.set_failure_reporter(FailureReporter::Deepest);
+                assert!(parser.legacy_cache.is_empty());
+                for _ in 0..2 {
+                    assert!(
+                        matches!(parser.parse(), Err(ParseError::Failed { position }) if position == prefix.len() + 1)
+                    );
+                    assert_eq!(parser.failure_wire().unwrap().0, prefix.len() + 1);
+                    assert!(parser.failure_wire().unwrap().1.contains(&"'c'".to_owned()));
+                    assert!(parser.legacy_cache.contains_key(&(c, prefix.len() + 1)));
+                }
+                parser.set_failure_reporter(FailureReporter::Default);
+                assert!(parser.parse().is_err());
+                assert_eq!(parser.failure_wire().unwrap().0, prefix.len());
+            }
+        }
+    }
+}
+
+#[test]
+fn artifact_deepest_reporter_is_explicit_and_preserves_accepted_tree() {
+    use crate::parg::{frontend::envelope::compile_source, PargArtifact, PargError};
+    let source = r#"grammar ExplicitReporter version "0.1.0" {
+      tree = ([("ab" "c")] "a" "!") as tree
+      entry main: tree
+    }"#;
+    let wire = compile_source(source).unwrap();
+    let artifact = PargArtifact::from_json(&wire.to_string()).unwrap();
+    let policy = ParserCompatibility::Parslet;
+    assert!(matches!(
+        artifact.parse_shape_with_compatibility("main", "ab?", policy),
+        Err(PargError::ParseWire { offset: 1, .. })
+    ));
+    assert!(matches!(
+        artifact.parse_shape_with_reporter("main", "ab?", policy, FailureReporter::Deepest),
+        Err(PargError::ParseWire { offset: 2, .. })
+    ));
+    for policy in [ParserCompatibility::Strict, ParserCompatibility::Parslet] {
+        let accepted = artifact
+            .parse_shape_with_compatibility("main", "a!", policy)
+            .unwrap();
+        assert_eq!(
+            artifact
+                .parse_shape_with_reporter("main", "a!", policy, FailureReporter::Deepest)
+                .unwrap(),
+            accepted
+        );
+    }
+}

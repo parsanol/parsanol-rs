@@ -29,7 +29,7 @@ mod stack_tests;
 mod tests;
 
 pub use config::{
-    DiagnosticsPolicy, ParserCompatibility, ParserConfig, DEFAULT_MAX_CALL_DEPTH,
+    DiagnosticsPolicy, FailureReporter, ParserCompatibility, ParserConfig, DEFAULT_MAX_CALL_DEPTH,
     DEFAULT_MAX_INPUT_SIZE, DEFAULT_MAX_RECURSION_DEPTH,
 };
 pub use context::ParseContext;
@@ -272,6 +272,11 @@ pub struct PortableParser<'a> {
     compatibility: ParserCompatibility,
     /// Failure-diagnostics storage policy (rs#498); legacy by default.
     diagnostics_policy: DiagnosticsPolicy,
+    failure_reporter: FailureReporter,
+    // Reporter state belongs to the whole reporting pass, independently of
+    // causal application frames and raw memo outcomes. Ruby Deepest#succ is
+    // a no-op: successful speculative applications do not rewind this state.
+    reporter_failure: pending::PendingFailure,
     /// Explicit executable-grammar policy; public Atom shape stays unchanged.
     ascii_state_match_atoms: Vec<bool>,
     /// Eager legacy memo retained for this parser's lifetime. Recycling a
@@ -602,6 +607,8 @@ impl<'a> PortableParser<'a> {
             cache,
             compatibility: ParserCompatibility::Strict,
             diagnostics_policy: DiagnosticsPolicy::Legacy,
+            failure_reporter: FailureReporter::Default,
+            reporter_failure: pending::PendingFailure::default(),
             ascii_state_match_atoms: Vec::new(),
             legacy_cache: std::collections::HashMap::new(),
             legacy_memo_identity: Vec::new(),
@@ -690,6 +697,8 @@ impl<'a> PortableParser<'a> {
             cache,
             compatibility: ParserCompatibility::Strict,
             diagnostics_policy: DiagnosticsPolicy::Legacy,
+            failure_reporter: FailureReporter::Default,
+            reporter_failure: pending::PendingFailure::default(),
             ascii_state_match_atoms: Vec::new(),
             legacy_cache: std::collections::HashMap::new(),
             legacy_memo_identity: Vec::new(),
@@ -781,6 +790,21 @@ impl<'a> PortableParser<'a> {
         Ok(())
     }
 
+    /// Select an explicit failure reporter before parsing. Changing it clears
+    /// warmed memo outcomes and diagnostics, just like changing compatibility.
+    /// The default reporter and Strict parsing remain unchanged.
+    pub fn set_failure_reporter(&mut self, reporter: FailureReporter) {
+        if self.failure_reporter != reporter {
+            self.failure_reporter = reporter;
+            self.reset_policy_state(self.compatibility);
+        }
+    }
+
+    /// The explicitly selected failure reporter.
+    pub fn failure_reporter(&self) -> FailureReporter {
+        self.failure_reporter
+    }
+
     fn reset_policy_state(&mut self, compatibility: ParserCompatibility) {
         self.cache.clear();
         self.legacy_cache.clear();
@@ -794,6 +818,7 @@ impl<'a> PortableParser<'a> {
         self.expected_label_hashes = None;
         self.ranked_failures = self.empty_legacy_failure.ranks.clone();
         self.pending_failure = pending::PendingFailure::default();
+        self.reporter_failure = pending::PendingFailure::default();
         self.max_end_pos = 0;
         self.partial_stash = None;
         self.spine_trace.clear();
@@ -894,7 +919,10 @@ impl<'a> PortableParser<'a> {
     /// Get memory usage
     #[inline]
     pub fn memory_usage(&self) -> usize {
-        self.arena.memory_usage() + self.cache.memory_usage() + self.legacy_cache_memory_usage()
+        self.arena.memory_usage()
+            + self.cache.memory_usage()
+            + self.legacy_cache_memory_usage()
+            + self.reporter_failure.memory_usage()
     }
 
     /// Cache-only memory usage. The default dense tier is hard-bounded
@@ -996,7 +1024,8 @@ impl<'a> PortableParser<'a> {
     fn check_resources(&mut self) -> Result<(), ParseError> {
         let (arena, cache, legacy) = (&self.arena, &self.cache, &self.legacy_cache);
         let legacy_bytes = self.legacy_diagnostic_bytes;
-        let pending_bytes = self.pending_failure.memory_usage();
+        let pending_bytes =
+            self.pending_failure.memory_usage() + self.reporter_failure.memory_usage();
         self.governor.check_resources_lazy(|| {
             arena.memory_usage()
                 + cache.memory_usage()
@@ -1759,14 +1788,18 @@ impl<'a> PortableParser<'a> {
     /// the pending store exactly once. A parse that noted nothing
     /// materializes nothing beyond empty vectors.
     fn sync_failure_surface(&mut self) {
-        if self.diagnostics_policy != DiagnosticsPolicy::Pending {
+        let failure = if self.failure_reporter == FailureReporter::Deepest {
+            &self.reporter_failure
+        } else if self.diagnostics_policy == DiagnosticsPolicy::Pending {
+            &self.pending_failure
+        } else {
             return;
-        }
-        self.has_failure = self.pending_failure.present;
-        self.deepest_failure_pos = self.pending_failure.deepest;
-        self.expected_labels = Arc::new(self.pending_failure.deepest_labels());
+        };
+        self.has_failure = failure.present;
+        self.deepest_failure_pos = failure.deepest;
+        self.expected_labels = Arc::new(failure.deepest_labels());
         self.expected_label_hashes = None;
-        self.ranked_failures = Arc::new(self.pending_failure.materialize_ranks());
+        self.ranked_failures = Arc::new(failure.materialize_ranks());
     }
 
     /// The deepest-set dedup probe: O(1) via the shadow index, with the
@@ -2117,6 +2150,12 @@ impl<'a> PortableParser<'a> {
     /// ranked list is dropped before any label is copied.
     fn note_failure_ref(&mut self, pos: usize, label: &str) {
         perf_count!(self.note_failure);
+        // The Ruby Context does not call its reporter for injected trivia.
+        // These notes survive successful speculative frames. Cached failures
+        // were already observed when first evaluated in this same pass.
+        if self.failure_reporter == FailureReporter::Deepest && self.trivia_depth == 0 {
+            self.reporter_failure.note(pos, label);
+        }
         // rs#498: the pending policy keeps note-ordered inline labels
         // with hash-first per-position dedup; the legacy buffer work
         // below runs only under the legacy policy.
@@ -3435,6 +3474,11 @@ impl<'a> PortableParser<'a> {
         };
         temp_parser.set_compatibility(self.compatibility)?;
         let _ = temp_parser.set_diagnostics_policy(self.diagnostics_policy);
+        temp_parser.set_failure_reporter(self.failure_reporter);
+        if self.failure_reporter == FailureReporter::Deepest {
+            temp_parser.trivia_depth = self.trivia_depth;
+        }
+        temp_parser.reporter_failure = std::mem::take(&mut self.reporter_failure);
         // Seed the fragment's visible capture state wholesale
         // (rs#174 round 2): the per-name store loop pushed two undo-log
         // entries per capture per boundary crossing, and the merge-back
@@ -3456,6 +3500,7 @@ impl<'a> PortableParser<'a> {
         temp_parser.pending_trivia = std::mem::take(&mut self.pending_trivia);
 
         let result = temp_parser.try_atom_impl(temp_atom_id, pos, false);
+        self.reporter_failure = std::mem::take(&mut temp_parser.reporter_failure);
         self.call_depth_limit_hit |= temp_parser.call_depth_limit_hit;
         // Dynamic fragments evaluate against the full input, so their cause
         // positions are already absolute byte offsets. Preserve those causes

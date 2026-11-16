@@ -19,6 +19,12 @@ export async function runCompatibilityChecks(engine) {
         const result=JSON.parse(artifact.parseShapeWithCompatibility('main',input,policy));
         assert(result.ok===false && result.error.offset===offset,`${prefix} ${policy} byte offset`);
       }
+      const deepest=JSON.parse(artifact.parseShapeWithReporter('main',input,'parslet','deepest'));
+      assert(deepest.ok===false && deepest.error.offset===causal+1,`${prefix} explicit deepest byte offset`);
+      const defaultReporter=JSON.parse(artifact.parseShapeWithReporter('main',input,'parslet','default'));
+      assert(defaultReporter.ok===false && defaultReporter.error.offset===causal,`${prefix} explicit default remains causal`);
+      let unknownReporter=false;try{artifact.parseShapeWithReporter('main',input,'parslet','unknown');}catch{unknownReporter=true;}
+      assert(unknownReporter,`${prefix} unknown reporter rejected`);
       const accepted=JSON.parse(artifact.parseShapeWithCompatibility('main',prefix+'!','parslet'));
       assert(accepted.ok===true,`${prefix} valid input`);
       assert(JSON.stringify(accepted.shape)===artifact.parseShape('main',prefix+'!'),`${prefix} strict success unchanged`);

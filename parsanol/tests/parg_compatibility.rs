@@ -190,3 +190,44 @@ fn vm_call_budget_is_a_typed_abort_and_does_not_poison_reuse() {
         assert!(parser.parse().is_ok());
     }
 }
+
+#[test]
+fn c_deepest_reporter_is_additive_and_validates_reporter() {
+    use parsanol::ffi::c::{parsanol_parg_free, parsanol_parg_parse_with_reporter};
+    for prefix in ["a", "α"] {
+        let artifact = CString::new(artifact(prefix)).unwrap();
+        let entry = CString::new("main").unwrap();
+        let input = CString::new(format!("{prefix}b?")).unwrap();
+        for (policy, reporter, expected) in [
+            (0, 0, prefix.len() + 1),
+            (1, 0, prefix.len()),
+            (1, 1, prefix.len() + 1),
+        ] {
+            unsafe {
+                let ptr = parsanol_parg_parse_with_reporter(
+                    artifact.as_ptr(),
+                    entry.as_ptr(),
+                    input.as_ptr(),
+                    policy,
+                    reporter,
+                );
+                assert!(!ptr.is_null());
+                let value: Value =
+                    serde_json::from_str(CStr::from_ptr(ptr).to_str().unwrap()).unwrap();
+                parsanol_parg_free(ptr);
+                assert_eq!(value["ok"], false);
+                assert_eq!(value["error"]["offset"], expected);
+            }
+        }
+        unsafe {
+            assert!(parsanol_parg_parse_with_reporter(
+                artifact.as_ptr(),
+                entry.as_ptr(),
+                input.as_ptr(),
+                1,
+                99
+            )
+            .is_null());
+        }
+    }
+}
