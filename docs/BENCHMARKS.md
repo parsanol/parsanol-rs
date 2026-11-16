@@ -54,8 +54,14 @@ cause) and closes the suffix gap from 14.7% to 92.6% — delete-20 rows
 win outright (96.2% vs 94.2%). Span-aware structure recall: 52.8% vs
 72.2% — tree-sitter's recovery tree keeps coarse non-error containers
 (one surviving root covers every ground-truth span; parsanol emits
-fine-grained per-iteration spans). Receipt:
-[the suffix-replay receipt](../benchmarks/sota/results/2026-11-16-recovery-suffix.md);
+fine-grained per-iteration spans). Windowed tree-edit distance
+(±1 KB, ≤80 nodes): parsanol 0.113 vs tree-sitter 0.023 — a published
+loss: ts hole-punches the original tree (everything outside the ERROR
+region is byte-identical to its clean parse) while parsanol rebuilds
+forward at the recovery spine's granularity; unterminated-20 is the
+one win (0.103 vs 0.122). Receipts:
+[the suffix-replay receipt](../benchmarks/sota/results/2026-11-16-recovery-suffix.md),
+[the TED receipt](../benchmarks/sota/results/2026-11-17-recovery-ted.md);
 history: [the layer-1 receipt](../benchmarks/sota/results/2026-11-16-recovery-anchor.md).
 
 ## Keystroke-scale incremental editing (200-keystroke traces, 2026-11-15)

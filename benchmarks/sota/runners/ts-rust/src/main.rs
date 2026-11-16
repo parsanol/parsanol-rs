@@ -85,7 +85,9 @@ fn recovery_mode(corpus_dir: &str) {
     for path in paths {
         let input = std::fs::read_to_string(&path).expect("doc");
         let name = path.file_name().unwrap().to_string_lossy().into_owned();
-        let tree = parser.parse(input.as_bytes(), None).expect("parse returns a tree");
+        let tree = parser
+            .parse(input.as_bytes(), None)
+            .expect("parse returns a tree");
         let root = tree.root_node();
         if !root.has_error() {
             println!("{name} {} 0 true", input.len());
@@ -102,6 +104,65 @@ fn recovery_mode(corpus_dir: &str) {
             covered,
             first_err.unwrap_or(0),
             joined.join(",")
+        );
+    }
+}
+
+/// TED scorer emission (rs#527): per corrupted case, the named-node
+/// tree of the recovered parse plus the clean document's tree — the
+/// windowed tree-edit-distance inputs. One JSON line per case:
+/// {"name":..., "recovered":..., "clean":...}
+fn trees_mode(corpus_dir: &str, clean_dir: &str, manifest_path: &str) {
+    let manifest: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(manifest_path).expect("manifest"))
+            .expect("manifest json");
+
+    let to_tree = |input: &str| -> serde_json::Value {
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_json::LANGUAGE.into())
+            .expect("json grammar loads");
+        let tree = parser
+            .parse(input.as_bytes(), None)
+            .expect("parse returns a tree");
+        fn emit(node: tree_sitter::Node) -> serde_json::Value {
+            let mut kids = Vec::new();
+            let mut cursor = node.walk();
+            if cursor.goto_first_child() {
+                loop {
+                    let child = cursor.node();
+                    if child.is_named() {
+                        kids.push(emit(child));
+                    }
+                    if !cursor.goto_next_sibling() {
+                        break;
+                    }
+                }
+            }
+            serde_json::json!({
+                "kind": node.kind(),
+                "start": node.start_byte(),
+                "end": node.end_byte(),
+                "kids": kids,
+            })
+        }
+        emit(tree.root_node())
+    };
+
+    for case in manifest["cases"].as_array().expect("cases") {
+        let name = case["file"].as_str().expect("file");
+        let source = case["source"].as_str().expect("source");
+        let recovered =
+            std::fs::read_to_string(std::path::Path::new(corpus_dir).join(name)).expect("doc");
+        let clean =
+            std::fs::read_to_string(std::path::Path::new(clean_dir).join(source)).expect("doc");
+        println!(
+            "{}",
+            serde_json::json!({
+                "name": name,
+                "recovered": to_tree(&recovered),
+                "clean": to_tree(&clean),
+            })
         );
     }
 }
@@ -151,7 +212,8 @@ fn incremental_mode(trace_path: &str, source_path: &str) {
     use std::time::Instant;
 
     let trace: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(trace_path).expect("trace")).expect("trace json");
+        serde_json::from_str(&std::fs::read_to_string(trace_path).expect("trace"))
+            .expect("trace json");
     let mut text = std::fs::read_to_string(source_path).expect("source");
     let edits = trace["edits"].as_array().expect("edits").clone();
 
@@ -207,7 +269,12 @@ fn incremental_mode(trace_path: &str, source_path: &str) {
         if !ok {
             identity_failures += 1;
         }
-        println!("{} {} {}", i + 1, ns, if ok { "identity_ok" } else { "IDENTITY_FAIL" });
+        println!(
+            "{} {} {}",
+            i + 1,
+            ns,
+            if ok { "identity_ok" } else { "IDENTITY_FAIL" }
+        );
         old_tree = new_tree;
         text = next;
     }
@@ -239,6 +306,10 @@ fn main() {
         recovery_mode(&args[2]);
         return;
     }
+    if args.len() == 5 && args[1] == "trees" {
+        trees_mode(&args[2], &args[3], &args[4]);
+        return;
+    }
     if args.len() != 3 {
         eprintln!("usage: run_ts <corpus-dir> <rounds>");
         std::process::exit(2);
@@ -258,7 +329,10 @@ fn main() {
         if path.extension().is_some_and(|x| x == "json") {
             let input = std::fs::read_to_string(&path).expect("doc");
             total_bytes += input.len();
-            docs.push((path.file_name().unwrap().to_string_lossy().into_owned(), input));
+            docs.push((
+                path.file_name().unwrap().to_string_lossy().into_owned(),
+                input,
+            ));
         }
     }
     docs.sort();
