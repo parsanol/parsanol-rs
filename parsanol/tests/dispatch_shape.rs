@@ -131,7 +131,7 @@ fn single_byte_choices_merge_to_charsets_inside_repetitions() {
         serde_json::to_string(&envelope).expect("envelope serializes")
     };
     let artifact = parsanol::PargArtifact::from_json(&artifact_text).expect("artifact loads");
-    for (input, ok) in [("  a  ", true), ("\ta\n", true), ("ba", false), ("a", true)] {
+    for (input, ok) in [("  a  ", true), ("\ta\n", true), ("b a", false), ("a", true)] {
         let parsed = artifact.parse_shape("main", input).is_ok();
         assert_eq!(
             parsed,
