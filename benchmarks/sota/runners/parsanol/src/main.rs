@@ -16,6 +16,27 @@ use parsanol::portable::{AstArena, Grammar, PortableParser};
 use std::hint::black_box;
 use std::time::Instant;
 
+fn collect_shape_offsets(node: &serde_json::Value, out: &mut Vec<u32>) {
+    // Every node with an offset field is a recovered structure node;
+    // recurse into nested objects and arrays, dedup+sort.
+    if let Some(off) = node.get("offset").and_then(|v| v.as_u64()) {
+        out.push(off as u32);
+    }
+    match node {
+        serde_json::Value::Object(map) => {
+            for (_k, v) in map {
+                collect_shape_offsets(v, out);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for v in items {
+                collect_shape_offsets(v, out);
+            }
+        }
+        _ => {}
+    }
+}
+
 fn recovery_mode(corpus_dir: &str) {
     // Per corrupted case: `<file> <covered> <len> <first_err>` — covered
     // is the byte count parsed into structure (total minus the consumed
@@ -44,7 +65,6 @@ fn recovery_mode(corpus_dir: &str) {
                     continue;
                 }
                 let mut junk_end: usize = 0;
-                let mut covered = input.len();
                 if let Some(spans) = envelope["resyncs"].as_array() {
                     for span in spans {
                         let off = span["offset"].as_u64().unwrap_or(0) as usize;
@@ -52,9 +72,28 @@ fn recovery_mode(corpus_dir: &str) {
                         junk_end += resumed.saturating_sub(off);
                     }
                 }
-                covered = covered.saturating_sub(junk_end);
+                // Coverage is only what the parse actually consumed past
+                // its junk spans; without resync rounds (non-spine
+                // grammars, rs#539) nothing is consumed and the parse
+                // recovered nothing — covered 0, with the failure offset
+                // reported separately for the diagnostic metric.
+                let consumed = envelope["consumed_upto"].as_u64().unwrap_or(0) as usize;
+                let covered = consumed.saturating_sub(junk_end).min(input.len());
                 let first_err = envelope["error"]["offset"].as_u64().unwrap_or(0) as usize;
-                println!("{name} {} {} false {}", input.len(), covered, first_err);
+                let mut offsets = Vec::new();
+                if let Some(captures) = envelope.get("captures") {
+                    collect_shape_offsets(captures, &mut offsets);
+                }
+                offsets.sort_unstable();
+                offsets.dedup();
+                let joined: Vec<String> = offsets.iter().map(|o| o.to_string()).collect();
+                println!(
+                    "{name} {} {} false {} {}",
+                    input.len(),
+                    covered,
+                    first_err,
+                    joined.join(",")
+                );
             }
         }
     }
