@@ -37,7 +37,7 @@ fn giant_input_stays_under_the_cache_ceiling() {
 
     let cache = parser.cache_memory_usage();
     assert!(
-        cache > 1 * 1024 * 1024,
+        cache > 1024 * 1024,
         "expected a populated packrat cache on a giant input, got {cache} bytes"
     );
     assert!(

@@ -1001,7 +1001,7 @@ mod tests {
         // and bought nothing on linear-scan inputs.
         let giant = DenseCache::for_input(usize::MAX / 2, 10_000);
         assert!(
-            giant.memory_usage() > 1 * 1024 * 1024,
+            giant.memory_usage() > 1024 * 1024,
             "giant cache should still reserve the windowed tiers: {}",
             giant.memory_usage()
         );
