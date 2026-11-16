@@ -540,16 +540,13 @@ impl PargArtifact {
                         // cursor (e.g. right after a declared skip).
                         if let Ok(r) = journaling.try_atom_impl(body, cursor, false) {
                             if r.end_pos > cursor {
-                                recovered_spans
-                                    .push((cursor as u32, r.end_pos as u32));
+                                recovered_spans.push((cursor as u32, r.end_pos as u32));
                                 items.push(r.value.clone());
                                 cursor = r.end_pos;
                                 loop {
                                     match journaling.try_atom_impl(body, cursor, false) {
                                         Ok(r) if r.end_pos > cursor => {
-                                            recovered_spans.push(
-                                                (cursor as u32, r.end_pos as u32),
-                                            );
+                                            recovered_spans.push((cursor as u32, r.end_pos as u32));
                                             items.push(r.value.clone());
                                             cursor = r.end_pos;
                                         }
