@@ -764,14 +764,15 @@ impl<'a> IncrementalParser<'a> {
                     let mut ok = current.is_some();
                     for step in &spine.path {
                         let node = current.take();
-                        match (step, node) {
+                        let node_ref = node.as_ref();
+                        match (step, node_ref) {
                             (
                                 crate::portable::spine::SpineStep::Named { name },
                                 Some(AstNode::Hash { pool_index, length }),
                             ) => {
                                 let items = self
                                     .output_arena
-                                    .get_hash_items(pool_index as usize, length as usize);
+                                    .get_hash_items(*pool_index as usize, *length as usize);
                                 ok = items.first().is_some_and(|(k, _)| k == name);
                                 current = items.into_iter().next().map(|(_, v)| v);
                             }
@@ -779,26 +780,25 @@ impl<'a> IncrementalParser<'a> {
                                 crate::portable::spine::SpineStep::Sequence { index, .. },
                                 Some(AstNode::Array { pool_index, length }),
                             ) => {
+                                // The walker's sequences store tagged
+                                // arrays: tree slot 0 is the tag, so
+                                // the atom at index i sits at slot i+1.
                                 let children = self
                                     .output_arena
-                                    .get_array(pool_index as usize, length as usize);
-                                ok = *index < children.len();
+                                    .get_array(*pool_index as usize, *length as usize);
+                                ok = *index + 1 < children.len();
                                 if ok {
-                                    leading_siblings.push(children[..*index].to_vec());
-                                    current = Some(children[*index].clone());
+                                    leading_siblings.push(children[1..*index + 1].to_vec());
+                                    current = Some(children[*index + 1].clone());
                                 }
                             }
-                            (
-                                crate::portable::spine::SpineStep::Alternative { index },
-                                Some(AstNode::Array { pool_index, length }),
-                            ) => {
-                                let children = self
-                                    .output_arena
-                                    .get_array(pool_index as usize, length as usize);
-                                ok = *index < children.len();
-                                if ok {
-                                    current = Some(children[*index].clone());
-                                }
+                            // The alternative passes its chosen
+                            // branch's value through untagged — no
+                            // wrapper to navigate; the branch is
+                            // confirmed by the next step's key check.
+                            // (The node was already taken: put it back.)
+                            (crate::portable::spine::SpineStep::Alternative { .. }, _) => {
+                                current = node_ref.cloned();
                             }
                             _ => {
                                 ok = false;
@@ -1016,6 +1016,11 @@ impl<'a> IncrementalParser<'a> {
         if spliced.is_none() {
             if let (Some(plan), Some(spine)) = (path_plan.as_ref(), spine_kept.as_ref()) {
                 let body = plan.body;
+                // Bounds from the probe drain: the body atom sits in
+                // the no_cache set (late-flattened atoms carry no memo
+                // entries), so the chain cannot come from the cache.
+                // The drain's cost concentrates on the edited member;
+                // probes above the edit ride the shifted memo (hits).
                 let mut bounds: Vec<(usize, usize)> = Vec::new();
                 let mut scan = 0usize;
                 while scan < input.len() {
@@ -1026,12 +1031,12 @@ impl<'a> IncrementalParser<'a> {
                     }
                     scan += 1;
                 }
-                let mut cursor = scan;
-                while cursor < input.len() {
-                    match parser.try_atom_impl(body, cursor, false) {
-                        Ok(r) if r.end_pos > cursor => {
-                            bounds.push((cursor, r.end_pos));
-                            cursor = r.end_pos;
+                let mut probe_cursor = scan;
+                while probe_cursor < input.len() {
+                    match parser.try_atom_impl(body, probe_cursor, false) {
+                        Ok(r) if r.end_pos > probe_cursor => {
+                            bounds.push((probe_cursor, r.end_pos));
+                            probe_cursor = r.end_pos;
                         }
                         _ => break,
                     }
@@ -1103,25 +1108,22 @@ impl<'a> IncrementalParser<'a> {
                 pool_index: pool,
                 length: len,
             };
-            let seq_ordinals: Vec<usize> = spine
-                .path
-                .iter()
-                .enumerate()
-                .filter(|(_, s)| matches!(s, crate::portable::spine::SpineStep::Sequence { .. }))
-                .map(|(i, _)| i)
-                .collect();
+            // leading_siblings was collected in path order; the
+            // reverse walk consumes them back-to-front.
+            let seq_count = plan.leading_siblings.len();
             let mut rev_seq = 0usize;
             for step in spine.path.iter().rev() {
                 match step {
                     crate::portable::spine::SpineStep::Sequence { .. } => {
-                        let before =
-                            &plan.leading_siblings[seq_ordinals[seq_ordinals.len() - 1 - rev_seq]];
+                        let before = &plan.leading_siblings[seq_count - 1 - rev_seq];
                         let after = &tails[rev_seq];
                         rev_seq += 1;
                         let mut children: Vec<AstNode> = before.to_vec();
                         children.push(inner);
                         children.extend(after.iter().cloned());
-                        let (p, l) = self.output_arena.store_array(&children);
+                        // Tagged, like the walker's sequence values —
+                        // the tag rides slot 0.
+                        let (p, l) = self.output_arena.store_tagged_array(":sequence", &children);
                         inner = AstNode::Array {
                             pool_index: p,
                             length: l,
@@ -1207,6 +1209,12 @@ impl<'a> IncrementalParser<'a> {
             },
             |node| node.clone(),
         );
+        // The capacity-wide maintenance (the adopt remap + hole repair,
+        // plus the suffix shift's slot rebuilds) scales with the
+        // SESSION-START table; shrink to the survivors so every later
+        // keystroke's maintenance is O(window), not O(2M slots) — the
+        // rs#464 late-band floor, now on the retained tier too.
+        self.cache.shrink_to_entries();
         self.dirty_tracker.clear();
 
         if let Ok(ast) = &result {
