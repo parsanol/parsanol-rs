@@ -50,8 +50,183 @@ fn recovery_mode(corpus_dir: &str) {
     }
 }
 
+fn variant_name(n: &parsanol::portable::AstNode) -> &'static str {
+    use parsanol::portable::AstNode as N;
+    match n {
+        N::Nil => "Nil",
+        N::Bool(_) => "Bool",
+        N::Int(_) => "Int",
+        N::Float(_) => "Float",
+        N::StringRef { .. } => "StringRef",
+        N::InputRef { .. } => "InputRef",
+        N::Array { .. } => "Array",
+        N::Hash { .. } => "Hash",
+        _ => "Other",
+    }
+}
+
+fn deep_eq_dbg(a: parsanol::portable::AstNode, aa: &AstArena, b: parsanol::portable::AstNode, ab: &AstArena, path: &str, depth: usize) -> bool {
+    use parsanol::portable::AstNode as N;
+    if variant_name(&a) != variant_name(&b) {
+        eprintln!("MISMATCH at [{}] {} vs {}", path, variant_name(&a), variant_name(&b));
+        return false;
+    }
+    if depth > 40 {
+        eprintln!("MISMATCH at [{}] depth limit", path);
+        return false;
+    }
+    match (&a, &b) {
+        (N::Nil, N::Nil) => true,
+        (N::Bool(x), N::Bool(y)) => x == y,
+        (N::Int(x), N::Int(y)) => x == y,
+        (N::Float(x), N::Float(y)) => x == y,
+        (N::StringRef { pool_index: x }, N::StringRef { pool_index: y }) => {
+            let eq = aa.get_string(*x as usize) == ab.get_string(*y as usize);
+            if !eq {
+                eprintln!("MISMATCH at [{}] StringRef {:?} vs {:?}", path, aa.get_string(*x as usize), ab.get_string(*y as usize));
+            }
+            eq
+        }
+        (
+            N::InputRef { offset: o1, length: l1 },
+            N::InputRef { offset: o2, length: l2 },
+        ) => {
+            let i1 = aa.get_input();
+            let i2 = ab.get_input();
+            let l1 = *l1 as usize;
+            let l2 = *l2 as usize;
+            let o1 = *o1 as usize;
+            let o2 = *o2 as usize;
+            let eq = o1 == o2 && l1 == l2 && i1.get(o1..o1 + l1) == i2.get(o2..o2 + l2);
+            if !eq {
+                eprintln!("MISMATCH at [{}] InputRef {}+{} vs {}+{} ({:?} vs {:?})", path, o1, l1, o2, l2, i1.get(o1..o1 + l1), i2.get(o2..o2 + l2));
+            }
+            eq
+        }
+        (N::Array { pool_index: p1, length: l1 }, N::Array { pool_index: p2, length: l2 }) => {
+            if l1 != l2 {
+                eprintln!("MISMATCH at [{}] Array len {} vs {}", path, l1, l2);
+                return false;
+            }
+            let a_items = aa.get_array(*p1 as usize, *l1 as usize);
+            let b_items = ab.get_array(*p2 as usize, *l2 as usize);
+            for (i, (x, y)) in a_items.into_iter().zip(b_items).enumerate() {
+                let sub = format!("{}.{}", path, i);
+                if !deep_eq_dbg(x, aa, y, ab, &sub, depth + 1) {
+                    return false;
+                }
+            }
+            true
+        }
+        (N::Hash { pool_index: p1, length: l1 }, N::Hash { pool_index: p2, length: l2 }) => {
+            if l1 != l2 {
+                eprintln!("MISMATCH at [{}] Hash len {} vs {}", path, l1, l2);
+                return false;
+            }
+            let a_items = aa.get_hash_items(*p1 as usize, *l1 as usize);
+            let b_items = ab.get_hash_items(*p2 as usize, *l2 as usize);
+            for (i, ((k1, x), (k2, y))) in a_items.into_iter().zip(b_items).enumerate() {
+                if k1 != k2 {
+                    eprintln!("MISMATCH at [{}] Hash key {} vs {}", path, k1, k2);
+                    return false;
+                }
+                let sub = format!("{}.{}", path, i);
+                if !deep_eq_dbg(x, aa, y, ab, &sub, depth + 1) {
+                    return false;
+                }
+            }
+            true
+        }
+        _ => {
+            eprintln!("MISMATCH at [{}] unmatched variants {} {}", path, variant_name(&a), variant_name(&b));
+            false
+        }
+    }
+}
+
+fn incremental_mode(artifact_path: &str, trace_path: &str, source_path: &str) {
+    use parsanol::portable::incremental::{Edit, IncrementalParser};
+    use std::time::Instant;
+
+    let artifact_text = std::fs::read_to_string(artifact_path).expect("artifact");
+    let artifact = parsanol::PargArtifact::from_json(&artifact_text).expect("artifact loads");
+    let grammar = artifact.grammar("main").expect("the entry decodes");
+
+    let trace: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(trace_path).expect("trace")).expect("trace json");
+    let mut text = std::fs::read_to_string(source_path).expect("source");
+    let edits = trace["edits"].as_array().expect("edits").clone();
+
+    let mut incr = IncrementalParser::new(&grammar);
+    let _ = incr.parse_retained(&text).expect("initial parse");
+    println!("0 0 identity_ok");
+
+    let mut latencies: Vec<u128> = Vec::new();
+    let mut fresh_latencies: Vec<u128> = Vec::new();
+    let mut identity_failures = 0usize;
+    let mut total_reused = 0usize;
+    let mut total_invalidated = 0usize;
+    for (i, e) in edits.iter().enumerate() {
+        let pos = e["pos"].as_u64().expect("pos") as usize;
+        let del = e["del"].as_u64().expect("del") as usize;
+        let ins = e["text"].as_str().expect("text").to_string();
+        let mut next = String::with_capacity(text.len() + ins.len());
+        next.push_str(&text[..pos]);
+        next.push_str(&ins);
+        next.push_str(&text[pos + del..]);
+
+        let t = Instant::now();
+        let result = incr
+            .parse_with_edit_retained(&next, Edit::new(pos, del, ins.len()))
+            .expect("incremental parse");
+        let ns = t.elapsed().as_nanos();
+        latencies.push(ns);
+        total_reused += result.reused_cache_entries;
+        total_invalidated += result.invalidated_cache_entries;
+
+        let incr_root = result.ast;
+        let incr_arena_snapshot: &AstArena = incr.retained_arena();
+        let mut scratch = AstArena::for_input(next.len());
+        scratch.set_input(next.clone());
+        let mut fresh = parsanol::portable::PortableParser::new(&grammar, &next, &mut scratch);
+        let tf = Instant::now();
+        let fresh_res = fresh.parse_with_end_pos().expect("fresh parse");
+        let fresh_ns = tf.elapsed().as_nanos();
+        fresh_latencies.push(fresh_ns);
+        let ok = fresh_res.end_pos == next.len()
+            && deep_eq_dbg(incr_root, incr_arena_snapshot, fresh_res.value, &scratch, "root", 0);
+        if !ok {
+            identity_failures += 1;
+        }
+        println!("{} {} {}", i + 1, ns, if ok { "identity_ok" } else { "IDENTITY_FAIL" });
+        text = next;
+    }
+
+    latencies.sort();
+    fresh_latencies.sort();
+    let n = latencies.len();
+    let p = |q: f64, v: &[u128]| v[((q * (v.len() - 1) as f64).round()) as usize];
+    println!(
+        "SUMMARY steps {} incr_p50 {} incr_p95 {} incr_max {} fresh_p50 {} fresh_p95 {} fresh_max {} identity_failures {} reused {} invalidated {}",
+        n,
+        p(0.50, &latencies),
+        p(0.95, &latencies),
+        latencies[n - 1],
+        p(0.50, &fresh_latencies),
+        p(0.95, &fresh_latencies),
+        fresh_latencies[n - 1],
+        identity_failures,
+        total_reused,
+        total_invalidated,
+    );
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    if args.len() == 5 && args[1] == "incremental" {
+        incremental_mode(&args[2], &args[3], &args[4]);
+        return;
+    }
     if args.len() == 3 && args[1] == "recovery" {
         recovery_mode(&args[2]);
         return;

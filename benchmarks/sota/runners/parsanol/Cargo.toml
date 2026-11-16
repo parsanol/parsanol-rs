@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 parsanol = "1.5.1"
+serde_json = "1"
 
 [[bin]]
 name = "run_parsanol"
