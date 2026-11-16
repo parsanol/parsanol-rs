@@ -432,6 +432,26 @@ impl AstArena {
         result
     }
 
+    /// Borrow the `index`-th element of an array node's pool run without
+    /// copying (`get_array` without the per-call temporary Vec). For
+    /// consumers that walk the pool element-wise and build their own
+    /// owned containers (the parslet-shaped value trees), this skips one
+    /// heap allocation and one AstNode clone per node visited.
+    #[inline]
+    pub fn array_item(&self, start: usize, index: usize) -> &AstNode {
+        &self.array_pool[start + index].value
+    }
+
+    /// Borrow the `index`-th hash pair as `(key text, value)` without
+    /// copying (`get_hash_items` without the per-call temporary Vec and
+    /// the per-key String). The key text lives in the interned string
+    /// pool; callers that need an owned key pay one `to_string`.
+    #[inline]
+    pub fn hash_item(&self, pool_index: usize, index: usize) -> (&str, &AstNode) {
+        let entry = &self.hash_pool[pool_index + index];
+        (self.get_string(entry.key_pool_index as usize), &entry.value)
+    }
+
     /// Copy a node (and everything it references) from another arena
     /// into this one, returning an equivalent node that points into
     /// this arena's pools. Fragment parses run against a temporary
