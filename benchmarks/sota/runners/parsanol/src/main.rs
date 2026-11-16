@@ -346,7 +346,7 @@ fn incremental_mode(artifact_path: &str, trace_path: &str, source_path: &str) {
     let n = latencies.len();
     let p = |q: f64, v: &[u128]| v[((q * (v.len() - 1) as f64).round()) as usize];
     println!(
-        "SUMMARY steps {} incr_p50 {} incr_p95 {} incr_max {} fresh_p50 {} fresh_p95 {} fresh_max {} identity_failures {} reused {} invalidated {}",
+        "SUMMARY steps {} incr_p50 {} incr_p95 {} incr_max {} fresh_p50 {} fresh_p95 {} fresh_max {} identity_failures {} reused {} invalidated {} spliced {}",
         n,
         p(0.50, &latencies),
         p(0.95, &latencies),
@@ -357,6 +357,7 @@ fn incremental_mode(artifact_path: &str, trace_path: &str, source_path: &str) {
         identity_failures,
         total_reused,
         total_invalidated,
+        incr.spliced_parses(),
     );
 }
 
