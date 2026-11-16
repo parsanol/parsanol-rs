@@ -169,8 +169,51 @@ fn capture_wire(value: &CaptureValue, input: &str) -> Value {
     }
 }
 
-/// Resync rounds per recovery (R2): bounded so recovery stays linear
-/// in the input even on pathological skip distance.
+/// Deep-copy an AST value from one arena into another: pool-backed
+/// nodes (StringRef/Array/Hash) re-intern into the target; span-backed
+/// and scalar nodes are arena-free and clone as-is. The recovery
+/// rounds' probe values reference the probe parser's arena, but the
+/// stash renders through the render arena — values must move across.
+fn copy_ast_into_arena(node: &AstNode, source: &AstArena, target: &mut AstArena) -> AstNode {
+    match node {
+        AstNode::StringRef { pool_index } => {
+            let text = source.get_string(*pool_index as usize).to_string();
+            target.intern_string(&text)
+        }
+        AstNode::Array { pool_index, length } => {
+            let items = source.get_array(*pool_index as usize, *length as usize);
+            let copied: Vec<AstNode> = items
+                .iter()
+                .map(|item| copy_ast_into_arena(item, source, target))
+                .collect();
+            let (start, len) = target.store_array(&copied);
+            AstNode::Array {
+                pool_index: start,
+                length: len,
+            }
+        }
+        AstNode::Hash { pool_index, length } => {
+            let pairs = source.get_hash_items(*pool_index as usize, *length as usize);
+            let copied: Vec<(&str, AstNode)> = pairs
+                .iter()
+                .map(|(key, item)| (key.as_str(), copy_ast_into_arena(item, source, target)))
+                .collect();
+            let (start, len) = target.store_hash(&copied);
+            AstNode::Hash {
+                pool_index: start,
+                length: len,
+            }
+        }
+        other => other.clone(),
+    }
+}
+
+/// Resync rounds per recovery (R2): the floor, plus one round per
+/// kilobyte of input. Each round strictly advances the cursor, so the
+/// total skip work stays linear in the input; the floor keeps tiny
+/// documents' recovery bounded and the per-kilobyte slope keeps
+/// heavily corrupted large documents (the 20-site harness rows) from
+/// exhausting the budget mid-file.
 const MAX_RESYNCS: usize = 8;
 
 /// The recovery envelope for a failed parse: the captures committed
@@ -387,9 +430,14 @@ impl PargArtifact {
                 // journaling enabled: the journal observes every
                 // capture, including writes the failed attempt rolled
                 // back. Success paths never journal (zero cost).
-                let mut arena2 = AstArena::for_input(input.len().max(1 << 16));
-                let mut journaling =
-                    PortableParser::with_analysis(grammar, input, &mut arena2, &decoded.analysis);
+                let mut render_arena = AstArena::for_input(input.len().max(1 << 16));
+                let mut journal_arena = AstArena::for_input(input.len().max(1 << 16));
+                let mut journaling = PortableParser::with_analysis(
+                    grammar,
+                    input,
+                    &mut journal_arena,
+                    &decoded.analysis,
+                );
                 journaling
                     .set_ascii_state_match_atoms(ascii_matches)
                     .map_err(|err| PargError::ParseFailed(err.to_string()))?;
@@ -409,6 +457,18 @@ impl PargArtifact {
                     journaling.capture_state().journal().to_vec();
                 let consumed_upto = journaling.max_end_pos();
                 let failure_wire = journaling.failure_wire();
+                drop(journaling);
+                // The stash items carry journal_arena pool indexes; the
+                // recovery envelope renders through the render arena.
+                // Journaling is dropped above, so the render arena is
+                // free for the copy and for the rounds' probe values.
+                if let Some((_, items, _)) = partial.as_mut() {
+                    let moved: Vec<AstNode> = items
+                        .iter()
+                        .map(|item| copy_ast_into_arena(item, &journal_arena, &mut render_arena))
+                        .collect();
+                    *items = moved;
+                }
                 // R2 (TODO.sota/1), inferred resync — no grammar
                 // addition: from the failure, scan forward for the next
                 // byte offset where a spine iteration matches; the
@@ -416,88 +476,140 @@ impl PargArtifact {
                 // continues. Bounded (MAX_RESYNCS rounds, each must
                 // advance) so recovery stays linear in the input.
                 // The recovery spine: the first UNBOUNDED repetition
-                // reachable from the root whose body drives rule calls
-                // (contains an Entity/Named). A bare char-class body
-                // (json's ws = *( %x20 / ... )) is not a recovery
-                // granularity — recovering whitespace items is
-                // meaningless; the member-list repetition is (rs#539:
-                // the root-only restriction left non-spine-rooted
-                // grammars like json with no recovery at all).
+                // reachable from the root whose body anchors at fixed
+                // literals AND drives rule calls — the list shape. A
+                // bare char-class body (json's ws = *( %x20 / ... )) or
+                // a char-run rule repetition (`1*digit` inside int) is
+                // not a recovery granularity — the trial scan would
+                // "match" at every offset and stall byte-by-byte. The
+                // walk is breadth-first: the outermost list wins, so a
+                // grammar nesting both an object member list and an
+                // array element list recovers at the member
+                // granularity, which also carries the enclosing
+                // object's separators (rs#539 layers 1-2).
                 let spine_body = {
-                    fn substantial_spine(
-                        grammar: &Grammar,
-                        idx: usize,
-                        visited: &mut std::collections::HashSet<usize>,
-                    ) -> Option<usize> {
-                        if !visited.insert(idx) {
-                            return None;
-                        }
-                        let mut spawns: Vec<usize> = Vec::new();
-                        let found = match grammar.get_atom(idx) {
-                            Some(Atom::Repetition { atom, max, .. }) => {
-                                // substantial when the body drives a rule call
-                                fn drives_rule(
-                                    grammar: &Grammar,
-                                    idx: usize,
-                                    seen: &mut std::collections::HashSet<usize>,
-                                ) -> bool {
-                                    if !seen.insert(idx) {
-                                        return false;
+                    fn substantial_spine(grammar: &Grammar, root: usize) -> Option<usize> {
+                        let mut visited = std::collections::HashSet::new();
+                        let mut queue = std::collections::VecDeque::new();
+                        queue.push_back(root);
+                        while let Some(idx) = queue.pop_front() {
+                            if !visited.insert(idx) {
+                                continue;
+                            }
+                            match grammar.get_atom(idx) {
+                                Some(Atom::Repetition { atom, max, .. }) => {
+                                    // substantial when the body anchors at
+                                    // fixed literals (":" "," "\"") and is not a
+                                    // char matcher: a bare class run (`*digit`),
+                                    // or an alternative offering a bare class
+                                    // branch (a string's interior run). Those
+                                    // match at (nearly) every offset, so the
+                                    // trial scan "finds" them everywhere and
+                                    // the rounds stall byte-by-byte (rs#539
+                                    // layer 2: the member list must beat
+                                    // `1*digit` inside int and the string
+                                    // interior). Flat terminal lists (a
+                                    // `pair*` of `k=v;` items) have no nested
+                                    // rule calls and stay substantial — their
+                                    // literals anchor the scan.
+                                    fn anchors_iteration(
+                                        grammar: &Grammar,
+                                        idx: usize,
+                                        seen: &mut std::collections::HashSet<usize>,
+                                    ) -> bool {
+                                        if !seen.insert(idx) {
+                                            return false;
+                                        }
+                                        match grammar.get_atom(idx) {
+                                            Some(Atom::Str { .. }) => true,
+                                            Some(Atom::Entity { atom })
+                                            | Some(Atom::Named { atom, .. }) => {
+                                                anchors_iteration(grammar, *atom, seen)
+                                            }
+                                            Some(Atom::Sequence { atoms })
+                                            | Some(Atom::Alternative { atoms }) => atoms
+                                                .iter()
+                                                .any(|&a| anchors_iteration(grammar, a, seen)),
+                                            Some(Atom::Repetition { atom, .. })
+                                            | Some(Atom::Ignore { atom })
+                                            | Some(Atom::Trivia { atom })
+                                            | Some(Atom::Capture { atom, .. })
+                                            | Some(Atom::Scope { atom }) => {
+                                                anchors_iteration(grammar, *atom, seen)
+                                            }
+                                            _ => false,
+                                        }
                                     }
-                                    match grammar.get_atom(idx) {
-                                        Some(Atom::Entity { .. }) | Some(Atom::Named { .. }) => {
-                                            true
+                                    // A char matcher: a bare class/regex, or an
+                                    // alternative offering one as a branch.
+                                    // Wrapper atoms resolve through; a Sequence
+                                    // with a fixed literal is never one.
+                                    fn char_matcher_body(
+                                        grammar: &Grammar,
+                                        idx: usize,
+                                        seen: &mut std::collections::HashSet<usize>,
+                                    ) -> bool {
+                                        if !seen.insert(idx) {
+                                            return false;
                                         }
-                                        Some(Atom::Sequence { atoms })
-                                        | Some(Atom::Alternative { atoms }) => {
-                                            atoms.iter().any(|&a| drives_rule(grammar, a, seen))
+                                        match grammar.get_atom(idx) {
+                                            Some(Atom::Re { .. }) | Some(Atom::Dynamic { .. }) => {
+                                                true
+                                            }
+                                            Some(Atom::Entity { atom })
+                                            | Some(Atom::Named { atom, .. }) => {
+                                                char_matcher_body(grammar, *atom, seen)
+                                            }
+                                            Some(Atom::Alternative { atoms }) => atoms
+                                                .iter()
+                                                .any(|&a| char_matcher_body(grammar, a, seen)),
+                                            Some(Atom::Repetition { atom, .. })
+                                            | Some(Atom::Ignore { atom })
+                                            | Some(Atom::Trivia { atom })
+                                            | Some(Atom::Capture { atom, .. })
+                                            | Some(Atom::Scope { atom }) => {
+                                                char_matcher_body(grammar, *atom, seen)
+                                            }
+                                            _ => false,
                                         }
-                                        Some(Atom::Repetition { atom, .. })
-                                        | Some(Atom::Ignore { atom })
-                                        | Some(Atom::Trivia { atom })
-                                        | Some(Atom::Capture { atom, .. })
-                                        | Some(Atom::Scope { atom }) => {
-                                            drives_rule(grammar, *atom, seen)
-                                        }
-                                        _ => false,
                                     }
-                                }
-                                let mut seen = std::collections::HashSet::new();
-                                let substantial = drives_rule(grammar, *atom, &mut seen);
-                                if max.is_none() && substantial {
-                                    Some(*atom)
-                                } else {
+                                    let substantial = max.is_none()
+                                        && anchors_iteration(
+                                            grammar,
+                                            *atom,
+                                            &mut std::collections::HashSet::new(),
+                                        )
+                                        && !char_matcher_body(
+                                            grammar,
+                                            *atom,
+                                            &mut std::collections::HashSet::new(),
+                                        );
+                                    if substantial {
+                                        return Some(*atom);
+                                    }
                                     // bounded (the `[ x ]` form lowers to
                                     // Repetition{max: 1}) or char-level: descend
                                     // into the body for nested spines
-                                    spawns.push(*atom);
-                                    None
+                                    queue.push_back(*atom);
                                 }
-                            }
-                            Some(Atom::Named { atom, .. })
-                            | Some(Atom::Entity { atom })
-                            | Some(Atom::Ignore { atom })
-                            | Some(Atom::Trivia { atom })
-                            | Some(Atom::Capture { atom, .. })
-                            | Some(Atom::Scope { atom }) => {
-                                spawns.push(*atom);
-                                None
-                            }
-                            Some(Atom::Sequence { atoms }) | Some(Atom::Alternative { atoms }) => {
-                                for a in atoms {
-                                    spawns.push(*a);
+                                Some(Atom::Named { atom, .. })
+                                | Some(Atom::Entity { atom })
+                                | Some(Atom::Ignore { atom })
+                                | Some(Atom::Trivia { atom })
+                                | Some(Atom::Capture { atom, .. })
+                                | Some(Atom::Scope { atom }) => queue.push_back(*atom),
+                                Some(Atom::Sequence { atoms })
+                                | Some(Atom::Alternative { atoms }) => {
+                                    for a in atoms {
+                                        queue.push_back(*a);
+                                    }
                                 }
-                                None
+                                _ => {}
                             }
-                            _ => None,
-                        };
-                        found.or_else(|| {
-                            spawns
-                                .into_iter()
-                                .find_map(|spawn| substantial_spine(grammar, spawn, visited))
-                        })
+                        }
+                        None
                     }
-                    substantial_spine(grammar, grammar.root, &mut std::collections::HashSet::new())
+                    substantial_spine(grammar, grammar.root)
                 };
 
                 let mut resyncs: Vec<Value> = Vec::new();
@@ -509,6 +621,7 @@ impl PargArtifact {
                 // is 0 - a declared pattern is usable from the start
                 // (rs#304 Gap B, the ruby engine's convergence twin).
                 let mut recovered_spans: Vec<(u32, u32)> = Vec::new();
+                let resync_budget = MAX_RESYNCS + input.len() / 1024;
                 if let Some(body) = spine_body {
                     let stash_was_empty = partial.is_none();
                     let mut fresh_items: Vec<AstNode> = Vec::new();
@@ -527,25 +640,59 @@ impl PargArtifact {
                     // Declared resync (`resync <rule> = <pattern>`, R2):
                     // the pattern is baked into the entry; the skip spans
                     // are exactly the pattern's matches — the author owns
-                    // them, deterministically. When no pattern is
-                    // declared, the inferred trial scan applies.
-                    let declared_grammar = match self.entry_value(entry, "resync") {
-                        Some(value)
-                            if value.get("atoms").and_then(Value::as_array).is_some_and(
-                                |atoms| {
+                    // them, deterministically. The spine body's rule call
+                    // resolves through the entry's rule-atom table to the
+                    // declared pattern for ITS rule (json's member list
+                    // uses `resync member`, not the root's); the
+                    // entry-level singular key stays as the root alias.
+                    // When no pattern is declared, the inferred trial scan
+                    // applies.
+                    let decode_resync =
+                        |value: &Value| -> Option<Result<(Grammar, Vec<usize>), PargError>> {
+                            if value
+                                .get("atoms")
+                                .and_then(Value::as_array)
+                                .is_some_and(|atoms| {
                                     atoms
                                         .iter()
                                         .any(|atom| atom.get("StateMatchAscii").is_some())
-                                },
-                            ) =>
-                        {
-                            Some(super::decode_ascii_state_grammar(value.clone())?)
-                        }
-                        Some(value) => serde_json::from_value::<Grammar>(value.clone())
-                            .ok()
-                            .map(|grammar| (grammar, Vec::new())),
-                        None => None,
-                    };
+                                })
+                            {
+                                Some(super::decode_ascii_state_grammar(value.clone()))
+                            } else {
+                                serde_json::from_value::<Grammar>(value.clone())
+                                    .ok()
+                                    .map(|grammar| Ok((grammar, Vec::new())))
+                            }
+                        };
+                    let spine_rule: Option<String> = spine_body.and_then(|body| {
+                        let target = match grammar.get_atom(body) {
+                            Some(Atom::Entity { atom }) | Some(Atom::Named { atom, .. }) => {
+                                Some(*atom)
+                            }
+                            Some(Atom::Sequence { atoms }) | Some(Atom::Alternative { atoms }) => {
+                                atoms.iter().find_map(|&a| match grammar.get_atom(a) {
+                                    Some(Atom::Entity { atom })
+                                    | Some(Atom::Named { atom, .. }) => Some(*atom),
+                                    _ => None,
+                                })
+                            }
+                            _ => None,
+                        }?;
+                        self.entry_value(entry, "rule_atoms")?
+                            .as_object()?
+                            .iter()
+                            .find(|(_, index)| index.as_u64() == Some(target as u64))
+                            .map(|(name, _)| name.clone())
+                    });
+                    let declared_grammar = spine_rule
+                        .as_ref()
+                        .and_then(|rule_name| {
+                            self.entry_value(entry, "resyncs")?.get(rule_name).cloned()
+                        })
+                        .or_else(|| self.entry_value(entry, "resync").cloned())
+                        .and_then(|value| decode_resync(&value))
+                        .transpose()?;
                     // The pattern parser gets its own arena: the
                     // journaling parser holds arena2 for the whole
                     // recovery pass.
@@ -560,16 +707,36 @@ impl PargArtifact {
                             .set_ascii_state_match_atoms(modes)
                             .map_err(|err| PargError::ParseFailed(err.to_string()))?;
                     }
-                    'rounds: for _ in 0..MAX_RESYNCS {
+                    // The probes run on a clean parser: the journaling
+                    // parser collects partial structure, which swallows
+                    // inner failures — a probe there reports prefix
+                    // "successes" (`,` + the member key, without `":
+                    // value"`), so the rounds stall byte-by-byte on junk
+                    // spans that are really failed iterations. The probe
+                    // arena only holds span-backed values (InputRef reads
+                    // the input at render time), so its items join the
+                    // journaling stash safely.
+                    let mut probe = PortableParser::with_analysis(
+                        grammar,
+                        input,
+                        &mut render_arena,
+                        &decoded.analysis,
+                    );
+                    probe
+                        .set_ascii_state_match_atoms(ascii_matches)
+                        .map_err(|err| PargError::ParseFailed(err.to_string()))?;
+                    'rounds: for _round in 0..resync_budget {
                         // An iteration may already be viable at the
                         // cursor (e.g. right after a declared skip).
-                        if let Ok(r) = journaling.try_atom_impl(body, cursor, false) {
+                        if let Ok(r) = probe.try_atom_impl(body, cursor, false) {
                             if r.end_pos > cursor {
                                 recovered_spans.push((cursor as u32, r.end_pos as u32));
+                                // The probe parses into the render arena,
+                                // so its shaped values join the stash as-is.
                                 items.push(r.value.clone());
                                 cursor = r.end_pos;
                                 loop {
-                                    match journaling.try_atom_impl(body, cursor, false) {
+                                    match probe.try_atom_impl(body, cursor, false) {
                                         Ok(r) if r.end_pos > cursor => {
                                             recovered_spans.push((cursor as u32, r.end_pos as u32));
                                             items.push(r.value.clone());
@@ -614,7 +781,7 @@ impl PargArtifact {
                             let mut found = None;
                             let mut scan = cursor;
                             while scan < input.len() {
-                                if let Ok(r) = journaling.try_atom_impl(body, scan, false) {
+                                if let Ok(r) = probe.try_atom_impl(body, scan, false) {
                                     if r.end_pos > scan {
                                         found = Some((scan, r.end_pos, r.value.clone()));
                                         break;
@@ -631,6 +798,7 @@ impl PargArtifact {
                                 "resumed_at": skip_start,
                             }));
                             items.push(item);
+                            recovered_spans.push((skip_start as u32, resume as u32));
                             cursor = resume;
                         }
                     }
@@ -645,14 +813,13 @@ impl PargArtifact {
                 // name (the shape contract), so the partial wraps the
                 // same way.
                 let root_is_named = self.entry_root(entry).map(str::to_string).ok();
-                drop(journaling);
                 Ok(recovery_shape(
                     entry,
                     &journal,
                     consumed_upto,
                     failure_wire,
                     input,
-                    &mut arena2,
+                    &mut render_arena,
                     partial,
                     root_is_named,
                     resyncs,

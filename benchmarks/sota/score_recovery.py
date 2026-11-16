@@ -19,7 +19,7 @@ import statistics
 import sys
 from pathlib import Path
 
-from gt_spans import value_spans
+from gt_spans import value_span_pairs
 
 
 def load_runner_output(path):
@@ -29,20 +29,27 @@ def load_runner_output(path):
         if len(parts) < 4:
             continue
         name = parts[0]
+        # offsets ride as `start:end` byte spans (or bare starts from
+        # older receipts — parsed as zero-length spans).
+        raw = parts[5].split(",") if len(parts) > 5 and parts[5] else []
+        spans = []
+        for token in raw:
+            if ":" in token:
+                a, b = token.split(":")
+                spans.append((int(a), int(b)))
+            elif token:
+                spans.append((int(token), int(token)))
+
         if parts[3] in ("true", "false"):
-            # parsanol rows: name len covered ok [offsets]; ok rows carry
+            # parsanol rows: name len covered ok [spans]; ok rows carry
             # covered=0, fail rows covered=pos, first_err in parts[4]
             ok = parts[3] == "true"
             rows[name] = {
                 "len": int(parts[1]),
-                "pos": int(parts[2]) if ok else int(parts[2]),
+                "pos": int(parts[2]),
                 "first_err": int(parts[4]) if len(parts) > 4 and not ok else None,
                 "ok": ok,
-                "offsets": (
-                    sorted(int(x) for x in parts[5].split(","))
-                    if len(parts) > 5
-                    else []
-                ),
+                "spans": spans,
             }
         else:
             # ts fail rows: name len covered first_err false offsets
@@ -51,11 +58,7 @@ def load_runner_output(path):
                 "pos": int(parts[2]),
                 "first_err": int(parts[3]),
                 "ok": False,
-                "offsets": (
-                    sorted(int(x) for x in parts[5].split(","))
-                    if len(parts) > 5
-                    else []
-                ),
+                "spans": spans,
             }
     return rows
 
@@ -63,9 +66,9 @@ def load_runner_output(path):
 CORPUS_DIR = None  # set in main: the clean corpus directory
 
 
-def gt_offsets(source_name):
+def gt_spans_of(source_name):
     doc = (CORPUS_DIR / source_name).read_text()
-    return set(value_spans(doc))
+    return value_span_pairs(doc)
 
 
 def main():
@@ -95,27 +98,39 @@ def main():
         row["p_diag"].append(abs((p["first_err"] if p["first_err"] is not None else p["pos"]) - site))
         row["t_diag"].append(abs((t["first_err"] or 0) - site))
         # Structure recall (the TED-precursor family): recovered node
-        # offsets past the site that match a ground-truth value span
-        # within the corruption's length delta, over the ground-truth
-        # suffix spans.
-        gt = gt_offsets(case["source"])
+        # SPANS past the site, matched by containment — a recovered
+        # span counts when it covers a ground-truth value span within
+        # the corruption's length delta. Both engines are scored on
+        # the same rule (their runners emit start:end pairs).
+        gt = gt_spans_of(case["source"])
         delta = abs(p["len"] - len((CORPUS_DIR / case["source"]).read_text()))
         tol = max(1, delta + 2)
-        gt_suffix = {g for g in gt if g >= site}
-        p_past = [o for o in p["offsets"] if o >= site]
-        t_past = [o for o in t["offsets"] if o >= site]
-        p_matched = sum(1 for o in p_past if any(abs(o - g) <= tol for g in gt_suffix))
-        t_matched = sum(1 for o in t_past if any(abs(o - g) <= tol for g in gt_suffix))
-        if p_past:
-            row["p_recall"].append(p_matched / len(p_past))
-        if t_past:
-            row["t_recall"].append(t_matched / len(t_past))
+        gt_suffix = [(gs, ge) for gs, ge in gt if gs >= site]
+        p_past = [sp for sp in p["spans"] if sp[0] >= site]
+        t_past = [sp for sp in t["spans"] if sp[0] >= site]
+
+        def recall(recovered, truth):
+            if not truth:
+                return 1.0
+            hits = 0
+            for gs, ge in truth:
+                if any(
+                    rs <= gs + tol and re_ >= ge - tol for rs, re_ in recovered
+                ):
+                    hits += 1
+            return hits / len(truth)
+
+        row["p_recall"].append(recall(p_past, gt_suffix))
+        row["t_recall"].append(recall(t_past, gt_suffix))
         if case["class"] == "truncate":
             # truncation removes the suffix; suffix recovery is undefined
             row["suffix_defined"] = False
             continue
-        row["p_suffix"].append(min(max(p["pos"] - site, 0) / suffix, 1.0))
-        row["t_suffix"].append(min(max(t["pos"] - site, 0) / suffix, 1.0))
+        # A clean full parse covers the whole suffix (both engines).
+        p_covered = p["len"] if p["ok"] else p["pos"]
+        t_covered = t["len"] if t["ok"] else t["pos"]
+        row["p_suffix"].append(min(max(p_covered - site, 0) / suffix, 1.0))
+        row["t_suffix"].append(min(max(t_covered - site, 0) / suffix, 1.0))
 
     print("| class | depth | n | parsanol diag± | parsanol suffix | parsanol recall | ts diag± | ts suffix | ts recall |")
     print("|---|---|---|---|---|---|---|---|---|")

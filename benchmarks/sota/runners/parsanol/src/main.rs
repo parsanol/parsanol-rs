@@ -16,11 +16,14 @@ use parsanol::portable::{AstArena, Grammar, PortableParser};
 use std::hint::black_box;
 use std::time::Instant;
 
-fn collect_shape_offsets(node: &serde_json::Value, out: &mut Vec<u32>) {
-    // Every node with an offset field is a recovered structure node;
-    // recurse into nested objects and arrays, dedup+sort.
+fn collect_shape_offsets(node: &serde_json::Value, out: &mut Vec<String>) {
+    // Every node with an offset field is a recovered structure node,
+    // emitted as a `start:end` byte span (the span-aware scorer
+    // matches recovered spans by containment); recurse into nested
+    // objects and arrays, dedup+sort.
     if let Some(off) = node.get("offset").and_then(|v| v.as_u64()) {
-        out.push(off as u32);
+        let len = node.get("length").and_then(|v| v.as_u64()).unwrap_or(0);
+        out.push(format!("{}:{}", off, off + len));
     }
     match node {
         serde_json::Value::Object(map) => {
@@ -95,12 +98,12 @@ fn recovery_mode(corpus_dir: &str) {
                     collect_shape_offsets(captures, &mut offsets);
                 }
                 // The recovered iteration spans ride "recovered_spans"
-                // (engine-side, offset-exact — the parslet-compatible
-                // shape merges string items and drops per-item offsets).
+                // (engine-side, offset-exact) as `start:end` pairs.
                 if let Some(spans) = envelope["recovered_spans"].as_array() {
                     for span in spans {
-                        let off = span["offset"].as_u64().unwrap_or(0) as u32;
-                        offsets.push(off);
+                        let off = span["offset"].as_u64().unwrap_or(0);
+                        let end = span["end"].as_u64().unwrap_or(off);
+                        offsets.push(format!("{off}:{end}"));
                     }
                 }
                 offsets.sort_unstable();
