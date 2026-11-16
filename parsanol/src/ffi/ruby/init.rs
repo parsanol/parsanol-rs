@@ -11,6 +11,7 @@ use super::parser::{
     optimized_atom_count, parse, parse_batch, parse_fresh, parse_handle, parse_handle_events,
     parse_handle_prefix, parse_handle_reference, parse_handle_with_compatibility,
     parse_with_builder, parse_with_stats, register_grammar, release_grammar, set_cache_version,
+    set_handle_diagnostics_policy,
 };
 use crate::portable::dynamic::{
     clear_dynamic_callbacks, dynamic_callback_count, get_dynamic_callback_description,
@@ -120,6 +121,13 @@ pub fn init(ruby: &Ruby) -> Result<(), Error> {
     native_module.define_module_function("_incremental_parse", function!(incremental_parse, 5))?;
     native_module.define_module_function("_incremental_stats", function!(incremental_stats, 1))?;
     native_module.define_module_function("_parse_handle", function!(parse_handle, 2))?;
+    // ruby#520: select the failure-diagnostics storage policy for a
+    // handle — :legacy (default) or :pending (rs#498 v2; observable
+    // output identical, the successful-parse allocation drops).
+    native_module.define_module_function(
+        "_set_diagnostics_policy",
+        function!(set_handle_diagnostics_policy, 2),
+    )?;
     native_module.define_module_function(
         "_parse_handle_with_compatibility",
         function!(parse_handle_with_compatibility, 3),

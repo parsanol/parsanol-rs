@@ -161,6 +161,11 @@ fn compile_program_on_big_stack(grammar: &Grammar) -> Option<Program> {
 struct HandleEntry {
     grammar: Arc<Grammar>,
     has_dynamic: bool,
+    /// The failure-diagnostics storage policy for parses on this handle
+    /// (rs#498 v2; ruby#520). Plain data — parser-local per construction,
+    /// no shared-state implications (the Ractor posture). Default Legacy:
+    /// existing consumers byte-identical.
+    diagnostics_policy: crate::portable::DiagnosticsPolicy,
     /// Program compiled once at registration for the bytecode VM tier.
     /// None when the grammar uses atoms the VM cannot express (e.g.
     /// Dynamic) — those grammars stay on the packrat engine entirely.
@@ -281,6 +286,56 @@ pub fn set_cache_version(version: String) {
     crate::portable::bytecode::artifact_cache::set_host_version(&version);
 }
 
+/// Parse the ruby-side policy spelling (`:legacy` / `:pending`, strings
+/// accepted) into the engine enum. Unknown spellings return None.
+fn parse_diagnostics_policy(policy: Value) -> Option<crate::portable::DiagnosticsPolicy> {
+    use crate::portable::DiagnosticsPolicy;
+    let ruby = Ruby::get().unwrap();
+    let spelling = if let Some(sym) = magnus::Symbol::from_value(policy) {
+        sym.to_string()
+    } else if let Some(s) = RString::from_value(policy) {
+        unsafe { s.as_str() }.ok()?.to_string()
+    } else {
+        return None;
+    };
+    match spelling.trim_start_matches(':') {
+        "legacy" => Some(DiagnosticsPolicy::Legacy),
+        "pending" => Some(DiagnosticsPolicy::Pending),
+        _ => {
+            let _ = ruby;
+            None
+        }
+    }
+}
+
+/// Select the failure-diagnostics storage policy for a handle
+/// (ruby#520): `:legacy` (the default; ordered live buffers) or
+/// `:pending` (rs#498 v2 — note-ordered inline labels, hash-first
+/// dedup, parse-end materialization; observable output identical).
+/// Plain data on the handle: parser-local per construction, no
+/// shared-state implications.
+pub fn set_handle_diagnostics_policy(handle: u64, policy: Value) -> Result<Value, Error> {
+    let ruby = Ruby::get().unwrap();
+    let parsed = parse_diagnostics_policy(policy).ok_or_else(|| {
+        Error::new(
+            ruby.exception_arg_error(),
+            "diagnostics policy must be :legacy or :pending",
+        )
+    })?;
+    let mut map = get_handle_map().lock().unwrap();
+    let Some(entry) = map.get_mut(&handle) else {
+        return Err(Error::new(
+            ruby.exception_arg_error(),
+            format!("unknown grammar handle: {}", handle),
+        ));
+    };
+    // The policy is Copy plain data behind the handle mutex; parses read
+    // it at construction. Parser-local per construction — no shared
+    // parse state (the Ractor posture).
+    entry.diagnostics_policy = parsed;
+    Ok(ruby.qnil().as_value())
+}
+
 /// Register a grammar JSON and return a handle for `parse_handle`.
 ///
 /// # Example
@@ -315,6 +370,7 @@ pub fn register_grammar(grammar_json: String) -> Result<u64, Error> {
         HandleEntry {
             grammar: Arc::new(grammar),
             has_dynamic,
+            diagnostics_policy: crate::portable::DiagnosticsPolicy::Legacy,
             program,
             vm_disabled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         },
@@ -354,7 +410,14 @@ pub fn parse_handle(handle: u64, input: RString) -> Result<Value, Error> {
         .filter(|_| !entry.vm_disabled.load(Ordering::Relaxed));
     if entry.has_dynamic {
         let owned = input_str.to_string();
-        parse_with_grammar(&ruby, &entry.grammar, program, &owned, &entry.vm_disabled)
+        parse_with_grammar(
+            &ruby,
+            &entry.grammar,
+            program,
+            &owned,
+            &entry.vm_disabled,
+            entry.diagnostics_policy,
+        )
     } else {
         parse_with_grammar(
             &ruby,
@@ -362,6 +425,7 @@ pub fn parse_handle(handle: u64, input: RString) -> Result<Value, Error> {
             program,
             input_str,
             &entry.vm_disabled,
+            entry.diagnostics_policy,
         )
     }
 }
@@ -409,6 +473,7 @@ pub fn parse_handle_with_compatibility(
             &owned,
             &entry.vm_disabled,
             policy,
+            entry.diagnostics_policy,
         )
     } else {
         parse_with_grammar_compatibility(
@@ -418,6 +483,7 @@ pub fn parse_handle_with_compatibility(
             input_str,
             &entry.vm_disabled,
             policy,
+            entry.diagnostics_policy,
         )
     }
 }
@@ -445,9 +511,9 @@ pub fn parse_handle_reference(handle: u64, input: RString) -> Result<Value, Erro
     let input_str: &str = unsafe { input.as_str()? };
     if entry.has_dynamic {
         let owned = input_str.to_string();
-        parse_with_reference(&ruby, &entry.grammar, &owned)
+        parse_with_reference(&ruby, &entry.grammar, &owned, entry.diagnostics_policy)
     } else {
-        parse_with_reference(&ruby, &entry.grammar, input_str)
+        parse_with_reference(&ruby, &entry.grammar, input_str, entry.diagnostics_policy)
     }
 }
 
@@ -477,6 +543,7 @@ pub fn parse_handle_events(handle: u64, input: RString) -> Result<Value, Error> 
         crate::ffi::ruby::dynamic::reset_host_atoms();
     }
     let mut parser = PortableParser::new(&entry.grammar, input_str, &mut arena);
+    let _ = parser.set_diagnostics_policy(entry.diagnostics_policy);
     let raw = parser.parse().map_err(|e| {
         let diagnostics = parser.failure_diagnostics();
         Error::new(
@@ -563,6 +630,7 @@ pub fn parse_handle_prefix(handle: u64, input: RString) -> Result<Value, Error> 
         crate::ffi::ruby::dynamic::reset_host_atoms();
     }
     let mut parser = PortableParser::new(&entry.grammar, input_str, &mut arena);
+    let _ = parser.set_diagnostics_policy(entry.diagnostics_policy);
     let result = match parser.parse_with_end_pos() {
         Ok(result) => result,
         Err(e) => {
@@ -627,6 +695,7 @@ fn parse_with_grammar(
     program: Option<&Program>,
     input: &str,
     vm_disabled: &std::sync::atomic::AtomicBool,
+    diagnostics_policy: crate::portable::DiagnosticsPolicy,
 ) -> Result<Value, Error> {
     parse_with_grammar_compatibility(
         ruby,
@@ -635,6 +704,7 @@ fn parse_with_grammar(
         input,
         vm_disabled,
         ParserCompatibility::Strict,
+        diagnostics_policy,
     )
 }
 
@@ -645,6 +715,7 @@ fn parse_with_grammar_compatibility(
     input: &str,
     vm_disabled: &std::sync::atomic::AtomicBool,
     compatibility: ParserCompatibility,
+    diagnostics_policy: crate::portable::DiagnosticsPolicy,
 ) -> Result<Value, Error> {
     // Large inputs run on the precompiled bytecode VM (TODO.max-perf/4
     // phase 2): byte-identical trees per the differential gate, 2.76x
@@ -688,6 +759,7 @@ fn parse_with_grammar_compatibility(
     parser
         .set_compatibility(compatibility)
         .map_err(|error| Error::new(ruby.exception_arg_error(), error.to_string()))?;
+    let _ = parser.set_diagnostics_policy(diagnostics_policy);
 
     let ast = match parser.parse() {
         Ok(ast) => ast,
@@ -716,12 +788,18 @@ fn parse_with_grammar_compatibility(
 
 /// The reference-walker half of [`parse_with_grammar`]: same shaping
 /// pipeline, plain recursive evaluation (B1).
-fn parse_with_reference(ruby: &Ruby, grammar: &Grammar, input: &str) -> Result<Value, Error> {
+fn parse_with_reference(
+    ruby: &Ruby,
+    grammar: &Grammar,
+    input: &str,
+    diagnostics_policy: crate::portable::DiagnosticsPolicy,
+) -> Result<Value, Error> {
     let mut arena = AstArena::for_input(input.len());
     if !crate::portable::dynamic::in_dynamic_dispatch() {
         crate::ffi::ruby::dynamic::reset_host_atoms();
     }
     let mut parser = PortableParser::new_reference(grammar, input, &mut arena);
+    let _ = parser.set_diagnostics_policy(diagnostics_policy);
 
     let ast = match parser.parse() {
         Ok(ast) => ast,
@@ -919,7 +997,17 @@ pub fn parse(grammar_json: String, input: String) -> Result<Value, Error> {
     // serves them directly.
     static NO_PROGRAM_OFF: std::sync::atomic::AtomicBool =
         std::sync::atomic::AtomicBool::new(false);
-    parse_with_grammar(&ruby, &grammar, None, &input, &NO_PROGRAM_OFF)
+    // One-shot grammar-JSON parses have no handle to carry the policy:
+    // they stay on Legacy until a policy-bearing flow adopts them
+    // (ruby#520 documents the seam).
+    parse_with_grammar(
+        &ruby,
+        &grammar,
+        None,
+        &input,
+        &NO_PROGRAM_OFF,
+        crate::portable::DiagnosticsPolicy::Legacy,
+    )
 }
 
 /// Parse without packrat caching for memory-bounded operation
