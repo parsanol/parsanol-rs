@@ -17,14 +17,15 @@ use std::hint::black_box;
 use std::time::Instant;
 
 fn recovery_mode(corpus_dir: &str) {
-    // Per corrupted case: `<file> <diag_pos> <len> <ok>` — diag_pos is the
-    // deepest-failure position (0 = parse succeeded with full consumption
-    // when ok=true). The scorer joins against the corruption manifest.
+    // Per corrupted case: `<file> <covered> <len> <first_err>` — covered
+    // is the byte count parsed into structure (total minus the consumed
+    // junk spans, the same accounting as tree-sitter's non-ERROR bytes),
+    // so the scorer joins both engines symmetrically. A clean full parse
+    // prints covered=0 with ok=true (column 4 absent, like the old
+    // protocol's ok rows).
     let corpus = std::path::Path::new(corpus_dir);
     let artifact_text = std::fs::read_to_string("json-artifact.json").expect("artifact");
     let artifact = parsanol::PargArtifact::from_json(&artifact_text).expect("artifact loads");
-    let grammar = artifact.grammar("main").expect("the entry decodes");
-    let program = compile(grammar.clone()).expect("the program compiles");
 
     let mut paths: Vec<std::path::PathBuf> = std::fs::read_dir(corpus)
         .expect("corpus dir")
@@ -35,16 +36,25 @@ fn recovery_mode(corpus_dir: &str) {
     for path in paths {
         let input = std::fs::read_to_string(&path).expect("doc");
         let name = path.file_name().unwrap().to_string_lossy().into_owned();
-        let mut arena = AstArena::for_input(input.len());
-        let (result, diag) = parse_with_vm_diag(&program, &input, &mut arena);
-        match result {
-            Ok(r) => {
-                let full = r.end_pos == input.len();
-                println!("{name} {} {} {}", input.len(), if full { 0 } else { r.end_pos }, full);
-            }
-            Err(_) => {
-                let (pos, _labels) = diag.expect("failed parse carries diagnostics");
-                println!("{name} {} {} false", input.len(), pos);
+        match artifact.parse_shape_recovering("main", &input) {
+            Err(_) => println!("{name} {} 0 false 0", input.len()),
+            Ok(envelope) => {
+                if envelope["ok"].as_bool() == Some(true) {
+                    println!("{name} {} 0 true", input.len());
+                    continue;
+                }
+                let mut junk_end: usize = 0;
+                let mut covered = input.len();
+                if let Some(spans) = envelope["resyncs"].as_array() {
+                    for span in spans {
+                        let off = span["offset"].as_u64().unwrap_or(0) as usize;
+                        let resumed = span["resumed_at"].as_u64().unwrap_or(off as u64) as usize;
+                        junk_end += resumed.saturating_sub(off);
+                    }
+                }
+                covered = covered.saturating_sub(junk_end);
+                let first_err = envelope["error"]["offset"].as_u64().unwrap_or(0) as usize;
+                println!("{name} {} {} false {}", input.len(), covered, first_err);
             }
         }
     }
