@@ -34,6 +34,14 @@ pub struct Compiler {
     /// Pending label patches: (instruction index, atom index to jump to)
     pending_patches: Vec<(usize, usize)>,
 
+    /// Nesting depth inside repetition bodies. ByteDispatch tables are a
+    /// per-NODE win: inside a repetition the choice runs per ITERATION
+    /// (often per character — json's ws = *( %x20 / ... )), where the
+    /// table lookup+jump costs more than the interleaved charset probes
+    /// (measured 18x on the rs#533 JSON receipt when ws dispatched).
+    /// Dispatch is emitted only at depth 0.
+    repetition_depth: usize,
+
     /// Entity-referenced rules whose bodies still need to be compiled as
     /// subroutines after the main code (a call's return address points to
     /// the instruction after the call, so bodies must not sit inline).
@@ -70,6 +78,7 @@ impl Compiler {
             program: Program::with_capacity(atom_count * 4, atom_count, atom_count / 4),
             state: CompilerState { current_atom: 0 },
             pending_patches: Vec::new(),
+            repetition_depth: 0,
             subroutine_queue: VecDeque::new(),
             compile_depth: 0,
             rule_atoms,
@@ -285,7 +294,7 @@ impl Compiler {
             true
         });
 
-        if disjoint {
+        if disjoint && self.repetition_depth == 0 {
             let dispatch_idx = self.program.instruction_count();
             self.program
                 .add_instruction(Instruction::byte_dispatch(u32::MAX));
@@ -421,7 +430,12 @@ impl Compiler {
                 min,
                 max,
                 tag,
-            } => self.compile_repetition(atom, min, max, tag),
+            } => {
+                self.repetition_depth += 1;
+                let result = self.compile_repetition(atom, min, max, tag);
+                self.repetition_depth -= 1;
+                result
+            }
             Atom::Named { name, atom } => self.compile_named(&name, atom),
             Atom::Entity { atom } => self.compile_reference(atom),
             Atom::Lookahead { atom, positive } => self.compile_lookahead(atom, positive),
@@ -623,10 +637,66 @@ impl Compiler {
         Some((union, false))
     }
 
-    /// Lead bytes of a regex we can prove: a single character class with
-    /// no quantifier, alternation, or anchor.
+    /// Lead bytes of a regex we can prove: a character class, a literal,
+    /// or an alternation/group of provable shapes. Case-insensitive
+    /// literals lower to `(?i:...)` groups whose HIR is an alternation of
+    /// case-folded literal strings — json's value choice needs their
+    /// first bytes ({t,T}, {f,F}, {n,N}) to dispatch.
     fn regex_first_bytes(&self, pattern: &str) -> Option<Vec<u8>> {
-        CharRanges::from_pattern(pattern).map(|class| class.first_bytes())
+        let hir = regex_syntax::parse(pattern).ok()?;
+        let mut union: Vec<u8> = Vec::new();
+        self.hir_first_bytes(hir.kind(), &mut union)?;
+        Some(union)
+    }
+
+    /// Accumulate every byte the HIR node can START a match with;
+    /// `None` when the shape is unprovable (anchors, repetitions,
+    /// lookarounds, empty matches).
+    fn hir_first_bytes(
+        &self,
+        kind: &regex_syntax::hir::HirKind,
+        union: &mut Vec<u8>,
+    ) -> Option<()> {
+        use regex_syntax::hir::{Class, HirKind};
+        match kind {
+            HirKind::Class(Class::Unicode(class)) => {
+                for item in class.iter() {
+                    let (lo, hi) = (item.start() as u32, item.end() as u32);
+                    for b in utf8_first_bytes_range(lo, hi) {
+                        if !union.contains(&b) {
+                            union.push(b);
+                        }
+                    }
+                }
+                Some(())
+            }
+            HirKind::Literal(lit) => {
+                let s = std::str::from_utf8(&lit.0).ok()?;
+                let first = s.chars().next()?;
+                for b in utf8_first_bytes_range(first as u32, first as u32) {
+                    if !union.contains(&b) {
+                        union.push(b);
+                    }
+                }
+                Some(())
+            }
+            HirKind::Alternation(branches) => {
+                for branch in branches {
+                    self.hir_first_bytes(branch.kind(), union)?;
+                }
+                Some(())
+            }
+            // A concat contributes its FIRST child's lead bytes (classes
+            // and literals are non-nullable, so later children cannot
+            // start the match). (?i:true) lowers exactly to
+            // Concat[Class[tT], Class[rR], Class[uU], Class[eE]].
+            HirKind::Concat(children) => {
+                let first = children.first()?;
+                self.hir_first_bytes(first.kind(), union)
+            }
+            HirKind::Capture(cap) => self.hir_first_bytes(cap.sub.kind(), union),
+            _ => None,
+        }
     }
 
     /// Compile alternatives (ordered choice)
@@ -682,7 +752,7 @@ impl Compiler {
                     }
                 }
             }
-            if disjoint {
+            if disjoint && self.repetition_depth == 0 {
                 return self.compile_dispatch_alternative(atoms, &sets);
             }
         }
@@ -1278,4 +1348,40 @@ mod tests {
         assert!(disasm.contains("String"));
         assert!(disasm.contains("End"));
     }
+}
+
+/// The UTF-8 lead bytes of any code point in [lo, hi]. Within one
+/// encoding size class the lead byte is monotonic in the code point, so
+/// the class-intersection bounds give the exact inclusive lead range —
+/// sound by construction (no over- or under-approximation).
+fn utf8_first_bytes_range(lo: u32, hi: u32) -> Vec<u8> {
+    let lead = |cp: u32| -> u8 {
+        if cp < 0x80 {
+            cp as u8
+        } else if cp < 0x800 {
+            (0xC0 | (cp >> 6)) as u8
+        } else if cp < 0x10000 {
+            (0xE0 | (cp >> 12)) as u8
+        } else {
+            (0xF0 | (cp >> 18)) as u8
+        }
+    };
+    let mut out = Vec::new();
+    if lo < 0x80 {
+        for b in (lo as u8)..=(hi.min(0x7F) as u8) {
+            out.push(b);
+        }
+    }
+    for (clo, chi) in [(0x80u32, 0x7FFu32), (0x800, 0xFFFF), (0x10000, 0x10FFFF)] {
+        let a = lo.max(clo);
+        let b = hi.min(chi);
+        if a <= b {
+            for lead_b in lead(a)..=lead(b) {
+                if !out.contains(&lead_b) {
+                    out.push(lead_b);
+                }
+            }
+        }
+    }
+    out
 }

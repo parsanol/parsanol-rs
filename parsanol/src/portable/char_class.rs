@@ -480,7 +480,43 @@ impl CharRanges {
             regex_syntax::hir::HirKind::Class(regex_syntax::hir::Class::Unicode(class)) => {
                 Some(Self::from_unicode_class(class))
             }
+            // regex-syntax optimizes a SINGLE-member class (e.g. "[ ]",
+            // "[\"]", "[e]") into a Literal — without this arm every
+            // singleton-class instruction missed the class fast path and
+            // fell back to the regex engine per character (the rs#533
+            // JSON profile's dominant survivor: ws, quotes, structural
+            // singles are all singletons).
+            regex_syntax::hir::HirKind::Literal(lit) => {
+                // HirKind::Literal carries the UTF-8 bytes; a singleton
+                // class is exactly one char.
+                let single = std::str::from_utf8(&lit.0).ok().and_then(|s| {
+                    let mut chars = s.chars();
+                    match (chars.next(), chars.next()) {
+                        (Some(c), None) => Some(c),
+                        _ => None,
+                    }
+                });
+                single.map(Self::from_single_char)
+            }
             _ => None,
+        }
+    }
+
+    /// A one-member class: the singleton shape `from_unicode_class`
+    /// produces for a class of exactly one code point.
+    fn from_single_char(c: char) -> Self {
+        let mut ascii = [false; 128];
+        let mut ranges = Vec::new();
+        let code = c as u32;
+        if code <= 0x7F {
+            ascii[code as usize] = true;
+        } else {
+            ranges.push((code, code));
+        }
+        Self {
+            ascii,
+            ranges,
+            full: false,
         }
     }
 
