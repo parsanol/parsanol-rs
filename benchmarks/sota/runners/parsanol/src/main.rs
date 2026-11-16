@@ -78,11 +78,30 @@ fn recovery_mode(corpus_dir: &str) {
                 // recovered nothing — covered 0, with the failure offset
                 // reported separately for the diagnostic metric.
                 let consumed = envelope["consumed_upto"].as_u64().unwrap_or(0) as usize;
-                let covered = consumed.saturating_sub(junk_end).min(input.len());
+                // The resync rounds resume past junk: their furthest
+                // recovered span end is the coverage bound, not the
+                // original parse's consumption.
+                let mut covered_bound = consumed;
+                if let Some(spans) = envelope["recovered_spans"].as_array() {
+                    if let Some(last) = spans.last() {
+                        let end = last["end"].as_u64().unwrap_or(0) as usize;
+                        covered_bound = covered_bound.max(end);
+                    }
+                }
+                let covered = covered_bound.saturating_sub(junk_end).min(input.len());
                 let first_err = envelope["error"]["offset"].as_u64().unwrap_or(0) as usize;
                 let mut offsets = Vec::new();
                 if let Some(captures) = envelope.get("captures") {
                     collect_shape_offsets(captures, &mut offsets);
+                }
+                // The recovered iteration spans ride "recovered_spans"
+                // (engine-side, offset-exact — the parslet-compatible
+                // shape merges string items and drops per-item offsets).
+                if let Some(spans) = envelope["recovered_spans"].as_array() {
+                    for span in spans {
+                        let off = span["offset"].as_u64().unwrap_or(0) as u32;
+                        offsets.push(off);
+                    }
                 }
                 offsets.sort_unstable();
                 offsets.dedup();
