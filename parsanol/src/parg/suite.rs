@@ -188,6 +188,7 @@ fn recovery_shape(
     partial: Option<(usize, Vec<AstNode>, RepetitionTag)>,
     root_is_named: Option<String>,
     resyncs: Vec<Value>,
+    recovered_spans: Vec<(u32, u32)>,
 ) -> Value {
     let _ = entry;
     let mut captures = serde_json::Map::new();
@@ -234,11 +235,16 @@ fn recovery_shape(
         let shaped = to_parslet_compatible(&node, arena, input);
         Some(ast_to_value(&shaped, arena, input))
     });
+    let spans = recovered_spans
+        .iter()
+        .map(|(s, e)| serde_json::json!({ "offset": s, "end": e }))
+        .collect::<Vec<_>>();
     serde_json::json!({
         "ok": false, "captures": captures, "error": error,
         "consumed_upto": consumed_upto,
         "partial": partial_value,
         "resyncs": resyncs,
+        "recovered_spans": spans,
     })
 }
 
@@ -384,14 +390,91 @@ impl PargArtifact {
                 // skipped span becomes an error annotation and parsing
                 // continues. Bounded (MAX_RESYNCS rounds, each must
                 // advance) so recovery stays linear in the input.
-                let spine_body = match grammar.get_atom(grammar.root) {
-                    Some(Atom::Repetition { atom, .. }) => Some(*atom),
-                    Some(Atom::Named { atom, .. }) => match grammar.get_atom(*atom) {
-                        Some(Atom::Repetition { atom, .. }) => Some(*atom),
-                        _ => None,
-                    },
-                    _ => None,
+                // The recovery spine: the first UNBOUNDED repetition
+                // reachable from the root whose body drives rule calls
+                // (contains an Entity/Named). A bare char-class body
+                // (json's ws = *( %x20 / ... )) is not a recovery
+                // granularity — recovering whitespace items is
+                // meaningless; the member-list repetition is (rs#539:
+                // the root-only restriction left non-spine-rooted
+                // grammars like json with no recovery at all).
+                let spine_body = {
+                    fn substantial_spine(
+                        grammar: &Grammar,
+                        idx: usize,
+                        visited: &mut std::collections::HashSet<usize>,
+                    ) -> Option<usize> {
+                        if !visited.insert(idx) {
+                            return None;
+                        }
+                        let mut spawns: Vec<usize> = Vec::new();
+                        let found = match grammar.get_atom(idx) {
+                            Some(Atom::Repetition { atom, max, .. }) => {
+                                // substantial when the body drives a rule call
+                                fn drives_rule(
+                                    grammar: &Grammar,
+                                    idx: usize,
+                                    seen: &mut std::collections::HashSet<usize>,
+                                ) -> bool {
+                                    if !seen.insert(idx) {
+                                        return false;
+                                    }
+                                    match grammar.get_atom(idx) {
+                                        Some(Atom::Entity { .. }) | Some(Atom::Named { .. }) => {
+                                            true
+                                        }
+                                        Some(Atom::Sequence { atoms })
+                                        | Some(Atom::Alternative { atoms }) => {
+                                            atoms.iter().any(|&a| drives_rule(grammar, a, seen))
+                                        }
+                                        Some(Atom::Repetition { atom, .. })
+                                        | Some(Atom::Ignore { atom })
+                                        | Some(Atom::Trivia { atom })
+                                        | Some(Atom::Capture { atom, .. })
+                                        | Some(Atom::Scope { atom }) => {
+                                            drives_rule(grammar, *atom, seen)
+                                        }
+                                        _ => false,
+                                    }
+                                }
+                                let mut seen = std::collections::HashSet::new();
+                                let substantial = drives_rule(grammar, *atom, &mut seen);
+                                if max.is_none() && substantial {
+                                    Some(*atom)
+                                } else {
+                                    // bounded (the `[ x ]` form lowers to
+                                    // Repetition{max: 1}) or char-level: descend
+                                    // into the body for nested spines
+                                    spawns.push(*atom);
+                                    None
+                                }
+                            }
+                            Some(Atom::Named { atom, .. })
+                            | Some(Atom::Entity { atom })
+                            | Some(Atom::Ignore { atom })
+                            | Some(Atom::Trivia { atom })
+                            | Some(Atom::Capture { atom, .. })
+                            | Some(Atom::Scope { atom }) => {
+                                spawns.push(*atom);
+                                None
+                            }
+                            Some(Atom::Sequence { atoms }) | Some(Atom::Alternative { atoms }) => {
+                                for a in atoms {
+                                    spawns.push(*a);
+                                }
+                                None
+                            }
+                            _ => None,
+                        };
+                        found.or_else(|| {
+                            spawns
+                                .into_iter()
+                                .find_map(|spawn| substantial_spine(grammar, spawn, visited))
+                        })
+                    }
+                    substantial_spine(grammar, grammar.root, &mut std::collections::HashSet::new())
                 };
+
                 let mut resyncs: Vec<Value> = Vec::new();
                 // The spine boundary, not the failure offset, anchors
                 // the resync scan: junk frequently lies BEFORE the
@@ -400,12 +483,17 @@ impl PargArtifact {
                 // never match it. With no matched prefix the boundary
                 // is 0 - a declared pattern is usable from the start
                 // (rs#304 Gap B, the ruby engine's convergence twin).
+                let mut recovered_spans: Vec<(u32, u32)> = Vec::new();
                 if let Some(body) = spine_body {
                     let stash_was_empty = partial.is_none();
                     let mut fresh_items: Vec<AstNode> = Vec::new();
                     let mut cursor = match partial.as_ref() {
                         Some((end, _, _)) => *end,
-                        None => 0,
+                        // No spine-tracked partial: the journal's
+                        // consumption boundary is where the good parse
+                        // stopped — recovery resumes from THERE, not
+                        // from byte 0 (rs#539: non-spine grammars).
+                        None => consumed_upto.min(input.len()),
                     };
                     let items: &mut Vec<AstNode> = match partial.as_mut() {
                         Some((_, items, _)) => items,
@@ -452,11 +540,16 @@ impl PargArtifact {
                         // cursor (e.g. right after a declared skip).
                         if let Ok(r) = journaling.try_atom_impl(body, cursor, false) {
                             if r.end_pos > cursor {
+                                recovered_spans
+                                    .push((cursor as u32, r.end_pos as u32));
                                 items.push(r.value.clone());
                                 cursor = r.end_pos;
                                 loop {
                                     match journaling.try_atom_impl(body, cursor, false) {
                                         Ok(r) if r.end_pos > cursor => {
+                                            recovered_spans.push(
+                                                (cursor as u32, r.end_pos as u32),
+                                            );
                                             items.push(r.value.clone());
                                             cursor = r.end_pos;
                                         }
@@ -541,6 +634,7 @@ impl PargArtifact {
                     partial,
                     root_is_named,
                     resyncs,
+                    recovered_spans,
                 ))
             }
         }
