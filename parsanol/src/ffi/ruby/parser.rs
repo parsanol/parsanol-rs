@@ -58,8 +58,8 @@ use crate::ffi::ruby::cache::LruCache;
 use crate::ffi::shared::flatten_ast_to_u64;
 use crate::portable::bytecode::{parse_with_vm_capped, Program, VmCappedOutcome};
 use crate::portable::{
-    to_parslet_compatible, AstArena, Atom, DenseCache, Grammar, ParseError, ParserCompatibility,
-    PortableParser,
+    to_parslet_compatible, AstArena, Atom, DenseCache, DiagnosticsPolicy, Grammar, ParseError,
+    ParserCompatibility, PortableParser,
 };
 use magnus::{value::ReprValue, Error, RString, Ruby, Value};
 use std::collections::HashMap;
