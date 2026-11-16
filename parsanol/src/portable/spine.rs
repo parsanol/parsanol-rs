@@ -11,8 +11,11 @@ use crate::portable::grammar::{Atom, Grammar};
 use std::collections::{HashMap, HashSet, VecDeque};
 
 /// One step on the root→spine path: how a rebuilt tree reproduces the
-/// wrapper at this level.
+/// wrapper at this level. The splice (rs#542 slice 2b) consumes the
+/// steps to rebuild the wrappers above the spine array; until that
+/// lands only the discovery runs, so the step shapes sit quiet.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)]
 pub(crate) enum SpineStep {
     /// A Named wrapper: rebuild wraps the inner node in `{name: inner}`.
     Named { name: String },
@@ -32,6 +35,7 @@ pub(crate) enum SpineStep {
 
 /// The spine body plus the structural path from the root down to it.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)]
 pub(crate) struct Spine {
     /// The spine repetition's body atom — the iteration granularity.
     pub body: usize,
@@ -44,6 +48,7 @@ pub(crate) struct Spine {
 /// not a char matcher. A bare class run (`*digit`) or an alternative
 /// offering a bare class branch (a string's interior run) "matches" at
 /// every offset — the trial scan would stall byte-by-byte.
+#[allow(dead_code)] // read via substantial() and the splice predicates
 fn anchors_iteration(grammar: &Grammar, idx: usize, seen: &mut HashSet<usize>) -> bool {
     if !seen.insert(idx) {
         return false;
@@ -68,6 +73,7 @@ fn anchors_iteration(grammar: &Grammar, idx: usize, seen: &mut HashSet<usize>) -
 /// A char matcher: a bare class/regex, or an alternative offering one
 /// as a branch. Wrapper atoms resolve through; a Sequence with a fixed
 /// literal is never one.
+#[allow(dead_code)] // read via substantial()
 fn char_matcher_body(grammar: &Grammar, idx: usize, seen: &mut HashSet<usize>) -> bool {
     if !seen.insert(idx) {
         return false;
@@ -122,7 +128,7 @@ pub(crate) fn discover_spine(grammar: &Grammar) -> Option<Spine> {
                 came.entry(*atom).or_insert((idx, 0));
                 queue.push_back((*atom, Some(idx), 0));
             }
-            Some(Atom::Named { atom, name, .. }) => {
+            Some(Atom::Named { atom, .. }) => {
                 came.entry(*atom).or_insert((idx, 0));
                 queue.push_back((*atom, Some(idx), 0));
             }
