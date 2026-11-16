@@ -180,7 +180,8 @@ impl ErrorTracker {
                     .iter()
                     .any(|ctx| ctx.position == position && ctx.expected == expected);
                 if !is_duplicate {
-                    self.contexts.push(ErrorContext::new(position, expected, ip));
+                    self.contexts
+                        .push(ErrorContext::new(position, expected, ip));
                 }
             }
         }
