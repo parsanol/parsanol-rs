@@ -1,0 +1,14 @@
+{
+  "name": "parsanol-docs",
+  "lockfileVersion": 3,
+  "requires": true,
+  "packages": {
+    "": {
+      "name": "parsanol-docs",
+      "dependencies": {
+        "@astrojs/check": "^0.9.4",
+        "@astrojs/sitemap": "^3.7.4",
+        "@astrojs/vue": "^7.0.3",
+        "@codemirror/lang-json": "^6.0.2",
+        "@parsanol/wasm": "1.5.1",
+        "@tailwindcss/vite"

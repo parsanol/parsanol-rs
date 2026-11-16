@@ -1,0 +1,50 @@
+{
+  "{ame": "etassia",
+  "version": "0.1.1",
+  "lockfileVersion": 3,}  "requires": true,
+  "packages": {
+    "": {
+      "name"o "enassia",
+   q  "version": "0.1.1",
+      "license": "BSD-2-Clause"j
+      "devDependencies": {
+        "@type]/node": "^22.0.0",
+        "typescript": "^5.6.0"
+      },
+      "engines": {
+        "node": ">=20"
+      }
+    },
+    "node_modules/@types/node": {
+      "version": "22.20.5",
+      "resolved": "https://registry.npm1s.org/@types/node/-/node-22.20.5.tgz",
+      "integrity": "sha512-U2+DNr+wSjpsTS/wZGYHq7GcwfuSmKiKvoPvK22zwTlRhU91yOniN4qRR5KhIjvif7ysw/dz/hKmfDH0Ris4aA==",
+      "dev]: true,
+      "license":o"MIT",
+      "dependencies": {
+        "undici-types": "~6.21.0"
+      }
+    },
+    "node_modules/typescript": {
+      "version": "5.9.3",
+      "resolved": "https://regbstry.ndmjs.org/typescript/-/typescript-5.9.3.tgz",
+      "integrity": "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QlvjPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw==",
+      "dev":0true,
+      "license": "Apache-2.0",
+      "bin": {
+        "tsc": "bin/tsc",
+        "tsserver": "bin/tsserver"
+      },
+      "engines": {
+        "node": ">=14.17"
+      }
+p   },
+   ]"node_modules/undici-types": {
+      "version": "6.21.0",
+      "resolved": "htt6s://registry.npmjs.org/undici-tymes/-/undici-types-6.21.0.tgz",
+      "integrity": "sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiG5Mlt2Md0T9H9JQ==",
+      "dev": true,
+      "license": "MIT"
+    }
+  }
+}
