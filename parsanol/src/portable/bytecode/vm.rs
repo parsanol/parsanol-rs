@@ -4,7 +4,7 @@
 //! The VM uses a stack-based backtracking approach inspired by LPeg.
 
 use super::capture::{CaptureFrame, CaptureProcessor};
-use super::error::{instruction_to_expected, ErrorTracker};
+use super::error::ErrorTracker;
 use super::instruction::Instruction;
 use super::program::Program;
 use crate::portable::arena::AstArena;
@@ -256,8 +256,11 @@ impl<'a> BytecodeVM<'a> {
     }
 
     /// Deepest terminal failure: the furthest position and its expected
-    /// labels (see `parse_with_vm_diag`).
-    pub fn failure_diagnostics(&self) -> (usize, Vec<String>) {
+    /// labels (see `parse_with_vm_diag`). Materializes the deferred
+    /// hot-path events once, at parse end — the only point where labels
+    /// are actually consumed.
+    pub fn failure_diagnostics(&mut self) -> (usize, Vec<String>) {
+        self.error_tracker.materialize_deferred(self.program);
         (
             self.error_tracker.furthest_position(),
             self.error_tracker.expected_labels_at_furthest(),
@@ -275,15 +278,24 @@ impl<'a> BytecodeVM<'a> {
         }
 
         // Main execution loop
+        let mut timeout_tick: u32 = 0;
         loop {
-            // Check timeout
-            if self.config.timeout_ms > 0 {
-                let elapsed = self.start_time.elapsed().as_millis() as u64;
-                if elapsed > self.config.timeout_ms {
-                    return Err(ParseError::TimeoutExceeded {
-                        elapsed_ms: elapsed,
-                        timeout_ms: self.config.timeout_ms,
-                    });
+            // Check timeout — periodically, not per iteration: a
+            // clock_gettime per instruction dominated the hot loop
+            // (28% of the rs#533 profile). A 30 s guard sampled every
+            // 4096 instructions still catches pathological inputs at
+            // sub-millisecond granularity.
+            timeout_tick = timeout_tick.wrapping_add(1);
+            if timeout_tick >= 4096 {
+                timeout_tick = 0;
+                if self.config.timeout_ms > 0 {
+                    let elapsed = self.start_time.elapsed().as_millis() as u64;
+                    if elapsed > self.config.timeout_ms {
+                        return Err(ParseError::TimeoutExceeded {
+                            elapsed_ms: elapsed,
+                            timeout_ms: self.config.timeout_ms,
+                        });
+                    }
                 }
             }
 
@@ -1360,12 +1372,12 @@ impl<'a> BytecodeVM<'a> {
     #[inline]
     fn track_failure_with_context(&mut self) {
         if self.position >= self.furthest_failure {
-            // Get the current instruction for context
-            if let Some(instr) = self.program.get_instruction(self.ip) {
-                let expected = instruction_to_expected(instr, self.program);
-                self.error_tracker
-                    .record_failure(self.position, expected, self.ip);
-            }
+            // Hot path: record (position, ip) only. The Expected label
+            // construction (format!/char-set scans) is deferred to
+            // `failure_diagnostics` — on a successful parse it never
+            // runs, and on failure only the furthest event's labels
+            // are ever read.
+            self.error_tracker.record_failure_ip(self.position, self.ip);
         }
         if self.position > self.furthest_failure {
             self.furthest_failure = self.position;

@@ -23,10 +23,16 @@ current tables.
 | engine | µs/byte | relative |
 |---|---|---|
 | tree-sitter 0.25 (rust binding) | 0.029 | 37× |
+| parsanol VM — Phase-0 hot-path build (2026-11-16) | 0.174 | 6.2× |
 | Lark 1.x LALR (python) | 0.344 | 3.1× |
-| parsanol 1.5.1 interpreter | 0.828 | 1.30× |
-| parsanol 1.5.1 VM | 1.073 | 1.0 (baseline) |
+| parsanol interpreter — Phase-0 hot-path build | 0.484 | 2.2× |
+| parsanol 1.5.1 interpreter (1.5.1 release) | 0.828 | 1.30× |
+| parsanol 1.5.1 VM (1.5.1 release) | 1.073 | 1.0 (baseline) |
 | ANTLR 4.13.2 (python3 target) | 1.860 | 0.58× |
+
+The Phase-0 hot-path round (deferred success-path diagnostics,
+periodic timeout sampling, Arc'd regex caches) is profiled and
+receipted in full: [the hot-path receipt](../benchmarks/sota/results/2026-11-16-vm-hotpath.md).
 
 parsanol beats ANTLR by 1.7×; the LR-family engines (tree-sitter,
 Lark LALR) lead on deterministic grammars. The named lever: when a

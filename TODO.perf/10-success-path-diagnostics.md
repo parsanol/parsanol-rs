@@ -1,4 +1,4 @@
-# 10. Success-path diagnostics overhead (receipt-named, 2026-11-16)
+# 10. Success-path diagnostics overhead (SHIPPED 2026-11-16)
 
 The rs#533 JSON receipt measured the VM at 1.073 µs/B — 30–100× above
 what a release Rust PEG should cost. First suspect, visible in the
@@ -19,7 +19,13 @@ tracks eagerly.
 - Bench builds get `lto = "fat"`, `codegen-units = 1`, `debug =
   true` (for symbolicated profiles) in the harness runner profile.
 
-## Gate
+## Gate — MET
 
-Re-run the rs#533 JSON harness: byte-identical trees (corpus gates
-green) and the µs/B delta published in the receipt round-trip.
+Byte-identical: 633 suite tests green, all 60 corrupted-case
+diagnostics diff-identical to the pre-patch engine. VM 1.086 → 0.174
+µs/B (6.2×), interpreter 0.828 → 0.484 (1.7×). Full receipts:
+`benchmarks/sota/results/2026-11-16-vm-hotpath.md` (all three
+findings: diagnostics deferral, periodic timeout sampling, Arc'd
+regex caches — items 2 and 3 surfaced by the follow-up profiles).
+Remaining from this item's list: none — the pool/lint work moved to
+item 12; the class-decode/TLS survivors are item 11's targets.

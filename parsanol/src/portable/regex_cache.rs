@@ -39,11 +39,13 @@ pub struct CacheStats {
 
 thread_local! {
     /// Thread-local cache of compiled regex patterns
-    static REGEX_CACHE: RefCell<HashMap<String, Regex>> = RefCell::new(HashMap::new());
+    static REGEX_CACHE: RefCell<HashMap<String, std::sync::Arc<Regex>>> =
+        RefCell::new(HashMap::new());
 
     /// Thread-local cache of the same patterns compiled for anchored
     /// matching (see [`match_end_at`]).
-    static ANCHORED_CACHE: RefCell<HashMap<String, Option<MetaRegex>>> = RefCell::new(HashMap::new());
+    static ANCHORED_CACHE: RefCell<HashMap<String, Option<std::sync::Arc<MetaRegex>>>> =
+        RefCell::new(HashMap::new());
 
     /// Thread-local cache of decoded character classes: `None` marks
     /// patterns that are not pure classes, so the (negative) HIR decode
@@ -91,7 +93,7 @@ pub fn clear_class_cache() {
 /// * `Some(Regex)` if the pattern is valid
 /// * `None` if the pattern is invalid
 #[inline]
-pub fn get_or_compile(pattern: &str) -> Option<Regex> {
+pub fn get_or_compile(pattern: &str) -> Option<std::sync::Arc<Regex>> {
     REGEX_CACHE.with(|cache| {
         // Check if already compiled
         if let Some(regex) = cache.borrow().get(pattern) {
@@ -105,6 +107,7 @@ pub fn get_or_compile(pattern: &str) -> Option<Regex> {
         // Cache miss - compile and cache
         match Regex::new(pattern) {
             Ok(regex) => {
+                let regex = std::sync::Arc::new(regex);
                 cache
                     .borrow_mut()
                     .insert(pattern.to_string(), regex.clone());
@@ -142,11 +145,14 @@ pub fn get_or_compile(pattern: &str) -> Option<Regex> {
 /// `Regex::find_at`. An invalid pattern never matches.
 #[inline]
 pub fn match_end_at(pattern: &str, haystack: &str, at: usize) -> Option<usize> {
+    // The cache holds Arc'd regexes: cloning a meta::Regex deep-copies
+    // its capture pool and dominated the rs#533 profile; an Arc clone
+    // is a refcount bump.
     let re = ANCHORED_CACHE.with(|cache| {
         if let Some(cached) = cache.borrow().get(pattern) {
             return cached.clone();
         }
-        let compiled = MetaRegex::new(pattern).ok();
+        let compiled = MetaRegex::new(pattern).ok().map(std::sync::Arc::new);
         cache
             .borrow_mut()
             .insert(pattern.to_string(), compiled.clone());
