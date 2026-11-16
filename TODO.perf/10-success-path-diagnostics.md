@@ -22,8 +22,8 @@ tracks eagerly.
 ## Gate — MET
 
 Byte-identical: 633 suite tests green, all 60 corrupted-case
-diagnostics diff-identical to the pre-patch engine. VM 1.086 → 0.174
-µs/B (6.2×), interpreter 0.828 → 0.484 (1.7×). Full receipts:
+diagnostics diff-identical to the pre-patch engine. VM 1.086 → 0.153
+µs/B (7.1×), interpreter 0.828 → 0.464 (1.8×). Full receipts:
 `benchmarks/sota/results/2026-11-16-vm-hotpath.md` (all three
 findings: diagnostics deferral, periodic timeout sampling, Arc'd
 regex caches — items 2 and 3 surfaced by the follow-up profiles).
