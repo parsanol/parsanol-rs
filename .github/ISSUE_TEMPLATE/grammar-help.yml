@@ -1,0 +1,20 @@
+name: Grammar help
+description: "Help authoring a PARG grammar or porting one (ABNF, ANTLR, an existing parser's rules)"
+labels: ["grammar"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Include the target language's spec excerpt and what you have so
+        far — the gate stack (tests, lint, the corpus) usually finds the
+        last ambiguity before humans do.
+  - type: textarea
+    id: grammar
+    attributes:
+      label: Grammar so far (PARG source)
+    validations:
+      required: true
+  - type: textarea
+    id: sample
+    attributes:
+      label: Inputs it must accept / reject
