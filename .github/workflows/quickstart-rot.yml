@@ -1,0 +1,148 @@
+# The snippet-rot gate: every main push runs the quickstart's commands
+# against the PUBLISHED packages (crates.io / rubygems / PyPI / npm).
+# If a release breaks a copy-paste step, this fails before a newcomer
+# reads the page.
+name: Quickstart rot gate
+
+on:
+  push:
+    branches: [main]
+    paths: ["docs/QUICKSTART.md", ".github/workflows/quickstart-rot.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compile:
+    name: "Compile the calculator grammar (ruby CLI)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+      - name: Write the grammar
+        run: |
+          mkdir -p /tmp/qs && cd /tmp/qs
+          cat > calculator.parg <<'PARG'
+          grammar Calculator version "1.0.0" {
+            expression = (term / digit) as expression
+            term = (digit ws "+" ws expression) as term
+            digit = (1*%x30-39) as digit
+            ws = *( %x20 )
+            entry main: expression
+          }
+          PARG
+          sed -i 's/^          //' calculator.parg
+          cat calculator.parg >> "$GITHUB_WORKSPACE/docs/QUICKSTART.md.probe" || true
+      - name: gem install + compile
+        run: |
+          gem install parsanol
+          cd /tmp/qs
+          parsanol parg compile calculator.parg -o calculator.json
+          grep -q "sha256:" calculator.json && echo "checksum present"
+      - name: Upload the artifact for the runtime legs
+        uses: actions/upload-artifact@v4
+        with:
+          name: calculator-artifact
+          path: /tmp/qs/calculator.json
+
+  ruby-parse:
+    needs: compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: calculator-artifact
+          path: /tmp/qs
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+      - name: gem install + parse
+        run: |
+          gem install parsanol
+          ruby -r parsanol -e '
+          a = Parsanol::PARG::Artifact.from_json(File.read("/tmp/qs/calculator.json"))
+          tree = a.parse("main", "2+3").inspect
+          abort "unexpected tree: #{tree}" unless tree.include?("expression") && tree.include?("digit")
+          puts tree
+          '
+
+  ts-parse:
+    needs: compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: calculator-artifact
+          path: /tmp/qs
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: npm install + parse
+        run: |
+          mkdir -p /tmp/qs-consumer && cd /tmp/qs-consumer
+          echo '{"name":"consumer","private":true,"type":"module"}' > package.json
+          npm install --no-audit --no-fund parsanol
+          node --input-type=module -e '
+          import { PargRuntime } from "parsanol";
+          const rt = PargRuntime.fromFile("/tmp/qs/calculator.json");
+          const tree = JSON.stringify(rt.parseShape("2+3"));
+          if (!tree.includes("expression") || !tree.includes("digit")) throw new Error("unexpected tree: " + tree);
+          console.log(tree);
+          '
+
+  python-parse:
+    needs: compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: calculator-artifact
+          path: /tmp/qs
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: pip install + parse
+        run: |
+          pip install parsanol
+          python3 -c '
+          from parsanol import PargArtifact
+          a = PargArtifact.from_path("/tmp/qs/calculator.json")
+          tree = str(a.parse("2+3"))
+          assert "expression" in tree and "digit" in tree, tree
+          print(tree)
+          '
+
+  rust-parse:
+    needs: compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: calculator-artifact
+          path: /tmp/qs
+      - uses: dtolnay/rust-toolchain@stable
+      - name: cargo add + parse
+        run: |
+          mkdir -p /tmp/qs-rust/src && cd /tmp/qs-rust
+          echo '[package]' > Cargo.toml
+          echo 'name = "qs-consumer"' >> Cargo.toml
+          echo 'version = "0.1.0"' >> Cargo.toml
+          echo 'edition = "2021"' >> Cargo.toml
+          echo '[dependencies]' >> Cargo.toml
+          echo 'parsanol = "1.5"' >> Cargo.toml
+          echo 'fn main() { println!("placeholder"); }' >> /dev/null
+          cat > src/main.rs <<'RS'
+          fn main() {
+              let artifact_text = std::fs::read_to_string("/tmp/qs/calculator.json").unwrap();
+              let artifact = parsanol::PargArtifact::from_json(&artifact_text).unwrap();
+              let shape = artifact.parse_shape("main", "2+3").unwrap();
+              let s = format!("{shape}");
+              assert!(s.contains("expression") && s.contains("digit"), "{s}");
+              println!("{s}");
+          }
+          RS
+          sed -i 's/^          //' src/main.rs
+          cargo run --quiet

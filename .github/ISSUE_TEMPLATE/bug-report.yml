@@ -1,0 +1,37 @@
+name: Bug report
+description: A parse, compile, or runtime behavior that contradicts the documented contract
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The fastest fix starts from a runnable repro: a grammar (PARG
+        source or artifact) plus the input that misbehaves, and the
+        engine/runtime that produced it (rust / ruby / ts / python —
+        with the version).
+  - type: dropdown
+    id: tier
+    attributes:
+      label: Runtime
+      options: [rust, ruby, typescript, python, multiple]
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: "The engine version (e.g. parsanol 1.5.5 / the gem 1.5.3.2)"
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: "Grammar + input + what you got vs what the contract says"
+    validations:
+      required: true
+  - type: textarea
+    id: artifact
+    attributes:
+      label: Artifact (if applicable)
+      description: "The compiled artifact JSON — checksums make repros exact; paste or link it"
