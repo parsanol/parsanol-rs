@@ -217,7 +217,37 @@ fn deep_eq_dbg(
             },
         ) => {
             if l1 != l2 {
-                eprintln!("MISMATCH at [{}] Array len {} vs {}", path, l1, l2);
+                let dump = |arena: &AstArena, node: &N, inlen: usize| -> String {
+                    match node {
+                        N::Array { pool_index, length } => {
+                            let items = arena.get_array(*pool_index as usize, *length as usize);
+                            items
+                                .iter()
+                                .map(|it| match it {
+                                    N::InputRef { offset, length } => {
+                                        format!(
+                                            "[{}..{}]={:?}",
+                                            offset,
+                                            offset + length,
+                                            &arena.get_input()[*offset as usize..(*offset as usize + *length as usize).min(inlen)]
+                                        )
+                                    }
+                                    other => format!("{:?}", variant_name(other)),
+                                })
+                                .collect::<Vec<_>>()
+                                .join(" ")
+                        }
+                        _ => "?".to_string(),
+                    }
+                };
+                eprintln!(
+                    "MISMATCH at [{}] Array len {} vs {}\n  incr: {}\n  fresh: {}",
+                    path,
+                    l1,
+                    l2,
+                    dump(aa, &a, aa.get_input().len()),
+                    dump(ab, &b, ab.get_input().len())
+                );
                 return false;
             }
             let a_items = aa.get_array(*p1 as usize, *l1 as usize);
