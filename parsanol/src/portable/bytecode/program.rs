@@ -10,6 +10,31 @@ use std::collections::HashMap;
 ///
 /// Each bit indicates whether the corresponding byte value is in the set.
 /// This provides O(1) membership testing.
+/// The quoted-string idiom's fused-scan payload: the delimiters that
+/// terminate the run and the per-iteration terminal match.
+#[derive(Debug, Clone)]
+pub enum NegTerm {
+    /// A literal string (the terminal `Str`)
+    Lit(String),
+    /// A decoded class (`match_at` gives the consumed length)
+    Ranges(crate::portable::char_class::CharRanges),
+    /// A well-known ASCII character pattern
+    CharPat(crate::portable::char_class::CharacterPattern),
+}
+
+/// One ScanUntil spec: delimiters + terminal.
+#[derive(Debug, Clone)]
+pub struct NegScanSpec {
+    /// Any of these strings at the cursor ends the run.
+    pub delims: Vec<String>,
+    /// The per-iteration terminal.
+    pub term: NegTerm,
+}
+
+/// A character set represented as a 256-byte bitmap
+///
+/// Each bit indicates whether the corresponding byte value is in the set.
+/// This provides O(1) membership testing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CharSet {
     /// Bitmap of character membership
@@ -128,6 +153,10 @@ pub struct Program {
     /// compiled from the grammar at load.
     char_ranges: Vec<Vec<(u32, u32)>>,
 
+    /// Neg-scan specs (for ScanUntil runs): the delimiter strings and
+    /// the per-iteration terminal. Not serialized.
+    neg_specs: Vec<NegScanSpec>,
+
     /// Byte-dispatch tables for alternatives (256 relative offsets each)
     dispatch_tables: Vec<[i32; 256]>,
 
@@ -181,6 +210,7 @@ impl Program {
             entry_point: 0,
             rule_addresses: HashMap::new(),
             char_ranges: Vec::new(),
+            neg_specs: Vec::new(),
             scan_plans: Vec::new(),
             has_invoke_dynamic: false,
             rule_memoizable: None,
@@ -201,6 +231,7 @@ impl Program {
             entry_point: 0,
             rule_addresses: HashMap::new(),
             char_ranges: Vec::new(),
+            neg_specs: Vec::new(),
             scan_plans: Vec::new(),
             has_invoke_dynamic: false,
             rule_memoizable: None,
@@ -356,6 +387,19 @@ impl Program {
     #[inline]
     pub fn get_char_ranges(&self, idx: u32) -> Option<&[(u32, u32)]> {
         self.char_ranges.get(idx as usize).map(|v| v.as_slice())
+    }
+
+    /// Add a neg-scan spec
+    pub fn add_neg_spec(&mut self, spec: NegScanSpec) -> u32 {
+        let idx = self.neg_specs.len() as u32;
+        self.neg_specs.push(spec);
+        idx
+    }
+
+    /// Get a neg-scan spec
+    #[inline]
+    pub fn get_neg_spec(&self, idx: u32) -> Option<&NegScanSpec> {
+        self.neg_specs.get(idx as usize)
     }
 
     /// Get the number of character sets in the table

@@ -92,6 +92,59 @@ fn scan_class_lowers_range_choice_repetitions() {
     }
 }
 
+/// The quoted-string idiom `*(!delim terminal)` fuses to ONE
+/// ScanUntil — no per-character choice machinery remains, and
+/// acceptance/trees are identical (the lua/toml/csv string shape).
+#[test]
+fn scan_until_lowers_negated_delimiter_repetitions() {
+    let source = "grammar Shape version \"1.0.0\" edition 2 {
+      ws = *( %x20 / %x09 )
+      str = %x22 *(!%x22 %x00-10FFFF) %x22
+      doc = str ws
+      entry main: doc
+    }";
+    let program = compile_program(source);
+    let mut until = 0;
+    let mut choices = 0;
+    let mut i = 0;
+    while let Some(instr) = program.get_instruction(i) {
+        match instr {
+            Instruction::ScanUntil { .. } => until += 1,
+            Instruction::Choice { .. } => choices += 1,
+            _ => {}
+        }
+        i += 1;
+    }
+    assert_eq!(
+        until, 1,
+        "the negated-delimiter repetition must lower to ONE ScanUntil"
+    );
+    assert_eq!(choices, 0, "no choice machinery may remain");
+
+    // Acceptance identical: quoted runs parse, quotes terminate, an
+    // unterminated string rejects.
+    let artifact_text = {
+        let envelope = envelope::compile_source(source).expect("grammar compiles");
+        serde_json::to_string(&envelope).expect("envelope serializes")
+    };
+    let artifact = parsanol::PargArtifact::from_json(&artifact_text).expect("artifact loads");
+    for (input, ok) in [
+        ("\"hello\"  ", true),
+        ("\"\"  ", true),
+        ("\"montre\u{4e2d}\"  ", true),
+        ("\"open ", false),
+        ("bare  ", false),
+    ] {
+        let parsed = artifact.parse_shape("main", input).is_ok();
+        assert_eq!(
+            parsed,
+            ok,
+            "{input:?} must {}parse",
+            if ok { "" } else { "not " }
+        );
+    }
+}
+
 fn dispatch_count(program: &Program) -> usize {
     let mut n = 0;
     let mut i = 0;

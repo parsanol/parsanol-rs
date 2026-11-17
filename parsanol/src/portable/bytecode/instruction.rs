@@ -284,6 +284,13 @@ pub enum Opcode {
     /// values so the tree is byte-identical to the choice loop it
     /// replaces).
     ScanClass = 42,
+
+    /// Scan a maximal run of the quoted-string idiom
+    ///
+    /// `*(!delim terminal)` bodies: per-iteration values are the
+    /// body sequence's tagged `[Nil, terminal-span]` array, exactly
+    /// like the choice loop it replaces.
+    ScanUntil = 43,
 }
 
 /// Capture kind for capture instructions
@@ -511,6 +518,15 @@ pub enum Instruction {
         ranges_idx: u32,
     },
 
+    /// Scan a maximal `*(!delim terminal)` run (per-iteration values =
+    /// the tagged `[Nil, span]` sequence, matching the choice loop)
+    ScanUntil {
+        /// Index into the neg-scan spec table
+        spec_idx: u32,
+        /// The repetition's max (u32::MAX = unbounded)
+        max: u32,
+    },
+
     /// Custom atom invocation
     ///
     /// Invokes a custom atom registered via `register_custom_atom()`.
@@ -644,6 +660,7 @@ impl Instruction {
             Instruction::ThrowRec { .. } => Opcode::ThrowRec,
             Instruction::Span { .. } => Opcode::Span,
             Instruction::ScanClass { .. } => Opcode::ScanClass,
+            Instruction::ScanUntil { .. } => Opcode::ScanUntil,
             Instruction::Custom { .. } => Opcode::Custom,
             Instruction::PushScope => Opcode::PushScope,
             Instruction::PopScope => Opcode::PopScope,
@@ -909,6 +926,12 @@ impl Instruction {
         Instruction::ScanClass { ranges_idx }
     }
 
+    /// Create a ScanUntil instruction
+    #[inline]
+    pub fn scan_until(spec_idx: u32, max: u32) -> Self {
+        Instruction::ScanUntil { spec_idx, max }
+    }
+
     /// Create a Custom instruction
     #[inline]
     pub fn custom(id: u64) -> Self {
@@ -984,6 +1007,9 @@ impl fmt::Display for Instruction {
             } => write!(f, "ThrowRec [{}] -> +{}", label_idx, recovery_offset),
             Instruction::Span { set_idx } => write!(f, "Span [{}]", set_idx),
             Instruction::ScanClass { ranges_idx } => write!(f, "ScanClass [{}]", ranges_idx),
+            Instruction::ScanUntil { spec_idx, max } => {
+                write!(f, "ScanUntil [{}] max={}", spec_idx, max)
+            }
             Instruction::Custom { id } => write!(f, "Custom #{}", id),
             Instruction::PushScope => write!(f, "PushScope"),
             Instruction::PopScope => write!(f, "PopScope"),
