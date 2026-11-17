@@ -109,6 +109,12 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ## [Unreleased]
 
+- Release v1.5.5
+- Release v1.5.4
+- Resolve the changelog reword conflict (keep the current spelling)
+- CI hygiene on the window commits: the spell-check reword, identity-op
+- Borrow arena pool items element-wise (array_item, hash_item)
+- Bound the memo to a working window: the recycle keeps the newest half
 - Release v1.5.4
 - Resolve the changelog reword conflict (keep the current spelling)
 - CI hygiene on the window commits: the spell-check reword, identity-op
