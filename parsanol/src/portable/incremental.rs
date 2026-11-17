@@ -346,6 +346,20 @@ pub struct IncrementalParser<'a> {
     /// usize::MAX when no shift applied.
     applied_suffix_floor: usize,
 
+    /// The spine runs the last FULL parse recorded, keyed
+    /// `(atom_id, run_start, depth, items)` — depth 1 is the top-level
+    /// run (the path-splice chain), deeper runs are the nested lists
+    /// the multi-level splice bridges at. Cleared whenever a splice
+    /// moves coordinates (only a full parse re-derives them).
+    spine_runs: Vec<SpineRun>,
+    /// The spine bodies the parser watches (every unbounded run
+    /// records its iteration bounds).
+    spine_bodies: Vec<usize>,
+    /// Body atom → the unbounded repetition atom for that body (the
+    /// id spine runs are recorded under).
+    body_reps: std::collections::HashMap<usize, usize>,
+    /// Retained parses rebuilt via the deep (nested-run) surgery.
+    spliced_deep: usize,
     /// The path-splice's persisted item bounds (the spine list's
     /// items, current-input coordinates). Seeded by one drain after a
     /// full parse; every later keystroke derives its bounds by shift
@@ -360,34 +374,230 @@ pub struct IncrementalParser<'a> {
     last_edit: Option<(usize, u32, i64)>,
 }
 
+/// The selected nested-run candidate: where to bridge and what the
+/// arm needs to patch.
+struct DeepCandidate {
+    item_start: usize,
+    item_end_old: usize,
+    span: usize,
+    below: Vec<(usize, usize)>,
+    above_shifted: Vec<(usize, usize)>,
+    tail_steps: Vec<crate::portable::spine::SpineStep>,
+    prev_deep_list: AstNode,
+}
+
+/// The nested-run surgery the arm executes after `into_cache` (the
+/// deep bridge probe ran in the derivation; the patch reassembles the
+/// containers from the deep list up to the level-0 item).
+struct DeepPatch {
+    /// The deep item's new tree (the bridge probe's value).
+    bridge_node: AstNode,
+    /// The previous tree's deep list node (its items split at
+    /// `below_d_count`: below clones | the bridge | shifted above).
+    prev_deep_list: AstNode,
+    /// The tail steps from the level-0 body down to the deep rep,
+    /// with the previous tree's container nodes — the surgery
+    /// navigates these backward, replacing the list and shifting the
+    /// siblings above the edit.
+    prev_containers: Vec<(crate::portable::spine::SpineStep, AstNode)>,
+    /// The deep list's item count below the edit.
+    below_d_count: usize,
+    /// The deep run's refreshed bounds (new coordinates).
+    new_run_items: Vec<(u32, u32)>,
+    /// The spine_runs entry the deep run occupies.
+    run_idx: usize,
+}
+
+/// A successful path-splice: the level-0 item index, the item tree
+/// for slot k (a bridge parse — or the deep surgery's patched item),
+/// and the re-parsed sibling tails innermost-first.
+struct SpliceOutcome {
+    k: usize,
+    bridge: AstNode,
+    tails: Vec<Vec<AstNode>>,
+    deep: Option<DeepPatch>,
+}
+
+/// One recorded spine run: `(body atom, run start, watched depth,
+/// item bounds)`.
+pub(crate) type SpineRun = (usize, u32, usize, Vec<(u32, u32)>);
+
 /// A persistent output arena past this budget is reset wholesale
 /// between retained parses (retention dropped, next parse runs cold)
 /// instead of growing without bound across an edit session.
 const OUTPUT_ARENA_BUDGET: usize = 64 * 1024 * 1024;
 
-/// The body's anchor byte: its first single-byte Str literal (the
-/// comma in list grammars). Probes at anchors only — a per-byte scan
-/// pays a failing parse per position.
-fn anchor_byte_of(grammar: &Grammar, body: usize) -> Option<u8> {
-    let atom = grammar.get_atom(body)?;
-    let atoms = match atom {
-        Atom::Sequence { atoms } => atoms,
-        _ => return None,
-    };
-    for &a in atoms {
-        if let Some(Atom::Str { pattern }) = grammar.get_atom(a) {
-            if pattern.len() == 1 {
-                return Some(pattern.as_bytes()[0]);
+/// Deep-copy a tree into the arena with every InputRef offset shifted
+/// by `delta`. The suffix bytes are byte-identical at shifted
+/// positions, so the shifted copy of a suffix item is the correct
+/// tree without re-parsing — the body atom carries no memo, and the
+/// probe replay paid a full member parse per suffix item (the
+/// incremental gate's remaining ceiling, now gone).
+fn copy_shift_tree(node: &AstNode, delta: i64, arena: &mut AstArena) -> AstNode {
+    match node {
+        AstNode::InputRef { offset, length } => AstNode::InputRef {
+            offset: ((*offset as i64) + delta).max(0) as u32,
+            length: *length,
+        },
+        AstNode::Array { pool_index, length } => {
+            let items = arena.get_array(*pool_index as usize, *length as usize);
+            let copied: Vec<AstNode> = items
+                .iter()
+                .map(|item| copy_shift_tree(item, delta, arena))
+                .collect();
+            let (start, len) = arena.store_array(&copied);
+            AstNode::Array {
+                pool_index: start,
+                length: len,
             }
         }
+        AstNode::Hash { pool_index, length } => {
+            let pairs = arena.get_hash_items(*pool_index as usize, *length as usize);
+            let copied: Vec<(&str, AstNode)> = pairs
+                .iter()
+                .map(|(key, item)| (key.as_str(), copy_shift_tree(item, delta, arena)))
+                .collect();
+            let (start, len) = arena.store_hash(&copied);
+            AstNode::Hash {
+                pool_index: start,
+                length: len,
+            }
+        }
+        AstNode::StringRef { pool_index } => {
+            let text = arena.get_string(*pool_index as usize).to_string();
+            arena.intern_string(&text)
+        }
+        other => other.clone(),
     }
-    None
+}
+
+/// Copy a tree with only the leaves ABOVE the edit shifted by `delta`
+/// (the tree-surgery building block: containers straddling the edit
+/// keep their below-edit leaves untouched and shift the rest).
+fn shift_if_above(
+    node: &AstNode,
+    edit_end_old: usize,
+    delta: i64,
+    arena: &mut AstArena,
+) -> AstNode {
+    match node {
+        AstNode::InputRef { offset, length } => {
+            if (*offset as usize) >= edit_end_old {
+                AstNode::InputRef {
+                    offset: ((*offset as i64) + delta).max(0) as u32,
+                    length: *length,
+                }
+            } else {
+                node.clone()
+            }
+        }
+        AstNode::Array { pool_index, length } => {
+            let items = arena.get_array(*pool_index as usize, *length as usize);
+            let copied: Vec<AstNode> = items
+                .iter()
+                .map(|item| shift_if_above(item, edit_end_old, delta, arena))
+                .collect();
+            let (start, len) = arena.store_array(&copied);
+            AstNode::Array {
+                pool_index: start,
+                length: len,
+            }
+        }
+        AstNode::Hash { pool_index, length } => {
+            let pairs = arena.get_hash_items(*pool_index as usize, *length as usize);
+            let copied: Vec<(&str, AstNode)> = pairs
+                .iter()
+                .map(|(key, item)| {
+                    (
+                        key.as_str(),
+                        shift_if_above(item, edit_end_old, delta, arena),
+                    )
+                })
+                .collect();
+            let (start, len) = arena.store_hash(&copied);
+            AstNode::Hash {
+                pool_index: start,
+                length: len,
+            }
+        }
+        other => other.clone(),
+    }
+}
+
+/// Walk the previous tree through `steps`, collecting each container
+/// node before descending — the surgery's backward map. Named checks
+/// the hash key; Sequence takes slot `index + 1` (tagged arrays);
+/// Alternative passes through (nothing to rebuild).
+fn walk_containers(
+    arena: &AstArena,
+    root: &AstNode,
+    steps: &[crate::portable::spine::SpineStep],
+) -> Option<Vec<(crate::portable::spine::SpineStep, AstNode)>> {
+    use crate::portable::spine::SpineStep;
+    let mut containers: Vec<(SpineStep, AstNode)> = Vec::new();
+    let mut node = root.clone();
+    for step in steps {
+        match step {
+            SpineStep::Named { name } => {
+                if let AstNode::Hash { pool_index, length } = &node {
+                    let items = arena.get_hash_items(*pool_index as usize, *length as usize);
+                    let (key, value) = items.first()?;
+                    if key != name {
+                        return None;
+                    }
+                    containers.push((step.clone(), node.clone()));
+                    node = value.clone();
+                } else {
+                    return None;
+                }
+            }
+            SpineStep::Sequence { index, .. } => {
+                if let AstNode::Array { pool_index, length } = &node {
+                    let children = arena.get_array(*pool_index as usize, *length as usize);
+                    if *index + 1 >= children.len() {
+                        return None;
+                    }
+                    let child = children[*index + 1].clone();
+                    containers.push((step.clone(), node.clone()));
+                    node = child;
+                } else {
+                    return None;
+                }
+            }
+            SpineStep::Alternative { .. } => {}
+        }
+    }
+    Some(containers)
+}
+
+/// The unbounded repetition atom per spine body — the id the
+/// parser's spine runs are recorded under. Grammars share one rep
+/// atom across every nesting of the same list shape.
+fn body_reps_of(grammar: &Grammar) -> std::collections::HashMap<usize, usize> {
+    let mut map = std::collections::HashMap::new();
+    for (i, a) in grammar.atoms.iter().enumerate() {
+        if let Atom::Repetition {
+            atom,
+            min: _,
+            max: None,
+            tag: crate::portable::grammar::RepetitionTag::Repetition,
+        } = a
+        {
+            map.entry(*atom).or_insert(i);
+        }
+    }
+    map
 }
 
 impl<'a> IncrementalParser<'a> {
     /// Create a new incremental parser
     #[inline]
     pub fn new(grammar: &'a Grammar) -> Self {
+        let spine_bodies = crate::portable::spine::discover_spines(grammar)
+            .iter()
+            .map(|s| s.body)
+            .collect();
+        let body_reps = body_reps_of(grammar);
         Self {
             grammar: std::borrow::Cow::Borrowed(grammar),
             cache: DenseCache::new(4096),
@@ -396,6 +606,10 @@ impl<'a> IncrementalParser<'a> {
             dirty_tracker: DirtyRegionTracker::new(),
             last_root: None,
             body_chain: Vec::new(),
+            spliced_deep: 0,
+            spine_runs: Vec::new(),
+            spine_bodies,
+            body_reps,
             last_spine_trace: Vec::new(),
             spliced_parses: 0,
             prev_input_len: 0,
@@ -410,6 +624,11 @@ impl<'a> IncrementalParser<'a> {
     /// sessions hold the grammar and the parser together).
     #[inline]
     pub fn owned(grammar: Grammar) -> IncrementalParser<'static> {
+        let spine_bodies = crate::portable::spine::discover_spines(&grammar)
+            .iter()
+            .map(|s| s.body)
+            .collect();
+        let body_reps = body_reps_of(&grammar);
         IncrementalParser {
             grammar: std::borrow::Cow::Owned(grammar),
             cache: DenseCache::new(4096),
@@ -418,6 +637,10 @@ impl<'a> IncrementalParser<'a> {
             dirty_tracker: DirtyRegionTracker::new(),
             last_root: None,
             body_chain: Vec::new(),
+            spliced_deep: 0,
+            spine_runs: Vec::new(),
+            spine_bodies,
+            body_reps,
             last_spine_trace: Vec::new(),
             spliced_parses: 0,
             prev_input_len: 0,
@@ -936,13 +1159,6 @@ impl<'a> IncrementalParser<'a> {
             (k > 0).then_some((p, k, *max))
         });
 
-        if std::env::var("SPLICE_DEBUG").is_ok() {
-            eprintln!(
-                "PLAN dbg: plan={:?} graft_len={:?}",
-                splice_plan.as_ref().map(|(p, k, _)| (p, k)),
-                graft.as_ref().map(|(_, l)| l),
-            );
-        }
         let mut parser = super::parser::PortableParser::new_with_cache_in_place(
             &self.grammar,
             input,
@@ -959,6 +1175,7 @@ impl<'a> IncrementalParser<'a> {
         // a root offset by an entry wrapper's leading trivia simply
         // keeps the full-parse fallback.
         parser.spine_watch = spine_body.map(|b| (b, 0));
+        parser.spine_watch_bodies = self.spine_bodies.clone();
 
         // The splice: parse ONLY the suffix iterations of the body atom
         // from the last intact item boundary; rebuild the root by
@@ -967,21 +1184,6 @@ impl<'a> IncrementalParser<'a> {
         // suffix not consuming to EOF, budget — falls back to the full
         // parse below with the same parser (its memo entries from the
         // suffix attempts only help).
-        if std::env::var("SPLICE_DEBUG").is_ok() {
-            eprintln!(
-                "SPLICE dbg: regions={} has_dyn={} rep={} root={} chain={} cutoff={} name={:?}",
-                self.dirty_tracker.regions().len(),
-                self.grammar
-                    .atoms
-                    .iter()
-                    .any(|a| matches!(a, Atom::Dynamic { .. })),
-                splice.as_ref().map(|s| s.0).is_some(),
-                self.last_root.is_some(),
-                chain.len(),
-                cutoff,
-                splice.as_ref().map(|s| s.3.clone()),
-            );
-        }
         let mut spliced: Option<(&str, Vec<AstNode>)> = None;
         let mut root_name: Option<String> = None;
         let mut splice_k = 0usize;
@@ -1021,15 +1223,6 @@ impl<'a> IncrementalParser<'a> {
                         Err(_) => break,
                     }
                 }
-                if std::env::var("SPLICE_DEBUG").is_ok() {
-                    eprintln!(
-                        "SPLICE loop end: s_pos={} len={} suffix={} k={}",
-                        s_pos,
-                        input.len(),
-                        suffix.len(),
-                        k
-                    );
-                }
                 if s_pos == input.len() {
                     // prev_items[0] is the array's tag; items live at
                     // slots 1..=k. store_tagged_array re-prepends the tag.
@@ -1051,7 +1244,7 @@ impl<'a> IncrementalParser<'a> {
         // edit, replay the suffix items, parse the path's sibling tails
         // fresh. Any mismatch yields None — the full-parse fallback,
         // never speculative.
-        let mut path_data: Option<(usize, Vec<AstNode>, Vec<Vec<AstNode>>)> = None;
+        let mut path_data: Option<SpliceOutcome> = None;
         if spliced.is_none() {
             if let (Some(plan), Some(spine)) = (path_plan.as_ref(), spine_kept.as_ref()) {
                 let body = plan.body;
@@ -1062,71 +1255,374 @@ impl<'a> IncrementalParser<'a> {
                 // chain (below unchanged, above += delta) and probes
                 // ONCE at the bridge: the edited item's new span.
                 let mut bounds: Vec<(usize, usize)> = Vec::new();
+                let mut straddler_old: Option<(usize, usize)> = None;
+                let mut deep: Option<DeepPatch> = None;
+                let mut bridge: Option<AstNode> = None;
+                let mut bridge_end: Option<usize> = None;
+
                 if self.path_chain.is_empty() {
-                    // Seed: one anchor-byte drain after a full parse.
-                    let bytes = input.as_bytes();
-                    let anchor = anchor_byte_of(&self.grammar, body);
-                    let mut scan = 0usize;
-                    while scan < input.len() {
-                        if let Some(byte) = anchor {
-                            match bytes[scan..].iter().position(|&b| b == byte) {
-                                Some(off) => scan += off,
-                                None => break,
-                            }
-                        }
-                        match parser.try_atom_impl(body, scan, false) {
-                            Ok(r) if r.end_pos > scan => {
-                                bounds.push((scan, r.end_pos));
-                                scan = r.end_pos;
-                            }
-                            _ => scan += 1,
-                        }
+                    // Seed from the last FULL parse's spine records —
+                    // exact bounds, no scan (a scan probing the body
+                    // AT an interior anchor byte fails bodies that
+                    // start before their anchor). The run pairs to the
+                    // tree walk by item count: the path's node carries
+                    // one item per iteration.
+                    // The run must SPAN TO THE INPUT'S END: recorded
+                    // runs include failed backtrack attempts, whose
+                    // item chains stop mid-document; the splice's own
+                    // premise is a list covering the input.
+                    let input_len = input.len();
+                    let spans_to_end = |items: &[(u32, u32)]| {
+                        items
+                            .last()
+                            .is_some_and(|b| (b.1 as i64 - input_len as i64).abs() <= 64)
+                    };
+                    // Recorded runs include failed backtrack attempts
+                    // whose chains stop mid-document; the successful
+                    // interpretation consumes the most, so among the
+                    // count-matching candidates the LONGEST chain wins.
+                    let pick = self
+                        .spine_runs
+                        .iter()
+                        .filter(|(b, _, _, items)| {
+                            *b == body
+                                && items.len() == plan.items_prev.len()
+                                && items.len() > 1
+                                && spans_to_end(items)
+                        })
+                        .max_by_key(|(_, _, depth, items)| {
+                            (
+                                usize::from(*depth == 1),
+                                items.last().map(|b| b.1).unwrap_or(0),
+                            )
+                        });
+                    // The seed lands in the CHAIN (last-full-parse
+                    // coordinates); the split below shifts it — the
+                    // bounds it would seed directly are PRE-EDIT.
+                    if let Some((_, _, _, items)) = pick {
+                        self.path_chain = items.clone();
                     }
-                } else if let Some((edit_start, edit_end_old, delta)) = self.last_edit {
-                    // Below the edit: unchanged. Above: shifted. The
-                    // straddling item gets ONE bridge probe.
-                    let mut bridge_at = None;
-                    for &(p, e) in &self.path_chain {
-                        let (p, e) = (p as usize, e as usize);
-                        if e <= edit_start {
-                            bounds.push((p, e));
-                        } else if (p as i64) >= edit_end_old as i64 {
-                            bounds.push((
-                                (p as i64 + delta).max(0) as usize,
-                                (e as i64 + delta).max(0) as usize,
-                            ));
-                        } else if bridge_at.is_none() {
-                            bridge_at = Some(e);
-                        }
-                    }
-                    if let Some(start) = bridge_at {
-                        // The edited item's span in NEW coordinates.
-                        if let Ok(r) = parser.try_atom_impl(body, start, false) {
-                            if r.end_pos > start {
-                                bounds.push((start, r.end_pos));
+                }
+                if !self.path_chain.is_empty() {
+                    if let Some((edit_start, edit_end_old, delta)) = self.last_edit {
+                        // Below the edit: unchanged. Above: shifted. The
+                        // straddling item gets ONE bridge probe. An edit
+                        // landing before the first item (inside the
+                        // container's leading siblings) falls back: the
+                        // cloned leading siblings would be stale.
+                        if let Some(&(first_p, _)) = self.path_chain.first() {
+                            if cutoff < first_p as usize {
+                                self.path_chain.clear();
                             }
                         }
-                        bounds.sort_unstable();
-                        bounds.retain(|&(p, e)| e > p);
+                        if !self.path_chain.is_empty() {
+                            let mut below: Vec<(usize, usize)> = Vec::new();
+                            let mut above: Vec<(usize, usize)> = Vec::new();
+                            let mut straddler = None;
+                            for &(p, e) in &self.path_chain {
+                                let (p, e) = (p as usize, e as usize);
+                                if e <= edit_start {
+                                    below.push((p, e));
+                                } else if (p as i64) >= edit_end_old as i64 {
+                                    above.push((
+                                        ((p as i64 + delta).max(0)) as usize,
+                                        ((e as i64 + delta).max(0)) as usize,
+                                    ));
+                                } else if straddler.is_none() {
+                                    // The item spanning the edit.
+                                    straddler = Some((p, e));
+                                }
+                            }
+                            match straddler {
+                                Some((p0, e0)) => {
+                                    straddler_old = Some((p0, e0));
+                                    // Multi-level splice (rs#542): when a
+                                    // SMALLER spine run nested inside the
+                                    // straddling item contains the edit,
+                                    // bridge THERE — one small item parse —
+                                    // and patch the containers up to the
+                                    // level-0 item surgically (tree copies,
+                                    // zero parsing). The enclosing member
+                                    // never re-parses.
+                                    let mut edit_data = self.last_edit;
+                                    if let Some((edit_start_l, edit_end_old, delta)) = edit_data {
+                                        let _ = edit_start_l;
+                                        // The recorded runs include failed
+                                        // backtrack attempts — a candidate
+                                        // must match the PREVIOUS TREE:
+                                        // walk each spine body's tail once
+                                        // to the actual deep list node and
+                                        // keep runs whose item count
+                                        // equals the node's.
+                                        let prev_item = plan.items_prev[below.len()].clone();
+                                        let mut body_plans: std::collections::HashMap<
+                                            usize,
+                                            Option<(
+                                                Vec<crate::portable::spine::SpineStep>,
+                                                AstNode,
+                                                usize,
+                                            )>,
+                                        > = std::collections::HashMap::new();
+                                        for b in &self.spine_bodies {
+                                            let Some(&rep_d) = self.body_reps.get(b) else {
+                                                continue;
+                                            };
+                                            let Some(steps) = crate::portable::spine::path_between(
+                                                &self.grammar,
+                                                body,
+                                                rep_d,
+                                            ) else {
+                                                continue;
+                                            };
+                                            let Some(containers) =
+                                                walk_containers(parser.arena(), &prev_item, &steps)
+                                            else {
+                                                continue;
+                                            };
+                                            let node =
+                                                containers.last().and_then(|(step, cnode)| {
+                                                    match step {
+                                                crate::portable::spine::SpineStep::Sequence {
+                                                    index,
+                                                    ..
+                                                } => {
+                                                    if let AstNode::Array {
+                                                        pool_index,
+                                                        length,
+                                                    } = cnode
+                                                    {
+                                                        parser.arena().get_array(
+                                                            *pool_index as usize,
+                                                            *length as usize,
+                                                        )
+                                                        .get(*index + 1)
+                                                        .cloned()
+                                                    } else {
+                                                        None
+                                                    }
+                                                }
+                                                _ => None,
+                                            }
+                                                });
+                                            if let Some(AstNode::Array { pool_index, length }) =
+                                                &node
+                                            {
+                                                let count = parser
+                                                    .arena()
+                                                    .get_array(
+                                                        *pool_index as usize,
+                                                        *length as usize,
+                                                    )
+                                                    .len()
+                                                    .saturating_sub(1);
+                                                let list_node = node.clone().expect("node");
+                                                body_plans
+                                                    .insert(*b, Some((steps, list_node, count)));
+                                            }
+                                        }
+                                        // Candidate runs: contain the edit,
+                                        // match the tree's item count,
+                                        // strictly smaller straddling item
+                                        // than level 0's.
+                                        let mut best: Option<(usize, usize, usize, DeepCandidate)> =
+                                            None;
+                                        for (ri, (b, rs, _depth, items)) in
+                                            self.spine_runs.iter().enumerate()
+                                        {
+                                            let Some(Some((
+                                                tail_steps,
+                                                prev_deep_list,
+                                                tree_count,
+                                            ))) = body_plans.get(b)
+                                            else {
+                                                continue;
+                                            };
+                                            if *tree_count != items.len() {
+                                                continue;
+                                            }
+                                            let items_us: Vec<(usize, usize)> = items
+                                                .iter()
+                                                .map(|&(p, e)| (p as usize, e as usize))
+                                                .collect();
+                                            let run_end = items_us.last().map(|x| x.1).unwrap_or(0);
+                                            if (*rs as usize) > edit_start || run_end <= edit_start
+                                            {
+                                                continue;
+                                            }
+                                            let mut below_d: Vec<(usize, usize)> = Vec::new();
+                                            let mut above_d: Vec<(usize, usize)> = Vec::new();
+                                            let mut str_d: Option<(usize, usize)> = None;
+                                            for &(p, e) in &items_us {
+                                                if e <= edit_start {
+                                                    below_d.push((p, e));
+                                                } else if (p as i64) >= edit_end_old as i64 {
+                                                    above_d.push((
+                                                        ((p as i64 + delta).max(0)) as usize,
+                                                        ((e as i64 + delta).max(0)) as usize,
+                                                    ));
+                                                } else if str_d.is_none() {
+                                                    str_d = Some((p, e));
+                                                }
+                                            }
+                                            let (Some((pd, ed)), true) = (
+                                                str_d,
+                                                below_d.len() + above_d.len() + 1 == items_us.len(),
+                                            ) else {
+                                                continue;
+                                            };
+                                            let span = ed.saturating_sub(pd);
+                                            if span >= e0 - p0 {
+                                                continue;
+                                            }
+                                            let better = best
+                                                .as_ref()
+                                                .is_none_or(|(_, _, _, c)| c.span <= span);
+                                            if better {
+                                                best = Some((
+                                                    ri,
+                                                    *b,
+                                                    below_d.len(),
+                                                    DeepCandidate {
+                                                        item_start: pd,
+                                                        item_end_old: ed,
+                                                        span,
+                                                        below: below_d.clone(),
+                                                        above_shifted: above_d.clone(),
+                                                        tail_steps: tail_steps.clone(),
+                                                        prev_deep_list: prev_deep_list.clone(),
+                                                    },
+                                                ));
+                                            }
+                                        }
+                                        let _ = &mut edit_data;
+                                        if let Some((
+                                            ri,
+                                            body_d,
+                                            below_count_d,
+                                            DeepCandidate {
+                                                item_start: pd,
+                                                item_end_old: ed,
+                                                span: _,
+                                                below: below_d,
+                                                above_shifted: above_d,
+                                                tail_steps,
+                                                prev_deep_list,
+                                            },
+                                        )) = best
+                                        {
+                                            // ONE small parse: the edited
+                                            // item of the nested list. The
+                                            // shift identity guards it like
+                                            // the level-0 bridge.
+                                            let probed_d = parser.try_atom_impl(body_d, pd, false);
+                                            let deep_ok = probed_d.as_ref().is_ok_and(|r| {
+                                                r.end_pos as i64 == ed as i64 + delta
+                                                    && r.end_pos > pd
+                                            });
+                                            if deep_ok {
+                                                let r = probed_d.as_ref().expect("deep_ok");
+                                                let mut new_run_items: Vec<(u32, u32)> = below_d
+                                                    .iter()
+                                                    .map(|&(p, e)| (p as u32, e as u32))
+                                                    .collect();
+                                                new_run_items.push((pd as u32, r.end_pos as u32));
+                                                new_run_items.extend(
+                                                    above_d
+                                                        .iter()
+                                                        .map(|&(p, e)| (p as u32, e as u32)),
+                                                );
+                                                deep = Some(DeepPatch {
+                                                    bridge_node: r.value.clone(),
+                                                    prev_deep_list,
+                                                    prev_containers: {
+                                                        // The containers walk
+                                                        // rides along: rebuild
+                                                        // it from the stored
+                                                        // steps.
+                                                        walk_containers(
+                                                            parser.arena(),
+                                                            &prev_item,
+                                                            &tail_steps,
+                                                        )
+                                                        .unwrap_or_default()
+                                                    },
+                                                    below_d_count: below_count_d,
+                                                    new_run_items,
+                                                    run_idx: ri,
+                                                });
+                                                // Level-0 bounds without any
+                                                // parse: the shift identity
+                                                // gives the patched item's
+                                                // new end.
+                                                let new_e0 = ((e0 as i64 + delta).max(0)) as usize;
+                                                bounds = below.clone();
+                                                bounds.push((p0, new_e0));
+                                                bounds.extend(above.clone());
+                                                bridge_end = Some(new_e0);
+                                            }
+                                        }
+                                    }
+                                    if deep.is_none() {
+                                        // The level-0 bridge: ONE parse of
+                                        // the straddling item — the memo
+                                        // inside it serves everything except
+                                        // the edited bytes. The splice's
+                                        // precondition: the bytes above the
+                                        // edit are unchanged, so the item's
+                                        // new end MUST be old_end + delta —
+                                        // any other outcome means the item's
+                                        // shape changed and a shifted-copy
+                                        // rebuild would misalign.
+                                        let probed = parser.try_atom_impl(body, p0, false);
+                                        let expect_end = (e0 as i64 + delta).max(0) as usize;
+                                        if let Ok(r) = probed {
+                                            if r.end_pos == expect_end {
+                                                bounds = below.clone();
+                                                bounds.push((p0, r.end_pos));
+                                                bounds.extend(above.clone());
+                                            }
+                                        }
+                                    }
+                                }
+                                None => {
+                                    // No straddler: the edit sits in the
+                                    // trailing tail region — the tails
+                                    // parse fresh below, so the bounds
+                                    // are the unbroken below-chain.
+                                    bounds = below.clone();
+                                }
+                            }
+                        }
                     }
                 }
                 // The probe and the previous tree must agree on the
                 // item count (the tree carries one item per iteration).
                 if !bounds.is_empty() && bounds.len() == plan.items_prev.len() {
+                    // The below count = the straddler's index: items
+                    // [..k] clone, item k = the bridge (or the deep
+                    // surgery's patched item), items [k+1..] = shifted
+                    // deep copies (zero parsing).
                     let k = bounds.iter().take_while(|(_, end)| *end < cutoff).count();
                     let splice_pos = if k > 0 { bounds[k - 1].1 } else { bounds[0].0 };
-                    let mut suffix: Vec<AstNode> = Vec::new();
-                    let mut s_pos = splice_pos;
-                    while s_pos < input.len() {
-                        match parser.try_atom_impl(body, s_pos, false) {
-                            Ok(r) if r.end_pos > s_pos => {
-                                suffix.push(r.value.clone());
-                                s_pos = r.end_pos;
+                    let _ = splice_pos;
+                    if deep.is_none() && bridge.is_none() && k < plan.items_prev.len() {
+                        // No deep surgery ran and no level-0 bridge
+                        // yet (e.g. a no-straddler edit): parse the
+                        // item after the cut point as the bridge.
+                        let bridged = parser.try_atom_impl(body, splice_pos, false);
+                        if let Ok(r) = bridged {
+                            if r.end_pos > splice_pos {
+                                bridge = Some(r.value.clone());
+                                bridge_end = Some(r.end_pos);
                             }
-                            _ => break,
                         }
                     }
-                    // The path's sibling tails, innermost first.
+                    // The path's sibling tails parse from the END OF
+                    // THE REBUILT LIST (the last bound's new end) —
+                    // the atoms after the repetition — not from the
+                    // bridge end (a mid-list edit leaves siblings
+                    // between the bridge and the list's tail).
+                    let s_pos = bounds.last().map(|b| b.1).unwrap_or(splice_pos);
                     let mut tails: Vec<Vec<AstNode>> = Vec::new();
                     let mut tail_cursor = s_pos;
                     let mut tails_ok = true;
@@ -1154,20 +1650,62 @@ impl<'a> IncrementalParser<'a> {
                             break;
                         }
                     }
-                    if tails_ok && tail_cursor == input.len() {
+                    let bridge_ok =
+                        bridge.is_some() || deep.is_some() || k == plan.items_prev.len();
+                    // The shift identity applies to the bridge's own
+                    // span as well: bytes above the edit are unchanged,
+                    // so the straddling item's new end must be
+                    // old_end + delta. A different outcome means the
+                    // item's shape changed — the splice must not run.
+                    let shift_ok = match (bridge_end, straddler_old, self.last_edit) {
+                        (Some(bend), Some((_, e_old)), Some((_, _, d))) => {
+                            bend as i64 == e_old as i64 + d
+                        }
+                        _ => true,
+                    };
+                    if tails_ok && bridge_ok && shift_ok && tail_cursor == input.len() {
                         // The chain persists in the new coordinates:
                         // the next keystroke derives from it without a
-                        // drain.
+                        // drain. The spine runs follow the same
+                        // coordinates (the deep candidates read them
+                        // next keystroke) — shift every bound above
+                        // the edit on every splice.
                         self.path_chain =
                             bounds.iter().map(|&(p, e)| (p as u32, e as u32)).collect();
-                        path_data = Some((k, suffix, tails));
+                        let (e_old, d) = self
+                            .last_edit
+                            .map(|(_, e, d)| (e as usize, d))
+                            .unwrap_or((0, 0));
+                        for (_, _, _, items) in &mut self.spine_runs {
+                            for bnd in items.iter_mut() {
+                                if (bnd.0 as i64) >= e_old as i64 {
+                                    bnd.0 = (bnd.0 as i64 + d) as u32;
+                                    bnd.1 = (bnd.1 as i64 + d) as u32;
+                                }
+                            }
+                        }
+                        if deep.is_none() {
+                            self.spine_runs.clear();
+                        }
+                        path_data = Some(SpliceOutcome {
+                            k,
+                            bridge: bridge.clone().unwrap_or(AstNode::Nil),
+                            tails,
+                            deep,
+                        });
                     }
                 }
             }
         }
 
         let was_spliced = spliced.is_some() || path_data.is_some();
-        let result = if let Some((k, suffix, tails)) = path_data {
+        let result = if let Some(SpliceOutcome {
+            k,
+            bridge,
+            tails,
+            deep,
+        }) = path_data
+        {
             // Consume the parser first so the arena borrow ends (the
             // v1 splice's discipline), then rebuild walking the path
             // in reverse.
@@ -1175,6 +1713,26 @@ impl<'a> IncrementalParser<'a> {
             let spine = spine_kept.as_ref().expect("path data implies a spine");
             self.cache = parser.into_cache();
             self.spliced_parses += 1;
+            let delta = self.last_edit.map(|(_, _, d)| d).unwrap_or(0);
+            // The deep surgery runs with the session arena back: the
+            // deep list's items come from the previous tree, the
+            // bridge rides in from the derivation probe.
+            let bridge = match deep.as_ref() {
+                Some(dp) => {
+                    self.spliced_deep += 1;
+                    self.deep_patch(dp, delta)
+                }
+                None => bridge,
+            };
+            let mut suffix: Vec<AstNode> = Vec::new();
+            if k < plan.items_prev.len() {
+                suffix.push(bridge);
+                // The items above the bridge: shifted deep copies of
+                // the previous trees — no parsing, O(nodes).
+                for item in &plan.items_prev[k + 1..] {
+                    suffix.push(copy_shift_tree(item, delta, &mut self.output_arena));
+                }
+            }
             let mut all: Vec<AstNode> = plan.items_prev.iter().take(k).cloned().collect();
             all.extend(suffix);
             let (pool, len) = self.output_arena.store_tagged_array(":repetition", &all);
@@ -1240,9 +1798,56 @@ impl<'a> IncrementalParser<'a> {
                 None => {
                     let r = parser.parse();
                     self.last_spine_trace = std::mem::take(&mut parser.spine_trace);
-                    // Stale coordinates: the next splice re-seeds by
-                    // drain.
-                    self.path_chain.clear();
+                    // The fallback leaves a VALID chain: the drain here
+                    // is all memo hits (the full parse just cached
+                    // every body-atom entry — 540 on doc3), so the
+                    // next keystroke splices instead of re-draining
+                    // cold. A cold drain after the clear cost a full
+                    // re-parse and doubled every fallback.
+                    self.spine_runs = std::mem::take(&mut parser.spine_records);
+                    let spine_owned = spine_kept
+                        .is_none()
+                        .then(|| crate::portable::spine::discover_spine(&self.grammar))
+                        .flatten();
+                    if let Some(spine) = spine_kept.as_ref().or(spine_owned.as_ref()) {
+                        let body = spine.body;
+                        let want = path_plan.as_ref().map(|p| p.items_prev.len()).unwrap_or(0);
+                        // Pair to the tree walk FIRST (the path's
+                        // node carries one item per iteration — a
+                        // count match is the identity), then any
+                        // top-level run. The run must also span to
+                        // the input's end: recorded runs include
+                        // failed backtrack attempts, whose chains
+                        // stop mid-document.
+                        let input_len = input.len();
+                        let spans_to_end = |items: &[(u32, u32)]| {
+                            items
+                                .last()
+                                .is_some_and(|b| (b.1 as i64 - input_len as i64).abs() <= 64)
+                        };
+                        // The successful interpretation consumes the
+                        // most: among count-matching candidates the
+                        // LONGEST chain wins (failed backtrack
+                        // attempts record first, shorter).
+                        let pick = self
+                            .spine_runs
+                            .iter()
+                            .filter(|(b, _, _, items)| {
+                                *b == body && want > 1 && items.len() == want && spans_to_end(items)
+                            })
+                            .max_by_key(|(_, _, depth, items)| {
+                                (
+                                    usize::from(*depth == 1),
+                                    items.last().map(|b| b.1).unwrap_or(0),
+                                )
+                            });
+                        match pick {
+                            Some((_, _, _, items)) => self.path_chain = items.clone(),
+                            None => self.path_chain.clear(),
+                        }
+                    } else {
+                        self.path_chain.clear();
+                    }
                     self.cache = parser.into_cache();
                     r
                 }
@@ -1310,10 +1915,94 @@ impl<'a> IncrementalParser<'a> {
         })
     }
 
+    /// Execute the nested-run surgery: rebuild the deep list (below
+    /// clones | the deep bridge | shifted above), reassemble the
+    /// containers up to the level-0 item, refresh every spine run's
+    /// bounds, and hand back the patched item tree.
+    fn deep_patch(&mut self, dp: &DeepPatch, delta: i64) -> AstNode {
+        let edit_end_old = self.last_edit.map(|(_, e, _)| e as usize).unwrap_or(0);
+        // get_array slots include the tag at slot 0 — the items are
+        // slots 1..; store_tagged_array adds its own tag back.
+        let prev_items: Vec<AstNode> = match &dp.prev_deep_list {
+            AstNode::Array { pool_index, length } => self
+                .output_arena
+                .get_array(*pool_index as usize, *length as usize)
+                .into_iter()
+                .skip(1)
+                .collect(),
+            _ => Vec::new(),
+        };
+        let bd = dp.below_d_count.min(prev_items.len());
+        let mut deep_items: Vec<AstNode> = prev_items[..bd].to_vec();
+        deep_items.push(dp.bridge_node.clone());
+        for item in &prev_items[bd + 1..] {
+            deep_items.push(copy_shift_tree(item, delta, &mut self.output_arena));
+        }
+        let (pl, ln) = self
+            .output_arena
+            .store_tagged_array(":repetition", &deep_items);
+        let mut inner = AstNode::Array {
+            pool_index: pl,
+            length: ln,
+        };
+        for (step, prev_node) in dp.prev_containers.iter().rev() {
+            match step {
+                crate::portable::spine::SpineStep::Named { name } => {
+                    let (hp, hl) = self.output_arena.store_hash(&[(name.as_str(), inner)]);
+                    inner = AstNode::Hash {
+                        pool_index: hp,
+                        length: hl,
+                    };
+                }
+                crate::portable::spine::SpineStep::Sequence { index, .. } => {
+                    if let AstNode::Array { pool_index, length } = prev_node {
+                        // Slots include the tag — the atoms are
+                        // slots 1..; the grammar's atom `index` sits
+                        // at atom-position `index` in the tag-less
+                        // list.
+                        let children: Vec<AstNode> = self
+                            .output_arena
+                            .get_array(*pool_index as usize, *length as usize)
+                            .into_iter()
+                            .skip(1)
+                            .collect();
+                        let mut rebuilt: Vec<AstNode> = Vec::with_capacity(children.len());
+                        for (jc, ch) in children.iter().enumerate() {
+                            rebuilt.push(if jc == *index {
+                                inner.clone()
+                            } else {
+                                shift_if_above(ch, edit_end_old, delta, &mut self.output_arena)
+                            });
+                        }
+                        let (pl2, ln2) =
+                            self.output_arena.store_tagged_array(":sequence", &rebuilt);
+                        inner = AstNode::Array {
+                            pool_index: pl2,
+                            length: ln2,
+                        };
+                    }
+                }
+                crate::portable::spine::SpineStep::Alternative { .. } => {}
+            }
+        }
+        // The edited deep run takes its freshly derived items (the
+        // gate's wide shift already moved every OTHER run).
+        if dp.run_idx < self.spine_runs.len() {
+            self.spine_runs[dp.run_idx].3 = dp.new_run_items.clone();
+        }
+        inner
+    }
+
     /// Number of retained parses rebuilt via the splice path.
     #[inline]
     pub fn spliced_parses(&self) -> usize {
         self.spliced_parses
+    }
+
+    /// Number of retained parses rebuilt via the nested-run surgery.
+    #[inline]
+    pub fn spliced_deep(&self) -> usize {
+        self.spliced_deep
     }
 
     /// Get cache statistics
@@ -1377,6 +2066,56 @@ impl IncrementalResult {
             self.reused_cache_entries as f64 / total as f64
         }
     }
+}
+
+#[cfg(test)]
+mod splice_probe {
+    use super::*;
+
+    /// Does the walker's cache carry body-atom entries after a full
+    /// parse of the json artifact? (The splice seed's cost depends on
+    /// it: hits = ms, misses = a full re-parse.)
+    #[test]
+    fn probe_body_entries_after_full_parse() {
+        let Ok(dir) = std::env::var("PARSANOL_PROBE_DIR") else {
+            return;
+        };
+        let artifact_text =
+            std::fs::read_to_string(format!("{dir}/json-artifact.json")).expect("artifact");
+        let artifact = crate::parg::PargArtifact::from_json(&artifact_text).expect("loads");
+        let grammar = artifact.grammar("main").expect("decodes");
+        let input = std::fs::read_to_string(format!("{dir}/corpora/json/doc3.json")).expect("doc");
+        let mut arena = AstArena::for_input(input.len());
+        arena.set_input(input.clone());
+        let mut parser = crate::portable::parser::PortableParser::new(&grammar, &input, &mut arena);
+        let _ = parser.parse();
+        let cache = parser.into_cache();
+        let all: Vec<&crate::portable::cache::CacheEntry> = cache.entries().collect();
+        let max_atom = all.iter().map(|e| e.atom_id).max().unwrap_or(0);
+        println!(
+            "PROBE: entries={} max_atom={max_atom} atoms={} successes={}",
+            all.len(),
+            grammar.atoms.len(),
+            all.iter().filter(|e| e.success).count()
+        );
+        let spine = crate::portable::spine::discover_spine(&grammar).expect("spine");
+        let count = all
+            .iter()
+            .filter(|e| e.success && e.atom_id as usize == spine.body)
+            .count();
+        println!("PROBE: body={} body_entries={count}", spine.body);
+        for idx in 95..grammar.atoms.len().min(115) {
+            println!(
+                "PROBE: atom {idx} = {:?}",
+                grammar
+                    .get_atom(idx)
+                    .map(|a| format!("{a:?}").chars().take(60).collect::<String>())
+            );
+        }
+    }
+
+    #[test]
+    fn probe_placeholder() {}
 }
 
 #[cfg(test)]
@@ -1869,11 +2608,191 @@ mod edit_sequence_tests {
 }
 
 #[cfg(test)]
-mod dynamic_session_tests {
+mod deep_splice_tests {
     use super::*;
     use crate::portable::arena::AstArena;
-    use crate::portable::dynamic::{register_dynamic_callback, DynamicCallback, DynamicContext};
     use crate::portable::grammar::{Atom, Grammar};
+    use crate::portable::parser::PortableParser;
+
+    /// Nested member-list grammar (package-lock shape): an outer
+    /// object whose `packages` member holds a list of objects — the
+    /// level-0 spine is the outer member list; the nested member list
+    /// inside each package is the deep spine.
+    fn nested_grammar() -> Grammar {
+        let mut g = Grammar::new();
+        let ws_re = g.add_atom(Atom::Re {
+            pattern: "[ \\n]".to_string(),
+        });
+        let ws = g.add_atom(Atom::Repetition {
+            atom: ws_re,
+            min: 0,
+            max: None,
+            tag: crate::portable::grammar::RepetitionTag::Repetition,
+        });
+        let key = g.add_atom(Atom::Re {
+            pattern: "\"[a-z0-9]+\"".to_string(),
+        });
+        let colon = g.add_atom(Atom::Str {
+            pattern: ":".to_string(),
+        });
+        let comma = g.add_atom(Atom::Str {
+            pattern: ",".to_string(),
+        });
+        let lbrace = g.add_atom(Atom::Str {
+            pattern: "{".to_string(),
+        });
+        let rbrace = g.add_atom(Atom::Str {
+            pattern: "}".to_string(),
+        });
+        let str_val = g.add_atom(Atom::Re {
+            pattern: "\"[a-z0-9-]+\"".to_string(),
+        });
+
+        // inner member: ws key ":" ws str_val  (scalar objects only —
+        // the deep list sits at ONE nesting below the outer list)
+        let inner_member = g.add_atom(Atom::Sequence {
+            atoms: vec![ws, key, colon, ws, str_val],
+        });
+        let inner_body = g.add_atom(Atom::Sequence {
+            atoms: vec![ws, comma, inner_member],
+        });
+        let inner_list = g.add_atom(Atom::Repetition {
+            atom: inner_body,
+            min: 0,
+            max: None,
+            tag: crate::portable::grammar::RepetitionTag::Repetition,
+        });
+        let inner_first = g.add_atom(Atom::Sequence {
+            atoms: vec![inner_member, inner_list],
+        });
+        let inner_obj = g.add_atom(Atom::Sequence {
+            atoms: vec![ws, lbrace, inner_first, ws, rbrace],
+        });
+
+        // outer member: ws key ":" ws inner_obj
+        let outer_member = g.add_atom(Atom::Sequence {
+            atoms: vec![ws, key, colon, ws, inner_obj],
+        });
+        let outer_body = g.add_atom(Atom::Sequence {
+            atoms: vec![ws, comma, outer_member],
+        });
+        let outer_list = g.add_atom(Atom::Repetition {
+            atom: outer_body,
+            min: 0,
+            max: None,
+            tag: crate::portable::grammar::RepetitionTag::Repetition,
+        });
+        let outer_first = g.add_atom(Atom::Sequence {
+            atoms: vec![outer_member, outer_list],
+        });
+        let root = g.add_atom(Atom::Sequence {
+            atoms: vec![ws, lbrace, outer_first, ws, rbrace],
+        });
+        g.root = root;
+        g
+    }
+
+    fn doc() -> String {
+        // one outer member per line group; each inner object holds
+        // three inner members — the outer list = the level-0 spine,
+        // each inner object's list = a deep run.
+        let mut out = String::from("{\n");
+        for p in 0..40 {
+            out.push_str("\"pkg");
+            out.push_str(&p.to_string());
+            out.push_str("\": {\n");
+            for m in 0..3 {
+                out.push_str("\"dep");
+                out.push_str(&m.to_string());
+                out.push_str("\": \"v");
+                out.push_str(&m.to_string());
+                out.push('"');
+                if m < 2 {
+                    out.push(',');
+                }
+                out.push('\n');
+            }
+            out.push('}');
+            if p < 39 {
+                out.push(',');
+            }
+            out.push('\n');
+        }
+        out.push('}');
+        out
+    }
+
+    fn full_strings(g: &Grammar, input: &str) -> Vec<String> {
+        let mut arena = AstArena::new();
+        let mut parser = PortableParser::new(g, input, &mut arena);
+        let root = parser.parse().expect("parse");
+        let mut out = Vec::new();
+        walk_strings(&root, &arena, input, &mut out);
+        out
+    }
+
+    fn walk_strings(node: &AstNode, arena: &AstArena, input: &str, out: &mut Vec<String>) {
+        match node {
+            AstNode::InputRef { offset, length } => {
+                out.push(input[*offset as usize..*offset as usize + *length as usize].to_string())
+            }
+            AstNode::Array { pool_index, length } => {
+                for child in arena.get_array(*pool_index as usize, *length as usize) {
+                    walk_strings(&child, arena, input, out);
+                }
+            }
+            AstNode::StringRef { pool_index } => {
+                out.push(arena.get_string(*pool_index as usize).to_string())
+            }
+            _ => out.push(format!("{node:?}")),
+        }
+    }
+
+    /// The multi-level splice's identity contract: an edit inside a
+    /// nested member list must produce the same tree as a fresh parse
+    /// — and must engage the deep surgery (the rs#542 regression
+    /// where a nested-list edit re-parsed the whole enclosing member,
+    /// and the earlier failure where a failed backtrack attempt's run
+    /// bounds patched a wrong interpretation).
+    #[test]
+    fn deep_edit_matches_fresh_parse() {
+        let g = nested_grammar();
+        let text = doc();
+        let mut inc = IncrementalParser::owned(g.clone());
+        let _ = inc.parse_retained(&text).expect("initial parse");
+
+        // Edit dep2's value in package 20: dep2 sits INSIDE the
+        // nested member list (dep1 is the list's first member, held
+        // outside the repetition), so only the deep surgery can
+        // splice it without re-parsing the whole package member.
+        let pkg20 = text.find("\"pkg20\"").expect("pkg20");
+        let val_pos = text[pkg20..].find("\"v2\"").expect("v2") + pkg20;
+        let edited = format!(
+            "{}{}{}",
+            &text[..val_pos],
+            "\"v2-rc1\"",
+            &text[val_pos + 4..]
+        );
+        let result = inc
+            .parse_with_edit_retained(&edited, Edit::replace(val_pos, 4, 8))
+            .expect("incremental parse");
+        let expected = full_strings(&g, &edited);
+        let mut got = Vec::new();
+        walk_strings(&result.ast, inc.retained_arena(), &edited, &mut got);
+        assert_eq!(got, expected, "the deep-spliced tree diverged");
+        assert!(
+            inc.spliced_deep() >= 1,
+            "the deep surgery must engage on a nested-list edit"
+        );
+    }
+}
+
+#[cfg(test)]
+mod dynamic_session_tests {
+    use super::*;
+    use crate::portable::dynamic::{
+        register_dynamic_callback, DynamicCallback, DynamicContext,
+    };
 
     struct PassthroughCallback;
 

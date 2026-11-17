@@ -213,6 +213,12 @@ impl FailureFrame {
 /// The packrat tree-walking parser: evaluates the compiled grammar
 /// against the input with memoization, capture scopes and ranked
 /// failure tracking.
+/// One recorded spine run: `(body atom, run start, watched depth,
+/// item bounds)` — mirrors `incremental::SpineRun`.
+pub(crate) type SpineRecord = (usize, u32, usize, Vec<(u32, u32)>);
+
+/// The recursive-descent packrat engine: one grammar + one input,
+/// memoized per (position, atom), producing arena-backed trees.
 pub struct PortableParser<'a> {
     // ========================================================================
     // Grammar and Input (immutable)
@@ -315,6 +321,15 @@ pub struct PortableParser<'a> {
     /// outcomes spanning a trivia drain are never stored.
     pub(crate) spine_watch: Option<(usize, usize)>,
     pub(crate) spine_trace: Vec<(u32, u32)>,
+    /// Spine bodies whose EVERY unbounded run records its iteration
+    /// bounds (rs#542 multi-level): `(atom_id, run_start, depth, items)`.
+    /// Depth 1 = a top-level run (the path-splice's chain); deeper
+    /// frames = nested lists the splice can bridge at instead of
+    /// re-parsing the whole enclosing member. Cleared at each
+    /// top-level parse start.
+    pub(crate) spine_watch_bodies: Vec<usize>,
+    pub(crate) spine_frames: Vec<Vec<(u32, u32)>>,
+    pub(crate) spine_records: Vec<SpineRecord>,
     /// Injected-trivia nesting depth (rs#172): failures inside trivia
     /// atoms are not recorded.
     trivia_depth: u32,
@@ -618,6 +633,9 @@ impl<'a> PortableParser<'a> {
             dyn_cache: std::collections::HashMap::new(),
             spine_watch: None,
             spine_trace: Vec::new(),
+            spine_watch_bodies: Vec::new(),
+            spine_frames: Vec::new(),
+            spine_records: Vec::new(),
             trivia_depth: 0,
             pending_trivia: Vec::new(),
             trivia_drained: false,
@@ -708,6 +726,9 @@ impl<'a> PortableParser<'a> {
             dyn_cache: std::collections::HashMap::new(),
             spine_watch: None,
             spine_trace: Vec::new(),
+            spine_watch_bodies: Vec::new(),
+            spine_frames: Vec::new(),
+            spine_records: Vec::new(),
             trivia_depth: 0,
             pending_trivia: Vec::new(),
             trivia_drained: false,
@@ -823,6 +844,8 @@ impl<'a> PortableParser<'a> {
         self.partial_stash = None;
         self.spine_trace.clear();
         self.spine_watch = None;
+        self.spine_frames.clear();
+        self.spine_records.clear();
         self.pending_trivia.clear();
         self.trivia_depth = 0;
         self.trivia_drained = false;
@@ -1900,7 +1923,32 @@ impl<'a> PortableParser<'a> {
                     min,
                     max,
                     tag,
-                } => self.parse_repetition(*atom, *min, *max, *tag, pos, consume_all),
+                } => {
+                    // `atom` is the repetition's BODY id — the spine
+                    // watch keys on bodies (Spine::body), since the
+                    // general loop itself receives the body id.
+                    let watched = self.spine_watch_bodies.contains(atom);
+                    if !watched {
+                        return self.parse_repetition(
+                            *atom,
+                            *min,
+                            *max,
+                            *tag,
+                            pos,
+                            consume_all,
+                            false,
+                        );
+                    }
+                    self.spine_frames.push(Vec::new());
+                    let result =
+                        self.parse_repetition(*atom, *min, *max, *tag, pos, consume_all, true);
+                    let frame = self.spine_frames.pop().unwrap_or_default();
+                    if result.is_ok() && !frame.is_empty() {
+                        let depth = 1 + self.spine_frames.len();
+                        self.spine_records.push((*atom, pos as u32, depth, frame));
+                    }
+                    result
+                }
                 Atom::Named { name, atom } => self.parse_named(name, *atom, pos, consume_all),
                 Atom::Entity { atom } => {
                     self.enter_recursive()?;
@@ -2477,6 +2525,14 @@ impl<'a> PortableParser<'a> {
         Err(ParseError::Failed { position: pos })
     }
 
+    /// Read access to the output arena (splice tree surgery reads the
+    /// previous tree's containers mid-derivation, while the parser
+    /// holds the arena mutably between its own parse calls).
+    pub(crate) fn arena(&self) -> &AstArena {
+        self.arena
+    }
+
+    #[allow(clippy::too_many_arguments)] // mirrors the packed atom shape
     #[inline]
     fn parse_repetition(
         &mut self,
@@ -2486,6 +2542,7 @@ impl<'a> PortableParser<'a> {
         tag: RepetitionTag,
         pos: usize,
         consume_all: bool,
+        spine_watched_body: bool,
     ) -> Result<AtomResult, ParseError> {
         // Reference mode (B1) runs the general loop below: the bulk and
         // fused scans are optimizations whose tree equivalence is part
@@ -2565,6 +2622,11 @@ impl<'a> PortableParser<'a> {
                             self.spine_trace
                                 .push((current_pos as u32, result.end_pos as u32));
                         }
+                        if spine_watched_body {
+                            if let Some(frame) = self.spine_frames.last_mut() {
+                                frame.push((current_pos as u32, result.end_pos as u32));
+                            }
+                        }
                         items.push(result.value);
                         current_pos = result.end_pos;
                         count += 1;
@@ -2606,6 +2668,11 @@ impl<'a> PortableParser<'a> {
                         if spine_watched {
                             self.spine_trace
                                 .push((current_pos as u32, result.end_pos as u32));
+                        }
+                        if spine_watched_body {
+                            if let Some(frame) = self.spine_frames.last_mut() {
+                                frame.push((current_pos as u32, result.end_pos as u32));
+                            }
                         }
                         items.push(result.value);
                         current_pos = result.end_pos;

@@ -49,6 +49,9 @@ pub enum SpineStep {
 pub struct Spine {
     /// The spine repetition's body atom — the iteration granularity.
     pub body: usize,
+    /// The repetition atom itself (runs of `body` in the input are
+    /// recorded under this id).
+    pub rep: usize,
     /// Root-to-spine steps; empty when the root itself is the spine
     /// repetition (the classic splice shape).
     pub path: Vec<SpineStep>,
@@ -117,13 +120,64 @@ fn substantial(grammar: &Grammar, body: usize) -> bool {
 /// separators). The path records how the root reaches the spine; an
 /// alternative on the path is recorded as a branch index the splice
 /// confirms against the previous tree.
-pub fn discover_spine(grammar: &Grammar) -> Option<Spine> {
+/// One step per EDGE, keyed on the edge's PARENT: how a rebuilt tree
+/// nests at that level. Repetition parents pass through (the bounded
+/// `[ x ]` form's tree value is the inner's value).
+fn path_for(
+    grammar: &Grammar,
+    came: &HashMap<usize, (usize, usize)>,
+    rep_idx: usize,
+) -> Vec<SpineStep> {
+    let mut chain: Vec<(usize, usize)> = Vec::new(); // (child, pos_in_parent)
+    let mut cursor = rep_idx;
+    while let Some(&(parent, pos)) = came.get(&cursor) {
+        chain.push((cursor, pos));
+        cursor = parent;
+    }
+    chain.reverse();
+
+    let mut path: Vec<SpineStep> = Vec::new();
+    let mut parent = grammar.root;
+    for (child, pos) in &chain {
+        match grammar.get_atom(parent) {
+            Some(Atom::Named { name, .. }) => {
+                path.push(SpineStep::Named { name: name.clone() });
+            }
+            Some(Atom::Entity { .. })
+            | Some(Atom::Ignore { .. })
+            | Some(Atom::Trivia { .. })
+            | Some(Atom::Capture { .. })
+            | Some(Atom::Scope { .. }) => {}
+            Some(Atom::Sequence { atoms }) => {
+                path.push(SpineStep::Sequence {
+                    index: *pos,
+                    siblings_before: atoms[..*pos].to_vec(),
+                    siblings_after: atoms[*pos + 1..].to_vec(),
+                });
+            }
+            Some(Atom::Alternative { .. }) => {
+                path.push(SpineStep::Alternative { index: *pos });
+            }
+            Some(Atom::Repetition { .. }) => {}
+            _ => {}
+        }
+        parent = *child;
+    }
+    path
+}
+
+/// Every substantial repetition, OUTERMOST first (BFS order), each
+/// with its root→repetition structural path. The incremental splice
+/// picks the level whose run around the edit is smallest (rs#542):
+/// an edit inside a deeply nested member list splices at that list's
+/// granularity instead of re-parsing the whole enclosing member.
+pub fn discover_spines(grammar: &Grammar) -> Vec<Spine> {
     let mut visited = HashSet::new();
     let mut queue = VecDeque::new();
     // (atom, parent_atom, child_position) — parent None at the root.
     queue.push_back((grammar.root, None::<usize>, 0usize));
     let mut came: HashMap<usize, (usize, usize)> = HashMap::new();
-    let mut substantial_at: HashMap<usize, usize> = HashMap::new();
+    let mut found: Vec<(usize, usize)> = Vec::new(); // (rep_idx, body)
 
     while let Some((idx, _parent, _pos)) = queue.pop_front() {
         if !visited.insert(idx) {
@@ -132,9 +186,7 @@ pub fn discover_spine(grammar: &Grammar) -> Option<Spine> {
         match grammar.get_atom(idx) {
             Some(Atom::Repetition { atom, max, .. }) => {
                 if max.is_none() && substantial(grammar, *atom) {
-                    substantial_at.insert(idx, *atom);
-                    // The FIRST hit wins (BFS order decides), stop.
-                    break;
+                    found.push((idx, *atom));
                 }
                 came.entry(*atom).or_insert((idx, 0));
                 queue.push_back((*atom, Some(idx), 0));
@@ -170,25 +222,85 @@ pub fn discover_spine(grammar: &Grammar) -> Option<Spine> {
         }
     }
 
-    let (rep_idx, body) = {
-        let (idx, atom) = substantial_at.iter().next()?;
-        (*idx, *atom)
-    };
-    // The BFS break lands on the first-substantial repetition; walk
-    // the came[] chain back to the root, building the path forward.
-    let mut chain: Vec<(usize, usize)> = Vec::new(); // (child, pos_in_parent)
-    let mut cursor = rep_idx;
-    while let Some(&(parent, pos)) = came.get(&cursor) {
+    found
+        .into_iter()
+        .map(|(rep_idx, body)| Spine {
+            body,
+            rep: rep_idx,
+            path: path_for(grammar, &came, rep_idx),
+        })
+        .collect()
+}
+
+/// The outermost substantial repetition (BFS first) — the recovery
+/// spine. A prefix of `discover_spines`.
+pub fn discover_spine(grammar: &Grammar) -> Option<Spine> {
+    discover_spines(grammar).into_iter().next()
+}
+
+/// The structural path from atom `from` down to repetition atom `to`
+/// (BFS, first route wins) — how a rebuilt tree nests when the splice
+/// bridges at a NESTED run of a spine body (rs#542 multi-level): the
+/// tree surgery descends the previous item by these steps, replaces
+/// the list, and reassembles upward.
+pub fn path_between(grammar: &Grammar, from: usize, to: usize) -> Option<Vec<SpineStep>> {
+    if from == to {
+        return Some(Vec::new());
+    }
+    let mut visited = HashSet::new();
+    let mut queue = VecDeque::new();
+    queue.push_back(from);
+    let mut came: HashMap<usize, (usize, usize)> = HashMap::new();
+    let mut hit = false;
+    while let Some(idx) = queue.pop_front() {
+        if !visited.insert(idx) {
+            continue;
+        }
+        if idx == to {
+            hit = true;
+            break;
+        }
+        match grammar.get_atom(idx) {
+            Some(Atom::Repetition { atom, .. })
+            | Some(Atom::Named { atom, .. })
+            | Some(Atom::Entity { atom }) => {
+                came.entry(*atom).or_insert((idx, 0));
+                queue.push_back(*atom);
+            }
+            Some(Atom::Ignore { atom })
+            | Some(Atom::Trivia { atom })
+            | Some(Atom::Capture { atom, .. })
+            | Some(Atom::Scope { atom }) => {
+                came.entry(*atom).or_insert((idx, 0));
+                queue.push_back(*atom);
+            }
+            Some(Atom::Sequence { atoms }) | Some(Atom::Alternative { atoms }) => {
+                for (pos, &a) in atoms.iter().enumerate() {
+                    came.entry(a).or_insert((idx, pos));
+                    queue.push_back(a);
+                }
+            }
+            _ => {}
+        }
+    }
+    if !hit {
+        return None;
+    }
+    // Walk `to` back to `from`, building the steps keyed on each
+    // edge's parent (the same rules as the root path). The stop is
+    // `cursor == from`, NOT `came` exhaustion: the grammar is
+    // recursive through the spine body itself, so `from` can carry a
+    // came entry from a deeper push — walking past it cycles.
+    let mut chain: Vec<(usize, usize)> = Vec::new();
+    let mut cursor = to;
+    while cursor != from {
+        let &(parent, pos) = came.get(&cursor)?;
         chain.push((cursor, pos));
         cursor = parent;
     }
     chain.reverse();
-
-    // One step per EDGE, keyed on the edge's PARENT: how the rebuilt
-    // tree nests at that level. Repetition parents pass through (the
-    // bounded `[ x ]` form's tree value is the inner's value).
     let mut path: Vec<SpineStep> = Vec::new();
-    let mut parent = grammar.root;
+    let mut parent = from;
     for (child, pos) in &chain {
         match grammar.get_atom(parent) {
             Some(Atom::Named { name, .. }) => {
@@ -214,7 +326,7 @@ pub fn discover_spine(grammar: &Grammar) -> Option<Spine> {
         }
         parent = *child;
     }
-    Some(Spine { body, path })
+    Some(path)
 }
 
 #[cfg(test)]
@@ -354,5 +466,84 @@ mod tests {
 
         let spine = discover_spine(&g).expect("the list wins");
         assert_eq!(spine.body, list_body);
+    }
+
+    #[test]
+    fn spines_orders_outermost_first_with_nested_lists() {
+        // Outer member list; each member carries its own nested list.
+        // discover_spines[0] is the outer list (the recovery spine);
+        // discover_spines[1] is the nested list, its path extending
+        // level 0's.
+        let mut g = Grammar::new();
+        let ws_a = re(&mut g, "[ ]");
+        let ws = rep(&mut g, ws_a);
+        let key = re(&mut g, "[a-z]+");
+        let colon = str_atom(&mut g, ":");
+        let comma = str_atom(&mut g, ",");
+        let lbrace = str_atom(&mut g, "{");
+        let rbrace = str_atom(&mut g, "}");
+
+        // inner list: *("," inner_member); inner_member = [0-9]+
+        let num = re(&mut g, "[0-9]+");
+        let inner_member = named(&mut g, "num", num);
+        let inner_body = g.add_atom(Atom::Sequence {
+            atoms: vec![ws, comma, ws, inner_member],
+        });
+        let inner_list = rep(&mut g, inner_body);
+        let object_body = g.add_atom(Atom::Sequence {
+            atoms: vec![lbrace, inner_list, rbrace],
+        });
+        let object = named(&mut g, "object", object_body);
+
+        // outer list: *("," member); member = key ":" object
+        let member_body = g.add_atom(Atom::Sequence {
+            atoms: vec![key, colon, object],
+        });
+        let member = named(&mut g, "member", member_body);
+        let outer_body = g.add_atom(Atom::Sequence {
+            atoms: vec![ws, comma, ws, member],
+        });
+        let outer_list = rep(&mut g, outer_body);
+        let root = g.add_atom(Atom::Sequence {
+            atoms: vec![outer_list],
+        });
+        g.root = root;
+
+        let spines = discover_spines(&g);
+        assert_eq!(spines.len(), 2, "outer + nested lists");
+        assert_eq!(spines[0].body, outer_body);
+        assert_eq!(
+            discover_spine(&g).as_ref(),
+            spines.first(),
+            "recovery spine = the outermost"
+        );
+        assert_eq!(spines[1].body, inner_body);
+        assert!(
+            spines[1].path.len() > spines[0].path.len(),
+            "the nested path extends the outer one"
+        );
+        // The shared prefix: the nested path repeats level 0's steps
+        // (root → outer list) before descending into the member.
+        assert_eq!(
+            &spines[1].path[..spines[0].path.len()],
+            &spines[0].path[..],
+            "nested path shares the outer prefix"
+        );
+
+        // path_between from the outer BODY down to the nested rep:
+        // the multi-level splice's surgery route. It must reach the
+        // nested rep and only descend (no steps for pass-through
+        // wrappers).
+        let route = path_between(&g, spines[0].body, spines[1].rep)
+            .expect("the nested rep is reachable from the outer body");
+        assert!(!route.is_empty(), "the nested rep is below the outer body");
+        // And from the outer body to ITS OWN rep: the recursive
+        // grammar (member → value → object → the same list shape)
+        // must not cycle the chain walk past the start atom.
+        assert_eq!(
+            path_between(&g, spines[0].body, spines[0].rep),
+            None,
+            "the outer rep is not a descendant of its own body"
+        );
     }
 }
