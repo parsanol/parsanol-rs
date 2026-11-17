@@ -109,6 +109,11 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ## [Unreleased]
 
+- The ScanUntil instruction: fused negated-delimiter runs
+- The ScanClass instruction: bulk exact class runs for repetition bodies
+- Drop Spine.rep and let rustfmt settle the test-module import
+- The multi-level spine splice: bridge at the nested list containing the edit
+- Align the crate metadata with the discoverability pass (keywords + categories)
 - Release v1.5.4
 - Resolve the changelog reword conflict (keep the current spelling)
 - CI hygiene on the window commits: the spell-check reword, identity-op
