@@ -109,6 +109,22 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ## [Unreleased]
 
+- The persisted chain: bounds without a per-keystroke drain (rs#542 slice 2b)
+- Close the entries field (no consumer remains)
+- The anchor-byte drain scan + the visibility the splice substrate needs
+- The path splice engages: the tag-slot tree model (rs#542 slice 2b)
+- Rename the nav siblings field so the typos gate passes
+- The path-splice execution scaffold (rs#542 slice 2b) + the atom-to-tree finding
+- The remaining substrate lints
+- Silence the substrate's dead-code lint pending the splice consumer
+- The spine module: the shared list-structure discovery with its structural path
+- The post-parse window: fresh suffix entries survive (rs#542 slice 2a)
+- The suffix shift: memo-window retention across scattered edits (rs#542 slice 1)
+- Fix the parked-wire spec and the changelog spell gate
+- The recovery suffix replay: 14.7% to 92.6% suffix (rs#539 layer 2)
+- Merge pull request #546 from parsanol/fix/legacy-source-identity-current-sdk-20261116
+- Add explicit deepest failure reporting without changing defaults
+- Preserve source rule identity for Parslet compatibility
 - Span the ws shape: merged-choice bodies take the vectorized run
 - Reword the rejection input so the spell check passes (the literal is spelled with a space; still not ws-adjacent-to-a)
 - Single-byte choice merge: the ws shape compiles to one charset
