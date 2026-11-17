@@ -117,6 +117,27 @@ struct ResolvedRegex {
 }
 
 /// The bytecode virtual machine
+/// Decode a UTF-8 codepoint from its known-length byte slice.
+#[inline]
+fn decode_utf8_codepoint(bytes: &[u8]) -> u32 {
+    let b0 = bytes[0];
+    if b0 < 0x80 {
+        b0 as u32
+    } else if b0 < 0xE0 {
+        ((u32::from(b0) & 0x1F) << 6) | (u32::from(bytes[1]) & 0x3F)
+    } else if b0 < 0xF0 {
+        ((u32::from(b0) & 0x0F) << 12)
+            | ((u32::from(bytes[1]) & 0x3F) << 6)
+            | (u32::from(bytes[2]) & 0x3F)
+    } else {
+        ((u32::from(b0) & 0x07) << 18)
+            | ((u32::from(bytes[1]) & 0x3F) << 12)
+            | ((u32::from(bytes[2]) & 0x3F) << 6)
+            | (u32::from(bytes[3]) & 0x3F)
+    }
+}
+
+/// The bytecode virtual machine
 pub struct BytecodeVM<'a> {
     /// The program to execute
     program: &'a Program,
@@ -926,6 +947,45 @@ impl<'a> BytecodeVM<'a> {
                 }
 
                 self.push_span_value(start);
+                Ok(ExecutionResult::Continue)
+            }
+
+            Instruction::ScanClass { ranges_idx } => {
+                // The bulk class-run: exact per-char decode + range
+                // check, per-char span values (tree-identical to the
+                // per-char choice loop this replaces). Multi-byte
+                // ranges need the exact check; ASCII-only bodies keep
+                // the vectorized Span path.
+                let program = self.program;
+                let ranges: &[(u32, u32)] =
+                    program
+                        .get_char_ranges(*ranges_idx)
+                        .ok_or_else(|| ParseError::Internal {
+                            message: format!("Invalid char-range index: {}", ranges_idx),
+                        })?;
+                let input = self.input;
+                while self.position < input.len() {
+                    let b = input[self.position];
+                    let char_len = utf8_char_len(b);
+                    if self.position + char_len > input.len() {
+                        break;
+                    }
+                    let cp = decode_utf8_codepoint(&input[self.position..self.position + char_len]);
+                    let member = ranges.iter().any(|&(lo, hi)| cp >= lo && cp <= hi);
+                    if !member {
+                        break;
+                    }
+                    let start = self.position;
+                    self.position += char_len;
+                    // The span closes at the NEW position: values
+                    // measure position - start.
+                    self.push_span_value(start);
+                    if let Some(reg) = self.rep_registers.last_mut() {
+                        reg.count += 1;
+                        reg.last_end = self.position;
+                        reg.stalled = false;
+                    }
+                }
                 Ok(ExecutionResult::Continue)
             }
 

@@ -123,6 +123,11 @@ pub struct Program {
     /// Character set table (for CharSet instructions)
     char_sets: Vec<CharSet>,
 
+    /// Exact codepoint-range tables (for ScanClass runs) — one entry
+    /// per lowered class-choice body. Not serialized: the program is
+    /// compiled from the grammar at load.
+    char_ranges: Vec<Vec<(u32, u32)>>,
+
     /// Byte-dispatch tables for alternatives (256 relative offsets each)
     dispatch_tables: Vec<[i32; 256]>,
 
@@ -175,6 +180,7 @@ impl Program {
             labels: Vec::new(),
             entry_point: 0,
             rule_addresses: HashMap::new(),
+            char_ranges: Vec::new(),
             scan_plans: Vec::new(),
             has_invoke_dynamic: false,
             rule_memoizable: None,
@@ -194,6 +200,7 @@ impl Program {
             labels: Vec::new(),
             entry_point: 0,
             rule_addresses: HashMap::new(),
+            char_ranges: Vec::new(),
             scan_plans: Vec::new(),
             has_invoke_dynamic: false,
             rule_memoizable: None,
@@ -331,6 +338,24 @@ impl Program {
     #[inline]
     pub fn get_char_set(&self, idx: u32) -> Option<&CharSet> {
         self.char_sets.get(idx as usize)
+    }
+
+    /// Add an exact codepoint-range table (deduplicated)
+    pub fn add_char_ranges(&mut self, ranges: Vec<(u32, u32)>) -> u32 {
+        for (i, existing) in self.char_ranges.iter().enumerate() {
+            if *existing == ranges {
+                return i as u32;
+            }
+        }
+        let idx = self.char_ranges.len() as u32;
+        self.char_ranges.push(ranges);
+        idx
+    }
+
+    /// Get a codepoint-range table
+    #[inline]
+    pub fn get_char_ranges(&self, idx: u32) -> Option<&[(u32, u32)]> {
+        self.char_ranges.get(idx as usize).map(|v| v.as_slice())
     }
 
     /// Get the number of character sets in the table

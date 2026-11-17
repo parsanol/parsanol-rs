@@ -5,7 +5,7 @@
 
 use super::instruction::Instruction;
 use super::program::{CharSet, Program};
-use crate::portable::char_class::{CharRanges, CharacterPattern};
+use crate::portable::char_class::{normalize_ranges, CharRanges, CharacterPattern};
 use crate::portable::grammar::{Atom, Grammar, RepetitionTag};
 use std::collections::VecDeque;
 
@@ -907,6 +907,16 @@ impl Compiler {
                     // Character-class body: a single Span matches the whole run.
                     self.program.add_instruction(Instruction::span(set_idx));
                     self.program.add_instruction(Instruction::rep_count());
+                } else if let Some(ranges) = self.try_get_class_ranges_for_atom(atom_idx) {
+                    // Class-choice body (multi-byte ranges included):
+                    // the bulk ScanClass run replaces the per-char
+                    // Choice loop — exact codepoint checks, per-char
+                    // span values, identical trees by construction.
+                    let idx = self.program.add_char_ranges(ranges);
+                    // No RepCount after the run: the instruction owns
+                    // the register (it counts per character, exactly
+                    // like the choice loop it replaces).
+                    self.program.add_instruction(Instruction::scan_class(idx));
                 } else {
                     let choice_idx = self.program.instruction_count();
                     self.program
@@ -950,6 +960,34 @@ impl Compiler {
         self.program.add_instruction(Instruction::build_rep(maybe));
 
         Ok(entry)
+    }
+
+    /// Exact codepoint ranges for an atom when it is a single
+    /// codepoint class or a choice of them — the ScanClass fast
+    /// path. Ordered-choice semantics collapse into the union: every
+    /// branch is a bare single-char match producing the same span
+    /// value, so acceptance and trees are identical by construction.
+    fn try_get_class_ranges_for_atom(&mut self, atom_idx: usize) -> Option<Vec<(u32, u32)>> {
+        let atom = self.grammar.get_atom(atom_idx)?;
+        match atom {
+            Atom::Re { pattern } => Some(CharRanges::from_pattern(pattern)?.codepoint_ranges()),
+            Atom::Str { pattern } => {
+                let mut chars = pattern.chars();
+                let (c, extra) = (chars.next()?, chars.next());
+                extra
+                    .is_none()
+                    .then(|| normalize_ranges(vec![(c as u32, c as u32)]))
+            }
+            Atom::Alternative { atoms } => {
+                let children: Vec<usize> = atoms.clone();
+                let mut union: Vec<(u32, u32)> = Vec::new();
+                for &a in &children {
+                    union.extend(self.try_get_class_ranges_for_atom(a)?);
+                }
+                Some(normalize_ranges(union))
+            }
+            _ => None,
+        }
     }
 
     /// Try to get the charset index for an atom if it's a simple charset

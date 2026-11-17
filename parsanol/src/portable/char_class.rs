@@ -453,6 +453,29 @@ pub static CHAR_CLASSES: CharClassTables = CharClassTables::new();
 /// Semantics are inherited from the same HIR the `regex` crate itself
 /// compiles to, so membership is exactly what the fallback engine would
 /// decide for a pattern whose HIR is a single Unicode class.
+/// Sort and merge overlapping/adjacent inclusive ranges.
+pub(crate) fn normalize_ranges(mut v: Vec<(u32, u32)>) -> Vec<(u32, u32)> {
+    v.sort_unstable();
+    let mut out: Vec<(u32, u32)> = Vec::with_capacity(v.len());
+    for (lo, hi) in v {
+        match out.last_mut() {
+            Some(last) if lo <= last.1.saturating_add(1) => {
+                last.1 = last.1.max(hi);
+            }
+            _ => out.push((lo, hi)),
+        }
+    }
+    out
+}
+
+/// A regex character class decoded once into exact ranges: the
+/// regex engine's lazy-DFA determinization dominates the profile on
+/// repetition-heavy grammars. Decoding the class once into ranges and
+/// matching per character directly removes that per-position engine cost.
+///
+/// Semantics are inherited from the same HIR the `regex` crate itself
+/// compiles to, so membership is exactly what the fallback engine would
+/// decide for a pattern whose HIR is a single Unicode class.
 #[derive(Debug, Clone)]
 pub struct CharRanges {
     /// ASCII membership bitmap: patterns are overwhelmingly ASCII-heavy,
@@ -550,6 +573,28 @@ impl CharRanges {
     /// charset) can express exactly.
     pub fn ascii_only(&self) -> Option<&[bool; 128]> {
         self.ranges.is_empty().then_some(&self.ascii)
+    }
+
+    /// The exact codepoint membership as sorted disjoint inclusive
+    /// ranges (ASCII bitmap merged in, non-ASCII ranges appended) —
+    /// the ScanClass run's payload.
+    pub fn codepoint_ranges(&self) -> Vec<(u32, u32)> {
+        let mut out: Vec<(u32, u32)> = Vec::new();
+        let mut start: Option<u32> = None;
+        for b in 0u32..128 {
+            if self.ascii[b as usize] {
+                if start.is_none() {
+                    start = Some(b);
+                }
+            } else if let Some(s) = start.take() {
+                out.push((s, b - 1));
+            }
+        }
+        if let Some(s) = start {
+            out.push((s, 0x7F));
+        }
+        out.extend_from_slice(&self.ranges);
+        normalize_ranges(out)
     }
 
     /// Every byte that can begin the UTF-8 encoding of a member. A
