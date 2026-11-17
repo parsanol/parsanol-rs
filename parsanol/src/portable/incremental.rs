@@ -2790,9 +2790,7 @@ mod deep_splice_tests {
 #[cfg(test)]
 mod dynamic_session_tests {
     use super::*;
-    use crate::portable::dynamic::{
-        register_dynamic_callback, DynamicCallback, DynamicContext,
-    };
+    use crate::portable::dynamic::{register_dynamic_callback, DynamicCallback, DynamicContext};
 
     struct PassthroughCallback;
 

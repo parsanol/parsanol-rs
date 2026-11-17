@@ -49,9 +49,6 @@ pub enum SpineStep {
 pub struct Spine {
     /// The spine repetition's body atom — the iteration granularity.
     pub body: usize,
-    /// The repetition atom itself (runs of `body` in the input are
-    /// recorded under this id).
-    pub rep: usize,
     /// Root-to-spine steps; empty when the root itself is the spine
     /// repetition (the classic splice shape).
     pub path: Vec<SpineStep>,
@@ -226,7 +223,6 @@ pub fn discover_spines(grammar: &Grammar) -> Vec<Spine> {
         .into_iter()
         .map(|(rep_idx, body)| Spine {
             body,
-            rep: rep_idx,
             path: path_for(grammar, &came, rep_idx),
         })
         .collect()
@@ -533,15 +529,31 @@ mod tests {
         // path_between from the outer BODY down to the nested rep:
         // the multi-level splice's surgery route. It must reach the
         // nested rep and only descend (no steps for pass-through
-        // wrappers).
-        let route = path_between(&g, spines[0].body, spines[1].rep)
+        // wrappers). Reps are looked up by body, as the session does
+        // (one unbounded repetition per body, shared across nestings).
+        let rep_of = |body: usize| {
+            g.atoms
+                .iter()
+                .enumerate()
+                .find_map(|(i, a)| match a {
+                    Atom::Repetition {
+                        atom,
+                        max: None,
+                        tag: RepetitionTag::Repetition,
+                        ..
+                    } if *atom == body => Some(i),
+                    _ => None,
+                })
+                .expect("an unbounded rep exists for the body")
+        };
+        let route = path_between(&g, spines[0].body, rep_of(spines[1].body))
             .expect("the nested rep is reachable from the outer body");
         assert!(!route.is_empty(), "the nested rep is below the outer body");
         // And from the outer body to ITS OWN rep: the recursive
         // grammar (member → value → object → the same list shape)
         // must not cycle the chain walk past the start atom.
         assert_eq!(
-            path_between(&g, spines[0].body, spines[0].rep),
+            path_between(&g, spines[0].body, rep_of(spines[0].body)),
             None,
             "the outer rep is not a descendant of its own body"
         );
