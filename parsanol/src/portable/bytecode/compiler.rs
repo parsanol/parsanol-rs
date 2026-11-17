@@ -5,6 +5,7 @@
 
 use super::instruction::Instruction;
 use super::program::{CharSet, Program};
+use super::program::{NegScanSpec, NegTerm};
 use crate::portable::char_class::{normalize_ranges, CharRanges, CharacterPattern};
 use crate::portable::grammar::{Atom, Grammar, RepetitionTag};
 use std::collections::VecDeque;
@@ -892,6 +893,21 @@ impl Compiler {
             return Ok(entry);
         }
 
+        // The quoted-string idiom `*(!delim terminal)` fuses to one
+        // instruction (min 0 only — the mandatory loop keeps exact
+        // failure bookkeeping). Per-iteration values are the body's
+        // tagged `[Nil, span]` sequence, so the tree is identical.
+        if min == 0 {
+            if let Some(spec) = self.try_get_neg_scan_spec(atom_idx) {
+                let idx = self.program.add_neg_spec(spec);
+                let max_u32 = max.map(|m| m as u32).unwrap_or(u32::MAX);
+                self.program
+                    .add_instruction(Instruction::scan_until(idx, max_u32));
+                self.program.add_instruction(Instruction::build_rep(maybe));
+                return Ok(entry);
+            }
+        }
+
         // Mandatory iterations: failure propagates naturally.
         for _ in 0..min {
             self.compile_atom(atom_idx)?;
@@ -960,6 +976,91 @@ impl Compiler {
         self.program.add_instruction(Instruction::build_rep(maybe));
 
         Ok(entry)
+    }
+
+    /// Follow Entity chains to the underlying atom.
+    fn resolved_atom(&self, idx: usize) -> Option<&Atom> {
+        let mut cur = idx;
+        for _ in 0..64 {
+            match self.grammar.get_atom(cur)? {
+                Atom::Entity { atom } => cur = *atom,
+                a => return Some(a),
+            }
+        }
+        None
+    }
+
+    /// The delimiter strings of a negative lookahead: a Str, a
+    /// single-codepoint class (the compiled shape of `!"x"`), or an
+    /// Alternative of those, entities followed.
+    fn delim_strings_of(&self, atom_idx: usize) -> Option<Vec<String>> {
+        fn one_delim(atom: Option<&Atom>) -> Option<String> {
+            match atom? {
+                Atom::Str { pattern } => Some(pattern.clone()),
+                Atom::Re { pattern } => {
+                    // `!"x"` compiles to a one-member class; a
+                    // multi-codepoint class is not a string delimiter.
+                    let ranges = CharRanges::from_pattern(pattern)?;
+                    let cps = ranges.codepoint_ranges();
+                    if cps.len() == 1 && cps[0].0 == cps[0].1 {
+                        char::from_u32(cps[0].0).map(|c| c.to_string())
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            }
+        }
+        match self.resolved_atom(atom_idx)? {
+            Atom::Str { .. } | Atom::Re { .. } => {
+                Some(vec![one_delim(self.resolved_atom(atom_idx))?])
+            }
+            Atom::Alternative { atoms } => {
+                let mut out = Vec::with_capacity(atoms.len());
+                for &a in atoms {
+                    out.push(one_delim(self.resolved_atom(a))?);
+                }
+                Some(out)
+            }
+            _ => None,
+        }
+    }
+
+    /// The per-iteration terminal of the quoted-string idiom.
+    fn neg_terminal_of(&self, atom_idx: usize) -> Option<NegTerm> {
+        match self.resolved_atom(atom_idx)? {
+            Atom::Str { pattern } => Some(NegTerm::Lit(pattern.clone())),
+            Atom::Re { pattern } => {
+                if let Some(p) = CharacterPattern::from_pattern(pattern) {
+                    Some(NegTerm::CharPat(p))
+                } else {
+                    Some(NegTerm::Ranges(
+                        (*crate::portable::regex_cache::get_or_decode_class(pattern)?).clone(),
+                    ))
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Recognize `Sequence[Lookahead(negative, Str…), terminal]` (the
+    /// quoted-string idiom's body); None = the general loop runs.
+    fn try_get_neg_scan_spec(&self, atom_idx: usize) -> Option<NegScanSpec> {
+        let atoms = match self.grammar.get_atom(atom_idx)? {
+            Atom::Sequence { atoms } if atoms.len() == 2 => atoms.clone(),
+            _ => return None,
+        };
+        match self.grammar.get_atom(atoms[0])? {
+            Atom::Lookahead {
+                atom: la,
+                positive: false,
+            } => {
+                let delims = self.delim_strings_of(*la)?;
+                let term = self.neg_terminal_of(atoms[1])?;
+                Some(NegScanSpec { delims, term })
+            }
+            _ => None,
+        }
     }
 
     /// Exact codepoint ranges for an atom when it is a single

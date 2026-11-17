@@ -6,7 +6,7 @@
 use super::capture::{CaptureFrame, CaptureProcessor};
 use super::error::{instruction_to_expected, ErrorTracker};
 use super::instruction::Instruction;
-use super::program::Program;
+use super::program::{NegTerm, Program};
 use crate::portable::arena::AstArena;
 use crate::portable::ast::{AstNode, ParseError, ParseResult};
 use crate::portable::capture_state::CaptureState;
@@ -985,6 +985,82 @@ impl<'a> BytecodeVM<'a> {
                         reg.last_end = self.position;
                         reg.stalled = false;
                     }
+                }
+                Ok(ExecutionResult::Continue)
+            }
+
+            Instruction::ScanUntil { spec_idx, max } => {
+                // The quoted-string idiom's fused run: per iteration,
+                // a delimiter check then the terminal match; each
+                // iteration's value is the body sequence's tagged
+                // `[Nil, terminal-span]` array — byte-identical to
+                // the choice loop this replaces.
+                let program = self.program;
+                let spec = program
+                    .get_neg_spec(*spec_idx)
+                    .ok_or_else(|| ParseError::Internal {
+                        message: format!("Invalid neg-scan spec index: {}", spec_idx),
+                    })?;
+                let delims = &spec.delims;
+                let term = &spec.term;
+                let input_bytes = self.input;
+                let input_str = self.input_str;
+                let max_count = *max as usize;
+                let mut count = 0usize;
+                while count < max_count && self.position < input_bytes.len() {
+                    if delims
+                        .iter()
+                        .any(|d| input_str[self.position..].starts_with(d.as_str()))
+                    {
+                        break;
+                    }
+                    let len = match term {
+                        NegTerm::Lit(s) => {
+                            if input_str[self.position..].starts_with(s.as_str()) {
+                                s.len()
+                            } else {
+                                break;
+                            }
+                        }
+                        NegTerm::Ranges(r) => match r.match_at(input_bytes, self.position) {
+                            Some(l) => l,
+                            None => break,
+                        },
+                        NegTerm::CharPat(p) => {
+                            let b = input_bytes[self.position];
+                            if p.matches(b) {
+                                match p {
+                                    crate::portable::char_class::CharacterPattern::Any
+                                    | crate::portable::char_class::CharacterPattern::NonDigit
+                                    | crate::portable::char_class::CharacterPattern::NonSpace
+                                    | crate::portable::char_class::CharacterPattern::NonWord => {
+                                        utf8_char_len(b)
+                                    }
+                                    _ => 1,
+                                }
+                            } else {
+                                break;
+                            }
+                        }
+                    };
+                    if self.position + len > input_bytes.len() {
+                        break;
+                    }
+                    let t = self.arena.input_ref(self.position, len);
+                    let (pool_idx, slen) = self
+                        .arena
+                        .store_tagged_array(":sequence", &[AstNode::Nil, t]);
+                    self.value_stack.push(AstNode::Array {
+                        pool_index: pool_idx,
+                        length: slen,
+                    });
+                    self.position += len;
+                    if let Some(reg) = self.rep_registers.last_mut() {
+                        reg.count += 1;
+                        reg.last_end = self.position;
+                        reg.stalled = false;
+                    }
+                    count += 1;
                 }
                 Ok(ExecutionResult::Continue)
             }
