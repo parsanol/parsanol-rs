@@ -275,6 +275,15 @@ pub enum Opcode {
 
     /// Dispatch on lead byte
     ByteDispatch = 41,
+
+    /// Scan a maximal run of characters from a codepoint-range class
+    ///
+    /// The bulk-run instruction for repetition bodies that are a
+    /// single codepoint class or a choice of them (multi-byte ranges
+    /// included — exact per-char decode + range check, per-char span
+    /// values so the tree is byte-identical to the choice loop it
+    /// replaces).
+    ScanClass = 42,
 }
 
 /// Capture kind for capture instructions
@@ -494,6 +503,14 @@ pub enum Instruction {
         set_idx: u32,
     },
 
+    /// Scan a maximal codepoint-class run (exact ranges; per-char
+    /// span values keep the tree identical to the per-char choice
+    /// loop it replaces)
+    ScanClass {
+        /// Index into the char-range table
+        ranges_idx: u32,
+    },
+
     /// Custom atom invocation
     ///
     /// Invokes a custom atom registered via `register_custom_atom()`.
@@ -626,6 +643,7 @@ impl Instruction {
             Instruction::Throw { .. } => Opcode::Throw,
             Instruction::ThrowRec { .. } => Opcode::ThrowRec,
             Instruction::Span { .. } => Opcode::Span,
+            Instruction::ScanClass { .. } => Opcode::ScanClass,
             Instruction::Custom { .. } => Opcode::Custom,
             Instruction::PushScope => Opcode::PushScope,
             Instruction::PopScope => Opcode::PopScope,
@@ -885,6 +903,12 @@ impl Instruction {
         Instruction::Span { set_idx }
     }
 
+    /// Create a ScanClass instruction
+    #[inline]
+    pub fn scan_class(ranges_idx: u32) -> Self {
+        Instruction::ScanClass { ranges_idx }
+    }
+
     /// Create a Custom instruction
     #[inline]
     pub fn custom(id: u64) -> Self {
@@ -959,6 +983,7 @@ impl fmt::Display for Instruction {
                 recovery_offset,
             } => write!(f, "ThrowRec [{}] -> +{}", label_idx, recovery_offset),
             Instruction::Span { set_idx } => write!(f, "Span [{}]", set_idx),
+            Instruction::ScanClass { ranges_idx } => write!(f, "ScanClass [{}]", ranges_idx),
             Instruction::Custom { id } => write!(f, "Custom #{}", id),
             Instruction::PushScope => write!(f, "PushScope"),
             Instruction::PopScope => write!(f, "PopScope"),

@@ -24,6 +24,74 @@ fn compile_program(source: &str) -> Program {
     compile(grammar).expect("program compiles")
 }
 
+fn scan_class_count(program: &Program) -> usize {
+    let mut n = 0;
+    let mut i = 0;
+    while let Some(instr) = program.get_instruction(i) {
+        if let Instruction::ScanClass { .. } = instr {
+            n += 1;
+        }
+        i += 1;
+    }
+    n
+}
+
+/// A repetition whose body is a multi-byte-capable class choice (the
+/// json string-content shape: ranges, negated classes) lowers to ONE
+/// ScanClass bulk run — no per-character choice machinery remains.
+#[test]
+fn scan_class_lowers_range_choice_repetitions() {
+    let source = "grammar Shape version \"1.0.0\" edition 2 {
+      ws = *( %x20 / %x09 / %x0A / %x0D )
+      content = *( %x20-21 / %x23-5B / %x5D-10FFFF )
+      str = %x22 content %x22
+      doc = str ws
+      entry main: doc
+    }";
+    let program = compile_program(source);
+    assert_eq!(
+        scan_class_count(&program),
+        1,
+        "the range-choice repetition must lower to ONE ScanClass (the bulk exact run)"
+    );
+    let mut choices = 0;
+    let mut i = 0;
+    while let Some(instr) = program.get_instruction(i) {
+        if let Instruction::Choice { .. } = instr {
+            choices += 1;
+        }
+        i += 1;
+    }
+    assert_eq!(
+        choices, 0,
+        "no per-character choice machinery may remain for the class run"
+    );
+
+    // Acceptance identical: quoted strings with mixed content parse,
+    // non-ASCII rides through, quotes terminate the run.
+    let artifact_text = {
+        let envelope = envelope::compile_source(source).expect("grammar compiles");
+        serde_json::to_string(&envelope).expect("envelope serializes")
+    };
+    let artifact = parsanol::PargArtifact::from_json(&artifact_text).expect("artifact loads");
+    for (input, ok) in [
+        ("\"hello\" ", true),
+        ("\"a b  c\" ", true),
+        ("\"montre\u{e9} \u{4e2d}\" ", true),
+        ("\"\" ", true),
+        ("\"unterminated ", false),
+        ("hello ", false),
+    ] {
+        let parsed = artifact.parse_shape("main", input).is_ok();
+        assert_eq!(
+            parsed,
+            ok,
+            "{input:?} must {}parse",
+            if ok { "" } else { "not " }
+        );
+    }
+}
+
 fn dispatch_count(program: &Program) -> usize {
     let mut n = 0;
     let mut i = 0;
