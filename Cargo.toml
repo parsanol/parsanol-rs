@@ -27,10 +27,6 @@ regex-automata = "0.4"
 regex-syntax = "0.8"
 hashbrown = "0.17"
 ahash = "0.8"
-memchr = "2.7"
-syn = { version = "3.0", features = ["full", "parsing", "extra-traits"] }
-quote = "1.0"
-proc-macro2 = "1.0"
 
 [profile.release]
 opt-level = 3

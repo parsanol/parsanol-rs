@@ -70,6 +70,7 @@ pub fn reset_host_atoms() {
 }
 
 /// Resolve Parsanol::Atoms::Base once per call site use.
+#[allow(dead_code)] // reserved for the dynamic-atom call sites
 fn atoms_base_class(ruby: &Ruby) -> Option<RClass> {
     let object_class: RClass = ruby.class_object();
     let parsanol_mod: magnus::RModule = object_class
