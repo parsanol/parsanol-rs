@@ -4,6 +4,7 @@ members = [
     "parsanol-ffi",
     "parsanol",
     "parsanol-derive",
+    "parsanol-lsp",
 ]
 
 [workspace.package]
