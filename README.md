@@ -42,6 +42,8 @@ Rust. It provides high-performance parsing capabilities with a focus on:
 - [Grammar Composition](#grammar-composition) - Import and compose grammars
 - [Ruby FFI](#ruby-ffi) - Optional Ruby bindings
 - [WASM Support](#wasm-support) - Optional WebAssembly bindings
+- [PARG Language Server](#parg-language-server) - parsanol-lsp: parsanol parsing PARG
+- [Constrained Decoding](#constrained-decoding) - per-token masks from an artifact
 
 # Bytecode Backend
 
@@ -2077,3 +2079,29 @@ carrying it across the registries (crates, npm, rubygems, pypi);
 registries on main (ruby#421). A release train updates the manifest as
 it rides; consumers and docs read the manifest instead of
 reconstructing pairings from git archaeology.
+
+# PARG Language Server
+
+`parsanol-lsp` (in this workspace) is the self-hosting dogfood:
+parsanol parsing PARG with its own diagnostics. The stdio server ships
+the live diagnostics (the structured failure wire: the deepest
+position, the expected labels, the ranked failures), hover with the
+rule docs, go-to-definition, find-references, completion, document
+symbols, and the parse-tree preview (`parg/treePreview`) — the
+parse-tree debugger. Receipts: diagnostics over the self-hosting
+grammar's own source run in ~147 ms with zero diagnostics.
+
+```sh
+cargo install parsanol-lsp
+parsanol-lsp   # stdio; point your editor's LSP client at it
+```
+
+# Constrained Decoding
+
+`parsanol::constrain` compiles an artifact + a tokenizer's decoded
+vocabulary into per-step valid-token sets: the state oracle is the
+recovering envelope's consumed position, so a token extends the prefix
+iff the parse consumes past the boundary. The greedy harness generates
+grammar-valid output at 100% validity by the artifact oracle on the
+isbn and json grammars — the mask source a logits-processor
+integration wraps (rs#530).
