@@ -1069,21 +1069,38 @@ impl Compiler {
     /// branch is a bare single-char match producing the same span
     /// value, so acceptance and trees are identical by construction.
     fn try_get_class_ranges_for_atom(&mut self, atom_idx: usize) -> Option<Vec<(u32, u32)>> {
-        let atom = self.grammar.get_atom(atom_idx)?;
-        match atom {
+        let ranges = self.class_ranges_union(atom_idx)?;
+        // ASCII-only unions belong to the Span/charset paths: the
+        // byte-set match is faster than the decode + range check, and
+        // the existing extractors already own every shape they can
+        // express (the union flattens nested alternatives the charset
+        // extractor refuses). Taking such a union REGRESSED hot ASCII
+        // loops on json (a per-char choice over three digit sets
+        // became a slower decode loop). ScanClass = bodies with
+        // non-ASCII members only.
+        if ranges.iter().all(|&(lo, hi)| hi <= 0x7F) {
+            return None;
+        }
+        Some(ranges)
+    }
+
+    /// The codepoint union for a class/choice atom WITHOUT the ASCII
+    /// guard (the guard is a REP-BODY decision, not a per-branch one —
+    /// a union mixing ASCII and non-ASCII branches must survive the
+    /// recursion).
+    fn class_ranges_union(&self, atom_idx: usize) -> Option<Vec<(u32, u32)>> {
+        match self.grammar.get_atom(atom_idx)? {
             Atom::Re { pattern } => Some(CharRanges::from_pattern(pattern)?.codepoint_ranges()),
             Atom::Str { pattern } => {
                 let mut chars = pattern.chars();
                 let (c, extra) = (chars.next()?, chars.next());
-                extra
-                    .is_none()
-                    .then(|| normalize_ranges(vec![(c as u32, c as u32)]))
+                extra.is_none().then(|| vec![(c as u32, c as u32)])
             }
             Atom::Alternative { atoms } => {
                 let children: Vec<usize> = atoms.clone();
                 let mut union: Vec<(u32, u32)> = Vec::new();
                 for &a in &children {
-                    union.extend(self.try_get_class_ranges_for_atom(a)?);
+                    union.extend(self.class_ranges_union(a)?);
                 }
                 Some(normalize_ranges(union))
             }
