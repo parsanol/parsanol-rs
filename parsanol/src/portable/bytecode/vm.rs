@@ -381,6 +381,25 @@ impl<'a> BytecodeVM<'a> {
             }
 
             // Dispatch instruction
+            // The scan instructions dispatch OUT of
+            // execute_instruction: calls inside it degrade its hot
+            // codegen (the 1.5.6 +12% receipt).
+            match instr {
+                Instruction::ScanClass { ranges_idx } => {
+                    self.exec_scan_class(*ranges_idx)?;
+                    // Continue: advance past this instruction, exactly
+                    // like execute_instruction's Continue arm.
+                    self.ip += 1;
+                    continue;
+                }
+                Instruction::ScanUntil { spec_idx, max } => {
+                    self.exec_scan_until(*spec_idx, *max)?;
+                    self.ip += 1;
+                    continue;
+                }
+                _ => {}
+            }
+
             match self.execute_instruction(instr)? {
                 ExecutionResult::Continue => {
                     self.ip += 1;
@@ -467,6 +486,119 @@ impl<'a> BytecodeVM<'a> {
         if self.memo.len() < MEMO_MAX {
             self.memo.insert((rule_pc, pos), entry);
         }
+    }
+
+    /// The bulk class-run: exact per-char decode + range check, per-char
+    /// span values (tree-identical to the per-char choice loop this
+    /// replaces). Dispatched from `run`, never inside
+    /// `execute_instruction`: calls there degrade the hot match's
+    /// codegen (the 1.5.6 +12% receipt).
+    #[inline(never)]
+    fn exec_scan_class(&mut self, ranges_idx: u32) -> Result<ExecutionResult, ParseError> {
+        let program = self.program;
+        let ranges: &[(u32, u32)] =
+            program
+                .get_char_ranges(ranges_idx)
+                .ok_or_else(|| ParseError::Internal {
+                    message: format!("Invalid char-range index: {ranges_idx}"),
+                })?;
+        let input = self.input;
+        while self.position < input.len() {
+            let b = input[self.position];
+            let char_len = utf8_char_len(b);
+            if self.position + char_len > input.len() {
+                break;
+            }
+            let cp = decode_utf8_codepoint(&input[self.position..self.position + char_len]);
+            let member = ranges.iter().any(|&(lo, hi)| cp >= lo && cp <= hi);
+            if !member {
+                break;
+            }
+            let start = self.position;
+            self.position += char_len;
+            // The span closes at the NEW position: values measure
+            // position - start.
+            self.push_span_value(start);
+            if let Some(reg) = self.rep_registers.last_mut() {
+                reg.count += 1;
+                reg.last_end = self.position;
+                reg.stalled = false;
+            }
+        }
+        Ok(ExecutionResult::Continue)
+    }
+
+    /// The quoted-string idiom's fused run (see exec_scan_class).
+    #[inline(never)]
+    fn exec_scan_until(&mut self, spec_idx: u32, max: u32) -> Result<ExecutionResult, ParseError> {
+        let program = self.program;
+        let spec = program
+            .get_neg_spec(spec_idx)
+            .ok_or_else(|| ParseError::Internal {
+                message: format!("Invalid neg-scan spec index: {spec_idx}"),
+            })?;
+        let delims = &spec.delims;
+        let term = &spec.term;
+        let input_bytes = self.input;
+        let input_str = self.input_str;
+        let max_count = max as usize;
+        let mut count = 0usize;
+        while count < max_count && self.position < input_bytes.len() {
+            if delims
+                .iter()
+                .any(|d| input_str[self.position..].starts_with(d.as_str()))
+            {
+                break;
+            }
+            let len = match term {
+                NegTerm::Lit(s) => {
+                    if input_str[self.position..].starts_with(s.as_str()) {
+                        s.len()
+                    } else {
+                        break;
+                    }
+                }
+                NegTerm::Ranges(r) => match r.match_at(input_bytes, self.position) {
+                    Some(l) => l,
+                    None => break,
+                },
+                NegTerm::CharPat(p) => {
+                    let b = input_bytes[self.position];
+                    if p.matches(b) {
+                        match p {
+                            crate::portable::char_class::CharacterPattern::Any
+                            | crate::portable::char_class::CharacterPattern::NonDigit
+                            | crate::portable::char_class::CharacterPattern::NonSpace
+                            | crate::portable::char_class::CharacterPattern::NonWord => {
+                                utf8_char_len(b)
+                            }
+                            _ => 1,
+                        }
+                    } else {
+                        break;
+                    }
+                }
+            };
+            if self.position + len > input_bytes.len() {
+                break;
+            }
+            let t = self.arena.input_ref(self.position, len);
+            let (pool_idx, slen) = self
+                .arena
+                .store_tagged_array(":sequence", &[AstNode::Nil, t]);
+            self.value_stack.push(AstNode::Array {
+                pool_index: pool_idx,
+                length: slen,
+            });
+            self.position += len;
+            if let Some(reg) = self.rep_registers.last_mut() {
+                reg.count += 1;
+                reg.last_end = self.position;
+                reg.stalled = false;
+            }
+            count += 1;
+        }
+        Ok(ExecutionResult::Continue)
     }
 
     fn execute_instruction(&mut self, instr: &Instruction) -> Result<ExecutionResult, ParseError> {
@@ -950,119 +1082,8 @@ impl<'a> BytecodeVM<'a> {
                 Ok(ExecutionResult::Continue)
             }
 
-            Instruction::ScanClass { ranges_idx } => {
-                // The bulk class-run: exact per-char decode + range
-                // check, per-char span values (tree-identical to the
-                // per-char choice loop this replaces). Multi-byte
-                // ranges need the exact check; ASCII-only bodies keep
-                // the vectorized Span path.
-                let program = self.program;
-                let ranges: &[(u32, u32)] =
-                    program
-                        .get_char_ranges(*ranges_idx)
-                        .ok_or_else(|| ParseError::Internal {
-                            message: format!("Invalid char-range index: {}", ranges_idx),
-                        })?;
-                let input = self.input;
-                while self.position < input.len() {
-                    let b = input[self.position];
-                    let char_len = utf8_char_len(b);
-                    if self.position + char_len > input.len() {
-                        break;
-                    }
-                    let cp = decode_utf8_codepoint(&input[self.position..self.position + char_len]);
-                    let member = ranges.iter().any(|&(lo, hi)| cp >= lo && cp <= hi);
-                    if !member {
-                        break;
-                    }
-                    let start = self.position;
-                    self.position += char_len;
-                    // The span closes at the NEW position: values
-                    // measure position - start.
-                    self.push_span_value(start);
-                    if let Some(reg) = self.rep_registers.last_mut() {
-                        reg.count += 1;
-                        reg.last_end = self.position;
-                        reg.stalled = false;
-                    }
-                }
-                Ok(ExecutionResult::Continue)
-            }
-
-            Instruction::ScanUntil { spec_idx, max } => {
-                // The quoted-string idiom's fused run: per iteration,
-                // a delimiter check then the terminal match; each
-                // iteration's value is the body sequence's tagged
-                // `[Nil, terminal-span]` array — byte-identical to
-                // the choice loop this replaces.
-                let program = self.program;
-                let spec = program
-                    .get_neg_spec(*spec_idx)
-                    .ok_or_else(|| ParseError::Internal {
-                        message: format!("Invalid neg-scan spec index: {}", spec_idx),
-                    })?;
-                let delims = &spec.delims;
-                let term = &spec.term;
-                let input_bytes = self.input;
-                let input_str = self.input_str;
-                let max_count = *max as usize;
-                let mut count = 0usize;
-                while count < max_count && self.position < input_bytes.len() {
-                    if delims
-                        .iter()
-                        .any(|d| input_str[self.position..].starts_with(d.as_str()))
-                    {
-                        break;
-                    }
-                    let len = match term {
-                        NegTerm::Lit(s) => {
-                            if input_str[self.position..].starts_with(s.as_str()) {
-                                s.len()
-                            } else {
-                                break;
-                            }
-                        }
-                        NegTerm::Ranges(r) => match r.match_at(input_bytes, self.position) {
-                            Some(l) => l,
-                            None => break,
-                        },
-                        NegTerm::CharPat(p) => {
-                            let b = input_bytes[self.position];
-                            if p.matches(b) {
-                                match p {
-                                    crate::portable::char_class::CharacterPattern::Any
-                                    | crate::portable::char_class::CharacterPattern::NonDigit
-                                    | crate::portable::char_class::CharacterPattern::NonSpace
-                                    | crate::portable::char_class::CharacterPattern::NonWord => {
-                                        utf8_char_len(b)
-                                    }
-                                    _ => 1,
-                                }
-                            } else {
-                                break;
-                            }
-                        }
-                    };
-                    if self.position + len > input_bytes.len() {
-                        break;
-                    }
-                    let t = self.arena.input_ref(self.position, len);
-                    let (pool_idx, slen) = self
-                        .arena
-                        .store_tagged_array(":sequence", &[AstNode::Nil, t]);
-                    self.value_stack.push(AstNode::Array {
-                        pool_index: pool_idx,
-                        length: slen,
-                    });
-                    self.position += len;
-                    if let Some(reg) = self.rep_registers.last_mut() {
-                        reg.count += 1;
-                        reg.last_end = self.position;
-                        reg.stalled = false;
-                    }
-                    count += 1;
-                }
-                Ok(ExecutionResult::Continue)
+            Instruction::ScanClass { .. } | Instruction::ScanUntil { .. } => {
+                unreachable!("scan instructions are dispatched in run")
             }
 
             Instruction::Custom { id } => {
