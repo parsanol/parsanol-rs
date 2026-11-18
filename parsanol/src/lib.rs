@@ -74,6 +74,7 @@ pub mod ffi;
 pub mod portable;
 
 // PARG artifact envelopes (compiled by the Ruby-side Parsanol::PARG compiler)
+pub mod constrain;
 pub mod parg;
 
 /// Re-export commonly used types for convenience
