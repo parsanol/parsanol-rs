@@ -129,6 +129,185 @@ pub enum StepState {
     Dead,
 }
 
+/// The per-step mask in the llguidance-compatible token-bitmask wire:
+/// one bit per vocabulary token, packed little-endian into u32 words
+/// (bit i of word i/32 = token i). The bytes serialize as-is for the
+/// logits-processor interface.
+#[derive(Debug, Clone)]
+pub struct TokenBitmask {
+    /// The packed words: bit i of word i/32 = token i allowed.
+    pub words: Vec<u32>,
+    /// The vocabulary size the mask covers.
+    pub vocab_size: usize,
+}
+
+impl TokenBitmask {
+    /// Whether the token id passes the mask.
+    pub fn is_allowed(&self, token_id: u64) -> bool {
+        let id = token_id as usize;
+        id < self.vocab_size && self.words[id / 32] & (1 << (id % 32)) != 0
+    }
+
+    /// The little-endian word bytes (the wire form).
+    pub fn to_wire(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(self.words.len() * 4);
+        for w in &self.words {
+            out.extend_from_slice(&w.to_le_bytes());
+        }
+        out
+    }
+}
+
+/// The logits-processor-side mask emitter: the bridge between the
+/// oracle and a runtime's per-step masking loop (rs#530's runtime
+/// integration seam).
+pub struct MaskEmitter<'a> {
+    oracle: TokenOracle<'a>,
+}
+
+impl<'a> MaskEmitter<'a> {
+    /// Wrap the oracle as a mask emitter.
+    pub fn new(oracle: TokenOracle<'a>) -> Self {
+        Self { oracle }
+    }
+
+    /// The mask for the next generation step at `prefix`.
+    pub fn mask_for(&self, prefix: &str) -> TokenBitmask {
+        // The bitset is id-indexed: size by the largest id, not the
+        // entry count — tokenizer ids may be sparse or 1-based.
+        let vocab_size = self
+            .oracle
+            .vocab
+            .iter()
+            .map(|t| t.id as usize)
+            .max()
+            .unwrap_or(0)
+            .saturating_add(1);
+        let mut words = vec![0u32; vocab_size.div_ceil(32)];
+        for t in &self.oracle.vocab {
+            if self.oracle.extends(prefix, &t.text) {
+                words[(t.id as usize) / 32] |= 1 << ((t.id as usize) % 32);
+            }
+        }
+        TokenBitmask { words, vocab_size }
+    }
+
+    /// The constrained generation loop from the empty prefix.
+    pub fn generate(
+        &self,
+        cap: usize,
+        sample: impl Fn(&TokenBitmask) -> u64,
+    ) -> Option<(String, Vec<u64>, bool)> {
+        self.generate_from("", cap, sample)
+    }
+
+    /// The loop seeded at `prefix` (the mid-generation entry: the
+    /// runtime replays its own tokens into the tracker and continues).
+    pub fn generate_from(
+        &self,
+        prefix: &str,
+        cap: usize,
+        sample: impl Fn(&TokenBitmask) -> u64,
+    ) -> Option<(String, Vec<u64>, bool)> {
+        let mut prefix = prefix.to_string();
+        let mut picked = Vec::new();
+        if self
+            .oracle
+            .artifact
+            .parse_shape(self.oracle.entry, &prefix)
+            .is_ok()
+        {
+            return Some((prefix, picked, true));
+        }
+        for _ in 0..cap {
+            let mask = self.mask_for(&prefix);
+            if mask.words.iter().all(|&w| w == 0) {
+                return None; // the valid set drained: the relaxation
+                             // path (the recovery envelope) is the
+                             // designed continuation
+            }
+            let id = sample(&mask);
+            let text = self.oracle.vocab.iter().find(|t| t.id == id)?.text.clone();
+            prefix.push_str(&text);
+            picked.push(id);
+            if self
+                .oracle
+                .artifact
+                .parse_shape(self.oracle.entry, &prefix)
+                .is_ok()
+            {
+                return Some((prefix, picked, true));
+            }
+            // Alive by construction: the mask allowed this token, so
+            // the parse consumed past the boundary. (A step() check
+            // here would misclassify fully-consumed-but-incomplete
+            // prefixes as dead — the empty extension consumes
+            // nothing.)
+        }
+        Some((prefix, picked, false))
+    }
+
+    /// The relaxed generation loop — the recovery relaxation. The
+    /// seed rides as picked token ids (the runtime's own rollout,
+    /// possibly off-mask), so when the mask drains at a depth the
+    /// loop pops the last pick, bans it at that depth, and retries:
+    /// a DFS over the mask lattice that finds a completion whenever
+    /// one exists within the budget. This is the no-dead-end
+    /// continuation the FSM mask compilers cannot offer — every
+    /// re-mask is a fresh oracle parse, so backtracking is free.
+    pub fn generate_relaxed(
+        &self,
+        seed: &[u64],
+        budget: usize,
+        sample: impl Fn(&TokenBitmask) -> u64,
+    ) -> Option<(String, Vec<u64>, bool)> {
+        let text_of = |id: u64| -> Option<String> {
+            self.oracle
+                .vocab
+                .iter()
+                .find(|t| t.id == id)
+                .map(|t| t.text.clone())
+        };
+        let mut picks: Vec<u64> = seed.to_vec();
+        // banned[d] = ids refused at depth d (the drained branches).
+        let mut banned: Vec<Vec<u64>> = vec![Vec::new(); picks.len() + 1];
+        let mut steps = 0usize;
+        loop {
+            if steps >= budget {
+                let prefix: String = picks.iter().filter_map(|id| text_of(*id)).collect();
+                return Some((prefix, picks, false));
+            }
+            steps += 1;
+            let prefix: String = picks.iter().filter_map(|id| text_of(*id)).collect();
+            if self
+                .oracle
+                .artifact
+                .parse_shape(self.oracle.entry, &prefix)
+                .is_ok()
+            {
+                return Some((prefix, picks, true));
+            }
+            let mut mask = self.mask_for(&prefix);
+            for &b in &banned[picks.len()] {
+                let i = b as usize;
+                if i < mask.vocab_size {
+                    mask.words[i / 32] &= !(1 << (i % 32));
+                }
+            }
+            if mask.words.iter().all(|&w| w == 0) {
+                let last = picks.pop()?;
+                banned.truncate(picks.len() + 1);
+                banned[picks.len()].push(last);
+                continue;
+            }
+            let id = sample(&mask);
+            text_of(id)?;
+            picks.push(id);
+            banned.push(Vec::new());
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -251,6 +430,60 @@ mod tests {
         println!("generated: {text:?} from {} tokens", picked.len());
     }
 
+    /// The mask emitter: the llguidance-compatible wire (the bitset
+    /// per step), the sampler-gated generation loop, and the 100%
+    /// validity guarantee — the runtime integration's seam (rs#575).
+    #[test]
+    fn the_mask_emitter_wire_and_generation() {
+        let artifact = artifact("isbn");
+        let vocab = isbn_vocab();
+        let oracle = TokenOracle::new(&artifact, "identifier", vocab.clone());
+        let emitter = MaskEmitter::new(oracle);
+
+        // The wire: at "" the allowed set = the non-hyphen starters;
+        // the bit for "-" (id 8) is clear in word 0.
+        let mask = emitter.mask_for("");
+        assert!(!mask.is_allowed(8), "the hyphen is masked out at the start");
+        assert!(mask.is_allowed(1), "ISBN is allowed at the start");
+        let wire = mask.to_wire();
+        assert_eq!(wire.len(), mask.words.len() * 4);
+        assert_eq!(wire[8 / 8] & (1 << (8 % 8)), 0, "the wire bit for id 8");
+
+        // The generation loop: the sampler = the lowest allowed id —
+        // the closure the runtime's logits pass replaces.
+        let lowest = |mask: &TokenBitmask| -> u64 {
+            (0..mask.vocab_size as u64)
+                .find(|&id| mask.is_allowed(id))
+                .expect("the mask is non-empty")
+        };
+        let (text, picked, complete) = emitter.generate(40, lowest).expect("no dead end");
+        assert!(
+            artifact.parse_shape("identifier", &text).is_ok(),
+            "the generated text must parse: {text:?}"
+        );
+        assert!(complete, "the loop reached a full parse");
+        let replay: String = picked
+            .iter()
+            .filter_map(|id| vocab.iter().find(|t| t.id == *id).map(|t| t.text.clone()))
+            .collect();
+        assert_eq!(replay, text, "the picks concatenate to the output");
+
+        // The drained set: at "X" no vocabulary token extends (X is
+        // only ever a final check digit, never a start) — the loop
+        // reports None, the relaxation trigger.
+        let dead = emitter.mask_for("X");
+        assert!(
+            dead.words.iter().all(|&w| w == 0),
+            "X drains this vocab: {dead:?}"
+        );
+        assert!(emitter.generate_from("X", 40, lowest).is_none());
+
+        // Not every mid-word prefix drains: "978-" demands another
+        // digit group, and the digits continue.
+        let alive = emitter.mask_for("978-");
+        assert!(alive.is_allowed(4), "digits continue after 978-");
+    }
+
     /// The json grammar: the greedy loop composes braces and strings
     /// into a valid document (the second acceptance grammar).
     #[test]
@@ -287,5 +520,75 @@ mod tests {
         // The oracle refuses the dead openings regardless of the
         // generator's route.
         assert!(!oracle.extends("", "}"));
+    }
+
+    /// The recovery relaxation (rs#575's differentiator): the
+    /// runtime's own rollout `{"a"}` — the "}" was never mask-allowed
+    /// — engages the mask at a drain. The plain loop reports None;
+    /// the relaxed loop pops the dead pick and walks the ":" branch
+    /// to a full parse. Every re-mask is a fresh oracle parse, so the
+    /// backtrack is free — the no-dead-end continuation the FSM mask
+    /// compilers cannot offer.
+    #[test]
+    fn the_relaxed_loop_recovers_a_dead_rollout() {
+        let raw = include_str!("../tests/constrain_fixtures/json.json");
+        let artifact = PargArtifact::from_json(raw).expect("the json artifact loads");
+        let entry = artifact.default_entry().unwrap_or("json").to_string();
+        let vocab: Vec<Token> = [
+            (1, "{"),
+            (2, "}"),
+            (3, "\""),
+            (4, "a"),
+            (5, ":"),
+            (6, ","),
+            (7, "1"),
+            (8, " "),
+            (9, "["),
+            (10, "]"),
+        ]
+        .into_iter()
+        .map(|(id, text)| Token {
+            id,
+            text: text.to_string(),
+        })
+        .collect();
+        let oracle = TokenOracle::new(&artifact, &entry, vocab.clone());
+        let emitter = MaskEmitter::new(oracle);
+        let lowest = |mask: &TokenBitmask| -> u64 {
+            (0..mask.vocab_size as u64)
+                .find(|&id| mask.is_allowed(id))
+                .expect("the mask is non-empty")
+        };
+
+        // The seed rollout: {"a"} — missing the colon.
+        let seed: Vec<u64> = vec![1, 3, 4, 3, 2];
+        let seed_text: String = seed
+            .iter()
+            .map(|id| vocab.iter().find(|t| t.id == *id).unwrap().text.clone())
+            .collect();
+        assert_eq!(seed_text, "{\"a\"}");
+        // The drain: nothing continues a missing colon.
+        let dead = emitter.mask_for(&seed_text);
+        assert!(dead.words.iter().all(|&w| w == 0), "{dead:?}");
+        assert!(emitter.generate_from(&seed_text, 40, lowest).is_none());
+
+        // The relaxation: pop the "}", ban it at that depth, continue.
+        let (text, picked, complete) = emitter
+            .generate_relaxed(&seed, 200, lowest)
+            .expect("the relaxation finds a completion");
+        assert!(complete, "the relaxed loop reached a full parse: {text}");
+        assert!(
+            artifact.parse_shape(&entry, &text).is_ok(),
+            "the relaxed text must parse: {text:?}"
+        );
+        assert!(
+            text.starts_with("{\"a\":"),
+            "the seed minus the dead pick, colon re-opened: {text:?}"
+        );
+        let replay: String = picked
+            .iter()
+            .filter_map(|id| vocab.iter().find(|t| t.id == *id).map(|t| t.text.clone()))
+            .collect();
+        assert_eq!(replay, text, "the picks concatenate to the output");
     }
 }
