@@ -109,6 +109,10 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ## [Unreleased]
 
+- The CI gates: the reserved FFI fn allowed, the unused workspace deps dropped
+- The constrained-decoding oracle: the token-mask sets + the state tracker (rs#530 engine side)
+- The ASCII guard binds only the range end
+- The scan instructions stop taxing the hot dispatch: guard + out-of-line dispatch
 - The ScanUntil instruction: fused negated-delimiter runs
 - The ScanClass instruction: bulk exact class runs for repetition bodies
 - Drop Spine.rep and let rustfmt settle the test-module import
