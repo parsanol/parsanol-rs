@@ -1078,7 +1078,7 @@ impl Compiler {
         // loops on json (a per-char choice over three digit sets
         // became a slower decode loop). ScanClass = bodies with
         // non-ASCII members only.
-        if ranges.iter().all(|&(lo, hi)| hi <= 0x7F) {
+        if ranges.iter().all(|&(_, hi)| hi <= 0x7F) {
             return None;
         }
         Some(ranges)
