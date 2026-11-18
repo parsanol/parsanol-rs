@@ -8,7 +8,7 @@ use super::program::{CharSet, Program};
 use super::program::{NegScanSpec, NegTerm};
 use crate::portable::char_class::{normalize_ranges, CharRanges, CharacterPattern};
 use crate::portable::grammar::{Atom, Grammar, RepetitionTag};
-use std::collections::VecDeque;
+use std::collections::{HashMap, HashSet, VecDeque};
 
 /// Placeholder for forward references (will be patched later)
 const PLACEHOLDER_OFFSET: i32 = 0;
@@ -59,6 +59,13 @@ pub struct Compiler {
     /// Rules whose subroutine body has been emitted.
     compiled_rules: std::collections::HashSet<usize>,
 
+    /// Per-rule exact FIRST-byte sets + nullability (rs#574's prover):
+    /// a fixpoint over the rule graph, so call chains and cycles
+    /// resolve instead of failing the inline walk the way a visited
+    /// collision did. None = the rule's closure contains an unprovable
+    /// atom (Dynamic/State/Lookahead/Lookbehind/Constant/Cut).
+    rule_first: HashMap<usize, Option<(Vec<u8>, bool)>>,
+
     /// Dispatch tables emitted; the peephole optimizer shifts
     /// instruction indices and cannot fix up table offsets.
     emitted_dispatch: bool,
@@ -74,6 +81,7 @@ impl Compiler {
     pub fn new(grammar: Grammar) -> Self {
         let atom_count = grammar.atoms.len();
         let rule_atoms = Self::discover_rule_atoms(&grammar);
+        let rule_first = Self::solve_rule_first(&grammar, &rule_atoms);
         Self {
             grammar,
             program: Program::with_capacity(atom_count * 4, atom_count, atom_count / 4),
@@ -83,10 +91,19 @@ impl Compiler {
             subroutine_queue: VecDeque::new(),
             compile_depth: 0,
             rule_atoms,
+            rule_first,
             compiled_rules: std::collections::HashSet::new(),
             compiling_rule_body: false,
             emitted_dispatch: false,
         }
+    }
+
+    /// The prover's per-rule FIRST-byte sets + nullability (rs#574):
+    /// exact for call chains and cycles alike — the analysis surface
+    /// the deterministic-subset campaign routes on. None = the rule's
+    /// closure carries an unprovable atom.
+    pub fn rule_first_sets(&self) -> &HashMap<usize, Option<(Vec<u8>, bool)>> {
+        &self.rule_first
     }
 
     /// Rule-boundary discovery: Named atoms wrap grammar rules, and
@@ -107,6 +124,93 @@ impl Compiler {
             }
         }
         rules
+    }
+
+    /// The per-rule exact FIRST-byte sets + nullability (rs#574's
+    /// determinism prover). Phase 1 poisons every rule whose atom
+    /// closure reaches an unprovable atom (Dynamic/State/Lookahead/
+    /// Lookbehind/Constant/Cut/empty Str — the shapes the inline walk
+    /// refused); phase 2 iterates FIRST's equations over the clean
+    /// rules to the least fixed point, so call CHAINS and CYCLES
+    /// converge (sets only grow, bounded by the 256-byte universe)
+    /// instead of failing on the visited collision. The fixpoint is
+    /// exact, which keeps dispatch sound: the table routes bytes the
+    /// branch provably leads with, and misses none.
+    fn solve_rule_first(
+        grammar: &Grammar,
+        rules: &HashSet<usize>,
+    ) -> HashMap<usize, Option<(Vec<u8>, bool)>> {
+        // Phase 1: poison, computed at the atom level then propagated
+        // to rules (a poisoned body poisons every rule that reaches it,
+        // through Entity/Named edges and composites alike).
+        let mut poisoned_atom: HashSet<usize> = HashSet::new();
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for (idx, atom) in grammar.atoms.iter().enumerate() {
+                if poisoned_atom.contains(&idx) {
+                    continue;
+                }
+                let poisons = match atom {
+                    Atom::Str { pattern } => pattern.is_empty(),
+                    Atom::Re { pattern } => regex_syntax::parse(pattern).is_err(),
+                    Atom::Sequence { atoms } | Atom::Alternative { atoms } => {
+                        atoms.iter().any(|a| poisoned_atom.contains(a))
+                    }
+                    Atom::Repetition { atom, .. }
+                    | Atom::Ignore { atom }
+                    | Atom::Trivia { atom }
+                    | Atom::TriviaCapture { atom, .. }
+                    | Atom::Capture { atom, .. }
+                    | Atom::Scope { atom }
+                    | Atom::Named { atom, .. }
+                    | Atom::Entity { atom } => poisoned_atom.contains(atom),
+                    _ => true,
+                };
+                if poisons {
+                    poisoned_atom.insert(idx);
+                    changed = true;
+                }
+            }
+        }
+        // Phase 2: the least fixed point over the clean rules.
+        // Entries start empty/nullable and grow monotonically.
+        let mut table: HashMap<usize, Option<(Vec<u8>, bool)>> = HashMap::new();
+        for &rule in rules {
+            table.insert(
+                rule,
+                if poisoned_atom.contains(&rule) {
+                    None
+                } else {
+                    Some((Vec::new(), false))
+                },
+            );
+        }
+        let mut sweeps = 0usize;
+        let mut moved = true;
+        while moved {
+            moved = false;
+            sweeps += 1;
+            if sweeps > 1024 {
+                break; // unreachable: monotone growth over a finite universe
+            }
+            for &rule in rules {
+                if poisoned_atom.contains(&rule) {
+                    continue;
+                }
+                let (mut set, mut non_null) = (Vec::new(), false);
+                first_of_atom(grammar, rule, &table, &mut set, &mut non_null);
+                let changed_entry = match table.get(&rule) {
+                    Some(Some((old_set, old_nn))) => *old_set != set || *old_nn != non_null,
+                    _ => true,
+                };
+                if changed_entry {
+                    table.insert(rule, Some((set, non_null)));
+                    moved = true;
+                }
+            }
+        }
+        table
     }
 
     /// Compile the grammar into a program
@@ -590,6 +694,13 @@ impl Compiler {
                 let (set, non_nullable) = self.provable_first_set(*atom, visited)?;
                 Some((set, non_nullable && *min >= 1))
             }
+            // Rule references stay INLINE-walked for DISPATCH
+            // eligibility: the fixpoint prover (rs#574) resolves their
+            // exact sets, but wiring them into emission measured a 13%
+            // loss on json (the root value choice dispatches per VALUE,
+            // where interleaved fail-probes are cheaper than the table
+            // hop). The prover is the analysis surface; the emission
+            // gate reopens per shape with its own A/B receipt.
             Atom::Named { atom, .. }
             | Atom::Entity { atom }
             | Atom::Ignore { atom }
@@ -1465,6 +1576,129 @@ fn utf8_first_bytes_range(lo: u32, hi: u32) -> Vec<u8> {
     out
 }
 
+/// The exact FIRST-byte union of a regex HIR node, or None when the
+/// shape is unprovable (anchors, unanchored repetitions, lookarounds,
+/// empty matches). The `hir_first_bytes` method delegates here.
+fn hir_first_union(kind: &regex_syntax::hir::HirKind) -> Option<Vec<u8>> {
+    use regex_syntax::hir::{Class, HirKind};
+    match kind {
+        HirKind::Class(Class::Unicode(class)) => {
+            let mut union = Vec::new();
+            for item in class.iter() {
+                for b in utf8_first_bytes_range(item.start() as u32, item.end() as u32) {
+                    if !union.contains(&b) {
+                        union.push(b);
+                    }
+                }
+            }
+            Some(union)
+        }
+        HirKind::Literal(lit) => {
+            let s = std::str::from_utf8(&lit.0).ok()?;
+            let first = s.chars().next()?;
+            Some(utf8_first_bytes_range(first as u32, first as u32))
+        }
+        HirKind::Alternation(branches) => {
+            let mut union = Vec::new();
+            for branch in branches {
+                union.extend(hir_first_union(branch.kind())?);
+            }
+            Some(union)
+        }
+        // A concat contributes its FIRST child's lead bytes (classes and
+        // literals are non-nullable, so later children cannot start the
+        // match).
+        HirKind::Concat(children) => {
+            let first = children.first()?;
+            hir_first_union(first.kind())
+        }
+        HirKind::Capture(cap) => hir_first_union(cap.sub.kind()),
+        _ => None,
+    }
+}
+
+fn push_unique(set: &mut Vec<u8>, b: u8) {
+    if !set.contains(&b) {
+        set.push(b);
+    }
+}
+
+/// FIRST evaluation over one atom against the per-rule fixpoint table
+/// (rs#574's prover): rule references resolve through the table, so
+/// chains and cycles contribute their current partial and the sweep
+/// converges to the exact sets.
+fn first_of_atom(
+    grammar: &Grammar,
+    idx: usize,
+    table: &HashMap<usize, Option<(Vec<u8>, bool)>>,
+    set: &mut Vec<u8>,
+    non_null: &mut bool,
+) {
+    let Some(atom) = grammar.get_atom(idx) else {
+        return;
+    };
+    match atom {
+        Atom::Str { pattern } => {
+            if let Some(b) = pattern.as_bytes().first() {
+                push_unique(set, *b);
+                *non_null = true;
+            }
+        }
+        Atom::Re { pattern } => {
+            if let Ok(hir) = regex_syntax::parse(pattern) {
+                if let Some(bytes) = hir_first_union(hir.kind()) {
+                    for b in bytes {
+                        push_unique(set, b);
+                    }
+                    *non_null = true;
+                }
+            }
+        }
+        Atom::Sequence { atoms } => {
+            for &child in atoms {
+                let mut child_nn = false;
+                first_of_atom(grammar, child, table, set, &mut child_nn);
+                if child_nn {
+                    *non_null = true;
+                    return;
+                }
+            }
+        }
+        Atom::Alternative { atoms } => {
+            let mut all_nn = true;
+            for &branch in atoms {
+                let mut branch_nn = false;
+                first_of_atom(grammar, branch, table, set, &mut branch_nn);
+                all_nn &= branch_nn;
+            }
+            *non_null = all_nn;
+        }
+        Atom::Repetition { atom, min, .. } => {
+            let mut body_nn = false;
+            first_of_atom(grammar, *atom, table, set, &mut body_nn);
+            *non_null = body_nn && *min >= 1;
+        }
+        Atom::Ignore { atom }
+        | Atom::Trivia { atom }
+        | Atom::TriviaCapture { atom, .. }
+        | Atom::Capture { atom, .. }
+        | Atom::Scope { atom } => {
+            first_of_atom(grammar, *atom, table, set, non_null);
+        }
+        Atom::Named { atom, .. } | Atom::Entity { atom } => {
+            if let Some(Some((rule_set, rule_nn))) = table.get(atom) {
+                for b in rule_set {
+                    push_unique(set, *b);
+                }
+                if *rule_nn {
+                    *non_null = true;
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1478,6 +1712,49 @@ mod tests {
         });
         grammar.root = 0;
         grammar
+    }
+
+    /// The fixpoint prover (rs#574): FIRST sets resolve exactly through
+    /// call chains AND cycles — the inline walk gave `None` the moment
+    /// an Entity re-entered a visited atom.
+    #[test]
+    fn rule_first_fixpoint_resolves_cycles_exactly() {
+        // ruleA = "o" Entity(ruleB)   -> FIRST = {o}
+        // ruleB = Entity(ruleA) | "z" -> FIRST = {o, z} via the cycle
+        // The old inline walk: Ent(A) -> A -> Ent(B) -> B -> Ent(A)
+        // collides with `visited` and yields None.
+        let mut grammar = Grammar::new();
+        // Reserve the two rule slots first; patch them below.
+        let slot_a = grammar.add_atom(Atom::Sequence { atoms: vec![] });
+        let slot_b = grammar.add_atom(Atom::Alternative { atoms: vec![] });
+        let s_o = grammar.add_atom(Atom::Str {
+            pattern: "o".to_string(),
+        });
+        let s_z = grammar.add_atom(Atom::Str {
+            pattern: "z".to_string(),
+        });
+        let ent_a = grammar.add_atom(Atom::Entity { atom: slot_a });
+        let ent_b = grammar.add_atom(Atom::Entity { atom: slot_b });
+        grammar.atoms[slot_a] = Atom::Sequence {
+            atoms: vec![s_o, ent_b],
+        };
+        grammar.atoms[slot_b] = Atom::Alternative {
+            atoms: vec![ent_a, s_z],
+        };
+        grammar.root = slot_b;
+
+        let compiler = Compiler::new(grammar);
+        let sets = compiler.rule_first_sets();
+        let b_first = sets.get(&slot_b).expect("ruleB proved");
+        let (set, non_null) = b_first.as_ref().expect("ruleB not poisoned");
+        assert!(
+            set.contains(&b'o') && set.contains(&b'z'),
+            "the cycle contributes through the fixpoint: {set:?}"
+        );
+        assert!(*non_null, "ruleB matches non-empty");
+        let a_first = sets.get(&slot_a).expect("ruleA proved");
+        let (aset, _) = a_first.as_ref().expect("ruleA not poisoned");
+        assert_eq!(aset, b"o", "ruleA's own first stays exact: {aset:?}");
     }
 
     #[test]
