@@ -26,6 +26,12 @@ jobs:
   ruby-ffi:
     name: Ruby FFI Tests
     runs-on: ubuntu-latest
+    env:
+      # The runner's ruby 3.2.11 headers use `bool` in internal APIs;
+      # rb-sys 0.9.130's bindgen parses them without the C99 prelude
+      # and fails with "unknown type name 'bool'" (red since 2026-11-17).
+      # Preloading stdbool.h is the canonical bindgen workaround.
+      BINDGEN_EXTRA_CLANG_ARGS: "-include stdbool.h"
     steps:
       - uses: actions/checkout@v7
 
