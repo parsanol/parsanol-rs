@@ -12,7 +12,7 @@
 
 use parsanol::portable::bytecode::compiler::compile;
 use parsanol::portable::bytecode::parse_with_vm_diag;
-use parsanol::portable::{AstArena, Grammar, PortableParser};
+use parsanol::portable::{AstArena, PortableParser};
 use std::hint::black_box;
 use std::time::Instant;
 
@@ -229,7 +229,8 @@ fn deep_eq_dbg(
                                             "[{}..{}]={:?}",
                                             offset,
                                             offset + length,
-                                            &arena.get_input()[*offset as usize..(*offset as usize + *length as usize).min(inlen)]
+                                            &arena.get_input()[*offset as usize
+                                                ..(*offset as usize + *length as usize).min(inlen)]
                                         )
                                     }
                                     other => format!("{:?}", variant_name(other)),
@@ -410,8 +411,18 @@ fn trees_mode(corpus_dir: &str, clean_dir: &str, manifest_path: &str, artifact_p
         let clean = std::fs::read_to_string(std::path::Path::new(clean_dir).join(source))
             .expect("clean doc");
 
+        // A still-valid document (a 1-byte delete inside a string
+        // keeps the JSON valid) recovers to its own clean parse — the
+        // ts hole-punch equivalent. The envelope carries it under
+        // `shape`, not `partial`.
         let recovered_tree = match artifact.parse_shape_recovering("main", &recovered) {
-            Ok(envelope) => envelope["partial"].clone(),
+            Ok(envelope) => {
+                if envelope["ok"].as_bool() == Some(true) {
+                    envelope["shape"].clone()
+                } else {
+                    envelope["partial"].clone()
+                }
+            }
             Err(_) => serde_json::Value::Null,
         };
         let clean_tree = match artifact.parse_shape("main", &clean) {

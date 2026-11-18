@@ -623,20 +623,20 @@ impl PargArtifact {
                 let mut recovered_spans: Vec<(u32, u32)> = Vec::new();
                 let resync_budget = MAX_RESYNCS + input.len() / 1024;
                 if let Some(body) = spine_body {
-                    let stash_was_empty = partial.is_none();
+                    // The spine replay owns the partial for spine
+                    // grammars: the stash gate (root-level repetitions
+                    // only) never sees a list that opens behind a fixed
+                    // prefix (json's member list sits behind `{`), so
+                    // the good prefix would drop and the recovered tree
+                    // would be null. Drop the stash here and replay the
+                    // whole prefix forward with the same probe the
+                    // rounds use — identical shapes, the unchanged
+                    // iterations in their original nesting, and the
+                    // rounds continue from the replay end.
+                    partial = None;
                     let mut fresh_items: Vec<AstNode> = Vec::new();
-                    let mut cursor = match partial.as_ref() {
-                        Some((end, _, _)) => *end,
-                        // No spine-tracked partial: the journal's
-                        // consumption boundary is where the good parse
-                        // stopped — recovery resumes from THERE, not
-                        // from byte 0 (rs#539: non-spine grammars).
-                        None => consumed_upto.min(input.len()),
-                    };
-                    let items: &mut Vec<AstNode> = match partial.as_mut() {
-                        Some((_, items, _)) => items,
-                        None => &mut fresh_items,
-                    };
+                    let items: &mut Vec<AstNode> = &mut fresh_items;
+                    let mut cursor = 0usize;
                     // Declared resync (`resync <rule> = <pattern>`, R2):
                     // the pattern is baked into the entry; the skip spans
                     // are exactly the pattern's matches — the author owns
@@ -725,6 +725,27 @@ impl PargArtifact {
                     probe
                         .set_ascii_state_match_atoms(ascii_matches)
                         .map_err(|err| PargError::ParseFailed(err.to_string()))?;
+                    // The prefix replay: scan to the first viable
+                    // iteration start (the grammar's fixed prefix —
+                    // `{`, a keyword — is structure, not junk, so no
+                    // resync record), then drain the good prefix the
+                    // failed parse had already consumed.
+                    while cursor < input.len() {
+                        match probe.try_atom_impl(body, cursor, false) {
+                            Ok(r) if r.end_pos > cursor => break,
+                            _ => cursor += 1,
+                        }
+                    }
+                    while cursor < input.len() {
+                        match probe.try_atom_impl(body, cursor, false) {
+                            Ok(r) if r.end_pos > cursor => {
+                                recovered_spans.push((cursor as u32, r.end_pos as u32));
+                                items.push(r.value.clone());
+                                cursor = r.end_pos;
+                            }
+                            _ => break,
+                        }
+                    }
                     'rounds: for _round in 0..resync_budget {
                         // An iteration may already be viable at the
                         // cursor (e.g. right after a declared skip).
@@ -802,10 +823,7 @@ impl PargArtifact {
                             cursor = resume;
                         }
                     }
-                    if let Some((end, _, _)) = partial.as_mut() {
-                        *end = cursor;
-                    }
-                    if stash_was_empty && !fresh_items.is_empty() {
+                    if !fresh_items.is_empty() {
                         partial = Some((cursor, fresh_items, RepetitionTag::Repetition));
                     }
                 }
