@@ -109,6 +109,10 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ## [Unreleased]
 
+- The recovery spine replays the unchanged prefix — the TED gap halves ([#580](https://github.com/parsanol/parsanol-rs/pull/580))
+- The mask emitter: the llguidance wire, the sampler-gated loops, and the relaxed recovery ([#579](https://github.com/parsanol/parsanol-rs/pull/579))
+- The README: the language server and the constrained decoding
+- Release v1.5.7
 - Release v1.5.7
 - The CI gates: the reserved FFI fn allowed, the unused workspace deps dropped
 - The constrained-decoding oracle: the token-mask sets + the state tracker (rs#530 engine side)
