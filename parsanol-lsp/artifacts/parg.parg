@@ -1,0 +1,118 @@
+# PG described in PG — the self-description grammar (F10, phase 1).
+# It recognizes the language this file is written in, over raw text:
+# whitespace is threaded explicitly (pq = potential whitespace within a
+# line, nlws = line-breaking whitespace, bw = brace-body whitespace: the
+# b* rules thread it so brace-form rule bodies span lines). The
+# reference compiler remains parsanol-ruby (SSOT, TODO 11); this
+# artifact is the validator — and brace_rule below is itself written in
+# the brace form it recognizes.
+
+grammar PgMeta version "1.0.0" edition 2 {
+
+  # ---- lexical ----
+  digit = %x30-39
+  hexdig = %x30-39 / %x41-46 / %x61-66
+  letter = %x41-5A / %x61-7A
+  ident_char = letter / digit / %x5F
+  ident = 1*ident_char
+  newline = %x0A
+  nonl = %x01-09 / %x0B-10FFFF
+  comment = "#" *nonl
+  doc_marker = "##" *nonl
+  ws = %x20 / %x09
+  nlws = 1*(ws / newline)
+  pq = *ws
+
+  # ---- terminals ----
+  str_body_char = %x01-09 / %x0B-21 / %x23-10FFFF
+  dstring = "\"" *("\\" nonl / str_body_char) "\""
+  istring = "%i" dstring
+  sstring = "%s" dstring
+  hexdigits = 2*6hexdig
+  hexlit = "%x" hexdigits [("-" hexdigits) / 1*("." hexdigits)]
+  hex = hexlit / istring / sstring / dstring
+
+  # ---- expressions (pq-threaded) ----
+  choice = seq *(pq "/" pq seq)
+  seq = element *(pq element)
+  element = pq (rep_prefix pq [pred / postfixed] / pred / postfixed)
+  rep_prefix = num ["*" [num]] / "*" [num]
+  num = 1*digit
+  pred = ("!" / "&") postfixed
+  postfixed = primary [pq "as" pq ident]
+  table_alt = "alt" pq "from_table" pq dstring pq "column" pq dstring
+  set_expr = "set" pq ident pq "=" pq (dstring / "(" [pq] choice [pq] ")")
+  switch_arm = (dstring / "_") pq "->" pq dotted_ident
+  switch_expr = "switch" pq ident pq "{" *nlws [switch_arm *(nlws switch_arm)] *nlws "}"
+  custom_line = "custom" pq ident pq "=" pq dstring
+  state_line = "state" pq ident pq ":" pq ident
+  dotted_ident = ident *("." ident)
+  primary = hex / "(" [pq] choice [pq] ")" / "[" [pq] choice [pq] "]" / table_alt / set_expr / switch_expr / dotted_ident
+
+  # ---- brace-body expressions (bw-threaded: newlines are whitespace) ----
+  bw = *(ws / newline / comment)
+  bchoice = bseq *(bw "/" bw bseq)
+  bseq = belement *(bw belement)
+  belement = bw (rep_prefix bw [bpred / bpostfixed] / bpred / bpostfixed)
+  bpred = ("!" / "&") bpostfixed
+  bprimary = hex / "(" [bw] bchoice [bw] ")" / "[" [bw] bchoice [bw] "]" / table_alt / set_expr / switch_expr / dotted_ident
+  bpostfixed = bprimary [bw "as" bw ident]
+
+  # ---- rules and sections ----
+  rule = ident pq "=" pq choice
+  brace_rule = {
+    ident pq "=" *(ws / newline) %x7B
+    bchoice bw %x7D
+  }
+  entry_section = "entry" pq ident ":" pq ident
+  path = ident *(("[" "]") / ("." ident))
+  cardinality = 1*(digit / "." / "*")
+  binding = ident pq "->" pq path [pq "(" ident ["," pq cardinality] ")"] [pq "preprocess" ":" pq ident]
+  bindings_section = "bindings" pq ident nlws "{" [nlws] [binding *(nlws binding)] [nlws] "}"
+  step = "table_lookup" pq ident pq ident pq "->" pq ident
+  preprocess_section = "preprocess" pq ident nlws "{" *nlws step nlws "}"
+  test_line = ("accept" / "reject" / "example") pq dstring [pq "{" *nlws test_pair *nlws "}"] / comment / doc_marker
+  test_pair = ident ":" pq (dstring / num / ("true" / "false"))
+  test_section = "test" [pq ident] nlws "{" *nlws [test_line *(nlws test_line)] nlws "}"
+  rule_line = rule / brace_rule / entry_section / bindings_section / preprocess_section / test_section / custom_line / state_line / glue_line / doc_marker / comment
+  edition_decl = "mode" pq dstring / "edition" pq (num / dstring)
+  glue_line = "glue" pq ident *(pq ident)
+  grammar_block = "grammar" pq ident pq "version" pq dstring [pq edition_decl] pq "{" *(nlws rule_line) *nlws "}"
+  render_section = "render" pq ident nlws "{" *(nlws render_seg) nlws "}"
+  render_seg = ("field" pq ident) / ("literal" pq dstring) / ("cond" pq ident nlws "{" *(nlws render_seg) nlws "}")
+  derive_section = "derive" pq ident pq dstring
+  top = grammar_block / entry_section / bindings_section / preprocess_section / test_section / render_section / derive_section
+  use_line = "use" pq ident
+  top_item = use_line / doc_marker / comment / top
+
+  pg_file = pq *(top_item [nlws]) pq
+
+  entry file: pg_file
+
+  test {
+    accept "grammar T version \"1\" { x = %x30-39 }"
+    accept "grammar T version \"1\" { a = b / c as d }"
+    accept "grammar T version \"1\" { g = [x] 3*y !z &w (p / q) }"
+    accept "grammar T version \"1\" { k = 1*3(e / f) !(g h) }"
+    accept "grammar T version \"1\" { custom lookback = \"ParsanolAtoms::Lookbehind\" a = %x30-39 }"
+    accept "grammar T version \"1\" { state block_kind: symbol a = %x30-39 }"
+    accept "grammar T version \"1\" { a = (set block_kind = \"quote\") %x30-39 }"
+    accept "grammar T version \"1\" { a = (switch block_kind { \"quote\" -> q _ -> never }) }"
+    accept "grammar T version \"1\" { a = (set d = (3*4(%x2D)) %x0A) }"
+    accept "grammar T version \"1\" { a = (!(state d) %x61-7A) }"
+    accept "grammar T version \"1\" {\n  p = {\n    %i\"iso\" / %i\"ieee\"\n  }\n}"
+    accept "grammar T version \"1\" { q = { a b } }"
+    accept "grammar T version \"1\" {\n  r =\n  {\n    x as y\n  }\n}"
+    accept "grammar T version \"1\" {\n  s = {\n    # a comment is body whitespace\n    !(t / u) 2*v\n  }\n}"
+    accept "grammar T version \"1\" mode \"v1\" { x = %x30-39 }"
+    accept "grammar T version \"1\" mode \"v2\" { x = %x30-39 }"
+    accept "grammar T version \"1\" edition 1 { x = %x30-39 }"
+    accept "grammar T version \"1\" edition 2 { x = %x30-39 }"
+    accept "grammar T version \"1\" edition \"v2\" { x = %x30-39 }"
+    accept "grammar T version \"1\" edition 2 {\n  glue ws comment\n  ws = 1*( %x20 )\n  comment = \"#\" *nonl\n  main = \"a\" ws \"b\"\n}"
+    reject "grammar T version \"1\" { q = { a }"
+    reject "grammar T version \"1\" { q = { } }"
+    reject "nonsense"
+    reject "grammar T version \"1\" { = }"
+  }
+}

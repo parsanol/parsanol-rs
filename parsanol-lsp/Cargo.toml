@@ -1,0 +1,19 @@
+[package]
+name = "parsanol-lsp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The PARG language server: parsanol parsing PARG with its own diagnostics, hover, go-to-definition, completion, symbols, and the parse-tree preview"
+
+[[bin]]
+name = "parsanol-lsp"
+path = "src/main.rs"
+
+[dependencies]
+parsanol = { path = "../parsanol", version = "1.5.6" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[lib]
+name = "parsanol_lsp"
+path = "src/lib.rs"
