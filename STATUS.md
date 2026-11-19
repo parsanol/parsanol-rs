@@ -14,11 +14,13 @@
   (−20.6%, every interleaved round wins)**. tree-sitter 0.031: the gap
   is now **1.93×** (was 37× on 2026-11-15). Ahead of Lark LALR (0.366)
   and ANTLR (1.970) by 6-33×.
-- Slice 4 SPECCED + filed (rs#589, TODO.perf/13): the mixed-rep bulk
-  scan for the string body (the histogram: zero bulk-scan ops in the
-  compiled json program; strings ≈ 60% of the corpus bytes run the
-  per-char Choice). The build-side tree treatment it needs is the same
-  the neg-scan solved — designed, not yet built.
+- Slice 4 CORRECTED (rs#591, TODO.perf/13): the histogram falsified
+  the specced premise — the string body is ALREADY bulk-lowered
+  (Span: 1 in the compiled program). The remaining 1.93× lives in the
+  TREE-BUILD OPS (85 of 253 instructions = the typed-AST writes) —
+  Phase 0's pooled writes / the --no-ast split is the measured next
+  lever, then the Phase 2 LR routing behind the #585 prover. The
+  mixed-rep detector stays parked for the capture-bearing shapes.
 
 **Constrained decoding** (rs#530): the TokenOracle + StepState
 (rs#569), the llguidance-compatible TokenBitmask wire + MaskEmitter +
@@ -49,12 +51,13 @@ each tier. The Ruby FFI gate un-red after two days (#583).
 ## Deferred + why
 
 - **Throughput ≤ 0.03 (beating tree-sitter)**: 1.93× remains. The
-  lever is specced (slice 4, the string-body bulk scan — the largest
-  measured block), then the per-rule LR/automaton routing (Phase 2)
-  behind the #585 prover. Both need build-side tree treatment that
-  the corpus identity gates hold to byte-identical output — the
-  mission's own law, which is why they are designed-and-filed rather
-  than hot-patched.
+  measured lever = the tree-build ops (Phase 0's pooled writes /
+  --no-ast split — 85 of 253 program instructions are the typed-AST
+  writes tree-sitter's flat CST never pays), then the per-rule
+  LR/automaton routing (Phase 2) behind the #585 prover. Both need
+  corpus identity gates held to byte-identical output — the mission's
+  own law, which is why they are designed-and-filed rather than
+  hot-patched.
 - **The symbols gate required**: blocked on the ruby engine fix
   (parsanol-ruby#535) and family 4 (the synthetic ?/self nodes).
 - **expressir-rs v2.4.69 crate publish**: the version bump is on
