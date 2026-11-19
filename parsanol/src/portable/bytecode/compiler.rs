@@ -921,7 +921,14 @@ impl Compiler {
                     }
                 }
             }
-            if disjoint && self.repetition_depth == 0 {
+            if disjoint {
+                // The depth gate (rs#533: dispatch measured 18x slower
+                // on json's per-character ws choice inside a rep) is
+                // absorbed upstream: single-byte choices merge to a
+                // charset before this point at ANY depth. What reaches
+                // here inside a repetition = multi-byte-branched
+                // choices (json's value list), where the table wins.
+                // Re-measured on the 1.5.8 receipts before landing.
                 return self.compile_dispatch_alternative(atoms, &sets);
             }
         }
