@@ -109,6 +109,8 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ## [Unreleased]
 
+- The dispatch depth gate falls: 0.079 to 0.0599 us/B on json (-20.6%) ([#586](https://github.com/parsanol/parsanol-rs/pull/586))
+- The determinism prover: per-rule exact FIRST sets at the least fixpoint (rs#574 slice 1) ([#585](https://github.com/parsanol/parsanol-rs/pull/585))
 - The recovery spine replays the unchanged prefix — the TED gap halves ([#580](https://github.com/parsanol/parsanol-rs/pull/580))
 - The mask emitter: the llguidance wire, the sampler-gated loops, and the relaxed recovery ([#579](https://github.com/parsanol/parsanol-rs/pull/579))
 - The README: the language server and the constrained decoding
