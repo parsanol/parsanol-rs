@@ -157,10 +157,14 @@ fn dispatch_count(program: &Program) -> usize {
     n
 }
 
-/// A disjoint multi-branch value-style choice at statement level
-/// dispatches; the same choice shape inside a repetition does not.
+/// A disjoint multi-branch value-style choice dispatches — at statement
+/// level AND inside a repetition (rs#574 slice 2: the single-byte
+/// per-char shape that made in-rep dispatch 18x slower on json ws
+/// merges to a charset before eligibility ever runs, so what dispatches
+/// inside reps = exactly the multi-byte-branched choices the table
+/// wins; re-measured -20.6% on the json corpus).
 #[test]
-fn dispatch_only_outside_repetitions() {
+fn dispatch_survives_repetition_depth() {
     let value = "grammar Shape version \"1.0.0\" edition 2 {
   value = ( %x7B / %x5B / %x22 / number / %i\"true\" / %i\"false\" / %i\"null\" ) as value
   number = ( [ %x2D ] 1*%x30-39 ) as number
@@ -177,10 +181,21 @@ fn dispatch_only_outside_repetitions() {
   entry main: value
 }";
     let program = compile_program(repeated);
+    assert!(
+        dispatch_count(&program) >= 1,
+        "the multi-byte-branched choice inside a repetition dispatches (the charset merge absorbed the per-char shape)"
+    );
+
+    // The per-char single-byte shape stays a charset — never a table.
+    let ws = "grammar Shape version \"1.0.0\" edition 2 {
+  ws = *( %x20 / %x09 / %x0A / %x0D )
+  entry main: ws
+}";
+    let program = compile_program(ws);
     assert_eq!(
         dispatch_count(&program),
         0,
-        "the same choice inside a repetition must stay interleaved (per-char dispatch measured 18x slower on json ws)"
+        "the single-byte per-char choice merges to a charset, never dispatches (the rs#533 18x shape)"
     );
 }
 
