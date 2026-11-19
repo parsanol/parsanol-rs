@@ -53,3 +53,18 @@ the neg-scan solved ("per-iteration values are the body's tagged
 the mixed case before the corpus identity gates can pass. Strings are
 ~60% of package-lock.json's bytes; the per-char Choice over them is
 the largest remaining block between 0.0599 and the 0.03 gate.
+
+## Slice 4 CORRECTION (2026-11-19, measured): the premise is falsified
+
+The instruction histogram of the compiled bench-json program shows
+**Span: 1** — the string interior is ALREADY bulk-lowered (the
+try_get_charset_for_atom path predates this slice). The detector
+written for the mixed-rep shape never fires on the bench grammar; the
+implementation was reverted and parked (the stash carries it). The
+remaining 1.93× is therefore NOT the string body: the histogram's
+largest block is the tree-build ops (85 of 253 instructions are
+PushNil/BuildSeq/BuildHash/RepOpen-class writes — the typed-AST cost
+tree-sitter's flat CST never pays). The next real lever = Phase 0's
+pooled tree writes / the --no-ast split (TODO.perf/10), then the
+Phase 2 LR routing. The mixed-rep detector stays parked for the
+capture-bearing shapes the Span path cannot take.
