@@ -29,3 +29,20 @@ findings: diagnostics deferral, periodic timeout sampling, Arc'd
 regex caches — items 2 and 3 surfaced by the follow-up profiles).
 Remaining from this item's list: none — the pool/lint work moved to
 item 12; the class-decode/TLS survivors are item 11's targets.
+
+## Phase 0 negatives (2026-11-19, interleaved A/B, min-of-6) — measured, not guessed
+
+1. **The deps opt-level flip** (`[profile.release.package."*"]`
+   "s" → 3): FALSIFIED — the clean A/B at current main shows the "s"
+   profile **6% faster** (min 26.79 vs 28.35 ms). The smaller kernels
+   win the I-cache; the owner's "s" is deliberate and optimal. (The
+   first "-20%" reading = a stale pre-rs#586 baseline artifact.)
+2. **The ErrorTracker record-time duplicate scan** (the linear
+   `contexts.iter().any` per failed alternative): FALSIFIED as a
+   measurable lever — removing it (the wire dedups at render anyway)
+   lands at noise level (min 26.99 vs 27.06 ms). The scan is not hot;
+   the wire contract stays pinned.
+
+The measured remaining lever stays the TREE-BUILD OPS (85 of 253
+program instructions — Phase 0's pooled writes / --no-ast split),
+then the Phase 2 LR routing behind rs#585's prover.
