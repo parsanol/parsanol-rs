@@ -13,7 +13,13 @@ use magnus::{value::ReprValue, Error, IntoValue, RArray, Ruby, Symbol, Value};
 use super::normalize::{create_slice, get_slice_class};
 
 /// Maximum recursion depth to prevent stack overflow
-const MAX_RECURSION_DEPTH: u32 = 500;
+// The transform frame is ~1KB (the Ruby call machinery dominates), so
+// 8192 levels ≈ 8MB — within the native thread's stack budget (the
+// release profile ships the 8MiB-stack link args; see rs#535: the
+// oracle's concatenated fixture nests deeper than the old 500 and
+// tripped RecursionLimitExceeded, silently degrading every span to
+// the shallowest slices the partial tree carried).
+const MAX_RECURSION_DEPTH: u32 = 8192;
 
 /// Check if a value is a valid Ruby object (not nil)
 #[inline]
