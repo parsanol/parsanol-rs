@@ -45,6 +45,9 @@
 //! - Use `parsanol_grammar_free()` to free grammars
 //! - Use `parsanol_string_free()` to free strings
 //! - Use `parsanol_result_free()` to free parse results
+//! - Use `parsanol_parg_free()` to free the parg/mask JSON and bitmask
+//!   buffers
+//! - Use `parsanol_mask_free()` to free mask-emitter handles
 
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int, c_ulong};
@@ -1056,6 +1059,199 @@ pub unsafe extern "C" fn parsanol_parg_parse_recovering(
             c_set_error(&error);
             std::ptr::null_mut()
         }
+    }
+}
+
+// ============================================================================
+// Constrained-decoding mask ABI (rs#530, additive): a TokenOracle/MaskEmitter
+// handle per artifact entry + tokenizer vocabulary. `parsanol_mask_step`
+// returns the next-step token bitmask in the llguidance wire format (bit i of
+// word i/32, little-endian u32 words) — byte-identical to
+// `TokenBitmask::to_wire`. Owned masks are freed with the existing
+// `parsanol_parg_free`; handles with `parsanol_mask_free`.
+// ============================================================================
+
+/// Opaque handle to a constrained-decoding mask emitter (rs#530). Build
+/// with `parsanol_mask_open`, step with `parsanol_mask_step`, release
+/// with `parsanol_mask_free`. Self-contained: usable from any thread.
+pub struct ParsanolMask {
+    artifact: crate::parg::PargArtifact,
+    entry: String,
+    vocab: Vec<crate::constrain::Token>,
+}
+
+/// Decode the vocabulary wire: `[{"id": u64, "text": str}, ...]`, ids unique.
+fn c_parse_vocab(text: &str) -> Result<Vec<crate::constrain::Token>, String> {
+    use crate::constrain::Token;
+    let value: serde_json::Value =
+        serde_json::from_str(text).map_err(|e| format!("vocabulary json error: {e}"))?;
+    let items = value
+        .as_array()
+        .ok_or_else(|| "vocabulary json must be an array".to_string())?;
+    if items.is_empty() {
+        return Err("vocabulary json must be a non-empty array".into());
+    }
+    let mut vocab: Vec<Token> = Vec::with_capacity(items.len());
+    for (index, item) in items.iter().enumerate() {
+        let id = item
+            .get("id")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or_else(|| format!("vocabulary[{index}] lacks a u64 \"id\""))?;
+        let text = item
+            .get("text")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| format!("vocabulary[{index}] lacks a string \"text\""))?;
+        vocab.push(Token {
+            id,
+            text: text.to_string(),
+        });
+    }
+    vocab.sort_by_key(|t| t.id);
+    if vocab.windows(2).any(|pair| pair[0].id == pair[1].id) {
+        return Err("vocabulary json has duplicate token ids".into());
+    }
+    Ok(vocab)
+}
+
+/// Open a mask-emitter handle over a checksum-verified artifact entry and
+/// a tokenizer vocabulary. `entry` may be NULL for the artifact's default
+/// entry. `vocab_json` may be NULL to derive the vocabulary from the
+/// artifact's terminal vocabulary (ids 1..n by sorted terminal order);
+/// otherwise it is `[{"id": u64, "text": str}, ...]`. Returns NULL with
+/// `parsanol_c_last_error` set on any failure (bad JSON, checksum
+/// rejection, unknown entry, bad vocabulary). Free with
+/// `parsanol_mask_free`.
+///
+/// # Safety
+/// artifact_json (and entry/vocab_json when non-NULL) must be valid
+/// UTF-8 NUL-terminated C strings.
+#[no_mangle]
+pub unsafe extern "C" fn parsanol_mask_open(
+    artifact_json: *const c_char,
+    entry: *const c_char,
+    vocab_json: *const c_char,
+) -> *mut ParsanolMask {
+    let result = (|| -> Result<ParsanolMask, String> {
+        if artifact_json.is_null() {
+            return Err("artifact must be non-NULL".into());
+        }
+        let text = CStr::from_ptr(artifact_json)
+            .to_str()
+            .map_err(|_| "artifact is not valid UTF-8".to_string())?;
+        let artifact = crate::parg::PargArtifact::from_json(text).map_err(|e| e.to_string())?;
+        let entry = if entry.is_null() {
+            artifact
+                .default_entry()
+                .or_else(|| artifact.entry_names().first().copied())
+                .ok_or_else(|| "envelope has no entries".to_string())?
+                .to_string()
+        } else {
+            let name = CStr::from_ptr(entry)
+                .to_str()
+                .map_err(|_| "entry is not valid UTF-8".to_string())?;
+            if !artifact.entry_names().contains(&name) {
+                return Err(format!("unknown entry {name:?}"));
+            }
+            name.to_string()
+        };
+        let vocab = if vocab_json.is_null() {
+            artifact
+                .terminal_vocabulary()
+                .into_iter()
+                .enumerate()
+                .map(|(index, text)| crate::constrain::Token {
+                    id: (index + 1) as u64,
+                    text,
+                })
+                .collect()
+        } else {
+            let vocab = CStr::from_ptr(vocab_json)
+                .to_str()
+                .map_err(|_| "vocabulary is not valid UTF-8".to_string())?;
+            c_parse_vocab(vocab)?
+        };
+        Ok(ParsanolMask {
+            artifact,
+            entry,
+            vocab,
+        })
+    })();
+    match result {
+        Ok(mask) => {
+            c_set_error("");
+            Box::into_raw(Box::new(mask))
+        }
+        Err(error) => {
+            c_set_error(&error);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// The next-step bitmask at `text` (the consumed text so far): the
+/// llguidance wire exactly as `TokenBitmask::to_wire` emits it —
+/// `ceil(vocab_size / 32)` little-endian u32 words, bit i of word i/32 =
+/// token i allowed. Writes the buffer pointer and its byte length
+/// (the wire length, without the terminator) through `out_mask` /
+/// `out_len`. An empty or drained mask is a valid all-zero buffer.
+///
+/// The buffer is a true CString allocation (NUL-terminated) but packed
+/// bit words legitimately contain interior NUL bytes: always read
+/// exactly `*out_len` bytes and never treat the pointer as a C string.
+/// Free it exactly once with `parsanol_parg_free`.
+///
+/// # Safety
+/// - `mask` must come from `parsanol_mask_open` and not be freed
+/// - `text` must be valid for reads of `len` bytes (NULL or 0 = the
+///   empty prefix)
+/// - `out_mask`/`out_len` must be valid writable pointers
+#[no_mangle]
+pub unsafe extern "C" fn parsanol_mask_step(
+    mask: *const ParsanolMask,
+    text: *const c_char,
+    len: usize,
+    out_mask: *mut *mut c_char,
+    out_len: *mut usize,
+) -> c_int {
+    if mask.is_null() || out_mask.is_null() || out_len.is_null() {
+        c_set_error("null mask handle or out pointer");
+        return PARSANOL_ERROR_NULL_POINTER;
+    }
+    let prefix = if text.is_null() || len == 0 {
+        ""
+    } else {
+        match std::str::from_utf8(std::slice::from_raw_parts(text.cast::<u8>(), len)) {
+            Ok(s) => s,
+            Err(_) => {
+                c_set_error("prefix text is not valid UTF-8");
+                return PARSANOL_ERROR_PARSE_FAILED;
+            }
+        }
+    };
+    let handle = &*mask;
+    let oracle =
+        crate::constrain::TokenOracle::new(&handle.artifact, &handle.entry, handle.vocab.clone());
+    let mut buffer = crate::constrain::MaskEmitter::new(oracle)
+        .mask_for(prefix)
+        .to_wire();
+    *out_len = buffer.len();
+    buffer.push(0); // the NUL terminator the shared free fn expects
+    *out_mask = CString::from_vec_unchecked(buffer).into_raw();
+    c_set_error("");
+    PARSANOL_OK
+}
+
+/// Release a mask handle from `parsanol_mask_open`. Safe with NULL
+/// (no-op). The handle is not the mask buffers: those belong to the
+/// caller after `parsanol_mask_step` and free with `parsanol_parg_free`.
+///
+/// # Safety
+/// `mask` must be a pointer returned by `parsanol_mask_open` that has
+/// not been freed already.
+#[no_mangle]
+pub unsafe extern "C" fn parsanol_mask_free(mask: *mut ParsanolMask) {
+    if !mask.is_null() {
+        drop(Box::from_raw(mask));
     }
 }
 

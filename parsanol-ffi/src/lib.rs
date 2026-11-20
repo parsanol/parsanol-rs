@@ -12,8 +12,8 @@
 #[allow(unused_imports)]
 use parsanol::ffi::c::{
     parsanol_c_last_error, parsanol_c_parse, parsanol_c_parse_len, parsanol_c_register,
-    parsanol_c_release, parsanol_parg_error, parsanol_parg_free, parsanol_parg_parse,
-    parsanol_parg_parse_recovering,
+    parsanol_c_release, parsanol_mask_free, parsanol_mask_open, parsanol_mask_step,
+    parsanol_parg_error, parsanol_parg_free, parsanol_parg_parse, parsanol_parg_parse_recovering,
 };
 
 #[cfg(test)]
@@ -74,6 +74,25 @@ mod tests {
     #[test]
     fn last_error_is_always_readable() {
         assert!(!parsanol_c_last_error().is_null());
+    }
+
+    #[test]
+    fn mask_exports_link_and_open() {
+        // Compile-time link check for the mask ABI (rs#530): the exports
+        // resolve from this cdylib crate and a NULL artifact is rejected.
+        let mut out: *mut std::os::raw::c_char = std::ptr::null_mut();
+        let mut out_len: usize = 0;
+        let rc = unsafe {
+            parsanol_mask_step(
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                &mut out,
+                &mut out_len,
+            )
+        };
+        assert_eq!(rc, -1, "null handle is a NULL_POINTER rejection");
+        unsafe { parsanol_mask_free(std::ptr::null_mut()) };
     }
 
     #[test]
