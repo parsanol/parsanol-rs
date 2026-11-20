@@ -47,7 +47,7 @@ export async function runCompatibilityChecks(engine) {
       nested.parseShape('main','('.repeat(depth)+'x'+')'.repeat(depth));
       nested.parseShape('main','x');checks.push('valid nesting and reuse '+depth);
     }
-    for (const invalid of [0,8193]) {
+    for (const invalid of [0,-1,8193,1.5,NaN,Infinity,4294967297]) {
       let refused=false;
       try {nested.parseShapeWithCallDepth('main','x','strict','default',invalid);} catch {refused=true;}
       assert(refused,'invalid explicit call depth '+invalid);
