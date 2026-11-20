@@ -231,3 +231,40 @@ fn c_deepest_reporter_is_additive_and_validates_reporter() {
         }
     }
 }
+
+#[test]
+fn explicit_call_budget_is_finite_typed_and_local_to_one_parse() {
+    use parsanol::portable::parser::FailureReporter;
+    let artifact = PargArtifact::from_json(&artifact("a")).unwrap();
+    let parse = |depth| {
+        artifact.parse_shape_with_call_depth(
+            "main",
+            "a!",
+            ParserCompatibility::Strict,
+            FailureReporter::Default,
+            Some(depth),
+        )
+    };
+    for depth in [0, 8193, usize::MAX] {
+        assert!(matches!(parse(depth), Err(PargError::InvalidEnvelope(_))));
+    }
+    assert!(matches!(
+        parse(1),
+        Err(PargError::CallDepthLimitExceeded { max_depth: 1, .. })
+    ));
+    assert_eq!(
+        parse(256).unwrap(),
+        artifact.parse_shape("main", "a!").unwrap()
+    );
+    assert!(artifact.parse_shape("main", "a!").is_ok());
+    assert!(matches!(
+        artifact.parse_shape_with_call_depth(
+            "main",
+            "ab?",
+            ParserCompatibility::Strict,
+            FailureReporter::Default,
+            Some(256),
+        ),
+        Err(PargError::ParseWire { offset: 2, .. })
+    ));
+}
