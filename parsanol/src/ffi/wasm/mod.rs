@@ -392,8 +392,13 @@ impl PargArtifactJs {
         input: &str,
         compatibility: &str,
         reporter: &str,
-        max_call_depth: u32,
+        max_call_depth: f64,
     ) -> Result<JsString, JsValue> {
+        if !(1.0..=8192.0).contains(&max_call_depth) || max_call_depth.fract() != 0.0 {
+            return Err(JsValue::from_str(
+                "call depth must be an integer between 1 and 8192",
+            ));
+        }
         self.parse_shape_report(
             entry,
             input,
