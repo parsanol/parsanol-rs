@@ -161,7 +161,7 @@ impl Compiler {
         };
         in_progress.push(idx);
         let verdict = match atom {
-            Atom::Str { pattern } => Ok(pattern.as_bytes().len().max(1)),
+            Atom::Str { pattern } => Ok(pattern.len().max(1)),
             Atom::Re { pattern } => {
                 match regex_syntax::parse(pattern)
                     .ok()
