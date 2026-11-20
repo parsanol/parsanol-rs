@@ -1561,12 +1561,11 @@ impl<'a> BytecodeVM<'a> {
                 let key = match self.name_pool[idx] {
                     Some(key) => key,
                     None => {
-                        let name = self
-                            .program
-                            .get_string(*name_idx)
-                            .ok_or_else(|| ParseError::Internal {
+                        let name = self.program.get_string(*name_idx).ok_or_else(|| {
+                            ParseError::Internal {
                                 message: format!("Invalid string index: {name_idx}"),
-                            })?;
+                            }
+                        })?;
                         let key = self.arena.intern_string_index(name);
                         self.name_pool[idx] = Some(key);
                         key
