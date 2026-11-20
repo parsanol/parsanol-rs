@@ -109,6 +109,8 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ## [Unreleased]
 
+- The mask FFI: the constrained-decoding surface crosses the C ABI (rs#530)
+- Re-pin the export-parity fixture to the re-baked corpus
 - Cargo fmt
 - Phase 0 shipped: the memo hasher + the pooled tree writes (rs#574)
 - The ruby-ext transform depth cap rises to the stack budget (ruby#535) ([#593](https://github.com/parsanol/parsanol-rs/pull/593))
