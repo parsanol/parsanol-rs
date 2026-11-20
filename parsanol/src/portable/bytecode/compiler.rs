@@ -210,7 +210,9 @@ impl Compiler {
                 }
                 Ok(total)
             }
-            Atom::Repetition { atom, min: _, max, .. } => {
+            Atom::Repetition {
+                atom, min: _, max, ..
+            } => {
                 let (body_first, body_non_null) = self.atom_first(*atom);
                 // The loop-exit ambiguity: a byte that both starts an
                 // iteration and can follow the loop is a shift/reduce
