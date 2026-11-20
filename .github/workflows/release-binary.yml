@@ -7,10 +7,13 @@ name: Release Binaries
 
 on:
   release:
+    # published alone fires exactly once per release. Adding created or
+    # prereleased makes GitHub fire the workflow TWICE for a normal
+    # publish; the duplicate runs raced `gh release upload --clobber` on
+    # the same asset names and the loser got HTTP 404 from the uploads
+    # endpoint (parsanol-v1.5.10 Linux aarch64).
     types:
       - published
-      - created
-      - prereleased
   workflow_dispatch:
     inputs:
       tag:
@@ -126,8 +129,18 @@ jobs:
 
       - name: Upload artifact
         # upload-release-asset@v1 (2019 API) fails "Invalid name for
-        # request"; gh release upload is the supported path.
-        run: gh release upload -R "$GITHUB_REPOSITORY" "$TAG" "out/parsanol-${{ matrix.target }}.tar.gz" --clobber
+        # request"; gh release upload is the supported path. Retry with
+        # backoff: uploads occasionally 404 transiently (an overlapping
+        # rerun's clobber, or API blips) and a failed upload strands the
+        # release without its asset.
+        run: |
+          for attempt in 1 2 3; do
+            gh release upload -R "$GITHUB_REPOSITORY" "$TAG" "out/parsanol-${{ matrix.target }}.tar.gz" --clobber && exit 0
+            echo "upload attempt $attempt failed; retrying in $((attempt * 15))s"
+            sleep $((attempt * 15))
+          done
+          echo "upload failed after 3 attempts" >&2
+          exit 1
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.prepare.outputs.tag_name }}
@@ -177,8 +190,18 @@ jobs:
 
       - name: Upload artifact
         # upload-release-asset@v1 (2019 API) fails "Invalid name for
-        # request"; gh release upload is the supported path.
-        run: gh release upload -R "$GITHUB_REPOSITORY" "$TAG" "out/parsanol-${{ matrix.target }}.tar.gz" --clobber
+        # request"; gh release upload is the supported path. Retry with
+        # backoff: uploads occasionally 404 transiently (an overlapping
+        # rerun's clobber, or API blips) and a failed upload strands the
+        # release without its asset.
+        run: |
+          for attempt in 1 2 3; do
+            gh release upload -R "$GITHUB_REPOSITORY" "$TAG" "out/parsanol-${{ matrix.target }}.tar.gz" --clobber && exit 0
+            echo "upload attempt $attempt failed; retrying in $((attempt * 15))s"
+            sleep $((attempt * 15))
+          done
+          echo "upload failed after 3 attempts" >&2
+          exit 1
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.prepare.outputs.tag_name }}
@@ -220,8 +243,16 @@ jobs:
       - name: Upload artifact
         # pwsh does not expand $VAR env syntax (bash-ism) - the
         # repository argument arrived empty. bash is on the runner.
+        # Retry with backoff like the other upload steps.
         shell: bash
-        run: gh release upload -R "$GITHUB_REPOSITORY" "$TAG" "out/parsanol-x86_64-windows.zip" --clobber
+        run: |
+          for attempt in 1 2 3; do
+            gh release upload -R "$GITHUB_REPOSITORY" "$TAG" "out/parsanol-x86_64-windows.zip" --clobber && exit 0
+            echo "upload attempt $attempt failed; retrying in $((attempt * 15))s"
+            sleep $((attempt * 15))
+          done
+          echo "upload failed after 3 attempts" >&2
+          exit 1
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.prepare.outputs.tag_name }}
@@ -267,7 +298,14 @@ jobs:
           cd out && tar -czvf parsanol-wasm.tar.gz *
 
       - name: Upload artifact
-        run: gh release upload -R "$GITHUB_REPOSITORY" "$TAG" "out/parsanol-wasm.tar.gz" --clobber
+        run: |
+          for attempt in 1 2 3; do
+            gh release upload -R "$GITHUB_REPOSITORY" "$TAG" "out/parsanol-wasm.tar.gz" --clobber && exit 0
+            echo "upload attempt $attempt failed; retrying in $((attempt * 15))s"
+            sleep $((attempt * 15))
+          done
+          echo "upload failed after 3 attempts" >&2
+          exit 1
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.prepare.outputs.tag_name }}
