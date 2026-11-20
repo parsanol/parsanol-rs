@@ -83,3 +83,15 @@ construction. Interleaved A/B min-of-15×6: **−35.0%**
 Receipt: `benchmarks/sota/results/2026-11-20-memo-pooled-writes.md`.
 Next profile-ranked blocks: the dispatch loop itself and the per-char
 scan kernels; the Phase 2 LR routing stays the structural endgame.
+
+## Dispatch-loop hoists FALSIFIED (2026-11-20, interleaved A/B min-of-15×6)
+
+Moving the recursion-depth gate to the backtrack push sites (mirroring
+the capture-depth convention) + hoisting the debug branch out of the
+loop: min-of-min 19 376 vs the pre-hoist 18 723 µs — no win (the
+per-instruction depth check and the debug branch were already
+near-free predictable branches). Reverted; the loop check stays where
+rs#533 put it. The dispatch loop's real cost = the match dispatch and
+the scan pre-dispatch's two extra variant compares — the pre-dispatch
+exists deliberately (the 1.5.6 +12% receipt), so the loop is at its
+measured local optimum until the Phase 2 LR routing replaces it.
