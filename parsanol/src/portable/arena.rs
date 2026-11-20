@@ -318,7 +318,11 @@ impl AstArena {
     /// constants, so the VM caches their pool indexes and skips the
     /// per-node intern probe.
     #[inline]
-    pub fn store_tagged_array_indexed(&mut self, tag_pool_index: u32, items: &[AstNode]) -> (u32, u32) {
+    pub fn store_tagged_array_indexed(
+        &mut self,
+        tag_pool_index: u32,
+        items: &[AstNode],
+    ) -> (u32, u32) {
         let start = self.array_pool.len() as u32;
         self.array_pool.push(ArrayPoolEntry {
             value: AstNode::StringRef {
@@ -326,7 +330,9 @@ impl AstArena {
             },
         });
         self.array_pool
-            .extend(items.iter().map(|item| ArrayPoolEntry { value: item.clone() }));
+            .extend(items.iter().map(|item| ArrayPoolEntry {
+                value: item.clone(),
+            }));
         (start, items.len() as u32 + 1)
     }
 
