@@ -106,6 +106,167 @@ impl Compiler {
         &self.rule_first
     }
 
+    /// Whole-rule LR-family provability (rs#574 Phase 2, slice A):
+    /// does the rule's recognition lower to a deterministic finite
+    /// automaton? Sequences chain, alternatives branch on
+    /// pairwise-disjoint FIRST sets, repetitions loop only when their
+    /// body's FIRST set is disjoint from what can follow the loop
+    /// (the exit ambiguity) and the body consumes at least one byte;
+    /// recursion, predicates, and non-terminal constructs refuse with
+    /// the reason. The verdicts route slice B's per-rule automaton
+    /// emission; the corpus survey publishes the coverage.
+    pub fn rule_lr_provability(&self) -> HashMap<usize, LrVerdict> {
+        let mut out = HashMap::new();
+        for (rule, first) in &self.rule_first {
+            let verdict = match first {
+                None => LrVerdict::Refused {
+                    reason: "the FIRST-set closure is poisoned (non-terminal constructs inside)",
+                },
+                Some((first_bytes, _)) => {
+                    // The grammar's ROOT rule is consumed at end-of-input;
+                    // every other rule's usage-site continuation is
+                    // over-approximated by its own FIRST set.
+                    let follow: &[u8] = if *rule == self.grammar.root {
+                        &[]
+                    } else {
+                        first_bytes
+                    };
+                    let mut in_progress = Vec::new();
+                    match self.lr_states(*rule, follow, &mut in_progress) {
+                        Ok(states) => LrVerdict::Provable { states },
+                        Err(reason) => LrVerdict::Refused { reason },
+                    }
+                }
+            };
+            out.insert(*rule, verdict);
+        }
+        out
+    }
+
+    /// The DFA transition count of one atom under the follow set that
+    /// can come after it. `in_progress` holds the walk's open atoms —
+    /// a re-entry is recursion, which the automaton family does not
+    /// cover (the DFA would be infinite).
+    fn lr_states(
+        &self,
+        idx: usize,
+        follow: &[u8],
+        in_progress: &mut Vec<usize>,
+    ) -> Result<usize, &'static str> {
+        if in_progress.contains(&idx) {
+            return Err("recursion (the atom closure is not finite)");
+        }
+        let Some(atom) = self.grammar.get_atom(idx) else {
+            return Err("unknown atom index");
+        };
+        in_progress.push(idx);
+        let verdict = match atom {
+            Atom::Str { pattern } => Ok(pattern.as_bytes().len().max(1)),
+            Atom::Re { pattern } => {
+                match regex_syntax::parse(pattern)
+                    .ok()
+                    .map(|hir| hir_first_union(hir.kind()))
+                {
+                    Some(Some(_)) => Ok(1),
+                    _ => Err("a multi-character or unanalyzable regex"),
+                }
+            }
+            Atom::Sequence { atoms } => {
+                // Thread the follow right-to-left: child[i]'s follow =
+                // FIRST(child[i+1..]) ∪ (nullable(child[i+1..]) ? the
+                // outer follow : ∅) — the loop-exit disjointness inside
+                // nested repetitions reads the true continuation.
+                let mut total = 0usize;
+                let mut child_follow = follow.to_vec();
+                for &child in atoms.iter().rev() {
+                    let n = self.lr_states(child, &child_follow, in_progress)?;
+                    total = total.saturating_add(n);
+                    // The next (earlier) child's follow = this child's
+                    // FIRST ∪ (this child nullable ? the outer follow : ∅).
+                    let (mut first, non_null) = self.atom_first(child);
+                    if !non_null {
+                        first.extend_from_slice(follow);
+                    }
+                    child_follow = first;
+                }
+                Ok(total)
+            }
+            Atom::Alternative { atoms } => {
+                let mut sets = Vec::with_capacity(atoms.len());
+                for &branch in atoms {
+                    let (first, _) = self.atom_first(branch);
+                    sets.push(first);
+                }
+                for i in 0..sets.len() {
+                    for other in &sets[i + 1..] {
+                        if sets[i].iter().any(|b| other.contains(b)) {
+                            return Err("ordered choice with overlapping FIRST sets");
+                        }
+                    }
+                }
+                let mut total = 0usize;
+                for (branch, set) in atoms.iter().zip(&sets) {
+                    total = total.saturating_add(self.lr_states(*branch, set, in_progress)?);
+                }
+                Ok(total)
+            }
+            Atom::Repetition { atom, min: _, max, .. } => {
+                let (body_first, body_non_null) = self.atom_first(*atom);
+                // The loop-exit ambiguity: a byte that both starts an
+                // iteration and can follow the loop is a shift/reduce
+                // conflict — the DFA cannot decide iterate vs exit.
+                if body_first.iter().any(|b| follow.contains(b)) {
+                    return Err("a repetition body that overlaps what follows it");
+                }
+                // A nullable body in an unbounded loop never terminates.
+                if !body_non_null && max.is_none() {
+                    return Err("a nullable repetition body in an unbounded loop");
+                }
+                if !body_non_null {
+                    return Err("a nullable repetition body");
+                }
+                let mut inner_follow = body_first;
+                inner_follow.extend_from_slice(follow);
+                let n = self.lr_states(*atom, &inner_follow, in_progress)?;
+                Ok(n)
+            }
+            Atom::Named { atom, .. }
+            | Atom::Capture { atom, .. }
+            | Atom::Scope { atom }
+            | Atom::Ignore { atom }
+            | Atom::Trivia { atom }
+            | Atom::TriviaCapture { atom, .. } => self.lr_states(*atom, follow, in_progress),
+            Atom::Entity { atom } => self.lr_states(*atom, follow, in_progress),
+            Atom::Cut => Ok(0),
+            Atom::Lookahead { .. } => Err("a lookahead predicate"),
+            Atom::Lookbehind { .. } => Err("a lookbehind predicate"),
+            Atom::Constant { .. } => Err("a constant-output atom"),
+            Atom::Dynamic { .. } | Atom::Custom { .. } | Atom::CustomRef { .. } => {
+                Err("a host-computed atom")
+            }
+            Atom::StateSet { .. } | Atom::StateMatch { .. } | Atom::StateSwitch { .. } => {
+                Err("a stateful atom")
+            }
+        };
+        in_progress.pop();
+        verdict
+    }
+
+    /// FIRST bytes + nullability of one atom (the exact per-atom view
+    /// over the fixed-point rule table).
+    fn atom_first(&self, idx: usize) -> (Vec<u8>, bool) {
+        let mut set = Vec::new();
+        let mut non_null = false;
+        first_of_atom(
+            &self.grammar,
+            idx,
+            &self.rule_first,
+            &mut set,
+            &mut non_null,
+        );
+        (set, non_null)
+    }
+
     /// Rule-boundary discovery: Named atoms wrap grammar rules, and
     /// Entity atoms point at rule bodies. Serializers may emit rule
     /// references as shared inlined atoms (cycles included), so these
@@ -1634,6 +1795,23 @@ fn push_unique(set: &mut Vec<u8>, b: u8) {
 /// (rs#574's prover): rule references resolve through the table, so
 /// chains and cycles contribute their current partial and the sweep
 /// converges to the exact sets.
+/// Whole-rule LR-family provability (rs#574 Phase 2, slice A): the
+/// per-rule verdict of whether the rule's recognition lowers to a
+/// deterministic finite automaton.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LrVerdict {
+    /// The rule's recognition lowers to a DFA of this many transitions.
+    Provable {
+        /// The transition count (bytes, branch joins, loop edges).
+        states: usize,
+    },
+    /// The construct that keeps the rule out of the automaton family.
+    Refused {
+        /// The reason, human-readable.
+        reason: &'static str,
+    },
+}
+
 fn first_of_atom(
     grammar: &Grammar,
     idx: usize,
@@ -1762,6 +1940,260 @@ mod tests {
         let a_first = sets.get(&slot_a).expect("ruleA proved");
         let (aset, _) = a_first.as_ref().expect("ruleA not poisoned");
         assert_eq!(aset, b"o", "ruleA's own first stays exact: {aset:?}");
+    }
+
+    /// Build a Named rule atom from children (the boundary the prover
+    /// keys on).
+    fn named_rule(grammar: &mut Grammar, name: &str, body: usize) -> usize {
+        grammar.add_atom(Atom::Named {
+            name: name.to_string(),
+            atom: body,
+        })
+    }
+
+    #[test]
+    fn lr_provable_rule_proves() {
+        // member = '"' chars '"' — a byte chain, the canonical
+        // automaton-lowerable shape.
+        let mut grammar = Grammar::new();
+        let s_q = grammar.add_atom(Atom::Str {
+            pattern: "\"".to_string(),
+        });
+        let s_chars = grammar.add_atom(Atom::Str {
+            pattern: "abc".to_string(),
+        });
+        let body = grammar.add_atom(Atom::Sequence {
+            atoms: vec![s_q, s_chars, s_q],
+        });
+        let rule = named_rule(&mut grammar, "member", body);
+        grammar.root = rule;
+
+        let compiler = Compiler::new(grammar);
+        let verdicts = compiler.rule_lr_provability();
+        match &verdicts[&rule] {
+            LrVerdict::Provable { states } => {
+                assert!(*states >= 5, "one transition per byte plus joins: {states}");
+            }
+            LrVerdict::Refused { reason } => {
+                panic!("the byte chain must prove: {reason}");
+            }
+        }
+    }
+
+    #[test]
+    fn lr_refuses_disjoint_choice_proves() {
+        // value = number | string | kw — disjoint FIRST sets prove.
+        let mut grammar = Grammar::new();
+        let s_num = grammar.add_atom(Atom::Str {
+            pattern: "1".to_string(),
+        });
+        let s_str = grammar.add_atom(Atom::Str {
+            pattern: "\"".to_string(),
+        });
+        let s_kw = grammar.add_atom(Atom::Str {
+            pattern: "true".to_string(),
+        });
+        let body = grammar.add_atom(Atom::Alternative {
+            atoms: vec![s_num, s_str, s_kw],
+        });
+        let rule = named_rule(&mut grammar, "value", body);
+        grammar.root = rule;
+
+        let compiler = Compiler::new(grammar);
+        let verdicts = compiler.rule_lr_provability();
+        assert!(
+            matches!(verdicts[&rule], LrVerdict::Provable { .. }),
+            "disjoint alternatives prove: {:?}",
+            verdicts[&rule]
+        );
+    }
+
+    #[test]
+    fn lr_refuses_overlapping_choice() {
+        // "a" | "ab" — the shared lead byte is a DFA conflict.
+        let mut grammar = Grammar::new();
+        let s_a = grammar.add_atom(Atom::Str {
+            pattern: "a".to_string(),
+        });
+        let s_ab = grammar.add_atom(Atom::Str {
+            pattern: "ab".to_string(),
+        });
+        let body = grammar.add_atom(Atom::Alternative {
+            atoms: vec![s_a, s_ab],
+        });
+        let rule = named_rule(&mut grammar, "amb", body);
+        grammar.root = rule;
+
+        let compiler = Compiler::new(grammar);
+        let verdicts = compiler.rule_lr_provability();
+        match &verdicts[&rule] {
+            LrVerdict::Refused { reason } => {
+                assert!(reason.contains("overlapping FIRST"), "{reason}");
+            }
+            LrVerdict::Provable { states } => {
+                panic!("the overlapping choice must refuse, proved {states} states");
+            }
+        }
+    }
+
+    #[test]
+    fn lr_refuses_loop_exit_ambiguity() {
+        // ("a")* "a" — the iteration and the exit share their lead byte.
+        let mut grammar = Grammar::new();
+        let s_a = grammar.add_atom(Atom::Str {
+            pattern: "a".to_string(),
+        });
+        let rep = grammar.add_atom(Atom::Repetition {
+            atom: s_a,
+            min: 0,
+            max: None,
+            tag: RepetitionTag::Repetition,
+        });
+        let body = grammar.add_atom(Atom::Sequence {
+            atoms: vec![rep, s_a],
+        });
+        let rule = named_rule(&mut grammar, "run", body);
+        grammar.root = rule;
+
+        let compiler = Compiler::new(grammar);
+        let verdicts = compiler.rule_lr_provability();
+        match &verdicts[&rule] {
+            LrVerdict::Refused { reason } => {
+                assert!(reason.contains("overlaps what follows"), "{reason}");
+            }
+            LrVerdict::Provable { states } => {
+                panic!("the ambiguous loop must refuse, proved {states} states");
+            }
+        }
+    }
+
+    #[test]
+    fn lr_refuses_recursion() {
+        // rule = "x" rule? — the closure is not finite.
+        let mut grammar = Grammar::new();
+        let slot = grammar.add_atom(Atom::Sequence { atoms: vec![] });
+        let s_x = grammar.add_atom(Atom::Str {
+            pattern: "x".to_string(),
+        });
+        let ent = grammar.add_atom(Atom::Entity { atom: slot });
+        let rep = grammar.add_atom(Atom::Repetition {
+            atom: ent,
+            min: 0,
+            max: Some(1),
+            tag: RepetitionTag::Maybe,
+        });
+        grammar.atoms[slot] = Atom::Sequence {
+            atoms: vec![s_x, rep],
+        };
+        let rule = named_rule(&mut grammar, "rec", slot);
+        grammar.root = rule;
+
+        let compiler = Compiler::new(grammar);
+        let verdicts = compiler.rule_lr_provability();
+        match &verdicts[&rule] {
+            LrVerdict::Refused { reason } => {
+                assert!(reason.contains("recursion"), "{reason}");
+            }
+            LrVerdict::Provable { states } => {
+                panic!("the recursive rule must refuse, proved {states} states");
+            }
+        }
+    }
+
+    #[test]
+    fn lr_refuses_predicates() {
+        let mut grammar = Grammar::new();
+        let s_a = grammar.add_atom(Atom::Str {
+            pattern: "a".to_string(),
+        });
+        let la = grammar.add_atom(Atom::Lookahead {
+            atom: s_a,
+            positive: true,
+        });
+        let body = grammar.add_atom(Atom::Sequence {
+            atoms: vec![la, s_a],
+        });
+        let rule = named_rule(&mut grammar, "pred", body);
+        grammar.root = rule;
+
+        let compiler = Compiler::new(grammar);
+        let verdicts = compiler.rule_lr_provability();
+        assert!(
+            matches!(&verdicts[&rule], LrVerdict::Refused { .. }),
+            "a lookahead refuses: {:?}",
+            verdicts[&rule]
+        );
+    }
+
+    /// The fleet survey: per-flavor Provable/Refused rule counts over
+    /// the sibling pubid-grammar artifacts — the coverage evidence the
+    /// automaton-routing slice sizes against. Ambient stale checkouts
+    /// skip with guidance (the parg_corpus philosophy).
+    #[test]
+    fn lr_survey_over_the_corpus_fleet() {
+        let dir = match std::env::var("PARG_ARTIFACT_DIR") {
+            Ok(dir) => std::path::PathBuf::from(dir),
+            Err(_) => {
+                let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+                match manifest
+                    .ancestors()
+                    .map(|a| a.join("pubid").join("pubid-grammar").join("artifacts"))
+                    .find(|c| c.is_dir())
+                {
+                    Some(dir) => dir,
+                    None => {
+                        eprintln!(
+                            "skip: no PARG_ARTIFACT_DIR and no sibling pubid-grammar checkout"
+                        );
+                        return;
+                    }
+                }
+            }
+        };
+        let mut flavors = 0usize;
+        let mut provable_total = 0usize;
+        let mut refused_total = 0usize;
+        let mut reasons: std::collections::BTreeMap<&'static str, usize> = Default::default();
+        for entry in std::fs::read_dir(&dir).expect("artifact dir") {
+            let path = entry.expect("entry").path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+                continue;
+            };
+            let Some(grammar_value) = value["entries"]
+                .as_object()
+                .and_then(|e| e.values().next())
+                .map(|e| &e["grammar"])
+            else {
+                continue;
+            };
+            let Ok(grammar) = serde_json::from_value::<Grammar>(grammar_value.clone()) else {
+                continue;
+            };
+            let compiler = Compiler::new(grammar);
+            flavors += 1;
+            for verdict in compiler.rule_lr_provability().values() {
+                match verdict {
+                    LrVerdict::Provable { .. } => provable_total += 1,
+                    LrVerdict::Refused { reason } => {
+                        refused_total += 1;
+                        *reasons.entry(*reason).or_insert(0) += 1;
+                    }
+                }
+            }
+        }
+        eprintln!(
+            "LR survey: {flavors} flavors, {provable_total} provable rules, {refused_total} refused",
+        );
+        for (reason, count) in &reasons {
+            eprintln!("  {count:5}  {reason}");
+        }
+        assert!(flavors >= 20, "the survey saw only {flavors} flavors");
     }
 
     #[test]
