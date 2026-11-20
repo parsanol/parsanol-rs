@@ -379,38 +379,29 @@ impl PargArtifactJs {
         compatibility: &str,
         reporter: &str,
     ) -> Result<JsString, JsValue> {
-        use crate::portable::parser::{FailureReporter, ParserCompatibility};
-        let reporter = match reporter {
-            "default" => FailureReporter::Default,
-            "deepest" => FailureReporter::Deepest,
-            _ => return Err(JsValue::from_str("unknown failure reporter")),
-        };
-        let policy = match compatibility {
-            "strict" => ParserCompatibility::Strict,
-            "parslet" => ParserCompatibility::Parslet,
-            _ => return Err(JsValue::from_str("unknown parsing compatibility policy")),
-        };
-        let value = match self
-            .artifact
-            .parse_shape_with_reporter(entry, input, policy, reporter)
-        {
-            Ok(shape) => serde_json::json!({"ok": true, "shape": shape}),
-            Err(crate::parg::PargError::ParseWire { offset, ranked, .. }) => {
-                serde_json::json!({"ok": false, "error": {"offset": offset, "ranked": ranked}})
-            }
-            Err(crate::parg::PargError::RecursionLimitExceeded { depth, max_depth }) => {
-                serde_json::json!({"ok": false, "error": {"category": "recursion_limit", "offset": null, "depth": depth, "max_depth": max_depth}})
-            }
-            Err(crate::parg::PargError::CallDepthLimitExceeded { depth, max_depth }) => {
-                serde_json::json!({"ok": false, "error": {"category": "call_depth_limit", "offset": null, "depth": depth, "max_depth": max_depth}})
-            }
-            Err(error) => return Err(parg_error_to_js(error)),
-        };
-        serde_json::to_string(&value)
-            .map(JsString::from)
-            .map_err(|_| JsValue::from_str("Failed to serialize parse result"))
+        self.parse_shape_report(entry, input, compatibility, reporter, None)
     }
 
+    /// Explicit finite VM atom-depth budget (1..=8192), local to this call.
+    /// The default API keeps its 1024-call WASM guard. This does not change the
+    /// rule-recursion or shape-JSON budgets, nor guarantee a host stack size.
+    #[wasm_bindgen(js_name = parseShapeWithCallDepth)]
+    pub fn parse_shape_with_call_depth(
+        &self,
+        entry: &str,
+        input: &str,
+        compatibility: &str,
+        reporter: &str,
+        max_call_depth: u32,
+    ) -> Result<JsString, JsValue> {
+        self.parse_shape_report(
+            entry,
+            input,
+            compatibility,
+            reporter,
+            Some(max_call_depth as usize),
+        )
+    }
     /// Best-effort recovery (TODO.sota/1): success returns
     /// `{"ok": true, "shape": ...}`; failure returns
     /// `{"ok": false, "captures": ..., "error": ..., "consumed_upto"}`.
@@ -575,4 +566,49 @@ pub fn set_panic_hook() {
     // Set up panic hook for better error messages
     #[cfg(feature = "console_error_panic_hook")]
     console_error_panic_hook::set_once();
+}
+
+impl PargArtifactJs {
+    fn parse_shape_report(
+        &self,
+        entry: &str,
+        input: &str,
+        compatibility: &str,
+        reporter: &str,
+        max_call_depth: Option<usize>,
+    ) -> Result<JsString, JsValue> {
+        use crate::portable::parser::{FailureReporter, ParserCompatibility};
+        let reporter = match reporter {
+            "default" => FailureReporter::Default,
+            "deepest" => FailureReporter::Deepest,
+            _ => return Err(JsValue::from_str("unknown failure reporter")),
+        };
+        let policy = match compatibility {
+            "strict" => ParserCompatibility::Strict,
+            "parslet" => ParserCompatibility::Parslet,
+            _ => return Err(JsValue::from_str("unknown parsing compatibility policy")),
+        };
+        let value = match self.artifact.parse_shape_with_call_depth(
+            entry,
+            input,
+            policy,
+            reporter,
+            max_call_depth,
+        ) {
+            Ok(shape) => serde_json::json!({"ok": true, "shape": shape}),
+            Err(crate::parg::PargError::ParseWire { offset, ranked, .. }) => {
+                serde_json::json!({"ok": false, "error": {"offset": offset, "ranked": ranked}})
+            }
+            Err(crate::parg::PargError::RecursionLimitExceeded { depth, max_depth }) => {
+                serde_json::json!({"ok": false, "error": {"category": "recursion_limit", "offset": null, "depth": depth, "max_depth": max_depth}})
+            }
+            Err(crate::parg::PargError::CallDepthLimitExceeded { depth, max_depth }) => {
+                serde_json::json!({"ok": false, "error": {"category": "call_depth_limit", "offset": null, "depth": depth, "max_depth": max_depth}})
+            }
+            Err(error) => return Err(parg_error_to_js(error)),
+        };
+        serde_json::to_string(&value)
+            .map(JsString::from)
+            .map_err(|_| JsValue::from_str("Failed to serialize parse result"))
+    }
 }

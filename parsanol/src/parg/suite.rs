@@ -328,8 +328,29 @@ impl PargArtifact {
         compatibility: crate::portable::parser::ParserCompatibility,
         reporter: crate::portable::parser::FailureReporter,
     ) -> Result<Value, PargError> {
-        with_parser_stack(|| self.parse_shape_inner(entry, input, compatibility, reporter))
-            .map_err(PargError::ParseFailed)?
+        self.parse_shape_with_call_depth(entry, input, compatibility, reporter, None)
+    }
+
+    /// Parse with a per-call VM atom-depth budget. `None` preserves the target's
+    /// default; explicit budgets must be finite and nonzero. Rule recursion and
+    /// shape-JSON limits remain independent, and no setting survives this call.
+    pub fn parse_shape_with_call_depth(
+        &self,
+        entry: &str,
+        input: &str,
+        compatibility: crate::portable::parser::ParserCompatibility,
+        reporter: crate::portable::parser::FailureReporter,
+        max_call_depth: Option<usize>,
+    ) -> Result<Value, PargError> {
+        if matches!(max_call_depth, Some(0 | 8193..)) {
+            return Err(PargError::InvalidEnvelope(
+                "call depth must be between 1 and 8192",
+            ));
+        }
+        with_parser_stack(|| {
+            self.parse_shape_inner(entry, input, compatibility, reporter, max_call_depth)
+        })
+        .map_err(PargError::ParseFailed)?
     }
 
     fn parse_shape_inner(
@@ -338,6 +359,7 @@ impl PargArtifact {
         input: &str,
         compatibility: crate::portable::parser::ParserCompatibility,
         reporter: crate::portable::parser::FailureReporter,
+        max_call_depth: Option<usize>,
     ) -> Result<Value, PargError> {
         let decoded = self.decoded_entry(entry)?;
         // The shaped tree can dwarf the input (large grammars bind few
@@ -352,6 +374,9 @@ impl PargArtifact {
             .set_compatibility(compatibility)
             .map_err(|err| PargError::ParseFailed(err.to_string()))?;
         parser.set_failure_reporter(reporter);
+        if let Some(depth) = max_call_depth {
+            parser.set_max_call_depth(depth);
+        }
         if compatibility == crate::portable::parser::ParserCompatibility::Parslet {
             if let Some(identity) = self.legacy_rule_identity(entry) {
                 parser.set_legacy_rule_identity(identity);

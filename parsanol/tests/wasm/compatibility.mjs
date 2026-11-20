@@ -47,6 +47,19 @@ export async function runCompatibilityChecks(engine) {
       nested.parseShape('main','('.repeat(depth)+'x'+')'.repeat(depth));
       nested.parseShape('main','x');checks.push('valid nesting and reuse '+depth);
     }
+    for (const invalid of [0,8193]) {
+      let refused=false;
+      try {nested.parseShapeWithCallDepth('main','x','strict','default',invalid);} catch {refused=true;}
+      assert(refused,'invalid explicit call depth '+invalid);
+    }
+    const limited=JSON.parse(nested.parseShapeWithCallDepth('main','(x)','strict','default',1));
+    assert(!limited.ok&&limited.error.category==='call_depth_limit'&&limited.error.max_depth===1,'explicit typed call guard');
+    const long='('.repeat(400)+'x'+')'.repeat(400);
+    const expanded=JSON.parse(nested.parseShapeWithCallDepth('main',long,'strict','default',8192));
+    assert(expanded.ok===true,'explicit budget accepts input above the default budget');
+    const unchanged=JSON.parse(nested.parseShapeWithCompatibility('main',long,'strict'));
+    assert(!unchanged.ok&&unchanged.error.category==='call_depth_limit'&&unchanged.error.max_depth===1024,'explicit budget does not leak into defaults');
+    nested.parseShape('main','x');checks.push('explicit budget resource reuse');
     const excessive='('.repeat(1200)+'x'+')'.repeat(1200);
     for(const method of ['parseShape','parseShapeRecovering']){
       let resource;try{nested[method]('main',excessive);}catch(error){resource=error;}
