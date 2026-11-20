@@ -74,6 +74,62 @@ struct MemoEntry {
     value: Option<AstNode>,
 }
 
+/// The memo entry-count cap (see `memo_store`).
+const MEMO_MAX: usize = 2_000_000;
+
+/// Multiply-xor hasher for the memo's `(rule pc, position)` keys. The
+/// packrat writes and reads on every rule call, and the default sip
+/// hasher showed as the hot loop's largest block (hash per op plus the
+/// un-pre-sized table's rehash churn); only key identity matters here,
+/// never avalanche quality or iteration order.
+#[derive(Default)]
+struct MemoHasher(u64);
+
+impl MemoHasher {
+    #[inline]
+    fn add(&mut self, word: u64) {
+        self.0 = (self.0.rotate_left(5) ^ word).wrapping_mul(0x51_7c_c1_b7_27_22_0a_96);
+    }
+}
+
+impl std::hash::Hasher for MemoHasher {
+    #[inline]
+    fn write(&mut self, bytes: &[u8]) {
+        for chunk in bytes.chunks(8) {
+            let mut buf = [0u8; 8];
+            buf[..chunk.len()].copy_from_slice(chunk);
+            self.add(u64::from_le_bytes(buf));
+        }
+    }
+
+    #[inline]
+    fn write_u64(&mut self, word: u64) {
+        self.add(word);
+    }
+
+    #[inline]
+    fn write_usize(&mut self, word: usize) {
+        self.add(word as u64);
+    }
+
+    #[inline]
+    fn finish(&self) -> u64 {
+        self.0
+    }
+}
+
+#[derive(Clone, Default)]
+struct MemoBuild;
+
+impl std::hash::BuildHasher for MemoBuild {
+    type Hasher = MemoHasher;
+    fn build_hasher(&self) -> MemoHasher {
+        MemoHasher(0)
+    }
+}
+
+type MemoMap = std::collections::HashMap<(usize, usize), MemoEntry, MemoBuild>;
+
 /// What a backtrack frame represents when failure unwinds to it
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FrameKind {
@@ -213,7 +269,7 @@ pub struct BytecodeVM<'a> {
     /// PEG parse results are context-free at a call boundary (Dynamic
     /// atoms are gated out of VM programs), so successes and failures
     /// alike are memoizable.
-    memo: std::collections::HashMap<(usize, usize), MemoEntry>,
+    memo: MemoMap,
 
     /// Budget for parse_with_vm_capped; None = unlimited.
     backtrack_budget: Option<u64>,
@@ -229,6 +285,15 @@ pub struct BytecodeVM<'a> {
     /// Per-opcode execution counts (parsanol-rs#100 item 2): None
     /// until `enable_profiling`.
     opcode_counts: Option<Box<[u64]>>,
+
+    /// Interned pool indexes for the shape tags and the program's
+    /// BuildHash names — per-program constants whose re-intern probe
+    /// showed in the hot profile on every node build. Lazily filled;
+    /// `None` = not yet interned this parse.
+    tag_seq: Option<u32>,
+    tag_rep: Option<u32>,
+    tag_maybe: Option<u32>,
+    name_pool: Vec<Option<u32>>,
 }
 
 fn vm_success_traced() -> bool {
@@ -276,9 +341,20 @@ impl<'a> BytecodeVM<'a> {
             backtracks: 0,
             backtrack_budget: None,
             budget_exceeded: false,
-            memo: std::collections::HashMap::new(),
+            memo: MemoMap::with_capacity_and_hasher(
+                // Pre-size against the store cap: the raw table otherwise
+                // grows through repeated rehash cycles on any real corpus
+                // (the profiled malloc/madvise churn). Rule calls land at
+                // roughly one to three positions per input byte.
+                (input.len().saturating_mul(2)).clamp(64, MEMO_MAX),
+                MemoBuild,
+            ),
             memo_enabled: !program.has_invoke_dynamic(),
             opcode_counts: None,
+            tag_seq: None,
+            tag_rep: None,
+            tag_maybe: None,
+            name_pool: vec![None; program.string_count()],
         }
     }
 
@@ -482,7 +558,6 @@ impl<'a> BytecodeVM<'a> {
     /// dynamic-free subtrees otherwise).
     #[inline]
     fn memo_store(&mut self, rule_pc: usize, pos: usize, entry: MemoEntry) {
-        const MEMO_MAX: usize = 2_000_000;
         if self.memo.len() < MEMO_MAX {
             self.memo.insert((rule_pc, pos), entry);
         }
@@ -583,9 +658,17 @@ impl<'a> BytecodeVM<'a> {
                 break;
             }
             let t = self.arena.input_ref(self.position, len);
+            let tag = match self.tag_seq {
+                Some(idx) => idx,
+                None => {
+                    let idx = self.arena.intern_string_index(":sequence");
+                    self.tag_seq = Some(idx);
+                    idx
+                }
+            };
             let (pool_idx, slen) = self
                 .arena
-                .store_tagged_array(":sequence", &[AstNode::Nil, t]);
+                .store_tagged_array_indexed(tag, &[AstNode::Nil, t]);
             self.value_stack.push(AstNode::Array {
                 pool_index: pool_idx,
                 length: slen,
@@ -1377,8 +1460,21 @@ impl<'a> BytecodeVM<'a> {
                         message: format!("BuildSeq underflow: need {n} values"),
                     });
                 }
-                let items = self.value_stack.split_off(self.value_stack.len() - n);
-                let (pool_idx, len) = self.arena.store_tagged_array(":sequence", &items);
+                // Store straight from the stack tail — the split_off
+                // allocated a fresh Vec per node build.
+                let start = self.value_stack.len() - n;
+                let tag = match self.tag_seq {
+                    Some(idx) => idx,
+                    None => {
+                        let idx = self.arena.intern_string_index(":sequence");
+                        self.tag_seq = Some(idx);
+                        idx
+                    }
+                };
+                let (pool_idx, len) = self
+                    .arena
+                    .store_tagged_array_indexed(tag, &self.value_stack[start..]);
+                self.value_stack.truncate(start);
                 self.value_stack.push(AstNode::Array {
                     pool_index: pool_idx,
                     length: len,
@@ -1419,15 +1515,31 @@ impl<'a> BytecodeVM<'a> {
                         message: format!("BuildRep underflow: need {n} values"),
                     });
                 }
-                let mut items = self.value_stack.split_off(self.value_stack.len() - n);
-                if *maybe && items.len() == 1 {
+                if *maybe && n == 1 {
                     // A present optional flattens to its value in every
                     // context; only the absent case keeps the tag.
-                    let value = items.pop().unwrap_or(AstNode::Nil);
+                    let value = self.value_stack.pop().unwrap_or(AstNode::Nil);
                     self.value_stack.push(value);
                 } else {
-                    let tag = if *maybe { ":maybe" } else { ":repetition" };
-                    let (pool_idx, len) = self.arena.store_tagged_array(tag, &items);
+                    let cache = if *maybe {
+                        &mut self.tag_maybe
+                    } else {
+                        &mut self.tag_rep
+                    };
+                    let tag = match *cache {
+                        Some(idx) => idx,
+                        None => {
+                            let name = if *maybe { ":maybe" } else { ":repetition" };
+                            let idx = self.arena.intern_string_index(name);
+                            *cache = Some(idx);
+                            idx
+                        }
+                    };
+                    let start = self.value_stack.len() - n;
+                    let (pool_idx, len) = self
+                        .arena
+                        .store_tagged_array_indexed(tag, &self.value_stack[start..]);
+                    self.value_stack.truncate(start);
                     self.value_stack.push(AstNode::Array {
                         pool_index: pool_idx,
                         length: len,
@@ -1437,16 +1549,30 @@ impl<'a> BytecodeVM<'a> {
             }
 
             Instruction::BuildHash { name_idx } => {
-                let name =
-                    self.program
-                        .get_string(*name_idx)
-                        .ok_or_else(|| ParseError::Internal {
-                            message: format!("Invalid string index: {name_idx}"),
-                        })?;
+                let idx = *name_idx as usize;
+                if idx >= self.name_pool.len() {
+                    return Err(ParseError::Internal {
+                        message: format!("Invalid string index: {name_idx}"),
+                    });
+                }
                 let value = self.value_stack.pop().ok_or_else(|| ParseError::Internal {
                     message: "BuildHash underflow".to_string(),
                 })?;
-                let (pool_idx, len) = self.arena.store_hash(&[(name, value)]);
+                let key = match self.name_pool[idx] {
+                    Some(key) => key,
+                    None => {
+                        let name = self
+                            .program
+                            .get_string(*name_idx)
+                            .ok_or_else(|| ParseError::Internal {
+                                message: format!("Invalid string index: {name_idx}"),
+                            })?;
+                        let key = self.arena.intern_string_index(name);
+                        self.name_pool[idx] = Some(key);
+                        key
+                    }
+                };
+                let (pool_idx, len) = self.arena.store_hash_indexed_key(key, value);
                 self.value_stack.push(AstNode::Hash {
                     pool_index: pool_idx,
                     length: len,

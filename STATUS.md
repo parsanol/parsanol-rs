@@ -21,6 +21,15 @@
   Phase 0's pooled writes / the --no-ast split is the measured next
   lever, then the Phase 2 LR routing behind the #585 prover. The
   mixed-rep detector stays parked for the capture-bearing shapes.
+- Phase 0 SHIPPED (2026-11-20): the sample profile corrected the
+  histogram's read — the cost was the WRITE MECHANICS (the packrat
+  memo's default sip hash + un-pre-sized rehash churn, the per-node
+  tag/name intern probes, the split_off Vec per node build, the
+  20 000-node arena clamp regrowing the pools). All four fixed; trees
+  identical by construction. json **0.0599 → 0.0418 µs/B (−35.0%,
+  every interleaved round wins)** — tree-sitter 0.031: the gap is now
+  **1.35×**. Receipt:
+  benchmarks/sota/results/2026-11-20-memo-pooled-writes.md.
 
 **Constrained decoding** (rs#530): the TokenOracle + StepState
 (rs#569), the llguidance-compatible TokenBitmask wire + MaskEmitter +
@@ -38,28 +47,29 @@ windowed nTED **0.113 → 0.059** (ts 0.023), structure recall
 docs, absolute p50/p95 published, splice ratios 2.1-16.6× own-fresh
 (>10× on the big docs; the gate's ratio).
 
-**Expressir adoption** (rs#567): the corpus inventory LSP gate is now
-**REQUIRED** — byte-exact against the ruby lane across every
-capture-START family (expressir-rs #116/#119/#121/#122). The symbols
-gate's blocker = parsanol-ruby#535 (the ruby engine's size-cap span
-truncation, nine-cell-matrix filed) + family 4.
+**Expressir adoption** (rs#567): CLOSED 2026-11-20 — the corpus
+inventory LSP gate is REQUIRED (expressir-rs #122), and the symbols
+gate went required + CI-wired (expressir-rs#124) after the true root
+cause surfaced: the ruby builder indexed source spans with character
+addressing on byte offsets (lutaml/expressir#695, merged); the ruby
+slice-pool clobbering (parsanol-ruby#538, 1.5.10) was a real bug but
+not this symptom. ruby#535 closed with the decode.
 
-**Releases**: 1.5.8 AND 1.5.9 trains — every runtime (crates.io,
-rubygems, npm + both wasm tiers re-baked, PyPI, ts, py) verified at
-each tier. The Ruby FFI gate un-red after two days (#583).
+**Releases**: 1.5.8, 1.5.9 AND 1.5.10 trains — every runtime
+(crates.io, rubygems, npm + both wasm tiers re-baked, PyPI, ts, py)
+verified at each tier; 1.5.10 carries the slice-pool fix and the
+depth-cap raise. The Ruby FFI gate un-red after two days (#583).
 
 ## Deferred + why
 
-- **Throughput ≤ 0.03 (beating tree-sitter)**: 1.93× remains. The
-  measured lever = the tree-build ops (Phase 0's pooled writes /
-  --no-ast split — 85 of 253 program instructions are the typed-AST
-  writes tree-sitter's flat CST never pays), then the per-rule
-  LR/automaton routing (Phase 2) behind the #585 prover. Both need
-  corpus identity gates held to byte-identical output — the mission's
-  own law, which is why they are designed-and-filed rather than
-  hot-patched.
-- **The symbols gate required**: blocked on the ruby engine fix
-  (parsanol-ruby#535) and family 4 (the synthetic ?/self nodes).
+- **Throughput ≤ 0.03 (beating tree-sitter)**: 1.35× remains. The
+  profile-ranked next blocks = the VM dispatch loop itself and the
+  per-char scan kernels, then the per-rule LR/automaton routing
+  (Phase 2) behind the #585 prover. Both need corpus identity gates
+  held to byte-identical output — the mission's own law.
+- **The symbols gate required**: DONE (expressir-rs#124 merged) —
+  the drift was the expressir builder's char/byte span bug
+  (lutaml/expressir#695), not a capture gap.
 - **expressir-rs v2.4.69 crate publish**: the version bump is on
   main; the publish fails on the release workflow's token scoping
   (expressir-rs#120) — an owner-side credential fix, then a rerun.
