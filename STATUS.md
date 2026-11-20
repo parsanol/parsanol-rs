@@ -55,10 +55,11 @@ addressing on byte offsets (lutaml/expressir#695, merged); the ruby
 slice-pool clobbering (parsanol-ruby#538, 1.5.10) was a real bug but
 not this symptom. ruby#535 closed with the decode.
 
-**Releases**: 1.5.8, 1.5.9 AND 1.5.10 trains — every runtime
+**Releases**: 1.5.8, 1.5.9, 1.5.10 AND 1.5.11 trains — every runtime
 (crates.io, rubygems, npm + both wasm tiers re-baked, PyPI, ts, py)
 verified at each tier; 1.5.10 carries the slice-pool fix and the
-depth-cap raise. The Ruby FFI gate un-red after two days (#583).
+depth-cap raise; **1.5.11 carries the Phase 0 pooled-writes win to
+every runtime** (2026-11-20, all five registries verified live). The Ruby FFI gate un-red after two days (#583).
 
 ## Deferred + why
 

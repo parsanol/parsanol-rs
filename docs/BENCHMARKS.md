@@ -18,65 +18,87 @@ current tables.
 - **The honesty clause.** Losses publish with the same prominence as
   wins, with the profile of where the bytes go.
 
-## Raw parse throughput — JSON corpus (447,801 B, 2026-11-15)
+## Raw parse throughput — JSON corpus (447,801 B, 2026-11-20)
 
-| engine | µs/byte | relative |
+| engine | µs/byte | vs tree-sitter |
 |---|---|---|
-| tree-sitter 0.25 (rust binding) | 0.029 | 37× |
-| parsanol VM — charset-merge build (2026-11-16) | 0.074 | 14.7× |
-| Lark 1.x LALR (python) | 0.344 | 3.1× |
-| parsanol interpreter — charset-merge build | 0.409 | 2.0× |
-| parsanol 1.5.1 interpreter (1.5.1 release) | 0.828 | 1.30× |
-| parsanol 1.5.1 VM (1.5.1 release) | 1.073 | 1.0 (baseline) |
-| ANTLR 4.13.2 (python3 target) | 1.860 | 0.58× |
+| tree-sitter 0.25 (rust binding, C automaton) | 0.031 | 1.0× |
+| **parsanol 1.5.11 VM (Phase 0 pooled writes)** | **0.0418** | **1.35×** |
+| parsanol 1.5.10 VM (dispatch-depth relaxation) | 0.0599 | 1.93× |
+| parsanol 1.5.7 VM (Scan campaign, quiet-machine re-bake) | 0.079 | 2.55× |
+| parsanol interpreter | 0.364 | 11.7× |
+| Lark 1.x LALR (python) | 0.366 | 11.8× |
+| ANTLR 4.13.2 (python3 target) | 1.970 | 63× |
 
-The Phase-0 hot-path round (deferred success-path diagnostics,
-periodic timeout sampling, Arc'd regex caches) is profiled and
-receipted in full: [the hot-path receipt](../benchmarks/sota/results/2026-11-16-vm-hotpath.md).
+The climb since the 1.5.1 baseline (1.073 µs/B): the Scan campaign
+(1.5.6/1.5.7 bulk class-run kernels + scan-dispatch inlining) took
+1.073 → 0.079; the dispatch-depth relaxation (1.5.10, the charset
+merge absorbing the per-char shape) 0.079 → 0.0599; and the Phase 0
+pooled-writes round (1.5.11 — the packrat memo's multiply-xor hasher
++ pre-size, cached shape-tag/name interns, value-stack tail-store
+instead of per-node `split_off`, the arena pre-size) **0.0599 →
+0.0418 (−35%)**. Every step interleaved-A/B'd with byte-identical
+trees. The remaining 1.35× is profiled: the VM dispatch loop itself
+and the per-char scan kernels, then the per-rule LR/automaton routing
+behind the determinism prover — the typed-AST output tree-sitter's
+flat CST never produces stays the differentiator.
 
-parsanol beats ANTLR by 1.7×; the LR-family engines (tree-sitter,
-Lark LALR) lead on deterministic grammars. The named lever: when a
-choice set is first-set disjoint (derivable at compile time), ordered
-choice collapses to indexed dispatch — the determinism fast path.
-Details and analysis: [the JSON receipt](../benchmarks/sota/results/2026-11-15-json.md).
+Receipts: [the pooled-writes receipt](../benchmarks/sota/results/2026-11-20-memo-pooled-writes.md),
+[the dispatch-depth receipt](../benchmarks/sota/results/2026-11-19-dispatch-depth.md),
+[the quiet-machine re-bake](../benchmarks/sota/results/2026-11-18-receipts-rebake.md).
 
-## Error recovery — corrupted JSON (60 seeded cases, 2026-11-16)
+## Error recovery — corrupted JSON (60 seeded cases, 2026-11-18)
 
-| metric | parsanol (suffix replay) | tree-sitter 0.25 |
+| metric | parsanol (spine prefix replay) | tree-sitter 0.25 |
 |---|---|---|
-| suffix recovery (mean) | **92.6%** | 95.6% |
-| diagnostic distance (mean, lower is better) | **±24,744** | ±56,349 |
+| windowed nTED (±1 KB, ≤80 nodes) | 0.059 (was 0.113) | 0.023 |
+| structure recall (span-aware) | **67.5%** (was 52.8%) | — |
+| diagnostic distance (lower is better) | **±24,744** | ±56,349 |
 | diagnostic on truncation | **±1 byte** | root-ERROR at 0 |
+| null recoveries | **0/60** (was 24) | — |
 
-parsanol wins diagnostic precision (its deepest-failure position tracks
-the corruption cause; tree-sitter's ERROR regions start far from the
-cause) and closes the suffix gap from 14.7% to 92.6% — delete-20 rows
-win outright (96.2% vs 94.2%). Span-aware structure recall: 52.8% vs
-72.2% — tree-sitter's recovery tree keeps coarse non-error containers
-(one surviving root covers every ground-truth span; parsanol emits
-fine-grained per-iteration spans). Windowed tree-edit distance
-(±1 KB, ≤80 nodes): parsanol 0.113 vs tree-sitter 0.023 — a published
-loss: ts hole-punches the original tree (everything outside the ERROR
-region is byte-identical to its clean parse) while parsanol rebuilds
-forward at the recovery spine's granularity; unterminated-20 is the
-one win (0.103 vs 0.122). Receipts:
-[the suffix-replay receipt](../benchmarks/sota/results/2026-11-16-recovery-suffix.md),
-[the TED receipt](../benchmarks/sota/results/2026-11-17-recovery-ted.md);
-history: [the layer-1 receipt](../benchmarks/sota/results/2026-11-16-recovery-anchor.md).
+The spine replays the unchanged prefix instead of re-deriving it, so
+recovered iterations exist as real spans: structure recall jumped
+52.8% → 67.5% and null recoveries fell 24 → 0 in the same round that
+halved the windowed TED gap. The residual 0.059 vs 0.023 is the
+corruption site itself: ts hole-punches an ERROR node where the clean
+tree had a subtree, parsanol skips the junk span — closing it further
+means emitting error-node-shaped placeholders for skipped spans (a
+shape decision, not a recovery one). parsanol keeps the diagnostic
+wins outright: its deepest-failure position tracks the corruption
+cause; ts's ERROR regions start far from it.
 
-## Keystroke-scale incremental editing (200-keystroke traces, 2026-11-15)
+Receipts: [the recovery-shape receipt](../benchmarks/sota/results/2026-11-18-recovery-ted-shape.md),
+[the windowed TED receipt](../benchmarks/sota/results/2026-11-17-recovery-ted.md).
 
-| engine | 13.4 KB doc p50 | 151.9 KB doc p50 | speedup vs own fresh |
-|---|---|---|---|
-| tree-sitter incremental | 12.5 µs | 84.4 µs | 34× / 57× |
-| parsanol incremental | 10.17 ms | 108.3 ms | 0.93× / 1.16× |
+## Keystroke-scale incremental editing (200-keystroke traces, 2026-11-18)
 
-parsanol's incremental path is correct (tree identity held at 400/400
-keystrokes) but currently delivers no win: the memo retention rule
-drops the root entry on any length change, which for value grammars
-invalidates everything (`reused 0/200` on the large doc). The
-innermost-container splice retention is the named fix. Details:
-[the incremental receipt](../benchmarks/sota/results/2026-11-15-json-incremental.md).
+| doc | bytes | parsanol p50 | ts p50 | splice ratio vs own fresh | spliced |
+|---|---|---|---|---|---|
+| doc0 | 13,290 | 0.66 ms | 0.014 ms | 6.9× | 199/200 |
+| doc1 | 281,181 | 7.08 ms | 0.175 ms | 16.1× | 180/200 |
+| doc2 | 1,507 | 0.26 ms | 0.006 ms | 2.1× | 197/200 |
+| doc3 | 151,823 | 3.48 ms | 0.093 ms | 16.6× | 190/200 |
+
+Tree identity held at **800/800 keystrokes** across all four documents
+(zero divergence from a from-scratch parse). The p50 splice runs
+2.1–16.6× faster than parsanol's own fresh parse (>10× on the large
+docs); the tail stays full-parse-sized by design — structural edits
+break the splice's identity guards and fall back to the full parse,
+which is what makes the splice safe. tree-sitter's incremental remains
+faster in absolute terms on this harness.
+
+Receipt: [the quiet-machine re-bake](../benchmarks/sota/results/2026-11-18-receipts-rebake.md)
+(extends the earlier [incremental receipt](../benchmarks/sota/results/2026-11-15-json-incremental.md)).
+
+## Constrained decoding (llguidance-compatible masks, 2026-11-19)
+
+Grammar-valid token masks from the checksummed artifact: validity
+**200/200 (100%)** on both grammars (isbn + json); the end-to-end
+constrained loop costs 5.8% of a 10 ms/token model forward pass on
+isbn. The dead-end rollout (a closed brace with no live continuation)
+recovers through the colon branch — FSM mask compilers cannot.
+Receipt: [the mask receipt](../benchmarks/sota/results/2026-11-19-constrain-mask-receipt.md).
 
 ## Reproducing
 
