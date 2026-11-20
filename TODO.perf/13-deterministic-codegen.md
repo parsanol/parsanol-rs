@@ -68,3 +68,18 @@ tree-sitter's flat CST never pays). The next real lever = Phase 0's
 pooled tree writes / the --no-ast split (TODO.perf/10), then the
 Phase 2 LR routing. The mixed-rep detector stays parked for the
 capture-bearing shapes the Span path cannot take.
+
+## Phase 0 SHIPPED (2026-11-20, measured): the memo hasher + the pooled tree writes
+
+The sample profile corrected the histogram's read: the tree-build
+INSTRUCTIONS were the right cost center, but the actual cost was in the
+WRITE MECHANICS — the packrat memo's default sip hasher + un-pre-sized
+rehash churn (~14% of top-of-stack samples), `store_tagged_array`'s
+per-node tag intern + `BuildHash`'s per-capture name intern, the
+`split_off` Vec per node build, and `for_input`'s 20 000-node clamp
+regrowing the pools per parse. All four fixed; trees identical by
+construction. Interleaved A/B min-of-15×6: **−35.0%**
+(0.0599 → 0.0418 µs/B; tree-sitter gap 1.93× → 1.35×).
+Receipt: `benchmarks/sota/results/2026-11-20-memo-pooled-writes.md`.
+Next profile-ranked blocks: the dispatch loop itself and the per-char
+scan kernels; the Phase 2 LR routing stays the structural endgame.

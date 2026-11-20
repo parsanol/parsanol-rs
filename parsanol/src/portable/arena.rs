@@ -121,9 +121,13 @@ impl AstArena {
     /// A new arena with appropriately sized buffers
     #[inline]
     pub fn for_input(input_len: usize) -> Self {
-        // Estimate AST node count: roughly proportional to input size
-        // Use smaller estimate to limit pre-allocation and peak memory
-        let estimated_nodes = (input_len / 50).clamp(64, 20_000);
+        // Estimate AST node count: roughly proportional to input size.
+        // A per-char corpus (json) materializes near one span + shape
+        // node per byte; the old /50 estimate with a 20_000 clamp
+        // regrew the pools several times per parse (the profiled
+        // memmove/malloc churn), so size at a quarter of the input and
+        // let growth handle outliers.
+        let estimated_nodes = (input_len / 4).clamp(64, 4_000_000);
 
         // String pool: typically smaller than node count (only for keys/literals)
         let string_capacity = (estimated_nodes / 4).max(32);
@@ -276,11 +280,17 @@ impl AstArena {
     /// Returns StringRef with the pool index for O(1) string lookup.
     #[inline]
     pub fn intern_string(&mut self, s: &str) -> AstNode {
+        AstNode::StringRef {
+            pool_index: self.intern_string_index(s),
+        }
+    }
+
+    /// Intern a string and return its pool index (deduped).
+    #[inline]
+    pub fn intern_string_index(&mut self, s: &str) -> u32 {
         // Check for existing string first
         if let Some((index, _)) = self.find_interned_string_with_offset(s) {
-            return AstNode::StringRef {
-                pool_index: index as u32,
-            };
+            return index as u32;
         }
 
         // Allocate new string in pool
@@ -300,7 +310,24 @@ impl AstArena {
         let hash = self.hash_string(s);
         self.string_hash.insert(hash, pool_index as usize);
 
-        AstNode::StringRef { pool_index }
+        pool_index
+    }
+
+    /// Store a tagged array whose tag is ALREADY interned — the shape
+    /// tags (`:sequence`/`:repetition`/`:maybe`) are per-program
+    /// constants, so the VM caches their pool indexes and skips the
+    /// per-node intern probe.
+    #[inline]
+    pub fn store_tagged_array_indexed(&mut self, tag_pool_index: u32, items: &[AstNode]) -> (u32, u32) {
+        let start = self.array_pool.len() as u32;
+        self.array_pool.push(ArrayPoolEntry {
+            value: AstNode::StringRef {
+                pool_index: tag_pool_index,
+            },
+        });
+        self.array_pool
+            .extend(items.iter().map(|item| ArrayPoolEntry { value: item.clone() }));
+        (start, items.len() as u32 + 1)
     }
 
     /// Intern a string and return an InputRef with the given input offset.
@@ -410,16 +437,8 @@ impl AstArena {
     /// Returns the starting index and length.
     #[inline]
     pub fn store_tagged_array(&mut self, tag: &str, items: &[AstNode]) -> (u32, u32) {
-        let start = self.array_pool.len() as u32;
-        // Prepend the tag as a StringRef
-        let tag_node = self.intern_string(tag);
-        self.array_pool.push(ArrayPoolEntry { value: tag_node });
-        for item in items {
-            self.array_pool.push(ArrayPoolEntry {
-                value: item.clone(),
-            });
-        }
-        (start, items.len() as u32 + 1)
+        let tag_index = self.intern_string_index(tag);
+        self.store_tagged_array_indexed(tag_index, items)
     }
 
     /// Get array items from pool
@@ -525,6 +544,19 @@ impl AstArena {
         }
 
         (start, pairs.len() as u32)
+    }
+
+    /// Store a single-pair hash whose key is ALREADY interned — the
+    /// VM caches the per-instruction name's pool index (the intern
+    /// probe otherwise runs on every capture node).
+    #[inline]
+    pub fn store_hash_indexed_key(&mut self, key_pool_index: u32, value: AstNode) -> (u32, u32) {
+        let start = self.hash_pool.len() as u32;
+        self.hash_pool.push(HashPoolEntry {
+            key_pool_index,
+            value,
+        });
+        (start, 1)
     }
 
     /// Get hash items from pool
