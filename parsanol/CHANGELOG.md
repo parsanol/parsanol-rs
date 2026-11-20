@@ -109,6 +109,8 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ## [Unreleased]
 
+- Cargo fmt
+- Phase 0 shipped: the memo hasher + the pooled tree writes (rs#574)
 - The ruby-ext transform depth cap rises to the stack budget (ruby#535) ([#593](https://github.com/parsanol/parsanol-rs/pull/593))
 - The dispatch depth gate falls: 0.079 to 0.0599 us/B on json (-20.6%) ([#586](https://github.com/parsanol/parsanol-rs/pull/586))
 - The determinism prover: per-rule exact FIRST sets at the least fixpoint (rs#574 slice 1) ([#585](https://github.com/parsanol/parsanol-rs/pull/585))
