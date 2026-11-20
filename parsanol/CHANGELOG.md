@@ -109,6 +109,12 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ## [Unreleased]
 
+- Release v1.5.12
+- :len is already the byte length (the newer clippy's needless_as_bytes)
+- Cargo fmt
+- Slice A: the whole-rule LR-provability prover (rs#574 Phase 2)
+- The mask FFI: the constrained-decoding surface crosses the C ABI (rs#530)
+- Re-pin the export-parity fixture to the re-baked corpus
 - The mask FFI: the constrained-decoding surface crosses the C ABI (rs#530)
 - Re-pin the export-parity fixture to the re-baked corpus
 - Cargo fmt
