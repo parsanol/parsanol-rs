@@ -95,3 +95,31 @@ rs#533 put it. The dispatch loop's real cost = the match dispatch and
 the scan pre-dispatch's two extra variant compares — the pre-dispatch
 exists deliberately (the 1.5.6 +12% receipt), so the loop is at its
 measured local optimum until the Phase 2 LR routing replaces it.
+
+## Slice B design: the automaton backend (rs#574 Phase 2, the next opener)
+
+Slice A shipped the router's evidence: `rule_lr_provability()` proves
+55.5% of the fleet's rules DFA-lowerable, with the refusal profile
+attributed (overlapping choice 666, poisoned closures 528, loop-exit
+ambiguity 261, nullable bodies 136 — the survey test pins the counts).
+Slice B = the backend the verdicts route onto:
+
+1. **The table builder**: for a Provable rule, compile the atom tree
+   to a packed byte-transition table (state × lead byte → next
+   state/accept/epsilon), reusing the exact walk `lr_states` already
+   performs — the state numbering falls out of the same traversal.
+2. **The instruction**: `DfaRun { table_idx, span_into }` — the VM
+   walks bytes through the table (no per-byte instruction dispatch),
+   accepts at the table's accept state, records the span like Span.
+3. **The capture carve-out**: first scope = CAPTURE-FREE provable
+   rules (pure spans — the string/ws/number interiors); Named
+   markers inside provable bodies ride a second slice (accept-state
+   → value-synthesis metadata).
+4. **The routing**: `compile_atom` checks the verdict; Provable +
+   capture-free + the entity-closure rule → DfaRun; everything else
+   = the current lowering (byte-identical trees by construction —
+   the spans are identical, so identity gates hold trivially).
+5. **The A/B gate**: the json corpus (its string/ws/number interiors
+   prove) — the win = replacing the per-byte instruction streams
+   with one table walk; measured against the 0.0418 µs/B baseline,
+   targeting the dispatch-loop block (76% of the remaining profile).
