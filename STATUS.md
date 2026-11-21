@@ -55,11 +55,19 @@ addressing on byte offsets (lutaml/expressir#695, merged); the ruby
 slice-pool clobbering (parsanol-ruby#538, 1.5.10) was a real bug but
 not this symptom. ruby#535 closed with the decode.
 
-**Releases**: 1.5.8, 1.5.9, 1.5.10 AND 1.5.11 trains — every runtime
+**Releases**: 1.5.8 through **1.5.12** trains — every runtime
 (crates.io, rubygems, npm + both wasm tiers re-baked, PyPI, ts, py)
 verified at each tier; 1.5.10 carries the slice-pool fix and the
 depth-cap raise; **1.5.11 carries the Phase 0 pooled-writes win to
-every runtime** (2026-11-20, all five registries verified live). The Ruby FFI gate un-red after two days (#583).
+every runtime** (2026-11-20, all five registries verified live);
+**1.5.12 carries the mask FFI + the LR-provability prover**
+(rs#603+rs#604 — rs#530 CLOSED: the constrained-decoding pipeline
+end-to-end with the vLLM processor at 200/200 validity on both
+grammars; rs#574 Phase 2's analysis layer proves 55.5% of the
+fleet's rules automaton-lowerable, slice B = the automaton backend
+(designed in TODO.perf/13)). The ts lane also gained the explicit
+failure reporter (ts#89) and the Node WASM-poisoning recovery
+(ts#86). The Ruby FFI gate un-red after two days (#583).
 
 ## Deferred + why
 
