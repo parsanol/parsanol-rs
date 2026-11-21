@@ -308,3 +308,22 @@ rc=0 (37 targets, timing gate included), clippy, fmt, typos,
 semver-checks vs main = no update required. Remaining stage-3 scope:
 NESTED multi-value fragments (the plan becomes a tree) — every flat
 shape now routes.
+
+## Slice B stage 3 tranche 5 OPEN QUESTION (2026-11-22): the fold's merge rule
+
+The nested-element probe (`*((a b) c)` → the builder-fused
+`Sequence[Str("ab"), Str("c")]`) shows the classic VM delivering the
+two element spans SEPARATE (`[3(s:":sequence"; in:"ab"; in:"c";)]`),
+while the tranche-1 mixed grammar (`re[0-9]` + `"x"`, also a
+2-inline-element seq) showed the classic MERGING them
+(`[2(s:":sequence"; in:"1x";)]`). Both contiguous InputRef pairs,
+both BuildSeq(2) — different fold outcomes. The distinguishing
+factor is NOT yet characterized (candidates: the producing
+instruction class — Char/Span vs String; the value-decode path;
+builder fusion side effects). The nested synthesis cannot be correct
+until the rule is characterized: enumerate the producing-instruction
+pairs × the collapse behavior, pin the matrix, THEN implement
+`ElementDesc::Nested` (whose all-inline inner value = tagged
+`[:sequence, merged_span]` — trivially synthesized once the merge
+rule is known). Engines agree on every observed shape (walker == VM
+on both probes) — this is a characterization task, not a bug.
