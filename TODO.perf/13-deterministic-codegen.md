@@ -218,6 +218,24 @@ even though their tree shapes look bare. Pinned: engagement on four
 named grammars, collapsed walker-identity x12 inputs each, the raw
 synthesis shape (`{item-> [:sequence 1x]}` per iteration). Gates:
 lib 591/591, integration green modulo the debug-profile timing gate
-(release 2/2), clippy/fmt/typos, semver clean. Still on the classic
+(release 2/2), Still on the classic
 loop: capture/scope/trivia wrappers, nested multi-value fragments
 (the plan is a tree), non-terminal value atoms.
+
+## Slice B stage 3 tranche 3 SHIPPED (2026-11-21, #623): rule refs
+
+A RULE REFERENCE as the loop body routes — the fleet's dominant loop
+shape (`*(digit)`, `*(ws)`, `*(item)`). The classic path lowers a
+rule ref as a subroutine CALL to the target's compile, so the
+per-iteration value = the TARGET's shape: a Named-wrapped rule (the
+v2 named-tree law) hashes `{name: inner}` keyed by the RULE name; an
+unwrapped DSL-style body delivers the bare span / `:sequence`-tagged
+span directly. NO metadata changes — the Entity arm reuses the
+tranche-1/2 registries. Entity cycles refuse in thompson (no
+recursion reaches the routed path); double-wrapped targets (rule
+Named -> label Named) refuse for now (their per-iteration value
+nests hashes). GOTCHA recorded: the DSL builder's FIRST rule becomes
+the grammar root — a fixture declaring the referenced rule first
+serializes a degenerate single-atom grammar; the differential
+fixtures must declare the ROOT rule first. Gates: lib 593/593,
+integration rc=0, clippy/fmt/typos, semver clean.
