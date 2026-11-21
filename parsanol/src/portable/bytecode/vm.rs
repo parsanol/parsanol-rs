@@ -130,15 +130,19 @@ impl std::hash::BuildHasher for MemoBuild {
 
 type MemoMap = std::collections::HashMap<(usize, usize), MemoEntry, MemoBuild>;
 
-/// The executor-side routed-element plan (tranche 6): the compiler's
-/// descriptor tree with hash names resolved to interned indices —
-/// built once per `DfaRun` dispatch, walked per iteration.
+/// The executor-side routed-element plan (tranche 6, envelopes in
+/// tranche 7): the compiler's descriptor tree with hash names resolved
+/// to interned indices — built once per `DfaRun` dispatch, walked per
+/// iteration. An `Envelope` node reads its per-inner-iteration cuts
+/// from the dynamic lane at its envelope ordinal.
 #[derive(Debug, Clone)]
 enum AsmNode {
     Bare,
     Hash(u32),
     Nested(Vec<AsmNode>),
     HashNested(u32, Vec<AsmNode>),
+    Envelope(usize),
+    HashEnvelope(u32, usize),
 }
 
 /// The flat per-leaf descriptors' LEAF count (the fallback path: one
@@ -147,16 +151,48 @@ fn plan_leaf_count(names: &[super::dfa_table::ElementDesc]) -> usize {
     names.len()
 }
 
-/// The plan tree's LEAF count (the tranche-6 path: nested elements
-/// flatten).
-fn plan_tree_leaf_count(plan: &super::dfa_table::ElementPlan) -> usize {
+/// Count the ENVELOPE elements of a full plan tree (the dynamic
+/// inner-cut lane's size).
+fn plan_tree_envelope_count(plans: &[super::dfa_table::ElementPlanTree]) -> usize {
+    fn count(plan: &super::dfa_table::ElementPlanTree) -> usize {
+        match plan {
+            super::dfa_table::ElementPlanTree::Envelope(_)
+            | super::dfa_table::ElementPlanTree::HashEnvelope(_, _) => 1,
+            super::dfa_table::ElementPlanTree::Nested(children)
+            | super::dfa_table::ElementPlanTree::HashNested(_, children) => {
+                children.iter().map(count).sum()
+            }
+            _ => 0,
+        }
+    }
+    plans.iter().map(count).sum()
+}
+
+/// The FULL tree's LEAF count (the tranche-7 path; an envelope
+/// occupies no slot — its boundary lives in the inner lane).
+fn plan_tree_leaf_count(plan: &super::dfa_table::ElementPlanTree) -> usize {
+    match plan {
+        super::dfa_table::ElementPlanTree::Bare
+        | super::dfa_table::ElementPlanTree::RefBare
+        | super::dfa_table::ElementPlanTree::Hash(_) => 1,
+        super::dfa_table::ElementPlanTree::Nested(children)
+        | super::dfa_table::ElementPlanTree::HashNested(_, children) => {
+            children.iter().map(plan_tree_leaf_count).sum()
+        }
+        super::dfa_table::ElementPlanTree::Envelope(_)
+        | super::dfa_table::ElementPlanTree::HashEnvelope(_, _) => 0,
+    }
+}
+
+/// The tranche-6 plan tree's LEAF count (nested elements flatten).
+fn plan_tree_leaf_count_flat(plan: &super::dfa_table::ElementPlan) -> usize {
     match plan {
         super::dfa_table::ElementPlan::Bare
         | super::dfa_table::ElementPlan::RefBare
         | super::dfa_table::ElementPlan::Hash(_) => 1,
         super::dfa_table::ElementPlan::Nested(children)
         | super::dfa_table::ElementPlan::HashNested(_, children) => {
-            children.iter().map(plan_tree_leaf_count).sum()
+            children.iter().map(plan_tree_leaf_count_flat).sum()
         }
     }
 }
@@ -178,9 +214,61 @@ fn resolve_asm_plan(
         .collect()
 }
 
-/// Resolve the compiler's plan TREE into the executor-side plan,
-/// interning hash names once (the tranche-6 path).
+/// Resolve the compiler's FULL plan tree into the executor-side plan,
+/// interning hash names once (the tranche-7 path; envelopes take
+/// their ordinal in the dynamic inner-cut lane).
 fn resolve_plan_tree(
+    plans: &[super::dfa_table::ElementPlanTree],
+    arena: &mut crate::portable::arena::AstArena,
+) -> Vec<AsmNode> {
+    fn resolve(
+        plan: &super::dfa_table::ElementPlanTree,
+        arena: &mut crate::portable::arena::AstArena,
+        env_counter: &mut usize,
+    ) -> AsmNode {
+        match plan {
+            super::dfa_table::ElementPlanTree::Bare
+            | super::dfa_table::ElementPlanTree::RefBare => AsmNode::Bare,
+            super::dfa_table::ElementPlanTree::Hash(name) => {
+                AsmNode::Hash(arena.intern_string_index(name))
+            }
+            super::dfa_table::ElementPlanTree::Nested(children) => AsmNode::Nested(
+                children
+                    .iter()
+                    .map(|child| resolve(child, arena, env_counter))
+                    .collect(),
+            ),
+            super::dfa_table::ElementPlanTree::HashNested(name, children) => AsmNode::HashNested(
+                arena.intern_string_index(name),
+                children
+                    .iter()
+                    .map(|child| resolve(child, arena, env_counter))
+                    .collect(),
+            ),
+            // The envelope's inner plan carries no assembly state:
+            // the envelope's values are spans from the inner-cut lane.
+            super::dfa_table::ElementPlanTree::Envelope(_) => {
+                let ordinal = *env_counter;
+                *env_counter += 1;
+                AsmNode::Envelope(ordinal)
+            }
+            super::dfa_table::ElementPlanTree::HashEnvelope(name, _) => {
+                let ordinal = *env_counter;
+                *env_counter += 1;
+                AsmNode::HashEnvelope(arena.intern_string_index(name), ordinal)
+            }
+        }
+    }
+    let mut env_counter = 0usize;
+    plans
+        .iter()
+        .map(|p| resolve(p, arena, &mut env_counter))
+        .collect()
+}
+
+/// Resolve the tranche-6 plan tree (no envelopes) into the
+/// executor-side plan.
+fn resolve_plan_tree_flat(
     plans: &[super::dfa_table::ElementPlan],
     arena: &mut crate::portable::arena::AstArena,
 ) -> Vec<AsmNode> {
@@ -620,6 +708,7 @@ impl<'a> BytecodeVM<'a> {
     /// unaffected — the collapse folds contiguous InputRef runs
     /// identically for both shapes.
     #[inline]
+    #[allow(clippy::too_many_arguments)]
     fn push_assembled_iteration(
         &mut self,
         iter_start: usize,
@@ -627,11 +716,22 @@ impl<'a> BytecodeVM<'a> {
         tag_seq: u32,
         plan: &[AsmNode],
         named_idx: Option<u32>,
+        inner_cuts: &[Vec<usize>],
+        tag_rep: u32,
     ) {
         let mut cursor = 0usize;
+        let mut prev = iter_start;
         let mut vals: Vec<AstNode> = Vec::with_capacity(plan.len());
         for node in plan {
-            vals.push(self.assemble_node(node, iter_start, cuts, &mut cursor, tag_seq));
+            vals.push(self.assemble_node(
+                node,
+                cuts,
+                &mut cursor,
+                &mut prev,
+                tag_seq,
+                inner_cuts,
+                tag_rep,
+            ));
         }
         let (pool_idx, length) = self.arena.store_tagged_array_indexed(tag_seq, &vals);
         let array = AstNode::Array {
@@ -650,32 +750,35 @@ impl<'a> BytecodeVM<'a> {
         }
     }
 
-    /// Assemble one plan node's value from the leaf cuts (tranche 6).
+    /// Assemble one plan node's value from the leaf cuts (tranche 6;
+    /// envelope nodes read the dynamic inner-cut lane in tranche 7).
     /// A nested node ALWAYS emits its `:sequence` array — the classic
     /// emits one node per Sequence atom, even a builder-fused
-    /// one-element inner.
+    /// one-element inner. An envelope ALWAYS emits its `:repetition`
+    /// array — one value per inner-iteration crossing (empty when the
+    /// inner loop matched zero times).
+    #[allow(clippy::too_many_arguments)]
     fn assemble_node(
         &mut self,
         node: &AsmNode,
-        iter_start: usize,
         cuts: &[usize],
         cursor: &mut usize,
+        prev: &mut usize,
         tag_seq: u32,
+        inner_cuts: &[Vec<usize>],
+        tag_rep: u32,
     ) -> AstNode {
-        let leaf_span = |arena: &mut AstArena, cursor: &mut usize| -> AstNode {
-            let start = if *cursor == 0 {
-                iter_start
-            } else {
-                cuts[*cursor - 1]
-            };
+        let leaf_span = |arena: &mut AstArena, cursor: &mut usize, prev: &mut usize| -> AstNode {
+            let start = *prev;
             let end = cuts[*cursor];
             *cursor += 1;
+            *prev = end;
             arena.input_ref(start, end - start)
         };
         match node {
-            AsmNode::Bare => leaf_span(self.arena, cursor),
+            AsmNode::Bare => leaf_span(self.arena, cursor, prev),
             AsmNode::Hash(key) => {
-                let span = leaf_span(self.arena, cursor);
+                let span = leaf_span(self.arena, cursor, prev);
                 let (pool_idx, length) = self.arena.store_hash_indexed_key(*key, span);
                 AstNode::Hash {
                     pool_index: pool_idx,
@@ -685,7 +788,9 @@ impl<'a> BytecodeVM<'a> {
             AsmNode::Nested(children) => {
                 let mut vals: Vec<AstNode> = Vec::with_capacity(children.len());
                 for child in children {
-                    vals.push(self.assemble_node(child, iter_start, cuts, cursor, tag_seq));
+                    vals.push(
+                        self.assemble_node(child, cuts, cursor, prev, tag_seq, inner_cuts, tag_rep),
+                    );
                 }
                 let (pool_idx, length) = self.arena.store_tagged_array_indexed(tag_seq, &vals);
                 AstNode::Array {
@@ -696,9 +801,57 @@ impl<'a> BytecodeVM<'a> {
             AsmNode::HashNested(key, children) => {
                 let mut vals: Vec<AstNode> = Vec::with_capacity(children.len());
                 for child in children {
-                    vals.push(self.assemble_node(child, iter_start, cuts, cursor, tag_seq));
+                    vals.push(
+                        self.assemble_node(child, cuts, cursor, prev, tag_seq, inner_cuts, tag_rep),
+                    );
                 }
                 let (pool_idx, length) = self.arena.store_tagged_array_indexed(tag_seq, &vals);
+                let array = AstNode::Array {
+                    pool_index: pool_idx,
+                    length,
+                };
+                let (hpool, hlen) = self.arena.store_hash_indexed_key(*key, array);
+                AstNode::Hash {
+                    pool_index: hpool,
+                    length: hlen,
+                }
+            }
+            // The envelope's slot may carry NO recorded cut (an empty
+            // envelope never crosses its boundary state) — the walk's
+            // `prev` is the truth: the envelope starts where the
+            // previous element ended and, when empty, the next element
+            // starts there too.
+            AsmNode::Envelope(ordinal) => {
+                let env_start = *prev;
+                let env = &inner_cuts[*ordinal];
+                let mut vals: Vec<AstNode> = Vec::with_capacity(env.len());
+                let mut inner_prev = env_start;
+                for &cut in env {
+                    vals.push(self.arena.input_ref(inner_prev, cut - inner_prev));
+                    inner_prev = cut;
+                }
+                if let Some(&last) = env.last() {
+                    *prev = last;
+                }
+                let (pool_idx, length) = self.arena.store_tagged_array_indexed(tag_rep, &vals);
+                AstNode::Array {
+                    pool_index: pool_idx,
+                    length,
+                }
+            }
+            AsmNode::HashEnvelope(key, ordinal) => {
+                let env_start = *prev;
+                let env = &inner_cuts[*ordinal];
+                let mut vals: Vec<AstNode> = Vec::with_capacity(env.len());
+                let mut inner_prev = env_start;
+                for &cut in env {
+                    vals.push(self.arena.input_ref(inner_prev, cut - inner_prev));
+                    inner_prev = cut;
+                }
+                if let Some(&last) = env.last() {
+                    *prev = last;
+                }
+                let (pool_idx, length) = self.arena.store_tagged_array_indexed(tag_rep, &vals);
                 let array = AstNode::Array {
                     pool_index: pool_idx,
                     length,
@@ -832,19 +985,23 @@ impl<'a> BytecodeVM<'a> {
             .get_dfa_loop_named_key(table_idx)
             .map(|name| self.arena.intern_string_index(name));
         let elements_plan = self.program.get_dfa_loop_elements(table_idx);
-        // Tranche 6: the plan TREE supersedes the flat names when
-        // present (nested elements' descriptors live there).
+        // Tranche 7: the FULL plan tree (envelopes) supersedes the
+        // tranche-6 tree, which supersedes the flat names.
+        let plan_trees: Option<&[super::dfa_table::ElementPlanTree]> =
+            self.program.get_dfa_loop_plan_trees(table_idx);
         let plan_tree: Option<&[super::dfa_table::ElementPlan]> =
             self.program.get_dfa_loop_element_plans(table_idx);
-        let asm_plan: Vec<AsmNode> = match plan_tree {
-            Some(tree) => resolve_plan_tree(tree, self.arena),
-            None => elements_plan
+        let asm_plan: Vec<AsmNode> = match (plan_trees, plan_tree) {
+            (Some(tree), _) => resolve_plan_tree(tree, self.arena),
+            (None, Some(tree)) => resolve_plan_tree_flat(tree, self.arena),
+            (None, None) => elements_plan
                 .map(|plan| resolve_asm_plan(&plan.names, self.arena))
                 .unwrap_or_default(),
         };
-        let leaf_count = match plan_tree {
-            Some(tree) => tree.iter().map(plan_tree_leaf_count).sum(),
-            None => elements_plan
+        let leaf_count = match (plan_trees, plan_tree) {
+            (Some(tree), _) => tree.iter().map(plan_tree_leaf_count).sum(),
+            (None, Some(tree)) => tree.iter().map(plan_tree_leaf_count_flat).sum(),
+            (None, None) => elements_plan
                 .map(|plan| plan_leaf_count(&plan.names))
                 .unwrap_or(0),
         };
@@ -852,8 +1009,21 @@ impl<'a> BytecodeVM<'a> {
         let element_accepts: &[Option<u8>] = elements_plan
             .map(|plan| plan.accepts_per_state.as_slice())
             .unwrap_or(&[]);
+        // Tranche 7: the inner-boundary lane (envelope elements'
+        // per-inner-iteration cuts, reset per outer iteration).
+        let inner_accepts: &[Option<u8>] = self
+            .program
+            .get_dfa_loop_inner_accepts(table_idx)
+            .unwrap_or(&[]);
+        let env_count = plan_trees
+            .map(|tree| plan_tree_envelope_count(tree))
+            .unwrap_or(0);
+        let mut inner_cuts: Vec<Vec<usize>> = vec![Vec::new(); env_count];
         let mut cuts: Vec<usize> = vec![0; leaf_count];
-        let tag_seq_idx: Option<u32> = if leaf_count > 0 {
+        // A body of ONLY envelope elements still builds a `:sequence`
+        // array per iteration — gate the tag on the plan's presence,
+        // not the leaf count.
+        let tag_seq_idx: Option<u32> = if env_count > 0 || leaf_count > 0 {
             Some(match self.tag_seq {
                 Some(idx) => idx,
                 None => {
@@ -864,6 +1034,18 @@ impl<'a> BytecodeVM<'a> {
             })
         } else {
             None
+        };
+        let tag_rep_idx: u32 = if env_count > 0 {
+            match self.tag_rep {
+                Some(idx) => idx,
+                None => {
+                    let idx = self.arena.intern_string_index(":repetition");
+                    self.tag_rep = Some(idx);
+                    idx
+                }
+            }
+        } else {
+            0
         };
         // The routed loop's min rides the registry next to the
         // iteration-accept states; rule tables carry none.
@@ -877,6 +1059,17 @@ impl<'a> BytecodeVM<'a> {
         } else {
             None
         };
+        // A zero-width FIRST element's boundary lives in the START
+        // state's markers — no byte crossing records it, so record the
+        // start subset's cuts here (tranche 7's zero-width fix).
+        if envelope_mode {
+            if let Some(&Some(i)) = element_accepts.get(state as usize) {
+                cuts[i as usize] = start;
+            }
+            if let Some(&Some(e)) = inner_accepts.get(state as usize) {
+                inner_cuts[e as usize].push(start);
+            }
+        }
         // The envelope mode's bookkeeping.
         let entry_len = self.value_stack.len();
         let mut iterations = 0usize;
@@ -895,6 +1088,13 @@ impl<'a> BytecodeVM<'a> {
                     if let Some(&Some(i)) = element_accepts.get(state as usize) {
                         cuts[i as usize] = self.position;
                     }
+                    // Tranche 7: an inner-boundary crossing appends to
+                    // its envelope element's cut list.
+                    if let Some(&Some(e)) = inner_accepts.get(state as usize) {
+                        if let Some(list) = inner_cuts.get_mut(e as usize) {
+                            list.push(self.position);
+                        }
+                    }
                     if envelope_mode && iteration_accepts.is_some_and(|a| a[state as usize]) {
                         iterations += 1;
                         boundary = self.position;
@@ -907,7 +1107,15 @@ impl<'a> BytecodeVM<'a> {
                                 tag_seq_idx.unwrap_or_default(),
                                 &asm_plan,
                                 named_idx,
+                                &inner_cuts,
+                                tag_rep_idx,
                             );
+                            // The inner-cut lane resets per outer
+                            // iteration (the next iteration's envelope
+                            // starts empty).
+                            for list in inner_cuts.iter_mut() {
+                                list.clear();
+                            }
                         } else {
                             self.push_iteration_value(iter_start, boundary, seq_wrapped, named_idx);
                         }

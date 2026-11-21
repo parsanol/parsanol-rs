@@ -97,6 +97,35 @@ pub enum ElementPlan {
     HashNested(String, Vec<ElementPlan>),
 }
 
+/// The routed loop's FULL plan tree (tranche 7): `ElementPlan`'s
+/// variants plus the loop-composition envelopes, on its own type and
+/// its own program registry (the additive-registry law — extending
+/// `ElementPlan` would be a main-to-main major on an unreleased type,
+/// and even `#[non_exhaustive]` is gated). The executor prefers this
+/// registry; the tranche-6 `ElementPlan` tree stays for bodies
+/// without envelopes.
+#[derive(Debug, Clone)]
+pub enum ElementPlanTree {
+    /// A bare span from an inline Str/Re instruction.
+    Bare,
+    /// A bare span delivered through a rule-ref call.
+    RefBare,
+    /// A hash wrap `{name: span}` around one bare leaf.
+    Hash(String),
+    /// A bare nested sequence: ONE `:sequence` node per Sequence atom.
+    Nested(Vec<ElementPlanTree>),
+    /// A hash wrap `{name -> :sequence node}` around a nested
+    /// sequence's values.
+    HashNested(String, Vec<ElementPlanTree>),
+    /// An inner loop's ENVELOPE: ONE `:repetition` node whose values
+    /// are the per-inner-iteration values, each shaped by the inner
+    /// plan. The DFA's inner-accept crossings recover them.
+    Envelope(Box<ElementPlanTree>),
+    /// A hash wrap `{name -> :repetition node}` around an inner
+    /// loop's envelope (a Named-wrapped inner loop).
+    HashEnvelope(String, Box<ElementPlanTree>),
+}
+
 /// The routed sequence loop's per-element synthesis plan (tranche 4,
 /// per-leaf cut indices in tranche 6): which DFA states close a LEAF
 /// span of the iteration (nested elements flatten to their leaves —

@@ -1203,7 +1203,7 @@ impl Compiler {
                 grammar: &Grammar,
                 idx: usize,
                 depth: u8,
-            ) -> Option<super::dfa_table::ElementPlan> {
+            ) -> Option<super::dfa_table::ElementPlanTree> {
                 if depth > 64 {
                     return None;
                 }
@@ -1214,24 +1214,48 @@ impl Compiler {
                     }
                     _ => false,
                 };
-                let child_plans = |atoms: &[usize]| -> Option<Vec<super::dfa_table::ElementPlan>> {
-                    if atoms.is_empty() {
-                        return None;
-                    }
-                    atoms
-                        .iter()
-                        .map(|&c| element_plan(grammar, c, depth + 1))
-                        .collect()
-                };
+                let child_plans =
+                    |atoms: &[usize]| -> Option<Vec<super::dfa_table::ElementPlanTree>> {
+                        if atoms.is_empty() {
+                            return None;
+                        }
+                        atoms
+                            .iter()
+                            .map(|&c| element_plan(grammar, c, depth + 1))
+                            .collect()
+                    };
                 match grammar.get_atom(idx)? {
-                    Atom::Str { .. } if is_leaf(idx) => Some(super::dfa_table::ElementPlan::Bare),
-                    Atom::Re { .. } if is_leaf(idx) => Some(super::dfa_table::ElementPlan::Bare),
+                    Atom::Str { .. } if is_leaf(idx) => {
+                        Some(super::dfa_table::ElementPlanTree::Bare)
+                    }
+                    Atom::Re { .. } if is_leaf(idx) => {
+                        Some(super::dfa_table::ElementPlanTree::Bare)
+                    }
+                    // A Named-wrapped INNER LOOP (tranche 7): the plan
+                    // is the hash around the envelope. Must precede the
+                    // general Named arm.
+                    Atom::Named { name, atom }
+                        if matches!(
+                            grammar.get_atom(*atom),
+                            Some(Atom::Repetition {
+                                tag: RepetitionTag::Repetition | RepetitionTag::Maybe,
+                                ..
+                            })
+                        ) =>
+                    {
+                        element_plan(grammar, *atom, depth + 1).map(|inner| match inner {
+                            super::dfa_table::ElementPlanTree::Envelope(boxed) => {
+                                super::dfa_table::ElementPlanTree::HashEnvelope(name.clone(), boxed)
+                            }
+                            other => other,
+                        })
+                    }
                     Atom::Named { name, atom } => match grammar.get_atom(*atom) {
                         Some(Atom::Sequence { atoms }) => child_plans(atoms).map(|children| {
-                            super::dfa_table::ElementPlan::HashNested(name.clone(), children)
+                            super::dfa_table::ElementPlanTree::HashNested(name.clone(), children)
                         }),
                         _ if is_leaf(*atom) => {
-                            Some(super::dfa_table::ElementPlan::Hash(name.clone()))
+                            Some(super::dfa_table::ElementPlanTree::Hash(name.clone()))
                         }
                         // A deeper wrap (Named(Named(...)), Named of a
                         // non-terminal) delivers a shape the flat plan
@@ -1240,19 +1264,63 @@ impl Compiler {
                         _ => None,
                     },
                     Atom::Sequence { atoms } => {
-                        child_plans(atoms).map(super::dfa_table::ElementPlan::Nested)
+                        child_plans(atoms).map(super::dfa_table::ElementPlanTree::Nested)
+                    }
+                    // An inner LOOP element (tranche 7): the element's
+                    // value is the inner loop's ENVELOPE — one
+                    // `:repetition` node of per-iteration values. The
+                    // inner body's per-iteration plan must be a LEAF or
+                    // a flat nested sequence; a nested envelope refuses
+                    // (one envelope level per slice). The builder caps
+                    // bounded unrolls.
+                    Atom::Repetition {
+                        atom: body,
+                        tag: RepetitionTag::Repetition | RepetitionTag::Maybe,
+                        ..
+                    } => {
+                        let inner_ok =
+                            |idx: usize, depth: u8| -> Option<super::dfa_table::ElementPlanTree> {
+                                if depth > 64 {
+                                    return None;
+                                }
+                                match grammar.get_atom(idx)? {
+                                    Atom::Str { .. } if is_leaf(idx) => {
+                                        Some(super::dfa_table::ElementPlanTree::Bare)
+                                    }
+                                    Atom::Re { .. } if is_leaf(idx) => {
+                                        Some(super::dfa_table::ElementPlanTree::Bare)
+                                    }
+                                    Atom::Named { name, atom } if is_leaf(*atom) => {
+                                        Some(super::dfa_table::ElementPlanTree::Hash(name.clone()))
+                                    }
+                                    Atom::Entity { atom } if is_leaf(*atom) => {
+                                        Some(super::dfa_table::ElementPlanTree::RefBare)
+                                    }
+                                    Atom::Sequence { atoms } if !atoms.is_empty() => {
+                                        child_plans(atoms)
+                                            .map(super::dfa_table::ElementPlanTree::Nested)
+                                    }
+                                    _ => None,
+                                }
+                            };
+                        inner_ok(*body, depth + 1).map(|inner| {
+                            super::dfa_table::ElementPlanTree::Envelope(Box::new(inner))
+                        })
                     }
                     Atom::Entity { atom: target } => match grammar.get_atom(*target) {
                         Some(Atom::Named { name, atom }) => match grammar.get_atom(*atom) {
                             Some(Atom::Sequence { atoms }) => child_plans(atoms).map(|children| {
-                                super::dfa_table::ElementPlan::HashNested(name.clone(), children)
+                                super::dfa_table::ElementPlanTree::HashNested(
+                                    name.clone(),
+                                    children,
+                                )
                             }),
                             _ if is_leaf(*atom) => {
-                                Some(super::dfa_table::ElementPlan::Hash(name.clone()))
+                                Some(super::dfa_table::ElementPlanTree::Hash(name.clone()))
                             }
                             _ => None,
                         },
-                        _ if is_leaf(*target) => Some(super::dfa_table::ElementPlan::RefBare),
+                        _ if is_leaf(*target) => Some(super::dfa_table::ElementPlanTree::RefBare),
                         _ => None,
                     },
                     _ => None,
@@ -1262,28 +1330,34 @@ impl Compiler {
             // keeps its published shape): the plan tree flattened, one
             // `ElementDesc` per leaf in the builder's chain order.
             fn leaf_descs(
-                plan: &super::dfa_table::ElementPlan,
+                plan: &super::dfa_table::ElementPlanTree,
                 out: &mut Vec<super::dfa_table::ElementDesc>,
             ) {
                 match plan {
-                    super::dfa_table::ElementPlan::Bare => {
+                    super::dfa_table::ElementPlanTree::Bare => {
                         out.push(super::dfa_table::ElementDesc::InlineBare)
                     }
-                    super::dfa_table::ElementPlan::RefBare => {
+                    super::dfa_table::ElementPlanTree::RefBare => {
                         out.push(super::dfa_table::ElementDesc::RefBare)
                     }
-                    super::dfa_table::ElementPlan::Hash(name) => {
+                    super::dfa_table::ElementPlanTree::Hash(name) => {
                         out.push(super::dfa_table::ElementDesc::Hash(name.clone()))
                     }
-                    super::dfa_table::ElementPlan::Nested(children)
-                    | super::dfa_table::ElementPlan::HashNested(_, children) => {
+                    super::dfa_table::ElementPlanTree::Nested(children)
+                    | super::dfa_table::ElementPlanTree::HashNested(_, children) => {
                         for child in children {
                             leaf_descs(child, out);
                         }
                     }
+                    // The envelope element occupies NO leaf slot: its
+                    // boundary info lives in the inner lane (the last
+                    // copy accept), and the assembly's prev walk
+                    // supplies the span starts.
+                    super::dfa_table::ElementPlanTree::Envelope(_)
+                    | super::dfa_table::ElementPlanTree::HashEnvelope(_, _) => {}
                 }
             }
-            let element_descriptor = |idx: usize| -> Option<super::dfa_table::ElementPlan> {
+            let element_descriptor = |idx: usize| -> Option<super::dfa_table::ElementPlanTree> {
                 element_plan(&self.grammar, idx, 0)
             };
             let body_shape = match self.grammar.get_atom(atom_idx) {
@@ -1344,9 +1418,15 @@ impl Compiler {
                 _ => None,
             };
             if let Some((seq_wrapped, named)) = body_shape {
-                if let Some((table, iteration_accepts, element_accepts)) =
-                    super::dfa_build::build_loop_dfa(&self.grammar, atom_idx)
+                if let Some(loop_dfa) =
+                    super::dfa_build::build_loop_dfa_envelopes(&self.grammar, atom_idx)
                 {
+                    let super::dfa_build::LoopDfa {
+                        table,
+                        iteration_accepts,
+                        element_accepts,
+                        inner_accepts,
+                    } = loop_dfa;
                     let idx = self
                         .program
                         .add_dfa_loop_table(table, iteration_accepts, min as u32);
@@ -1383,7 +1463,7 @@ impl Compiler {
                         _ => None,
                     };
                     if let Some(atoms) = seq_atoms {
-                        let plans: Vec<super::dfa_table::ElementPlan> = atoms
+                        let plans: Vec<super::dfa_table::ElementPlanTree> = atoms
                             .iter()
                             .filter_map(|&c| element_descriptor(c))
                             .collect();
@@ -1398,8 +1478,57 @@ impl Compiler {
                         }
                         self.program
                             .mark_dfa_loop_elements(idx, element_accepts, names);
-                        self.program.mark_dfa_loop_element_plans(idx, plans);
+                        // The tranche-6 registry only carries bodies
+                        // WITHOUT envelopes (its type is frozen); the
+                        // full tree rides the tranche-7 registry.
+                        fn castable(plan: &super::dfa_table::ElementPlanTree) -> bool {
+                            match plan {
+                                super::dfa_table::ElementPlanTree::Envelope(_)
+                                | super::dfa_table::ElementPlanTree::HashEnvelope(_, _) => false,
+                                super::dfa_table::ElementPlanTree::Nested(children)
+                                | super::dfa_table::ElementPlanTree::HashNested(_, children) => {
+                                    children.iter().all(castable)
+                                }
+                                _ => true,
+                            }
+                        }
+                        fn cast(
+                            plan: &super::dfa_table::ElementPlanTree,
+                        ) -> super::dfa_table::ElementPlan {
+                            match plan {
+                                super::dfa_table::ElementPlanTree::Bare => {
+                                    super::dfa_table::ElementPlan::Bare
+                                }
+                                super::dfa_table::ElementPlanTree::RefBare => {
+                                    super::dfa_table::ElementPlan::RefBare
+                                }
+                                super::dfa_table::ElementPlanTree::Hash(name) => {
+                                    super::dfa_table::ElementPlan::Hash(name.clone())
+                                }
+                                super::dfa_table::ElementPlanTree::Nested(children) => {
+                                    super::dfa_table::ElementPlan::Nested(
+                                        children.iter().map(cast).collect(),
+                                    )
+                                }
+                                super::dfa_table::ElementPlanTree::HashNested(name, children) => {
+                                    super::dfa_table::ElementPlan::HashNested(
+                                        name.clone(),
+                                        children.iter().map(cast).collect(),
+                                    )
+                                }
+                                _ => unreachable!("castable() excludes the envelope variants"),
+                            }
+                        }
+                        if plans.iter().all(castable) {
+                            let flat: Vec<super::dfa_table::ElementPlan> =
+                                plans.iter().map(cast).collect();
+                            self.program.mark_dfa_loop_element_plans(idx, flat);
+                        }
+                        self.program.mark_dfa_loop_plan_trees(idx, plans);
                     }
+                    // Tranche 7: the inner-boundary lane (envelope
+                    // elements' per-inner-iteration cuts).
+                    self.program.mark_dfa_loop_inner_accepts(idx, inner_accepts);
                     self.program.add_instruction(Instruction::dfa_run(idx));
                     return Ok(entry);
                 }
