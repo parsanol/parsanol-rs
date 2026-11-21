@@ -29,6 +29,8 @@ pub mod artifact_cache;
 pub mod backend;
 pub mod capture;
 pub mod compiler;
+pub mod dfa_build;
+pub mod dfa_table;
 pub mod error;
 pub mod instruction;
 pub mod optimizer;
