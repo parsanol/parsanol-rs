@@ -529,6 +529,33 @@ impl<'a> BytecodeVM<'a> {
         self.value_stack.push(self.arena.input_ref(start, len));
     }
 
+    /// Push one routed-loop iteration's value: the bare span, or —
+    /// for a Sequence body — the `:sequence`-tagged array wrapping the
+    /// merged iteration span, exactly what the classic path's one
+    /// BuildSeq per iteration produces after its fold.
+    #[inline]
+    fn push_iteration_value(&mut self, iter_start: usize, boundary: usize, seq_wrapped: bool) {
+        if !seq_wrapped {
+            self.push_span_value(iter_start);
+            return;
+        }
+        let tag = match self.tag_seq {
+            Some(idx) => idx,
+            None => {
+                let idx = self.arena.intern_string_index(":sequence");
+                self.tag_seq = Some(idx);
+                idx
+            }
+        };
+        let len = boundary - iter_start;
+        let span = self.arena.input_ref(iter_start, len);
+        let (pool_idx, length) = self.arena.store_tagged_array_indexed(tag, &[span]);
+        self.value_stack.push(AstNode::Array {
+            pool_index: pool_idx,
+            length,
+        });
+    }
+
     /// Restore all stacks to a frame's recorded heights
     #[inline]
     fn truncate_to(&mut self, frame: &BacktrackFrame) {
@@ -599,6 +626,7 @@ impl<'a> BytecodeVM<'a> {
                 message: format!("Invalid DFA table index: {table_idx}"),
             })?;
         let iteration_accepts = self.program.get_dfa_iteration_accepts(table_idx);
+        let seq_wrapped = self.program.get_dfa_loop_sequence_wrapped(table_idx);
         // The routed loop's min rides the registry next to the
         // iteration-accept states; rule tables carry none.
         let min = self.program.get_dfa_loop_min(table_idx).unwrap_or(0);
@@ -629,7 +657,7 @@ impl<'a> BytecodeVM<'a> {
                         boundary = self.position;
                         let iter_start = iteration_start;
                         iteration_start = self.position;
-                        self.push_span_value(iter_start);
+                        self.push_iteration_value(iter_start, boundary, seq_wrapped);
                     }
                 }
                 None => break,

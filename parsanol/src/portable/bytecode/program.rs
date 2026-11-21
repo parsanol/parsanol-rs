@@ -169,6 +169,11 @@ pub struct Program {
     /// loop metadata never changes the published table shape.
     dfa_loops: Vec<Option<super::dfa_table::DfaLoopMeta>>,
 
+    /// Whether the routed loop's per-iteration value is a `:sequence`-
+    /// tagged array (a Sequence body's BuildSeq shape) — parallel to
+    /// `dfa_tables`, keeping `DfaLoopMeta` at its published fields.
+    dfa_loop_seq_wrapped: Vec<bool>,
+
     /// Regex pattern table (for Regex instructions)
     regexes: Vec<String>,
 
@@ -215,6 +220,7 @@ impl Program {
             dispatch_tables: Vec::new(),
             dfa_tables: Vec::new(),
             dfa_loops: Vec::new(),
+            dfa_loop_seq_wrapped: Vec::new(),
             regexes: Vec::new(),
             keys: Vec::new(),
             labels: Vec::new(),
@@ -238,6 +244,7 @@ impl Program {
             dispatch_tables: Vec::new(),
             dfa_tables: Vec::new(),
             dfa_loops: Vec::new(),
+            dfa_loop_seq_wrapped: Vec::new(),
             regexes: Vec::new(),
             keys: Vec::with_capacity(strings),
             labels: Vec::new(),
@@ -430,6 +437,7 @@ impl Program {
             iteration_accepts,
             min,
         }));
+        self.dfa_loop_seq_wrapped.push(false);
         idx
     }
 
@@ -447,6 +455,23 @@ impl Program {
         self.dfa_loops
             .get(idx as usize)
             .and_then(|m| m.as_ref().map(|m| m.min))
+    }
+
+    /// Whether the routed loop's per-iteration value carries the
+    /// `:sequence` tag (a Sequence body's BuildSeq shape). Parallel to
+    /// `dfa_loops` — `DfaLoopMeta` keeps its published fields.
+    pub fn get_dfa_loop_sequence_wrapped(&self, idx: u32) -> bool {
+        self.dfa_loop_seq_wrapped.get(idx as usize).copied() == Some(true)
+    }
+
+    /// Mark the routed loop's per-iteration value as a `:sequence`-
+    /// tagged array wrapping the iteration span — the shape the
+    /// classic Choice loop builds for a Sequence body (one BuildSeq
+    /// per iteration, whose fold merges the adjacent fragment spans).
+    pub fn mark_dfa_loop_sequence(&mut self, idx: u32) {
+        if let Some(slot) = self.dfa_loop_seq_wrapped.get_mut(idx as usize) {
+            *slot = true;
+        }
     }
 
     /// Get a DFA table

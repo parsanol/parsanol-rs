@@ -1165,31 +1165,49 @@ impl Compiler {
         let entry = self.program.instruction_count();
         let maybe = tag == RepetitionTag::Maybe;
 
-        // The DFA routing (rs#574 slice B stage 2): an unlimited plain
-        // repetition whose body = a single single-value terminal (a
-        // Str — one String/Char instruction — or an ASCII-class Re)
-        // lowers to ONE self-contained DfaRun: the loop table's
-        // iteration-accept states synthesize the identical
-        // per-iteration spans and the envelope BuildRep constructs.
-        // Byte-identical trees by construction; the value-1 body
-        // restriction is what keeps the synthesis exact (multi-value
-        // bodies ride the loop until the accept-state synthesis
-        // metadata covers them).
+        // The DFA routing (rs#574 slice B stages 2+3): an unlimited
+        // plain repetition whose body leaves one SPAN-shaped value per
+        // iteration lowers to ONE self-contained DfaRun. Stage 2: the
+        // body = a single single-value terminal (a Str — one
+        // String/Char instruction — or an ASCII-class Re). Stage 3: a
+        // FLAT Sequence of such terminals — the classic path lowers it
+        // to one BuildSeq per iteration whose fold merges the adjacent
+        // fragment spans into one; the routed executor reproduces the
+        // same tagged array from the iteration's start/end. Multi-value
+        // NON-span bodies (named/capture wraps, nested structures) keep
+        // riding the classic loop until their synthesis metadata
+        // exists.
         if max.is_none() && !maybe && matches!(tag, RepetitionTag::Repetition) {
-            let single_terminal = matches!(
-                self.grammar.get_atom(atom_idx),
-                Some(Atom::Str { pattern }) if !pattern.is_empty()
-            ) || matches!(
-                self.grammar.get_atom(atom_idx),
-                Some(Atom::Re { pattern }) if crate::portable::char_class::CharRanges::from_pattern(pattern).is_some()
-            );
-            if single_terminal {
+            let flat_span_body = match self.grammar.get_atom(atom_idx) {
+                Some(Atom::Str { pattern }) => !pattern.is_empty(),
+                Some(Atom::Re { pattern }) => {
+                    crate::portable::char_class::CharRanges::from_pattern(pattern).is_some()
+                }
+                Some(Atom::Sequence { atoms }) => {
+                    !atoms.is_empty()
+                        && atoms
+                            .iter()
+                            .all(|&child| match self.grammar.get_atom(child) {
+                                Some(Atom::Str { pattern }) => !pattern.is_empty(),
+                                Some(Atom::Re { pattern }) => {
+                                    crate::portable::char_class::CharRanges::from_pattern(pattern)
+                                        .is_some()
+                                }
+                                _ => false,
+                            })
+                }
+                _ => false,
+            };
+            if flat_span_body {
                 if let Some((table, iteration_accepts)) =
                     super::dfa_build::build_loop_dfa(&self.grammar, atom_idx)
                 {
                     let idx = self
                         .program
                         .add_dfa_loop_table(table, iteration_accepts, min as u32);
+                    if matches!(self.grammar.get_atom(atom_idx), Some(Atom::Sequence { .. })) {
+                        self.program.mark_dfa_loop_sequence(idx);
+                    }
                     self.program.add_instruction(Instruction::dfa_run(idx));
                     return Ok(entry);
                 }
