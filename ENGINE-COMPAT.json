@@ -1,9 +1,9 @@
 {
-  "engine_commit": "93ad1c78910388750ead42aa36c5c81dfa37191e",
-  "crates": "1.5.12",
-  "npm": "1.5.12",
-  "rubygems": "1.5.12",
-  "pypi": "1.5.12.0",
-  "released_at": "2026-11-20T08:51:01Z",
-  "_comment": "ruby#421 -- the engine-compat manifest. Every release train updates the pairings as it rides; tools/check_engine_compat.py verifies the manifest against the live registries in CI (tag <-> engine_commit, crates, npm, rubygems, pypi). Runtime versions follow the engine-linked scheme {engine-semver}.{runtime-single-digit} (npm: the engine semver, the 4th segment is invalid there) -- the leptris precedent. The rubygems/npm entries follow the current train's actual spellings (1.5.12, 3-segment)."
+  "engine_commit": "b44c30dc44ca8cc46240bbd909943b2f181b09ac",
+  "crates": "1.5.13",
+  "npm": "1.5.13",
+  "rubygems": "1.5.13",
+  "pypi": "1.5.13.0",
+  "released_at": "2026-11-21T04:48:19Z",
+  "_comment": "ruby#421 -- the engine-compat manifest. Every release train updates the pairings as it rides; tools/check_engine_compat.py verifies the manifest against the live registries in CI (tag <-> engine_commit, crates, npm, rubygems, pypi). Runtime versions follow the engine-linked scheme {engine-semver}.{runtime-single-digit} (npm: the engine semver, the 4th segment is invalid there) -- the leptris precedent. The rubygems/npm entries follow the current train's actual spellings (1.5.13, 3-segment)."
 }
