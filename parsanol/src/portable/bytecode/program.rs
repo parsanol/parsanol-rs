@@ -183,6 +183,11 @@ pub struct Program {
     /// 4) — parallel to `dfa_tables`.
     dfa_loop_elements: Vec<Option<super::dfa_table::DfaLoopElements>>,
 
+    /// The routed sequence loop's element plan TREE (tranche 6) —
+    /// parallel to `dfa_tables`; nested elements' descriptors live
+    /// here so the tranche-4 shapes stay frozen.
+    dfa_loop_element_plans: Vec<Option<Vec<super::dfa_table::ElementPlan>>>,
+
     /// Regex pattern table (for Regex instructions)
     regexes: Vec<String>,
 
@@ -232,6 +237,7 @@ impl Program {
             dfa_loop_seq_wrapped: Vec::new(),
             dfa_loop_named: Vec::new(),
             dfa_loop_elements: Vec::new(),
+            dfa_loop_element_plans: Vec::new(),
             regexes: Vec::new(),
             keys: Vec::new(),
             labels: Vec::new(),
@@ -258,6 +264,7 @@ impl Program {
             dfa_loop_seq_wrapped: Vec::new(),
             dfa_loop_named: Vec::new(),
             dfa_loop_elements: Vec::new(),
+            dfa_loop_element_plans: Vec::new(),
             regexes: Vec::new(),
             keys: Vec::with_capacity(strings),
             labels: Vec::new(),
@@ -453,6 +460,7 @@ impl Program {
         self.dfa_loop_seq_wrapped.push(false);
         self.dfa_loop_named.push(None);
         self.dfa_loop_elements.push(None);
+        self.dfa_loop_element_plans.push(None);
         idx
     }
 
@@ -528,6 +536,29 @@ impl Program {
         self.dfa_loop_elements
             .get(idx as usize)
             .and_then(|e| e.as_ref())
+    }
+
+    /// Mark the routed loop's element plan TREE (tranche 6): the
+    /// nested element descriptors over the flattened leaves, on a
+    /// parallel registry so `ElementDesc` and `DfaLoopElements` keep
+    /// their published shapes. Supersedes the flat `names` in the
+    /// executor when present.
+    pub fn mark_dfa_loop_element_plans(
+        &mut self,
+        idx: u32,
+        plans: Vec<super::dfa_table::ElementPlan>,
+    ) {
+        if let Some(slot) = self.dfa_loop_element_plans.get_mut(idx as usize) {
+            *slot = Some(plans);
+        }
+    }
+
+    /// The routed loop's element plan tree, when the body carries
+    /// nested elements.
+    pub fn get_dfa_loop_element_plans(&self, idx: u32) -> Option<&[super::dfa_table::ElementPlan]> {
+        self.dfa_loop_element_plans
+            .get(idx as usize)
+            .and_then(|p| p.as_deref())
     }
 
     /// Get a DFA table

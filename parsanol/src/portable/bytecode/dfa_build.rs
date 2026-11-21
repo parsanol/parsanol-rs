@@ -299,11 +299,13 @@ pub fn build_loop_dfa(
     let entry = nfa.node();
     let exit = nfa.node();
 
-    // A flat Sequence body: build the chain ELEMENT BY ELEMENT so each
-    // element's accept node is known — the cut positions the executor
-    // assembles the per-element values from (tranche 4). The elements
-    // cross in chain order, so a DFA subset contains at most one
-    // element accept (the disjointness proof keeps the chain linear).
+    // A flat Sequence body: build the chain LEAF BY LEAF so each
+    // leaf's accept node is known — the cut positions the executor
+    // assembles the element tree's values from (tranche 4; nested
+    // elements flatten to their leaves in tranche 6, whose plan tree
+    // rides the compiler's descriptor). The leaves cross in chain
+    // order, so a DFA subset contains at most one leaf accept (the
+    // disjointness proof keeps the chain linear).
     let mut element_accepts_of_node: std::collections::HashMap<u32, u8> =
         std::collections::HashMap::new();
     // Transparent wrappers (Named/Entity) unwrap before the chain
@@ -315,20 +317,74 @@ pub fn build_loop_dfa(
     {
         body_idx = *atom;
     }
+    // The flattened leaf atom indices of one element (tranche 6):
+    // unwrapping Named/Entity around bare terminals; nested Sequence
+    // elements contribute their leaves depth-first. The wrappers'
+    // values (hash wraps, nested nodes) are the PLAN's job — the NFA
+    // only needs the byte chain, and chaining the leaves equals the
+    // whole-subtree Thompson fragment (Named/Entity descend
+    // transparently). The unwrap set mirrors the compiler's element
+    // plan EXACTLY (Named/Entity transparent, everything else a leaf
+    // or a refusal) so the per-leaf accept indices and the plan tree
+    // never desync.
+    fn leaf_chain(grammar: &Grammar, idx: usize, leaves: &mut Vec<usize>, depth: u8) -> Option<()> {
+        if depth > 64 {
+            return None;
+        }
+        match grammar.get_atom(idx)? {
+            Atom::Named { atom, .. } | Atom::Entity { atom } => {
+                leaf_chain(grammar, *atom, leaves, depth + 1)
+            }
+            Atom::Sequence { atoms } if !atoms.is_empty() => {
+                for &child in atoms {
+                    leaf_chain(grammar, child, leaves, depth + 1)?;
+                }
+                Some(())
+            }
+            Atom::Str { pattern } if !pattern.is_empty() => {
+                leaves.push(idx);
+                Some(())
+            }
+            Atom::Re { pattern } => {
+                CharRanges::from_pattern(pattern)?;
+                leaves.push(idx);
+                Some(())
+            }
+            _ => None,
+        }
+    }
     let (bs, body_accept) = match grammar.get_atom(body_idx) {
         Some(Atom::Sequence { atoms }) if !atoms.is_empty() => {
             let mut cursor = entry;
             let mut first_start = entry;
             let mut last_accept = entry;
-            for (i, &child) in atoms.iter().enumerate() {
-                let (cs, ca) = thompson(grammar, child, &mut nfa, &mut Vec::new())?;
+            let mut leaf_i = 0u8;
+            let mut first_element = true;
+            for &child in atoms.iter() {
+                let mut leaves = Vec::with_capacity(2);
+                leaf_chain(grammar, child, &mut leaves, 0)?;
+                if leaves.is_empty() || leaves.len() > u8::MAX as usize {
+                    return None;
+                }
+                let (mut cs, mut ca) = (entry, entry);
+                for (j, &leaf) in leaves.iter().enumerate() {
+                    let (ls, la) = thompson(grammar, leaf, &mut nfa, &mut Vec::new())?;
+                    if j == 0 {
+                        cs = ls;
+                    } else {
+                        nfa.edge(ca, Edge::Epsilon, ls);
+                    }
+                    ca = la;
+                    element_accepts_of_node.insert(la, leaf_i);
+                    leaf_i += 1;
+                }
                 nfa.edge(cursor, Edge::Epsilon, cs);
                 cursor = ca;
-                if i == 0 {
+                if first_element {
                     first_start = cs;
+                    first_element = false;
                 }
                 last_accept = ca;
-                element_accepts_of_node.insert(ca, i as u8);
             }
             (first_start, last_accept)
         }

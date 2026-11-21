@@ -75,16 +75,42 @@ pub enum ElementDesc {
     Hash(String),
 }
 
-/// The routed sequence loop's per-element synthesis plan (tranche 4):
-/// which DFA states close an ELEMENT of the iteration (the cut
-/// positions) and each element's value descriptor. Parallel to
+/// The routed sequence loop's element plan TREE (tranche 6): the
+/// nested extension of [`ElementDesc`], on its own type and its own
+/// program registry so the tranche-4 shapes stay frozen (the
+/// additive-registry law). The executor prefers the plan tree; the
+/// `DfaLoopElements` names stay the flat per-leaf fallback.
+#[derive(Debug, Clone)]
+pub enum ElementPlan {
+    /// A bare span from an inline Str/Re instruction.
+    Bare,
+    /// A bare span delivered through a rule-ref call.
+    RefBare,
+    /// A hash wrap `{name: span}` around one bare leaf.
+    Hash(String),
+    /// A bare nested sequence: ONE `:sequence` node whose values are
+    /// the children's — the classic emits one node per Sequence atom,
+    /// even a builder-fused one-element inner.
+    Nested(Vec<ElementPlan>),
+    /// A hash wrap `{name -> :sequence node}` around a nested
+    /// sequence's values (the v2 named-tree law composes).
+    HashNested(String, Vec<ElementPlan>),
+}
+
+/// The routed sequence loop's per-element synthesis plan (tranche 4,
+/// per-leaf cut indices in tranche 6): which DFA states close a LEAF
+/// span of the iteration (nested elements flatten to their leaves —
+/// the cut positions) and the flat per-leaf descriptors. The nested
+/// plan tree rides the program's `dfa_loop_element_plans` registry and
+/// supersedes `names` in the executor when present. Parallel to
 /// `dfa_tables`.
 #[derive(Debug, Clone)]
 pub struct DfaLoopElements {
-    /// Per-DFA-state: the element index whose accept the state closes,
-    /// or `None`. The LAST element's accept is also the iteration
-    /// boundary.
+    /// Per-DFA-state: the LEAF index whose accept the state closes, or
+    /// `None`. The LAST leaf's accept is also the iteration boundary.
     pub accepts_per_state: Vec<Option<u8>>,
-    /// Per element: its value descriptor.
+    /// Per LEAF (the flattened order the DFA chain records): the flat
+    /// fallback descriptor. For flat bodies this is one entry per
+    /// element; nested bodies' tree detail lives in the plan registry.
     pub names: Vec<ElementDesc>,
 }
