@@ -1289,16 +1289,22 @@ impl Compiler {
                     // Tranche 4: a SEQUENCE body gets the per-element
                     // cut plan — each element's value descriptor (a
                     // Named-wrapped rule ref hashes; a bare terminal /
-                    // unwrapped ref delivers bare).
-                    if matches!(self.grammar.get_atom(atom_idx), Some(Atom::Sequence { .. })) {
-                        let names: Vec<super::dfa_table::ElementDesc> =
-                            match self.grammar.get_atom(atom_idx) {
-                                Some(Atom::Sequence { atoms }) => atoms
-                                    .iter()
-                                    .filter_map(|&c| element_descriptor(c))
-                                    .collect(),
-                                _ => Vec::new(),
-                            };
+                    // unwrapped ref delivers bare). Named-wrapped
+                    // sequences get it too: the outer hash wraps the
+                    // assembled array (the executor's named_idx).
+                    let seq_atoms: Option<&Vec<usize>> = match self.grammar.get_atom(atom_idx) {
+                        Some(Atom::Sequence { atoms }) => Some(atoms),
+                        Some(Atom::Named { atom, .. }) => match self.grammar.get_atom(*atom) {
+                            Some(Atom::Sequence { atoms }) => Some(atoms),
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+                    if let Some(atoms) = seq_atoms {
+                        let names: Vec<super::dfa_table::ElementDesc> = atoms
+                            .iter()
+                            .filter_map(|&c| element_descriptor(c))
+                            .collect();
                         self.program
                             .mark_dfa_loop_elements(idx, element_accepts, names);
                     }

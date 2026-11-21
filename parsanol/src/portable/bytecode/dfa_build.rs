@@ -306,6 +306,15 @@ pub fn build_loop_dfa(
     // element accept (the disjointness proof keeps the chain linear).
     let mut element_accepts_of_node: std::collections::HashMap<u32, u8> =
         std::collections::HashMap::new();
+    // Transparent wrappers (Named/Entity) unwrap before the chain
+    // check: a Named-wrapped sequence body carries the element plan
+    // too (the wrapper's hash rides the executor's named_idx).
+    let mut body_idx = body_idx;
+    while let Some(Atom::Named { atom, .. }) | Some(Atom::Entity { atom }) =
+        grammar.get_atom(body_idx)
+    {
+        body_idx = *atom;
+    }
     let (bs, body_accept) = match grammar.get_atom(body_idx) {
         Some(Atom::Sequence { atoms }) if !atoms.is_empty() => {
             let mut cursor = entry;

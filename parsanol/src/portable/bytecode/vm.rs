@@ -533,6 +533,14 @@ impl<'a> BytecodeVM<'a> {
     /// `:sequence`-tagged array of the per-element values, each cut
     /// from the iteration's element-accept crossings and wrapped per
     /// its descriptor (bare span, or the `{name: span}` hash).
+    ///
+    /// NO merging: the classic BuildSeq never merges multi-element
+    /// spans (characterized 2026-11-22 against 8983451 — str_re,
+    /// re_str, and the fusion-fused str_str all deliver per-element
+    /// spans raw; the earlier "merged" reading was this synthesis's
+    /// own output compared against itself). The collapsed wire is
+    /// unaffected — the collapse folds contiguous InputRef runs
+    /// identically for both shapes.
     #[inline]
     fn push_assembled_iteration(
         &mut self,
@@ -540,48 +548,40 @@ impl<'a> BytecodeVM<'a> {
         cuts: &[usize],
         tag_seq: u32,
         element_keys: &[Option<u32>],
-        element_inline: &[bool],
+        named_idx: Option<u32>,
     ) {
         let mut vals: Vec<AstNode> = Vec::with_capacity(element_keys.len());
-        // Consecutive InlineBare elements merge into ONE span (the
-        // classic BuildSeq fold over inline spans); ref-produced and
-        // hash-wrapped values stay separate.
-        let mut run_start: Option<usize> = None;
-        let mut run_end = 0usize;
-        for i in 0..element_keys.len() {
-            let elem_start = if i == 0 { iter_start } else { cuts[i - 1] };
-            let elem_end = cuts[i];
-            if element_inline[i] {
-                if run_start.is_none() {
-                    run_start = Some(elem_start);
-                }
-                run_end = elem_end;
-            } else {
-                if let Some(rs) = run_start.take() {
-                    vals.push(self.arena.input_ref(rs, run_end - rs));
-                }
-                let span = self.arena.input_ref(elem_start, elem_end - elem_start);
-                let wrapped = match element_keys[i] {
-                    None => span,
-                    Some(key_idx) => {
-                        let (pool_idx, length) = self.arena.store_hash_indexed_key(key_idx, span);
-                        AstNode::Hash {
-                            pool_index: pool_idx,
-                            length,
-                        }
+        for (i, key) in element_keys.iter().enumerate() {
+            let start = if i == 0 { iter_start } else { cuts[i - 1] };
+            let end = cuts[i];
+            let span = self.arena.input_ref(start, end - start);
+            let wrapped = match key {
+                None => span,
+                Some(key_idx) => {
+                    let (pool_idx, length) = self.arena.store_hash_indexed_key(*key_idx, span);
+                    AstNode::Hash {
+                        pool_index: pool_idx,
+                        length,
                     }
-                };
-                vals.push(wrapped);
-            }
-        }
-        if let Some(rs) = run_start.take() {
-            vals.push(self.arena.input_ref(rs, run_end - rs));
+                }
+            };
+            vals.push(wrapped);
         }
         let (pool_idx, length) = self.arena.store_tagged_array_indexed(tag_seq, &vals);
-        self.value_stack.push(AstNode::Array {
+        let array = AstNode::Array {
             pool_index: pool_idx,
             length,
-        });
+        };
+        match named_idx {
+            None => self.value_stack.push(array),
+            Some(key_idx) => {
+                let (hpool, hlen) = self.arena.store_hash_indexed_key(key_idx, array);
+                self.value_stack.push(AstNode::Hash {
+                    pool_index: hpool,
+                    length: hlen,
+                });
+            }
+        }
     }
 
     /// Push one routed-loop iteration's value: the bare span, the
@@ -717,14 +717,7 @@ impl<'a> BytecodeVM<'a> {
                     .collect()
             })
             .unwrap_or_default();
-        let element_inline: Vec<bool> = elements_plan
-            .map(|plan| {
-                plan.names
-                    .iter()
-                    .map(|d| matches!(d, super::dfa_table::ElementDesc::InlineBare))
-                    .collect()
-            })
-            .unwrap_or_default();
+
         let element_accepts: &[Option<u8>] = elements_plan
             .map(|plan| plan.accepts_per_state.as_slice())
             .unwrap_or(&[]);
@@ -783,7 +776,7 @@ impl<'a> BytecodeVM<'a> {
                                 &cuts,
                                 tag_seq_idx.unwrap_or_default(),
                                 &element_keys,
-                                &element_inline,
+                                named_idx,
                             );
                         } else {
                             self.push_iteration_value(iter_start, boundary, seq_wrapped, named_idx);
