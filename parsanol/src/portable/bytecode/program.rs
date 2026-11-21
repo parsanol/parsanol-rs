@@ -160,6 +160,10 @@ pub struct Program {
     /// Byte-dispatch tables for alternatives (256 relative offsets each)
     dispatch_tables: Vec<[i32; 256]>,
 
+    /// DFA tables for provable rules (rs#574 slice B). Not serialized:
+    /// the program is compiled from the grammar at load.
+    dfa_tables: Vec<super::dfa_table::DfaTable>,
+
     /// Regex pattern table (for Regex instructions)
     regexes: Vec<String>,
 
@@ -204,6 +208,7 @@ impl Program {
             strings: Vec::new(),
             char_sets: Vec::new(),
             dispatch_tables: Vec::new(),
+            dfa_tables: Vec::new(),
             regexes: Vec::new(),
             keys: Vec::new(),
             labels: Vec::new(),
@@ -225,6 +230,7 @@ impl Program {
             strings: Vec::with_capacity(strings),
             char_sets: Vec::with_capacity(sets),
             dispatch_tables: Vec::new(),
+            dfa_tables: Vec::new(),
             regexes: Vec::new(),
             keys: Vec::with_capacity(strings),
             labels: Vec::new(),
@@ -387,6 +393,24 @@ impl Program {
     #[inline]
     pub fn get_char_ranges(&self, idx: u32) -> Option<&[(u32, u32)]> {
         self.char_ranges.get(idx as usize).map(|v| v.as_slice())
+    }
+
+    /// Add a DFA table for a provable rule (deduplicated)
+    pub fn add_dfa_table(&mut self, table: super::dfa_table::DfaTable) -> u32 {
+        for (i, existing) in self.dfa_tables.iter().enumerate() {
+            if existing.transitions == table.transitions && existing.accepts == table.accepts {
+                return i as u32;
+            }
+        }
+        let idx = self.dfa_tables.len() as u32;
+        self.dfa_tables.push(table);
+        idx
+    }
+
+    /// Get a DFA table
+    #[inline]
+    pub fn get_dfa_table(&self, idx: u32) -> Option<&super::dfa_table::DfaTable> {
+        self.dfa_tables.get(idx as usize)
     }
 
     /// Add a neg-scan spec

@@ -291,6 +291,9 @@ pub enum Opcode {
     /// body sequence's tagged `[Nil, terminal-span]` array, exactly
     /// like the choice loop it replaces.
     ScanUntil = 43,
+
+    /// Run a provable rule's DFA table (rs#574 slice B)
+    DfaRun = 44,
 }
 
 /// Capture kind for capture instructions
@@ -510,6 +513,16 @@ pub enum Instruction {
         set_idx: u32,
     },
 
+    /// Run a provable rule's DFA table (rs#574 slice B): walk bytes
+    /// through the dense table, succeed at the last accept state (the
+    /// greedy longest match is exact for the provable family — the
+    /// loop-exit disjointness makes first == longest), fail when no
+    /// accept state was reached.
+    DfaRun {
+        /// Index into the DFA table
+        table_idx: u32,
+    },
+
     /// Scan a maximal codepoint-class run (exact ranges; per-char
     /// span values keep the tree identical to the per-char choice
     /// loop it replaces)
@@ -659,6 +672,7 @@ impl Instruction {
             Instruction::Throw { .. } => Opcode::Throw,
             Instruction::ThrowRec { .. } => Opcode::ThrowRec,
             Instruction::Span { .. } => Opcode::Span,
+            Instruction::DfaRun { .. } => Opcode::DfaRun,
             Instruction::ScanClass { .. } => Opcode::ScanClass,
             Instruction::ScanUntil { .. } => Opcode::ScanUntil,
             Instruction::Custom { .. } => Opcode::Custom,
@@ -920,6 +934,12 @@ impl Instruction {
         Instruction::Span { set_idx }
     }
 
+    /// Create a DfaRun instruction
+    #[inline]
+    pub fn dfa_run(table_idx: u32) -> Self {
+        Instruction::DfaRun { table_idx }
+    }
+
     /// Create a ScanClass instruction
     #[inline]
     pub fn scan_class(ranges_idx: u32) -> Self {
@@ -955,6 +975,7 @@ impl fmt::Display for Instruction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Instruction::Any { n } => write!(f, "Any {}", n),
+            Instruction::DfaRun { table_idx } => write!(f, "DfaRun {}", table_idx),
             Instruction::Char { byte } => {
                 let c = *byte as char;
                 if c.is_ascii_graphic() {

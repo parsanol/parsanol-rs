@@ -473,6 +473,20 @@ impl<'a> BytecodeVM<'a> {
                     self.ip += 1;
                     continue;
                 }
+                Instruction::DfaRun { table_idx } => {
+                    // Unlike the scans (which always Continue), a DFA
+                    // run legitimately fails — route that through the
+                    // same backtrack handling as execute_instruction's
+                    // Fail arm.
+                    if matches!(self.exec_dfa_run(*table_idx)?, ExecutionResult::Continue) {
+                        self.ip += 1;
+                    } else if !self.backtrack()? {
+                        return Err(ParseError::Failed {
+                            position: self.furthest_failure,
+                        });
+                    }
+                    continue;
+                }
                 _ => {}
             }
 
@@ -560,6 +574,52 @@ impl<'a> BytecodeVM<'a> {
     fn memo_store(&mut self, rule_pc: usize, pos: usize, entry: MemoEntry) {
         if self.memo.len() < MEMO_MAX {
             self.memo.insert((rule_pc, pos), entry);
+        }
+    }
+
+    /// The DFA run (rs#574 slice B): walk bytes through the dense
+    /// table, track the last accept position, succeed at the longest
+    /// accept (exact for the provable family), fail when none.
+    /// Dispatched from `run` like the scan instructions.
+    #[inline(never)]
+    fn exec_dfa_run(&mut self, table_idx: u32) -> Result<ExecutionResult, ParseError> {
+        let table = self
+            .program
+            .get_dfa_table(table_idx)
+            .ok_or_else(|| ParseError::Internal {
+                message: format!("Invalid DFA table index: {table_idx}"),
+            })?;
+        let input = self.input;
+        let start = self.position;
+        let mut state = table.start;
+        let mut last_accept: Option<usize> = if table.is_accept(state) {
+            Some(start)
+        } else {
+            None
+        };
+        while self.position < input.len() {
+            match table.step(state, input[self.position]) {
+                Some(next) => {
+                    state = next;
+                    self.position += 1;
+                    if table.is_accept(state) {
+                        last_accept = Some(self.position);
+                    }
+                }
+                None => break,
+            }
+        }
+        match last_accept {
+            Some(end) => {
+                self.position = end;
+                self.push_span_value(start);
+                Ok(ExecutionResult::Continue)
+            }
+            None => {
+                self.position = start;
+                self.track_failure();
+                Ok(ExecutionResult::Fail)
+            }
         }
     }
 
@@ -1115,6 +1175,14 @@ impl<'a> BytecodeVM<'a> {
                 }
             }
 
+            Instruction::DfaRun { .. } => {
+                // Unreachable through `run` (the pre-dispatch catches
+                // DfaRun before execute_instruction); the belt for any
+                // future direct caller.
+                Err(ParseError::Internal {
+                    message: "DfaRun dispatched inside execute_instruction".to_string(),
+                })
+            }
             Instruction::NoOp => Ok(ExecutionResult::Continue),
 
             Instruction::Throw { label_idx } => {
