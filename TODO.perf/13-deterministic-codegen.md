@@ -239,3 +239,39 @@ the grammar root — a fixture declaring the referenced rule first
 serializes a degenerate single-atom grammar; the differential
 fixtures must declare the ROOT rule first. Gates: lib 593/593,
 integration rc=0, clippy/fmt/typos, semver clean.
+
+## Slice B stage 3 tranche 4 DESIGN (2026-11-21): seq-of-refs, the cut assembly
+
+**Probed ground truth**: a flat Sequence whose atoms are RULE REFS
+(`*(sep word)`) — one iteration = tagged `:sequence` with the
+elements' values as SEPARATE spans (`[3(s:":sequence"; in:" "; in:"ab";)]`
+— the classic fold does NOT merge ref-element spans, unlike tranche 1's
+adjacent-literal fusion). Per-element values follow each ref's compile
+shape (bare for unwrapped rules; `{name: inner}` hashes for Named rules).
+
+**The design** (measured open — not started): the thompson chain gives
+each element its own accept node mid-chain, so the synthesis needs
+CUT POSITIONS per iteration:
+1. `build_loop_dfa` marks every element accept with its index (a subset
+   contains at most one chain node — the disjointness proof — so the
+   per-state mapping is a function, not a set); returns
+   `element_accepts: Vec<Option<u8>>` per DFA state alongside the
+   existing `iteration_accepts`.
+2. Registry (parallel, additive): per loop table — the per-state
+   element-accept index + each element's value descriptor
+   (`None` = bare span, `Some(name)` = hash wrap).
+3. Executor: per iteration, a small cut buffer — each element-accept
+   crossing records `(element, position)`; the iteration-accept
+   crossing (the LAST element) closes the iteration: assemble the
+   value list — element i's span = cuts[i-1]..cuts[i] (start_0 =
+   iteration start, end_last = the boundary) — wrapped per descriptor,
+   then the `:sequence` tag. The single-path table walk has no
+   backtracking inside `exec_dfa_run`, so the cut buffer is safe.
+4. The routing: extend the Sequence arm to accept Entity-ref elements
+   (their targets = span terminals / Named-wrapped span terminals).
+
+**The A/B upside**: this routes the fleet's OUTER loops (`0*(sep word)`
+— sequences of rule refs everywhere), composing with the already-routed
+inner loops; the 2026-11-21 A/B receipt (#625) measured this grammar's
+outer loop still classic. The win scales with the scan-to-tree-build
+ratio (the rule-ref A/B leg measured the hash-write bound).
