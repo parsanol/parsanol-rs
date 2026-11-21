@@ -188,6 +188,16 @@ pub struct Program {
     /// here so the tranche-4 shapes stay frozen.
     dfa_loop_element_plans: Vec<Option<Vec<super::dfa_table::ElementPlan>>>,
 
+    /// The routed loop's INNER-boundary states (tranche 7): per DFA
+    /// state, the envelope element whose inner iteration the state
+    /// closes. Parallel to `dfa_tables`.
+    dfa_loop_inner_accepts: Vec<Option<Vec<Option<u8>>>>,
+
+    /// The routed loop's FULL plan tree (tranche 7) — parallel to
+    /// `dfa_tables`; loop-composition envelopes live here so the
+    /// tranche-6 `ElementPlan` registry keeps its type.
+    dfa_loop_plan_trees: Vec<Option<Vec<super::dfa_table::ElementPlanTree>>>,
+
     /// Regex pattern table (for Regex instructions)
     regexes: Vec<String>,
 
@@ -238,6 +248,8 @@ impl Program {
             dfa_loop_named: Vec::new(),
             dfa_loop_elements: Vec::new(),
             dfa_loop_element_plans: Vec::new(),
+            dfa_loop_inner_accepts: Vec::new(),
+            dfa_loop_plan_trees: Vec::new(),
             regexes: Vec::new(),
             keys: Vec::new(),
             labels: Vec::new(),
@@ -265,6 +277,8 @@ impl Program {
             dfa_loop_named: Vec::new(),
             dfa_loop_elements: Vec::new(),
             dfa_loop_element_plans: Vec::new(),
+            dfa_loop_inner_accepts: Vec::new(),
+            dfa_loop_plan_trees: Vec::new(),
             regexes: Vec::new(),
             keys: Vec::with_capacity(strings),
             labels: Vec::new(),
@@ -461,6 +475,8 @@ impl Program {
         self.dfa_loop_named.push(None);
         self.dfa_loop_elements.push(None);
         self.dfa_loop_element_plans.push(None);
+        self.dfa_loop_inner_accepts.push(None);
+        self.dfa_loop_plan_trees.push(None);
         idx
     }
 
@@ -557,6 +573,47 @@ impl Program {
     /// nested elements.
     pub fn get_dfa_loop_element_plans(&self, idx: u32) -> Option<&[super::dfa_table::ElementPlan]> {
         self.dfa_loop_element_plans
+            .get(idx as usize)
+            .and_then(|p| p.as_deref())
+    }
+
+    /// Mark the routed loop's INNER-boundary states (tranche 7): per
+    /// DFA state, the envelope element whose inner iteration the state
+    /// closes. Parallel registry — nothing published changes.
+    pub fn mark_dfa_loop_inner_accepts(&mut self, idx: u32, inner: Vec<Option<u8>>) {
+        if let Some(slot) = self.dfa_loop_inner_accepts.get_mut(idx as usize) {
+            *slot = Some(inner);
+        }
+    }
+
+    /// The routed loop's inner-boundary lane, when the body carries
+    /// envelope elements.
+    pub fn get_dfa_loop_inner_accepts(&self, idx: u32) -> Option<&[Option<u8>]> {
+        self.dfa_loop_inner_accepts
+            .get(idx as usize)
+            .and_then(|v| v.as_deref())
+    }
+
+    /// Mark the routed loop's FULL plan tree (tranche 7): the
+    /// loop-composition envelopes ride their own registry and type so
+    /// the tranche-6 `ElementPlan` shape stays frozen.
+    pub fn mark_dfa_loop_plan_trees(
+        &mut self,
+        idx: u32,
+        plans: Vec<super::dfa_table::ElementPlanTree>,
+    ) {
+        if let Some(slot) = self.dfa_loop_plan_trees.get_mut(idx as usize) {
+            *slot = Some(plans);
+        }
+    }
+
+    /// The routed loop's full plan tree, when the body carries
+    /// envelopes (or any shape the tranche-6 registry cannot name).
+    pub fn get_dfa_loop_plan_trees(
+        &self,
+        idx: u32,
+    ) -> Option<&[super::dfa_table::ElementPlanTree]> {
+        self.dfa_loop_plan_trees
             .get(idx as usize)
             .and_then(|p| p.as_deref())
     }

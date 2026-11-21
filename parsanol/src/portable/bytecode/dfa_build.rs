@@ -277,6 +277,7 @@ fn determinize(nfa: &Nfa, start: u32, accept: u32) -> DfaTable {
         accept,
         &std::collections::HashSet::new(),
         &std::collections::HashMap::new(),
+        None,
     )
     .0
 }
@@ -395,9 +396,274 @@ pub fn build_loop_dfa(
     nfa.edge(body_accept, Edge::Epsilon, exit);
     let mut marked = std::collections::HashSet::new();
     marked.insert(body_accept);
-    let (table, iteration_accepts, element_accepts) =
-        determinize_marked(&nfa, entry, exit, &marked, &element_accepts_of_node);
+    let (table, iteration_accepts, element_accepts, _inner) =
+        determinize_marked(&nfa, entry, exit, &marked, &element_accepts_of_node, None);
     Some((table, iteration_accepts, element_accepts))
+}
+
+/// The envelope-aware loop table (tranche 7): `build_loop_dfa`'s
+/// superset. Bodies whose elements are THEMSELVES loops chain the
+/// inner loop's copies into the byte chain and mark each copy accept
+/// as an INNER boundary — `inner_accepts` maps DFA states to the
+/// element whose inner iteration they close (the envelope executor
+/// appends a per-inner-iteration cut). Flat/nested bodies produce the
+/// identical table with an all-`None` `inner_accepts`.
+pub struct LoopDfa {
+    /// The deterministic table for the loop body.
+    pub table: DfaTable,
+    /// Per state: whether it completes one OUTER iteration.
+    pub iteration_accepts: Vec<bool>,
+    /// Per state: the leaf slot whose boundary the state closes.
+    pub element_accepts: Vec<Option<u8>>,
+    /// Per state: the envelope ordinal whose inner iteration the
+    /// state closes.
+    pub inner_accepts: Vec<Option<u8>>,
+}
+
+/// Build the envelope-aware loop table for `body_idx`, or `None`
+/// when the atom tree carries something the byte-level builder
+/// refuses (predicates, recursion, non-chainable bodies, unbounded
+/// unrolls). Identical to [`build_loop_dfa`] for bodies without
+/// envelope elements.
+pub fn build_loop_dfa_envelopes(grammar: &Grammar, body_idx: usize) -> Option<LoopDfa> {
+    // The body must consume at least one byte: a nullable body makes
+    // the loop's iteration boundaries degenerate.
+    if !consumes_min_one(grammar, body_idx, 0, &mut Vec::new()) {
+        return None;
+    }
+    let mut nfa = Nfa::default();
+    let entry = nfa.node();
+    let exit = nfa.node();
+
+    let mut element_accepts_of_node: std::collections::HashMap<u32, u8> =
+        std::collections::HashMap::new();
+    let mut inner_accepts_of_node: std::collections::HashMap<u32, u8> =
+        std::collections::HashMap::new();
+    let mut body_idx = body_idx;
+    while let Some(Atom::Named { atom, .. }) | Some(Atom::Entity { atom }) =
+        grammar.get_atom(body_idx)
+    {
+        body_idx = *atom;
+    }
+    // The flattened leaf chain of one NON-envelope element (tranche 6
+    // semantics, unchanged).
+    fn leaf_chain(grammar: &Grammar, idx: usize, leaves: &mut Vec<usize>, depth: u8) -> Option<()> {
+        if depth > 64 {
+            return None;
+        }
+        match grammar.get_atom(idx)? {
+            Atom::Named { atom, .. } | Atom::Entity { atom } => {
+                leaf_chain(grammar, *atom, leaves, depth + 1)
+            }
+            Atom::Sequence { atoms } if !atoms.is_empty() => {
+                for &child in atoms {
+                    leaf_chain(grammar, child, leaves, depth + 1)?;
+                }
+                Some(())
+            }
+            Atom::Str { pattern } if !pattern.is_empty() => {
+                leaves.push(idx);
+                Some(())
+            }
+            Atom::Re { pattern } => {
+                CharRanges::from_pattern(pattern)?;
+                leaves.push(idx);
+                Some(())
+            }
+            _ => None,
+        }
+    }
+    // Whether an atom is an ENVELOPE element (tranche 7): a repetition
+    // (Named/Entity wrappers unwrap) whose body leaf-chains. Bounded
+    // copies respect the unroll sanity cap. Envelopes nest ONE level —
+    // an envelope body containing another repetition refuses.
+    fn envelope_of(grammar: &Grammar, idx: usize) -> Option<(usize, usize, Option<usize>)> {
+        let (idx, min, max) = match grammar.get_atom(idx)? {
+            Atom::Repetition {
+                atom: body,
+                min,
+                max,
+                tag: RepetitionTag::Repetition | RepetitionTag::Maybe,
+                ..
+            } => (*body, *min, *max),
+            Atom::Named { atom, .. } | Atom::Entity { atom } => {
+                let (b, mi, ma) = envelope_of(grammar, *atom)?;
+                (b, mi, ma)
+            }
+            _ => return None,
+        };
+        // One envelope level: the body must leaf-chain without hitting
+        // another repetition.
+        fn no_inner_loop(grammar: &Grammar, idx: usize, depth: u8) -> Option<()> {
+            if depth > 64 {
+                return None;
+            }
+            match grammar.get_atom(idx)? {
+                Atom::Named { atom, .. } | Atom::Entity { atom } => {
+                    no_inner_loop(grammar, *atom, depth + 1)
+                }
+                Atom::Sequence { atoms } if !atoms.is_empty() => {
+                    for &child in atoms {
+                        no_inner_loop(grammar, child, depth + 1)?;
+                    }
+                    Some(())
+                }
+                Atom::Str { pattern } if !pattern.is_empty() => Some(()),
+                Atom::Re { pattern } => {
+                    CharRanges::from_pattern(pattern)?;
+                    Some(())
+                }
+                _ => None,
+            }
+        }
+        no_inner_loop(grammar, idx, 0)?;
+        if max.is_some_and(|m| (m.saturating_sub(min)) as u64 * 8 > 4096) {
+            return None;
+        }
+        Some((idx, min, max))
+    }
+    let (bs, body_accept) = match grammar.get_atom(body_idx) {
+        Some(Atom::Sequence { atoms }) if !atoms.is_empty() => {
+            let mut cursor = entry;
+            let mut first_start = entry;
+            let mut last_accept = entry;
+            let mut leaf_i = 0u8;
+            let mut env_i = 0u8;
+            let mut first_element = true;
+            for &child in atoms.iter() {
+                if let Some((inner_body, inner_min, inner_max)) = envelope_of(grammar, child) {
+                    // The envelope element (tranche 7): chain the inner
+                    // loop's copies into the byte chain; every copy
+                    // accept is an INNER boundary (the envelope
+                    // executor's per-inner-iteration cut); ONE fixed
+                    // leaf slot carries the element's outer boundary.
+                    let mut inner_leaves = Vec::with_capacity(2);
+                    leaf_chain(grammar, inner_body, &mut inner_leaves, 0)?;
+                    if inner_leaves.is_empty() || inner_leaves.len() > u8::MAX as usize {
+                        return None;
+                    }
+                    let mut chain_inner_copy =
+                        |nfa: &mut Nfa, from: u32, element: u8| -> Option<u32> {
+                            let mut from = from;
+                            let mut copy_accept = from;
+                            for (j, &leaf) in inner_leaves.iter().enumerate() {
+                                let (ls, la) = thompson(grammar, leaf, nfa, &mut Vec::new())?;
+                                nfa.edge(from, Edge::Epsilon, ls);
+                                copy_accept = la;
+                                if j == inner_leaves.len() - 1 {
+                                    inner_accepts_of_node.insert(la, element);
+                                }
+                                from = la;
+                            }
+                            Some(copy_accept)
+                        };
+                    let mut pos = cursor;
+                    for _ in 0..inner_min {
+                        pos = chain_inner_copy(&mut nfa, pos, env_i)?;
+                    }
+                    match inner_max {
+                        None => {
+                            // The unbounded tail: one copy, the loop
+                            // back to the tail's start, and a fresh
+                            // connector node. The zero-path edge from
+                            // the iteration start is REQUIRED (an
+                            // empty envelope must reach the next
+                            // element). It merges the connector into
+                            // every iteration-boundary state —
+                            // harmless NOW because the envelope
+                            // element carries NO markers at all: its
+                            // boundary info lives entirely in the
+                            // inner lane (the last copy accept IS the
+                            // boundary), keeping every state
+                            // single-marked in both lanes.
+                            let tail_start = pos;
+                            let accept = chain_inner_copy(&mut nfa, pos, env_i)?;
+                            nfa.edge(accept, Edge::Epsilon, tail_start);
+                            let boundary = nfa.node();
+                            nfa.edge(accept, Edge::Epsilon, boundary);
+                            if inner_min == 0 {
+                                nfa.edge(cursor, Edge::Epsilon, boundary);
+                            }
+                            pos = boundary;
+                        }
+                        Some(m) => {
+                            // Optional copies (max > min) each get a
+                            // skip edge; boundaries are pure
+                            // connectors (no markers).
+                            for _ in inner_min..m {
+                                let boundary = nfa.node();
+                                nfa.edge(pos, Edge::Epsilon, boundary);
+                                let accept = chain_inner_copy(&mut nfa, pos, env_i)?;
+                                nfa.edge(accept, Edge::Epsilon, boundary);
+                                pos = boundary;
+                            }
+                            if inner_min == 0 {
+                                // min == 0, bounded: the zero-copy
+                                // path IS `pos` (the connector) — no
+                                // marker needed; the empty envelope
+                                // rides the assembly's prev walk.
+                            }
+                        }
+                    }
+                    env_i += 1;
+                    if env_i == 0 {
+                        return None; // u8 ordinal overflow
+                    }
+                    cursor = pos;
+                    last_accept = pos;
+                    if first_element {
+                        first_element = false;
+                    }
+                    continue;
+                }
+                let mut leaves = Vec::with_capacity(2);
+                leaf_chain(grammar, child, &mut leaves, 0)?;
+                if leaves.is_empty() || leaves.len() > u8::MAX as usize {
+                    return None;
+                }
+                let (mut cs, mut ca) = (entry, entry);
+                for (j, &leaf) in leaves.iter().enumerate() {
+                    let (ls, la) = thompson(grammar, leaf, &mut nfa, &mut Vec::new())?;
+                    if j == 0 {
+                        cs = ls;
+                    } else {
+                        nfa.edge(ca, Edge::Epsilon, ls);
+                    }
+                    ca = la;
+                    element_accepts_of_node.insert(la, leaf_i);
+                    leaf_i += 1;
+                }
+                nfa.edge(cursor, Edge::Epsilon, cs);
+                cursor = ca;
+                if first_element {
+                    first_start = cs;
+                    first_element = false;
+                }
+                last_accept = ca;
+            }
+            (first_start, last_accept)
+        }
+        _ => thompson(grammar, body_idx, &mut nfa, &mut Vec::new())?,
+    };
+    nfa.edge(entry, Edge::Epsilon, bs);
+    nfa.edge(body_accept, Edge::Epsilon, bs); // the loop back
+    nfa.edge(body_accept, Edge::Epsilon, exit);
+    let mut marked = std::collections::HashSet::new();
+    marked.insert(body_accept);
+    let (table, iteration_accepts, element_accepts, inner_accepts) = determinize_marked(
+        &nfa,
+        entry,
+        exit,
+        &marked,
+        &element_accepts_of_node,
+        Some(&inner_accepts_of_node),
+    );
+    Some(LoopDfa {
+        table,
+        iteration_accepts,
+        element_accepts,
+        inner_accepts,
+    })
 }
 
 /// Whether the atom consumes at least one byte on every match path.
@@ -437,13 +703,18 @@ fn consumes_min_one(grammar: &Grammar, idx: usize, depth: usize, seen: &mut Vec<
     ok.unwrap_or(false)
 }
 
+/// The determinizer's four lanes: the table, the outer iteration
+/// accepts, the leaf-boundary markers, the inner-boundary markers.
+type MarkedTables = (DfaTable, Vec<bool>, Vec<Option<u8>>, Vec<Option<u8>>);
+
 fn determinize_marked(
     nfa: &Nfa,
     start: u32,
     accept: u32,
     marked: &std::collections::HashSet<u32>,
     elements: &std::collections::HashMap<u32, u8>,
-) -> (DfaTable, Vec<bool>, Vec<Option<u8>>) {
+    inner_elements: Option<&std::collections::HashMap<u32, u8>>,
+) -> MarkedTables {
     // Epsilon closures per NFA node.
     let mut closures: Vec<Vec<u32>> = vec![Vec::new(); nfa.nodes as usize];
     for node in 0..nfa.nodes {
@@ -471,6 +742,8 @@ fn determinize_marked(
         merged.dedup();
         merged
     };
+    let empty_map: std::collections::HashMap<u32, u8> = std::collections::HashMap::new();
+    let inner = inner_elements.unwrap_or(&empty_map);
 
     let mut ids: HashMap<Vec<u32>, u32> = HashMap::new();
     let mut subsets: Vec<Vec<u32>> = Vec::new();
@@ -486,6 +759,8 @@ fn determinize_marked(
     iteration_accepts.push(subsets[0].iter().any(|n| marked.contains(n)));
     let mut element_accepts: Vec<Option<u8>> = Vec::new();
     element_accepts.push(subsets[0].iter().find_map(|n| elements.get(n).copied()));
+    let mut inner_accepts: Vec<Option<u8>> = Vec::new();
+    inner_accepts.push(subsets[0].iter().find_map(|n| inner.get(n).copied()));
 
     let mut worklist = 0usize;
     while worklist < subsets.len() {
@@ -519,6 +794,11 @@ fn determinize_marked(
                             .iter()
                             .find_map(|n| elements.get(n).copied()),
                     );
+                    inner_accepts.push(
+                        subsets[id as usize]
+                            .iter()
+                            .find_map(|n| inner.get(n).copied()),
+                    );
                     transitions.extend(std::iter::repeat_n(u32::MAX, 256));
                     id
                 }
@@ -533,7 +813,7 @@ fn determinize_marked(
         start: 0,
         state_count: subsets.len() as u32,
     };
-    (table, iteration_accepts, element_accepts)
+    (table, iteration_accepts, element_accepts, inner_accepts)
 }
 
 use std::collections::HashMap;

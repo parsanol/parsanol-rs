@@ -1327,3 +1327,135 @@ fn differential_dfa_routed_nested_fragments_match_the_walker() {
         "the routed nested loop's per-iteration value shape"
     );
 }
+
+#[test]
+fn differential_dfa_routed_loop_composition_envelopes_match_the_walker() {
+    // rs#574 slice B stage 3 tranche 7: loop bodies whose elements are
+    // THEMSELVES loops route with the ENVELOPE synthesis — the
+    // element's value is one `:repetition` node of per-inner-iteration
+    // spans (the classic's inner boundaries, recovered from the
+    // inner-accept crossings). Named-wrapped inner loops compose as
+    // `{inner -> [:repetition, ...]}`.
+    let star_inner = GrammarBuilder::new()
+        .rule(
+            "root",
+            dynamic(
+                seq(vec![
+                    dynamic(parser_dsl::re("[ab]").many()),
+                    dynamic(parser_dsl::str("c")),
+                ])
+                .many(),
+            ),
+        )
+        .build()
+        .to_json()
+        .unwrap();
+    let named_inner = GrammarBuilder::new()
+        .rule(
+            "root",
+            dynamic(
+                seq(vec![
+                    dynamic(parser_dsl::re("[ab]").many().label("inner")),
+                    dynamic(parser_dsl::str("c")),
+                ])
+                .many(),
+            ),
+        )
+        .build()
+        .to_json()
+        .unwrap();
+    let bounded_inner = GrammarBuilder::new()
+        .rule(
+            "root",
+            dynamic(
+                seq(vec![
+                    dynamic(parser_dsl::re("[ab]").repeat(2, Some(2))),
+                    dynamic(parser_dsl::str("c")),
+                ])
+                .many(),
+            ),
+        )
+        .build()
+        .to_json()
+        .unwrap();
+    let mixed_seq = GrammarBuilder::new()
+        .rule(
+            "root",
+            dynamic(
+                seq(vec![
+                    dynamic(parser_dsl::re("[ab]").many()),
+                    dynamic(parser_dsl::str("c")),
+                    dynamic(parser_dsl::re("[de]")),
+                ])
+                .many(),
+            ),
+        )
+        .build()
+        .to_json()
+        .unwrap();
+    for (name, g) in [
+        ("star_inner", &star_inner),
+        ("named_inner", &named_inner),
+        ("bounded_inner", &bounded_inner),
+        ("mixed_seq", &mixed_seq),
+    ] {
+        let grammar = Grammar::from_json(g).unwrap();
+        let program = compile_bytecode(grammar.clone()).unwrap();
+        assert!(
+            program.has_iteration_accept_tables(),
+            "{name}: the loop-composition loop did not route"
+        );
+    }
+    for input in [
+        "aacabbc",
+        "aac",
+        "c",
+        "cabc",
+        "aacaabbcabbc",
+        "aacx",
+        "aacabbcx",
+        "aabbc",
+        "",
+    ] {
+        assert_agree_collapsed(&star_inner, input);
+        assert_agree_collapsed(&named_inner, input);
+        assert_agree_collapsed(&bounded_inner, input);
+        assert_agree_collapsed(&mixed_seq, input);
+    }
+    // RAW equality across the battery: the envelope synthesis must
+    // produce the exact walker raw tree.
+    for (name, g) in [
+        ("star_inner", &star_inner),
+        ("named_inner", &named_inner),
+        ("bounded_inner", &bounded_inner),
+        ("mixed_seq", &mixed_seq),
+    ] {
+        let grammar = Grammar::from_json(g).unwrap();
+        let program = compile_bytecode(grammar.clone()).unwrap();
+        for input in ["aacabbc", "aac", "cabc", "aacaabbcabbc", "aacabbcx"] {
+            let mut vm_arena = AstArena::new();
+            let v = parse_with_vm(&program, input, &mut vm_arena)
+                .unwrap_or_else(|e| panic!("{name} {input}: vm failed: {e}"));
+            let mut pk_arena = AstArena::new();
+            let p = PortableParser::new(&grammar, input, &mut pk_arena)
+                .parse_with_end_pos()
+                .unwrap_or_else(|e| panic!("{name} {input}: walker failed: {e:?}"));
+            assert_eq!(
+                materialize(&v.value, &vm_arena, input),
+                materialize(&p.value, &pk_arena, input),
+                "{name} {input}: the routed raw tree diverges from the walker"
+            );
+        }
+    }
+    // Pin the routed envelope raw shape: the inner loop's envelope is
+    // one `:repetition` node of per-inner-iteration spans.
+    let grammar = Grammar::from_json(&star_inner).unwrap();
+    let program = compile_bytecode(grammar).unwrap();
+    let mut a = AstArena::new();
+    let v = parse_with_vm(&program, "aacabbc", &mut a).unwrap();
+    assert_eq!(
+        materialize(&v.value, &a, "aacabbc"),
+        "[3(s:\":repetition\";[3(s:\":sequence\";[3(s:\":repetition\";in:\"a\";in:\"a\";)];in:\"c\";)];[3(s:\":sequence\";[4(s:\":repetition\";in:\"a\";in:\"b\";in:\"b\";)];in:\"c\";)];)];",
+        "the routed loop-composition loop's per-iteration value shape"
+    );
+}
