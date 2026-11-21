@@ -139,3 +139,45 @@ is the honest stage boundary: multi-value bodies (sequences, named
 captures) need the accept-state synthesis metadata — stage 3 — before
 their trees survive. json A/B: unchanged within noise (its bodies
 already bulk-low; the win targets the fleet's literal/class loops).
+
+## Slice B stage 3 design sketch (2026-11-21): flat multi-value bodies
+
+**Ground truth** (probed walker+VM, identical today): for
+`*("a" "b")` on "abab", ONE iteration pushes ONE tagged `:sequence`
+array whose element list is the iteration's value — here fused to a
+single span `[2(s:":sequence"; in:"ab";)]`; on "abx" the partial
+trailing iteration vanishes (`[2(...)]` = one complete iteration).
+The classic Choice loop builds this via the body's inline lowering
++ BuildRep; the routed table must synthesize it.
+
+**The enabling proof**: the provability analysis guarantees
+pairwise-disjoint choice FIRST sets — a deterministic subset state
+contains AT MOST ONE fragment-accept node. So the emission plan keys
+by accept NODE id: no per-branch subset plans needed for flat bodies.
+
+**The metadata** (per routed loop table, riding the program-side
+`DfaLoopMeta` registry — keeps `DfaTable`/`DfaRun` at their shapes):
+1. `iteration_accept: u32` — the NFA node id whose crossing closes an
+   iteration (star(body)'s loop-back source; the body's FINAL fragment
+   accept).
+2. `fragment_plan: Vec<(accept_node_id, fragment_index)>` — every
+   intermediate fragment-accept mapped to its slot in the iteration's
+   value list (flat Sequence of value-1 atoms → fragments 0..n-1, the
+   last being the iteration accept).
+3. `tag: the body's envelope tag` (`:sequence` for Sequence bodies).
+
+**The executor**: per iteration, a small cut stack — crossing ANY
+plan accept pushes `(fragment_index, crossing_position)`; crossing
+the iteration accept closes the iteration: build the tagged array
+from the cuts (each fragment's span = cut[i-1]..cut[i], iteration
+start..cut[last]); rewind semantics unchanged (drop the partial
+iteration's cuts on stuck). The value-1 path stays the fast path
+(the plan degenerates to the existing single-span push).
+
+**Out of stage 3** (stays on the classic loop): nested multi-value
+bodies (a fragment that is itself multi-value — spans NEST, the plan
+becomes a tree, not a cut list), bodies with predicates/zero-width
+atoms mid-chain, and non-Sequence tags. Also gated on the owner's
+zero-match `""` decision (rs#574) — a zero-iteration envelope's
+delivery may change under (a), and stage 3's flat path inherits
+whatever that decision sets.
