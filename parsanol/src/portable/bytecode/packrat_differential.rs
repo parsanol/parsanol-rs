@@ -822,3 +822,78 @@ fn differential_dfa_routed_sequence_loops_match_the_walker() {
         "the routed sequence loop's per-iteration value shape"
     );
 }
+
+#[test]
+fn differential_dfa_routed_named_loops_match_the_walker() {
+    // rs#574 slice B stage 3 tranche 2: a Named-wrapped span terminal
+    // (or flat span sequence) routes with the per-iteration value
+    // `{name: inner}` — the classic BuildHash shape. Capture/Scope/
+    // Trivia wrappers stay on the classic loop (capture machinery).
+    let named_str = GrammarBuilder::new()
+        .rule("root", dynamic(parser_dsl::str("a").label("sub")).many())
+        .build()
+        .to_json()
+        .unwrap();
+    let named_seq = GrammarBuilder::new()
+        .rule(
+            "root",
+            dynamic(
+                seq(vec![
+                    dynamic(parser_dsl::str("a")),
+                    dynamic(parser_dsl::str("b")),
+                ])
+                .label("pair"),
+            )
+            .many(),
+        )
+        .build()
+        .to_json()
+        .unwrap();
+    let named_mixed = GrammarBuilder::new()
+        .rule(
+            "root",
+            dynamic(
+                seq(vec![
+                    dynamic(parser_dsl::re("[0-9]")),
+                    dynamic(parser_dsl::str("x")),
+                ])
+                .label("item"),
+            )
+            .many(),
+        )
+        .build()
+        .to_json()
+        .unwrap();
+    let named_str1 = GrammarBuilder::new()
+        .rule("root", dynamic(parser_dsl::str("a").label("sub")).many1())
+        .build()
+        .to_json()
+        .unwrap();
+    for g in [&named_str, &named_seq, &named_mixed, &named_str1] {
+        let grammar = Grammar::from_json(g).unwrap();
+        let program = compile_bytecode(grammar).unwrap();
+        assert!(
+            program.has_iteration_accept_tables(),
+            "the named loop did not route to a DfaRun loop table"
+        );
+    }
+    for input in [
+        "", "a", "aa", "aab", "abab", "abx", "1x2x", "1x!", "<>", "<a><b>", "<a>", "abc",
+    ] {
+        assert_agree_collapsed(&named_str, input);
+        assert_agree_collapsed(&named_seq, input);
+        assert_agree_collapsed(&named_mixed, input);
+        assert_agree_collapsed(&named_str1, input);
+    }
+    // Pin the routed synthesis's raw shape: one hash per iteration
+    // wrapping the (merged) inner span.
+    let grammar = Grammar::from_json(&named_mixed).unwrap();
+    let program = compile_bytecode(grammar).unwrap();
+    let mut a = AstArena::new();
+    let v = parse_with_vm(&program, "1x2x", &mut a).unwrap();
+    assert_eq!(
+        materialize(&v.value, &a, "1x2x"),
+        "[3(s:\":repetition\";{\"item\"->[2(s:\":sequence\";in:\"1x\";)];};{\"item\"->[2(s:\":sequence\";in:\"2x\";)];};)];",
+        "the routed named loop's per-iteration value shape"
+    );
+}
