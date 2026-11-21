@@ -1165,6 +1165,35 @@ impl Compiler {
         let entry = self.program.instruction_count();
         let maybe = tag == RepetitionTag::Maybe;
 
+        // The DFA routing (rs#574 slice B stage 2): an unlimited plain
+        // repetition whose body = a single single-value terminal (a
+        // Str — one String/Char instruction — or an ASCII-class Re)
+        // lowers to ONE self-contained DfaRun: the loop table's
+        // iteration-accept states synthesize the identical
+        // per-iteration spans and the envelope BuildRep constructs.
+        // Byte-identical trees by construction; the value-1 body
+        // restriction is what keeps the synthesis exact (multi-value
+        // bodies ride the loop until the accept-state synthesis
+        // metadata covers them).
+        if max.is_none() && !maybe && matches!(tag, RepetitionTag::Repetition) {
+            let single_terminal = matches!(
+                self.grammar.get_atom(atom_idx),
+                Some(Atom::Str { pattern }) if !pattern.is_empty()
+            ) || matches!(
+                self.grammar.get_atom(atom_idx),
+                Some(Atom::Re { pattern }) if crate::portable::char_class::CharRanges::from_pattern(pattern).is_some()
+            );
+            if single_terminal {
+                if let Some(table) =
+                    super::dfa_build::build_loop_dfa(&self.grammar, atom_idx)
+                {
+                    let idx = self.program.add_dfa_table(table);
+                    self.program.add_instruction(Instruction::dfa_run(idx, min as u32));
+                    return Ok(entry);
+                }
+            }
+        }
+
         // The tree-walker collects one value per iteration into a tagged
         // envelope; a present Maybe flattens to its single value.
         self.program.add_instruction(Instruction::rep_open());

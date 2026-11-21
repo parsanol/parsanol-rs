@@ -271,6 +271,77 @@ fn fragment_states(
 
 /// Subset determinization over epsilon closures into the dense table.
 fn determinize(nfa: &Nfa, start: u32, accept: u32) -> DfaTable {
+    determinize_marked(nfa, start, accept, &std::collections::HashSet::new())
+}
+
+/// The deterministic table for the UNBOUNDED LOOP of one body atom:
+/// star(body) with the body's fragment-accept nodes marked — a DFA
+/// state containing a marked node completes one iteration, which the
+/// envelope executor turns into the iteration's span. Any `min` is
+/// enforced by the executor against the crossing count.
+pub fn build_loop_dfa(grammar: &Grammar, body_idx: usize) -> Option<DfaTable> {
+    // The body must consume at least one byte: a nullable body makes
+    // the loop's iteration boundaries degenerate.
+    if !consumes_min_one(grammar, body_idx, 0, &mut Vec::new()) {
+        return None;
+    }
+    let mut nfa = Nfa::default();
+    let (bs, ba) = thompson(grammar, body_idx, &mut nfa, &mut Vec::new())?;
+    let entry = nfa.node();
+    let exit = nfa.node();
+    nfa.edge(entry, Edge::Epsilon, bs);
+    nfa.edge(ba, Edge::Epsilon, bs); // the loop back
+    nfa.edge(ba, Edge::Epsilon, exit);
+    let mut marked = std::collections::HashSet::new();
+    marked.insert(ba);
+    Some(determinize_marked(&nfa, entry, exit, &marked))
+}
+
+/// Whether the atom consumes at least one byte on every match path.
+fn consumes_min_one(grammar: &Grammar, idx: usize, depth: usize, seen: &mut Vec<usize>) -> bool {
+    if depth > 64 {
+        return false;
+    }
+    if seen.contains(&idx) {
+        return true; // a cycle back to an in-progress node: assume consuming
+    }
+    seen.push(idx);
+    let ok = (|| {
+        let atom = grammar.get_atom(idx)?;
+        Some(match atom {
+            Atom::Str { pattern } => !pattern.is_empty(),
+            Atom::Re { .. } => true,
+            Atom::Sequence { atoms } => {
+                atoms.iter().any(|&c| consumes_min_one(grammar, c, depth + 1, seen))
+            }
+            Atom::Alternative { atoms } => {
+                atoms.iter().all(|&c| consumes_min_one(grammar, c, depth + 1, seen))
+            }
+            Atom::Repetition { atom, min, .. } => {
+                *min >= 1 && consumes_min_one(grammar, *atom, depth + 1, seen)
+            }
+            Atom::Named { atom, .. }
+            | Atom::Capture { atom, .. }
+            | Atom::Scope { atom }
+            | Atom::Ignore { atom }
+            | Atom::Trivia { atom }
+            | Atom::TriviaCapture { atom, .. } => {
+                consumes_min_one(grammar, *atom, depth + 1, seen)
+            }
+            Atom::Entity { atom } => consumes_min_one(grammar, *atom, depth + 1, seen),
+            _ => false,
+        })
+    })();
+    seen.pop();
+    ok.unwrap_or(false)
+}
+
+fn determinize_marked(
+    nfa: &Nfa,
+    start: u32,
+    accept: u32,
+    marked: &std::collections::HashSet<u32>,
+) -> DfaTable {
     // Epsilon closures per NFA node.
     let mut closures: Vec<Vec<u32>> = vec![Vec::new(); nfa.nodes as usize];
     for node in 0..nfa.nodes {
@@ -309,6 +380,8 @@ fn determinize(nfa: &Nfa, start: u32, accept: u32) -> DfaTable {
     subsets.push(initial);
     accepts.push(subsets[0].contains(&accept));
     transitions.extend(std::iter::repeat_n(u32::MAX, 256));
+    let mut iteration_accepts: Vec<bool> = Vec::new();
+    iteration_accepts.push(subsets[0].iter().any(|n| marked.contains(n)));
 
     let mut worklist = 0usize;
     while worklist < subsets.len() {
@@ -336,6 +409,7 @@ fn determinize(nfa: &Nfa, start: u32, accept: u32) -> DfaTable {
                     ids.insert(closed.clone(), id);
                     subsets.push(closed);
                     accepts.push(subsets[id as usize].contains(&accept));
+                    iteration_accepts.push(subsets[id as usize].iter().any(|n| marked.contains(n)));
                     transitions.extend(std::iter::repeat_n(u32::MAX, 256));
                     id
                 }
@@ -347,6 +421,7 @@ fn determinize(nfa: &Nfa, start: u32, accept: u32) -> DfaTable {
     DfaTable {
         transitions,
         accepts,
+        iteration_accepts,
         start: 0,
         state_count: subsets.len() as u32,
     }
@@ -514,7 +589,7 @@ mod executor_tests {
 
         let mut program = Program::new();
         let idx = program.add_dfa_table(table);
-        program.add_instruction(Instruction::dfa_run(idx));
+        program.add_instruction(Instruction::dfa_run(idx, 1));
         program.add_instruction(Instruction::End);
 
         let mut arena = AstArena::new();

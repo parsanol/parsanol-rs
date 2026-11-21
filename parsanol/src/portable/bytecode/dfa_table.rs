@@ -15,6 +15,9 @@ pub struct DfaTable {
     pub transitions: Vec<u32>,
     /// State ids that end a valid rule match.
     pub accepts: Vec<bool>,
+    /// States that complete one repetition iteration: the envelope
+    /// executor pushes the iteration's span crossing one of these.
+    pub iteration_accepts: Vec<bool>,
     /// The start state id (always 0 after the builder).
     pub start: u32,
     /// Number of states (the transition table's row count).
@@ -37,5 +40,11 @@ impl DfaTable {
     #[inline]
     pub fn is_accept(&self, state: u32) -> bool {
         self.accepts[state as usize]
+    }
+
+    /// Whether the state completes one repetition iteration.
+    #[inline]
+    pub fn is_iteration_accept(&self, state: u32) -> bool {
+        self.iteration_accepts[state as usize]
     }
 }

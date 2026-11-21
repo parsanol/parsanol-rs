@@ -521,6 +521,10 @@ pub enum Instruction {
     DfaRun {
         /// Index into the DFA table
         table_idx: u32,
+        /// The minimum iteration count (the envelope executor checks
+        /// the crossings against it; the lower bound of the routed
+        /// repetition).
+        min: u32,
     },
 
     /// Scan a maximal codepoint-class run (exact ranges; per-char
@@ -936,8 +940,8 @@ impl Instruction {
 
     /// Create a DfaRun instruction
     #[inline]
-    pub fn dfa_run(table_idx: u32) -> Self {
-        Instruction::DfaRun { table_idx }
+    pub fn dfa_run(table_idx: u32, min: u32) -> Self {
+        Instruction::DfaRun { table_idx, min }
     }
 
     /// Create a ScanClass instruction
@@ -975,7 +979,9 @@ impl fmt::Display for Instruction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Instruction::Any { n } => write!(f, "Any {}", n),
-            Instruction::DfaRun { table_idx } => write!(f, "DfaRun {}", table_idx),
+            Instruction::DfaRun { table_idx, min } => {
+                write!(f, "DfaRun {} min={min}", table_idx)
+            }
             Instruction::Char { byte } => {
                 let c = *byte as char;
                 if c.is_ascii_graphic() {
