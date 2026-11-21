@@ -70,19 +70,37 @@ failure reporter (ts#89) and the Node WASM-poisoning recovery
 (ts#86). The Ruby FFI gate un-red after two days (#583).
 
 **The 1.5.13 release carries the wasm depth-budget work** (tag
-parsanol-v1.5.13 → b44c30d); both slice B stages landed AFTER its
-tag and ride the NEXT train. Slice B stage 1 (dense `states×256`
-DfaTable + Thompson NFA + subset determinization + the rule-level
-`DfaRun` routing) is merged (#611); stage 2 (the routed repetition
-loops: `build_loop_dfa`, iteration_accepts envelope mode, the
-value-1 single-terminal body restriction) is recovered in this
-round — its implementation had been left UNCOMMITTED in the session
-worktree (#611 carried stage 1 + the differential tests only; the
-tests pass trivially without the routing and become real when it
-lands). Trains riding 1.5.13: ruby PR #544 (Cargo.lock), ts PR #91
-(vendor bake + package.json — the mask-FFI glue grew the wasm ABI),
-py PR #67 (submodule + 1.5.13.0), manifest last per the registry
-law. The stage-1+2 engine rides the following all-runtimes train.
+parsanol-v1.5.13 → b44c30d) — TRAIN COMPLETE: crates.io 1.5.13
+(+ both binary releases), npm parsanol@1.5.13 + @parsanol/wasm@1.5.13
+(ts PR #91, the mask-FFI glue grew the wasm ABI), rubygems 1.5.13 on
+all 12 platforms (ruby #544 + #545 + the publish run), PyPI 1.5.13.0
+(py PR #67), and the manifest (#614: ENGINE-COMPAT.json →
+1.5.13/b44c30dc, checker green against all five live registries).
+
+**Slice B stages 1+2 both ON MAIN** (2026-11-21): stage 1 = #611
+(dense `states×256` DfaTable + Thompson NFA + subset determinization
++ the rule-level `DfaRun` routing); stage 2 = #615 (the routed
+repetition loops: `build_loop_dfa`, the iteration-accept envelope
+mode, the value-1 single-terminal body restriction) — recovered from
+UNCOMMITTED session worktree state (#611 had carried stage 1 + the
+differential tests only), hardened with an engagement assertion
+(`Program::has_iteration_accept_tables` — a silent builder-None can
+no longer make the differential pass trivially), and landed
+semver-clean (the loop metadata rides a program-side registry
+`dfa_loops: Vec<Option<DfaLoopMeta>>`; `DfaTable`/`DfaRun`/`dfa_run`
+keep their published shapes; cargo-semver-checks vs main: no update
+required). The differential EXPOSED a pre-existing walker-vs-VM
+divergence — a zero-match `*class` loop folds to an empty InputRef
+in the walker but keeps the tagged empty array in the VM (filed on
+rs#574 with the matrix; the RUBY side decides which side is the
+contract before either changes). Local gates: lib 589/589,
+integration 37 targets rc=0, clippy/fmt/semver clean.
+release-plz proposed **2.0.0** (#613) off the pre-refactor breaks —
+parked OPEN for the owner with the version analysis (the only
+strictly-major item vs published 1.5.13 is the enum-variant
+addition itself; `DfaRun = 44` was appended, no discriminants
+moved). The stage-1+2 engine rides the next all-runtimes train at
+whichever version the owner picks.
 
 ## Deferred + why
 
