@@ -10,8 +10,9 @@ use crate::portable::arena::AstArena;
 use crate::portable::bytecode::{compile_bytecode, parse_with_vm};
 use crate::portable::grammar::{Atom, Grammar};
 use crate::portable::parser::PortableParser;
+use crate::portable::parser_dsl;
 use crate::portable::parser_dsl::{
-    capture, choice, dynamic, re, ref_, seq, str, GrammarBuilder, ParsletExt,
+    capture, choice, dynamic, re, ref_, seq, GrammarBuilder, ParsletExt,
 };
 use crate::portable::visitor::{walk, Visitor};
 use std::fmt::Write as _;
@@ -143,7 +144,7 @@ fn kv_grammar() -> String {
     let value = choice(vec![
         dynamic(seq(vec![
             dynamic(ref_("ident")),
-            dynamic(str(".")),
+            dynamic(parser_dsl::str(".")),
             dynamic(ref_("ident")),
         ])),
         dynamic(ref_("ident")),
@@ -152,10 +153,10 @@ fn kv_grammar() -> String {
     let line = seq(vec![
         dynamic(ref_("ident")),
         dynamic(re(r"\s+").ignore()),
-        dynamic(str("=")),
+        dynamic(parser_dsl::str("=")),
         dynamic(re(r"\s+").ignore()),
         dynamic(ref_("value")),
-        dynamic(str(";")),
+        dynamic(parser_dsl::str(";")),
     ]);
     GrammarBuilder::new()
         .rule("document", capture("lines", ref_("line").many1()))
@@ -177,9 +178,9 @@ fn captures_grammar() -> String {
             dynamic(capture(
                 "string",
                 seq(vec![
-                    dynamic(str("\"")),
+                    dynamic(parser_dsl::str("\"")),
                     dynamic(capture("body", re(r#"[^"]*"#))),
-                    dynamic(str("\"")),
+                    dynamic(parser_dsl::str("\"")),
                 ]),
             )),
         ])),
@@ -195,7 +196,7 @@ fn captures_grammar() -> String {
 
 fn lookahead_grammar() -> String {
     let guarded = seq(vec![
-        dynamic(str("if").lookahead()),
+        dynamic(parser_dsl::str("if").lookahead()),
         dynamic(capture("kw", re("[a-z]+"))),
         dynamic(re(r"\s+").ignore()),
         dynamic(choice(vec![
@@ -213,9 +214,9 @@ fn lookahead_grammar() -> String {
 fn nested_repetition_grammar() -> String {
     let element = choice(vec![
         dynamic(seq(vec![
-            dynamic(str("(")),
+            dynamic(parser_dsl::str("(")),
             dynamic(capture("group", ref_("list"))),
-            dynamic(str(")")),
+            dynamic(parser_dsl::str(")")),
         ])),
         dynamic(capture("atom", re("[a-z]+"))),
     ]);
@@ -326,9 +327,9 @@ fn dispatch_grammar() -> String {
     // the dispatched program matches the tree-walker byte-for-byte.
     let item = choice(vec![
         dynamic(seq(vec![
-            dynamic(str("(")),
+            dynamic(parser_dsl::str("(")),
             dynamic(capture("group", ref_("list"))),
-            dynamic(str(")")),
+            dynamic(parser_dsl::str(")")),
         ])),
         dynamic(capture("atom", re("[a-z]+"))),
         dynamic(capture("num", re("[0-9]+"))),
@@ -617,7 +618,7 @@ fn differential_zero_width_repetition_body() {
     // A body that matches without consuming input is counted once and
     // the loop stops, on both engines (the VM looped until its timeout).
     let lookahead_only = GrammarBuilder::new()
-        .rule("root", str("a").lookahead().many1())
+        .rule("root", parser_dsl::str("a").lookahead().many1())
         .build()
         .to_json()
         .unwrap();
@@ -625,8 +626,8 @@ fn differential_zero_width_repetition_body() {
         .rule(
             "root",
             seq(vec![
-                dynamic(str("a").lookahead()),
-                dynamic(str("b").not_ahead()),
+                dynamic(parser_dsl::str("a").lookahead()),
+                dynamic(parser_dsl::str("b").not_ahead()),
             ])
             .many(),
         )
@@ -636,6 +637,90 @@ fn differential_zero_width_repetition_body() {
     for g in [lookahead_only, guard_chain] {
         for input in ["aaa", "a", "b", ""] {
             assert_agree(&g, input);
+        }
+    }
+}
+
+#[test]
+fn differential_dfa_routed_loops_match_the_walker() {
+    // rs#574 slice B stage 2: the unlimited plain repetitions with a
+    // single single-value terminal body lower to one DfaRun (the loop
+    // table's iteration-accept states synthesize the per-iteration
+    // spans and the envelope). The routed VM trees must equal the
+    // walker reference on every input class: full runs, partial
+    // trailing iterations (the no-partial-iteration rewind), empty
+    // matches (min=0), min-enforcement failures, and refusals after
+    // the loop.
+    let str_loop = GrammarBuilder::new()
+        .rule("root", parser_dsl::str("ab").many())
+        .build()
+        .to_json()
+        .unwrap();
+    let str_loop1 = GrammarBuilder::new()
+        .rule("root", parser_dsl::str("ab").many1())
+        .build()
+        .to_json()
+        .unwrap();
+    let re_loop = GrammarBuilder::new()
+        .rule("root", re("[0-9]").many())
+        .build()
+        .to_json()
+        .unwrap();
+    let re_loop_in_seq = GrammarBuilder::new()
+        .rule(
+            "root",
+            seq(vec![
+                dynamic(parser_dsl::re("[0-9]").many()),
+                dynamic(parser_dsl::str("!")),
+            ]),
+        )
+        .build()
+        .to_json()
+        .unwrap();
+    let grammars = [str_loop, str_loop1, re_loop, re_loop_in_seq];
+    let inputs = [
+        "",
+        "a",
+        "ab",
+        "abab",
+        "ababx",
+        "ababab!",
+        "0123456789",
+        "0123!",
+        "x!",
+        "!",
+        "aba",
+        "abb",
+    ];
+    let dbg = GrammarBuilder::new()
+        .rule("root", parser_dsl::str("ab").many())
+        .build()
+        .to_json()
+        .unwrap();
+    {
+        let grammar = Grammar::from_json(&dbg).unwrap();
+        let program = compile_bytecode(grammar.clone()).unwrap();
+        let mut a = AstArena::new();
+        let r = parse_with_vm(&program, "", &mut a);
+        eprintln!(
+            "STAGE1 VM on empty: {:?}",
+            r.as_ref().map(|x| x.end_pos).map_err(|e| e.to_string())
+        );
+        let p = PortableParser::new(&grammar, "", &mut a).parse_with_end_pos();
+        eprintln!(
+            "STAGE1 walker on empty: {:?}",
+            p.as_ref().map(|x| x.end_pos).map_err(|e| e.to_string())
+        );
+        if let Ok(x) = r {
+            let c = collapse_ast(&x.value, &mut a);
+            let d = TreeMaterializer { out: String::new() };
+            let d = walk(&c, &a, "", d);
+            eprintln!("STAGE1 VM tree on empty: {}", d.out);
+        }
+    }
+    for g in &grammars {
+        for input in &inputs {
+            assert_agree_collapsed(g, input);
         }
     }
 }
