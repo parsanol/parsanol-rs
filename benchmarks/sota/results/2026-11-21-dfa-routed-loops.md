@@ -65,3 +65,39 @@ scanning to tree-building in the loop.
 - The remaining loop shapes (sequences of rule refs, nested
   multi-value fragments) stay classic; their tranches would extend the
   win to grammars whose OUTER loops route too.
+
+## Addendum (2026-11-22): the tranche-4 shape, measured
+
+**Host**: the same box at load 4 (idle) — the quietest window of the
+campaign. **New side B**: main at 5e90565 (tranche 4 — the cut
+assembly). The tranche-4 routing covers sequences of RULE REFS whose
+targets are terminals; the measured shape:
+
+    grammar LoopBench3 version "1.0.0" edition "v2" {
+      sep = %x20
+      letter = %x61-7A
+      doc = 0*(sep letter)
+      entry doc: doc
+    }
+
+Input: 400,000 bytes (200,000 " letter" pairs). Per-iteration values =
+two `{sep}/{letter}` hash wraps (the v2 named-tree law) — the
+hash-write-bound class.
+
+| side | TOTAL ns (min of 2×15 interleaved) | ns/B |
+|---|---|---|
+| pre-routing (8983451) | 32,645,958 | 81.6 |
+| routed (5e90565) | 31,993,250 | **80.0** |
+
+**−2.0%**, consistent in both rounds (−2.6% / −1.3%). The honest
+reading stands: the routing's payoff scales with the scan-to-
+tree-build ratio — the hash-bound shapes win small, the
+scan-dominated shapes win big (−13.7-16.0% above). The bench
+grammars' word-loop remains unrouted (its outer elements target
+LOOPS, not terminals — loop-composition routing, the nested-fragments
+arc).
+
+Also re-run in this window: grammar 1 (rule-ref) pre 74.28 / post
+72.34 ms, grammar 2 (inline-class) pre 14.98 / post 13.42 ms — both
+consistent with the 2026-11-21 receipts (−2.6% and −10.4% on these
+runs; the minima above stand).
