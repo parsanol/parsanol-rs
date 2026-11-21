@@ -519,7 +519,10 @@ pub enum Instruction {
     /// loop-exit disjointness makes first == longest), fail when no
     /// accept state was reached.
     DfaRun {
-        /// Index into the DFA table
+        /// Index into the DFA table. The routed repetition-loop
+        /// tables carry their iteration-accept states and routed min
+        /// in the program's parallel registry, so this variant stays
+        /// at its published shape.
         table_idx: u32,
     },
 
@@ -975,7 +978,9 @@ impl fmt::Display for Instruction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Instruction::Any { n } => write!(f, "Any {}", n),
-            Instruction::DfaRun { table_idx } => write!(f, "DfaRun {}", table_idx),
+            Instruction::DfaRun { table_idx } => {
+                write!(f, "DfaRun {table_idx}")
+            }
             Instruction::Char { byte } => {
                 let c = *byte as char;
                 if c.is_ascii_graphic() {

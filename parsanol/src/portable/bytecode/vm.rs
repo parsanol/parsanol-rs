@@ -577,10 +577,19 @@ impl<'a> BytecodeVM<'a> {
         }
     }
 
-    /// The DFA run (rs#574 slice B): walk bytes through the dense
-    /// table, track the last accept position, succeed at the longest
-    /// accept (exact for the provable family), fail when none.
-    /// Dispatched from `run` like the scan instructions.
+    /// The DFA run (rs#574 slice B). Two modes:
+    ///
+    /// - **The plain recognizer** (no iteration-accept states in the
+    ///   table): walk bytes, track the last accept position, succeed at
+    ///   the longest accept (exact for the provable family), fail when
+    ///   none.
+    /// - **The envelope mode** (the routed repetition's loop table):
+    ///   each iteration-accept crossing pushes the iteration's span;
+    ///   on stuck the walk rewinds to the last boundary (a partial
+    ///   iteration never counts — the PEG's no-partial rule), the
+    ///   crossing count checks against `min`, and the pushed spans
+    ///   build the same tagged envelope BuildRep constructs — the
+    ///   tree is identical to the per-iteration Choice loop's.
     #[inline(never)]
     fn exec_dfa_run(&mut self, table_idx: u32) -> Result<ExecutionResult, ParseError> {
         let table = self
@@ -589,14 +598,24 @@ impl<'a> BytecodeVM<'a> {
             .ok_or_else(|| ParseError::Internal {
                 message: format!("Invalid DFA table index: {table_idx}"),
             })?;
+        let iteration_accepts = self.program.get_dfa_iteration_accepts(table_idx);
+        // The routed loop's min rides the registry next to the
+        // iteration-accept states; rule tables carry none.
+        let min = self.program.get_dfa_loop_min(table_idx).unwrap_or(0);
         let input = self.input;
         let start = self.position;
+        let envelope_mode = iteration_accepts.is_some_and(|a| a.iter().any(|&b| b));
         let mut state = table.start;
         let mut last_accept: Option<usize> = if table.is_accept(state) {
             Some(start)
         } else {
             None
         };
+        // The envelope mode's bookkeeping.
+        let entry_len = self.value_stack.len();
+        let mut iterations = 0usize;
+        let mut boundary = start;
+        let mut iteration_start = start;
         while self.position < input.len() {
             match table.step(state, input[self.position]) {
                 Some(next) => {
@@ -605,9 +624,50 @@ impl<'a> BytecodeVM<'a> {
                     if table.is_accept(state) {
                         last_accept = Some(self.position);
                     }
+                    if envelope_mode && iteration_accepts.is_some_and(|a| a[state as usize]) {
+                        iterations += 1;
+                        boundary = self.position;
+                        let iter_start = iteration_start;
+                        iteration_start = self.position;
+                        self.push_span_value(iter_start);
+                    }
                 }
                 None => break,
             }
+        }
+        if envelope_mode {
+            // The PEG's no-partial rule: the walk ending mid-body
+            // rewinds to the last iteration boundary, dropping the
+            // partial iteration's span.
+            if self.position != boundary {
+                self.value_stack.truncate(entry_len + iterations);
+                self.position = boundary;
+            }
+            if (iterations as u64) < u64::from(min) {
+                self.value_stack.truncate(entry_len);
+                self.position = start;
+                self.track_failure();
+                return Ok(ExecutionResult::Fail);
+            }
+            // BuildRep(maybe = false) with the pushed spans: the same
+            // tagged envelope, byte-identical to the Choice loop's.
+            let tag = match self.tag_rep {
+                Some(idx) => idx,
+                None => {
+                    let idx = self.arena.intern_string_index(":repetition");
+                    self.tag_rep = Some(idx);
+                    idx
+                }
+            };
+            let (pool_idx, len) = self
+                .arena
+                .store_tagged_array_indexed(tag, &self.value_stack[entry_len..]);
+            self.value_stack.truncate(entry_len);
+            self.value_stack.push(AstNode::Array {
+                pool_index: pool_idx,
+                length: len,
+            });
+            return Ok(ExecutionResult::Continue);
         }
         match last_accept {
             Some(end) => {

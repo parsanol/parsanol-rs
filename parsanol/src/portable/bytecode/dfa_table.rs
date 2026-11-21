@@ -7,6 +7,11 @@
 //! choice FIRST sets, no recursion) means the epsilon-NFA built from
 //! the atom tree determinizes single-path — no backtracking, so the
 //! greedy longest walk is exact for every usage site.
+//!
+//! The routed repetition-loop tables ride the same shape; their
+//! iteration-accept states live in the program's parallel registry
+//! (`Program::get_dfa_iteration_accepts`) so this struct stays at its
+//! published field set.
 
 /// A dense byte-transition table for one lowered rule.
 #[derive(Debug, Clone)]
@@ -38,4 +43,17 @@ impl DfaTable {
     pub fn is_accept(&self, state: u32) -> bool {
         self.accepts[state as usize]
     }
+}
+
+/// The routed repetition loop's executor metadata: the iteration-accept
+/// states and the routed minimum. Lives in the program's parallel
+/// registry so `DfaTable` and `Instruction::DfaRun` keep their
+/// published shapes.
+#[derive(Debug, Clone)]
+pub struct DfaLoopMeta {
+    /// States that complete one repetition iteration: the envelope
+    /// executor pushes the iteration's span crossing one of these.
+    pub iteration_accepts: Vec<bool>,
+    /// The lower bound of the routed repetition.
+    pub min: u32,
 }
