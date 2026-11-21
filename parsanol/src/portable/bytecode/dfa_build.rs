@@ -271,7 +271,7 @@ fn fragment_states(
 
 /// Subset determinization over epsilon closures into the dense table.
 fn determinize(nfa: &Nfa, start: u32, accept: u32) -> DfaTable {
-    determinize_marked(nfa, start, accept, &std::collections::HashSet::new())
+    determinize_marked(nfa, start, accept, &std::collections::HashSet::new()).0
 }
 
 /// The deterministic table for the UNBOUNDED LOOP of one body atom:
@@ -279,7 +279,7 @@ fn determinize(nfa: &Nfa, start: u32, accept: u32) -> DfaTable {
 /// state containing a marked node completes one iteration, which the
 /// envelope executor turns into the iteration's span. Any `min` is
 /// enforced by the executor against the crossing count.
-pub fn build_loop_dfa(grammar: &Grammar, body_idx: usize) -> Option<DfaTable> {
+pub fn build_loop_dfa(grammar: &Grammar, body_idx: usize) -> Option<(DfaTable, Vec<bool>)> {
     // The body must consume at least one byte: a nullable body makes
     // the loop's iteration boundaries degenerate.
     if !consumes_min_one(grammar, body_idx, 0, &mut Vec::new()) {
@@ -339,7 +339,7 @@ fn determinize_marked(
     start: u32,
     accept: u32,
     marked: &std::collections::HashSet<u32>,
-) -> DfaTable {
+) -> (DfaTable, Vec<bool>) {
     // Epsilon closures per NFA node.
     let mut closures: Vec<Vec<u32>> = vec![Vec::new(); nfa.nodes as usize];
     for node in 0..nfa.nodes {
@@ -416,13 +416,13 @@ fn determinize_marked(
         }
     }
 
-    DfaTable {
+    let table = DfaTable {
         transitions,
         accepts,
-        iteration_accepts,
         start: 0,
         state_count: subsets.len() as u32,
-    }
+    };
+    (table, iteration_accepts)
 }
 
 use std::collections::HashMap;
@@ -587,7 +587,7 @@ mod executor_tests {
 
         let mut program = Program::new();
         let idx = program.add_dfa_table(table);
-        program.add_instruction(Instruction::dfa_run(idx, 1));
+        program.add_instruction(Instruction::dfa_run(idx));
         program.add_instruction(Instruction::End);
 
         let mut arena = AstArena::new();

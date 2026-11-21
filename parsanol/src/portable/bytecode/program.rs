@@ -164,6 +164,11 @@ pub struct Program {
     /// the program is compiled from the grammar at load.
     dfa_tables: Vec<super::dfa_table::DfaTable>,
 
+    /// Per-table executor metadata for the routed repetition loops
+    /// (`None` for rule tables) — parallel to `dfa_tables`, so the
+    /// loop metadata never changes the published table shape.
+    dfa_loops: Vec<Option<super::dfa_table::DfaLoopMeta>>,
+
     /// Regex pattern table (for Regex instructions)
     regexes: Vec<String>,
 
@@ -209,6 +214,7 @@ impl Program {
             char_sets: Vec::new(),
             dispatch_tables: Vec::new(),
             dfa_tables: Vec::new(),
+            dfa_loops: Vec::new(),
             regexes: Vec::new(),
             keys: Vec::new(),
             labels: Vec::new(),
@@ -231,6 +237,7 @@ impl Program {
             char_sets: Vec::with_capacity(sets),
             dispatch_tables: Vec::new(),
             dfa_tables: Vec::new(),
+            dfa_loops: Vec::new(),
             regexes: Vec::new(),
             keys: Vec::with_capacity(strings),
             labels: Vec::new(),
@@ -404,7 +411,42 @@ impl Program {
         }
         let idx = self.dfa_tables.len() as u32;
         self.dfa_tables.push(table);
+        self.dfa_loops.push(None);
         idx
+    }
+
+    /// Add a routed repetition-loop table with its executor metadata
+    /// (appended, never deduplicated — the marked-subset shape is
+    /// loop-specific).
+    pub fn add_dfa_loop_table(
+        &mut self,
+        table: super::dfa_table::DfaTable,
+        iteration_accepts: Vec<bool>,
+        min: u32,
+    ) -> u32 {
+        let idx = self.dfa_tables.len() as u32;
+        self.dfa_tables.push(table);
+        self.dfa_loops.push(Some(super::dfa_table::DfaLoopMeta {
+            iteration_accepts,
+            min,
+        }));
+        idx
+    }
+
+    /// The routed loop's iteration-accept states, or `None` for a
+    /// rule-level table (or an out-of-range index).
+    pub fn get_dfa_iteration_accepts(&self, idx: u32) -> Option<&[bool]> {
+        self.dfa_loops
+            .get(idx as usize)
+            .and_then(|m| m.as_ref().map(|m| m.iteration_accepts.as_slice()))
+    }
+
+    /// The routed loop's minimum iteration count, or `None` for a
+    /// rule-level table.
+    pub fn get_dfa_loop_min(&self, idx: u32) -> Option<u32> {
+        self.dfa_loops
+            .get(idx as usize)
+            .and_then(|m| m.as_ref().map(|m| m.min))
     }
 
     /// Get a DFA table
@@ -413,18 +455,13 @@ impl Program {
         self.dfa_tables.get(idx as usize)
     }
 
-    /// Whether any loop/rule lowered to a DFA table.
-    pub fn has_dfa_tables(&self) -> bool {
-        !self.dfa_tables.is_empty()
-    }
-
-    /// Whether any table marks iteration-accept states — only the
-    /// routed repetition-loop tables do (stage-1 rule tables leave
-    /// them empty).
+    /// Whether any loop lowered to a routed repetition table — the
+    /// differential's engagement gate.
     pub fn has_iteration_accept_tables(&self) -> bool {
-        self.dfa_tables
+        self.dfa_loops
             .iter()
-            .any(|t| t.iteration_accepts.iter().any(|&x| x))
+            .flatten()
+            .any(|m| m.iteration_accepts.iter().any(|&x| x))
     }
 
     /// Add a neg-scan spec

@@ -1184,10 +1184,13 @@ impl Compiler {
                 Some(Atom::Re { pattern }) if crate::portable::char_class::CharRanges::from_pattern(pattern).is_some()
             );
             if single_terminal {
-                if let Some(table) = super::dfa_build::build_loop_dfa(&self.grammar, atom_idx) {
-                    let idx = self.program.add_dfa_table(table);
-                    self.program
-                        .add_instruction(Instruction::dfa_run(idx, min as u32));
+                if let Some((table, iteration_accepts)) =
+                    super::dfa_build::build_loop_dfa(&self.grammar, atom_idx)
+                {
+                    let idx = self
+                        .program
+                        .add_dfa_loop_table(table, iteration_accepts, min as u32);
+                    self.program.add_instruction(Instruction::dfa_run(idx));
                     return Ok(entry);
                 }
             }

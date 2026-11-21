@@ -473,15 +473,12 @@ impl<'a> BytecodeVM<'a> {
                     self.ip += 1;
                     continue;
                 }
-                Instruction::DfaRun { table_idx, min } => {
+                Instruction::DfaRun { table_idx } => {
                     // Unlike the scans (which always Continue), a DFA
                     // run legitimately fails — route that through the
                     // same backtrack handling as execute_instruction's
                     // Fail arm.
-                    if matches!(
-                        self.exec_dfa_run(*table_idx, *min)?,
-                        ExecutionResult::Continue
-                    ) {
+                    if matches!(self.exec_dfa_run(*table_idx)?, ExecutionResult::Continue) {
                         self.ip += 1;
                     } else if !self.backtrack()? {
                         return Err(ParseError::Failed {
@@ -594,16 +591,20 @@ impl<'a> BytecodeVM<'a> {
     ///   build the same tagged envelope BuildRep constructs — the
     ///   tree is identical to the per-iteration Choice loop's.
     #[inline(never)]
-    fn exec_dfa_run(&mut self, table_idx: u32, min: u32) -> Result<ExecutionResult, ParseError> {
+    fn exec_dfa_run(&mut self, table_idx: u32) -> Result<ExecutionResult, ParseError> {
         let table = self
             .program
             .get_dfa_table(table_idx)
             .ok_or_else(|| ParseError::Internal {
                 message: format!("Invalid DFA table index: {table_idx}"),
             })?;
+        let iteration_accepts = self.program.get_dfa_iteration_accepts(table_idx);
+        // The routed loop's min rides the registry next to the
+        // iteration-accept states; rule tables carry none.
+        let min = self.program.get_dfa_loop_min(table_idx).unwrap_or(0);
         let input = self.input;
         let start = self.position;
-        let envelope_mode = table.iteration_accepts.iter().any(|&b| b);
+        let envelope_mode = iteration_accepts.is_some_and(|a| a.iter().any(|&b| b));
         let mut state = table.start;
         let mut last_accept: Option<usize> = if table.is_accept(state) {
             Some(start)
@@ -623,7 +624,7 @@ impl<'a> BytecodeVM<'a> {
                     if table.is_accept(state) {
                         last_accept = Some(self.position);
                     }
-                    if envelope_mode && table.is_iteration_accept(state) {
+                    if envelope_mode && iteration_accepts.is_some_and(|a| a[state as usize]) {
                         iterations += 1;
                         boundary = self.position;
                         let iter_start = iteration_start;
