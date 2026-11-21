@@ -818,7 +818,7 @@ fn differential_dfa_routed_sequence_loops_match_the_walker() {
     let v = parse_with_vm(&program, "1x2x", &mut a).unwrap();
     assert_eq!(
         materialize(&v.value, &a, "1x2x"),
-        "[3(s:\":repetition\";[2(s:\":sequence\";in:\"1x\";)];[2(s:\":sequence\";in:\"2x\";)];)];",
+        "[3(s:\":repetition\";[3(s:\":sequence\";in:\"1\";in:\"x\";)];[3(s:\":sequence\";in:\"2\";in:\"x\";)];)];",
         "the routed sequence loop's per-iteration value shape"
     );
 }
@@ -893,7 +893,7 @@ fn differential_dfa_routed_named_loops_match_the_walker() {
     let v = parse_with_vm(&program, "1x2x", &mut a).unwrap();
     assert_eq!(
         materialize(&v.value, &a, "1x2x"),
-        "[3(s:\":repetition\";{\"item\"->[2(s:\":sequence\";in:\"1x\";)];};{\"item\"->[2(s:\":sequence\";in:\"2x\";)];};)];",
+        "[3(s:\":repetition\";{\"item\"->[3(s:\":sequence\";in:\"1\";in:\"x\";)];};{\"item\"->[3(s:\":sequence\";in:\"2\";in:\"x\";)];};)];",
         "the routed named loop's per-iteration value shape"
     );
 }
@@ -1105,4 +1105,72 @@ fn differential_dfa_routed_seq_of_refs_match_the_walker() {
         "[3(s:\":repetition\";[3(s:\":sequence\";in:\" \";in:\"ab\";)];[3(s:\":sequence\";in:\" \";in:\"ab\";)];)];",
         "the routed seq-of-refs loop's per-iteration value shape"
     );
+}
+
+#[test]
+fn differential_fold_merge_characterization() {
+    // rs#574 slice B tranche 5: the fold's merge rule, CHARACTERIZED
+    // against the classic engine (8983451) — the classic BuildSeq
+    // NEVER merges multi-element spans: str_str (builder-fused to a
+    // single Str — one element), str_re, re_str all deliver
+    // per-element spans raw, walker == VM on the classic. The routed
+    // cut assembly reproduces that: NO merging — every element its
+    // own span. This test pins walker == VM RAW (not just collapsed)
+    // per producing-instruction pair.
+    let cases: Vec<(&str, parser_dsl::Sequence<parser_dsl::ErasedParslet>)> = vec![
+        (
+            "str_str",
+            seq(vec![
+                dynamic(parser_dsl::str("ab")),
+                dynamic(parser_dsl::str("c")),
+            ]),
+        ),
+        (
+            "str_re",
+            seq(vec![
+                dynamic(parser_dsl::str("ab")),
+                dynamic(parser_dsl::re("[cd]")),
+            ]),
+        ),
+        (
+            "re_str",
+            seq(vec![
+                dynamic(parser_dsl::re("[ab]")),
+                dynamic(parser_dsl::str("c")),
+            ]),
+        ),
+    ];
+    for (name, body) in cases {
+        let g = GrammarBuilder::new()
+            .rule("root", dynamic(body).many())
+            .build()
+            .to_json()
+            .unwrap();
+        let grammar = Grammar::from_json(&g).unwrap();
+        let program = compile_bytecode(grammar.clone()).unwrap();
+        assert!(
+            program.has_iteration_accept_tables(),
+            "{name}: the loop did not route"
+        );
+        let input = match name {
+            "str_str" => "abcabc",
+            "str_re" => "abdabd",
+            "re_str" => "acac",
+            _ => "",
+        };
+        let mut vm_arena = AstArena::new();
+        let v = parse_with_vm(&program, input, &mut vm_arena)
+            .unwrap_or_else(|e| panic!("{name}: vm failed: {e}"));
+        let mut pk_arena = AstArena::new();
+        let p = PortableParser::new(&grammar, input, &mut pk_arena)
+            .parse_with_end_pos()
+            .unwrap_or_else(|e| panic!("{name}: walker failed: {e:?}"));
+        // RAW equality: the routed synthesis must produce the exact
+        // classic raw tree (no merging).
+        assert_eq!(
+            materialize(&v.value, &vm_arena, input),
+            materialize(&p.value, &pk_arena, input),
+            "{name}: the routed raw tree diverges from the walker"
+        );
+    }
 }
