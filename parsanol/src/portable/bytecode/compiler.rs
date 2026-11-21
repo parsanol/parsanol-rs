@@ -1170,43 +1170,58 @@ impl Compiler {
         // iteration lowers to ONE self-contained DfaRun. Stage 2: the
         // body = a single single-value terminal (a Str — one
         // String/Char instruction — or an ASCII-class Re). Stage 3: a
-        // FLAT Sequence of such terminals — the classic path lowers it
-        // to one BuildSeq per iteration whose fold merges the adjacent
-        // fragment spans into one; the routed executor reproduces the
-        // same tagged array from the iteration's start/end. Multi-value
-        // NON-span bodies (named/capture wraps, nested structures) keep
-        // riding the classic loop until their synthesis metadata
-        // exists.
+        // FLAT Sequence of such terminals (one `:sequence`-tagged
+        // array per iteration, the classic BuildSeq fold shape) and a
+        // Named-wrapped span terminal / flat span sequence (one
+        // `{name: inner}` hash per iteration, the classic BuildHash
+        // shape). Capture/Scope/Trivia wrappers stay on the classic
+        // loop — they ride the capture machinery, which the routed
+        // executor does not run — as do nested multi-value fragments
+        // (their synthesis plan is a tree, a later slice).
         if max.is_none() && !maybe && matches!(tag, RepetitionTag::Repetition) {
-            let flat_span_body = match self.grammar.get_atom(atom_idx) {
+            // A SPAN TERMINAL (routes bare); the wrapper decides the
+            // per-iteration value shape.
+            let is_span_terminal = |idx: usize| match self.grammar.get_atom(idx) {
                 Some(Atom::Str { pattern }) => !pattern.is_empty(),
                 Some(Atom::Re { pattern }) => {
                     crate::portable::char_class::CharRanges::from_pattern(pattern).is_some()
                 }
-                Some(Atom::Sequence { atoms }) => {
-                    !atoms.is_empty()
-                        && atoms
-                            .iter()
-                            .all(|&child| match self.grammar.get_atom(child) {
-                                Some(Atom::Str { pattern }) => !pattern.is_empty(),
-                                Some(Atom::Re { pattern }) => {
-                                    crate::portable::char_class::CharRanges::from_pattern(pattern)
-                                        .is_some()
-                                }
-                                _ => false,
-                            })
-                }
                 _ => false,
             };
-            if flat_span_body {
+            let body_shape = match self.grammar.get_atom(atom_idx) {
+                Some(Atom::Str { .. }) | Some(Atom::Re { .. }) if is_span_terminal(atom_idx) => {
+                    Some((false, None))
+                }
+                Some(Atom::Sequence { atoms })
+                    if !atoms.is_empty() && atoms.iter().all(|&c| is_span_terminal(c)) =>
+                {
+                    Some((true, None))
+                }
+                Some(Atom::Named { name, atom }) => match self.grammar.get_atom(*atom) {
+                    Some(Atom::Str { .. }) | Some(Atom::Re { .. }) if is_span_terminal(*atom) => {
+                        Some((false, Some(name.clone())))
+                    }
+                    Some(Atom::Sequence { atoms })
+                        if !atoms.is_empty() && atoms.iter().all(|&c| is_span_terminal(c)) =>
+                    {
+                        Some((true, Some(name.clone())))
+                    }
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some((seq_wrapped, named)) = body_shape {
                 if let Some((table, iteration_accepts)) =
                     super::dfa_build::build_loop_dfa(&self.grammar, atom_idx)
                 {
                     let idx = self
                         .program
                         .add_dfa_loop_table(table, iteration_accepts, min as u32);
-                    if matches!(self.grammar.get_atom(atom_idx), Some(Atom::Sequence { .. })) {
+                    if seq_wrapped {
                         self.program.mark_dfa_loop_sequence(idx);
+                    }
+                    if let Some(name) = named {
+                        self.program.mark_dfa_loop_named(idx, name);
                     }
                     self.program.add_instruction(Instruction::dfa_run(idx));
                     return Ok(entry);

@@ -529,31 +529,48 @@ impl<'a> BytecodeVM<'a> {
         self.value_stack.push(self.arena.input_ref(start, len));
     }
 
-    /// Push one routed-loop iteration's value: the bare span, or —
-    /// for a Sequence body — the `:sequence`-tagged array wrapping the
-    /// merged iteration span, exactly what the classic path's one
-    /// BuildSeq per iteration produces after its fold.
+    /// Push one routed-loop iteration's value: the bare span, the
+    /// `:sequence`-tagged array wrapping the merged iteration span
+    /// (a Sequence body's one-BuildSeq-per-iteration fold shape), and
+    /// optionally Named-wrapped as `{name: inner}` (a Named body's
+    /// BuildHash shape).
     #[inline]
-    fn push_iteration_value(&mut self, iter_start: usize, boundary: usize, seq_wrapped: bool) {
-        if !seq_wrapped {
-            self.push_span_value(iter_start);
-            return;
-        }
-        let tag = match self.tag_seq {
-            Some(idx) => idx,
-            None => {
-                let idx = self.arena.intern_string_index(":sequence");
-                self.tag_seq = Some(idx);
-                idx
-            }
-        };
+    fn push_iteration_value(
+        &mut self,
+        iter_start: usize,
+        boundary: usize,
+        seq_wrapped: bool,
+        named_idx: Option<u32>,
+    ) {
         let len = boundary - iter_start;
         let span = self.arena.input_ref(iter_start, len);
-        let (pool_idx, length) = self.arena.store_tagged_array_indexed(tag, &[span]);
-        self.value_stack.push(AstNode::Array {
-            pool_index: pool_idx,
-            length,
-        });
+        let inner = if seq_wrapped {
+            let tag = match self.tag_seq {
+                Some(idx) => idx,
+                None => {
+                    let idx = self.arena.intern_string_index(":sequence");
+                    self.tag_seq = Some(idx);
+                    idx
+                }
+            };
+            let (pool_idx, length) = self.arena.store_tagged_array_indexed(tag, &[span]);
+            AstNode::Array {
+                pool_index: pool_idx,
+                length,
+            }
+        } else {
+            span
+        };
+        match named_idx {
+            None => self.value_stack.push(inner),
+            Some(key) => {
+                let (pool_idx, length) = self.arena.store_hash_indexed_key(key, inner);
+                self.value_stack.push(AstNode::Hash {
+                    pool_index: pool_idx,
+                    length,
+                });
+            }
+        }
     }
 
     /// Restore all stacks to a frame's recorded heights
@@ -627,6 +644,10 @@ impl<'a> BytecodeVM<'a> {
             })?;
         let iteration_accepts = self.program.get_dfa_iteration_accepts(table_idx);
         let seq_wrapped = self.program.get_dfa_loop_sequence_wrapped(table_idx);
+        let named_idx: Option<u32> = self
+            .program
+            .get_dfa_loop_named_key(table_idx)
+            .map(|name| self.arena.intern_string_index(name));
         // The routed loop's min rides the registry next to the
         // iteration-accept states; rule tables carry none.
         let min = self.program.get_dfa_loop_min(table_idx).unwrap_or(0);
@@ -657,7 +678,7 @@ impl<'a> BytecodeVM<'a> {
                         boundary = self.position;
                         let iter_start = iteration_start;
                         iteration_start = self.position;
-                        self.push_iteration_value(iter_start, boundary, seq_wrapped);
+                        self.push_iteration_value(iter_start, boundary, seq_wrapped, named_idx);
                     }
                 }
                 None => break,

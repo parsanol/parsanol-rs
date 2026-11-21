@@ -174,6 +174,11 @@ pub struct Program {
     /// `dfa_tables`, keeping `DfaLoopMeta` at its published fields.
     dfa_loop_seq_wrapped: Vec<bool>,
 
+    /// The routed loop's per-iteration hash key when the body is a
+    /// Named-wrapped terminal (`{name: span}` per iteration, the
+    /// classic BuildHash shape) — parallel to `dfa_tables`.
+    dfa_loop_named: Vec<Option<String>>,
+
     /// Regex pattern table (for Regex instructions)
     regexes: Vec<String>,
 
@@ -221,6 +226,7 @@ impl Program {
             dfa_tables: Vec::new(),
             dfa_loops: Vec::new(),
             dfa_loop_seq_wrapped: Vec::new(),
+            dfa_loop_named: Vec::new(),
             regexes: Vec::new(),
             keys: Vec::new(),
             labels: Vec::new(),
@@ -245,6 +251,7 @@ impl Program {
             dfa_tables: Vec::new(),
             dfa_loops: Vec::new(),
             dfa_loop_seq_wrapped: Vec::new(),
+            dfa_loop_named: Vec::new(),
             regexes: Vec::new(),
             keys: Vec::with_capacity(strings),
             labels: Vec::new(),
@@ -438,6 +445,7 @@ impl Program {
             min,
         }));
         self.dfa_loop_seq_wrapped.push(false);
+        self.dfa_loop_named.push(None);
         idx
     }
 
@@ -472,6 +480,22 @@ impl Program {
         if let Some(slot) = self.dfa_loop_seq_wrapped.get_mut(idx as usize) {
             *slot = true;
         }
+    }
+
+    /// Mark the routed loop's per-iteration value as a Named wrap:
+    /// `{name: inner}` per iteration — the classic BuildHash shape.
+    pub fn mark_dfa_loop_named(&mut self, idx: u32, name: String) {
+        if let Some(slot) = self.dfa_loop_named.get_mut(idx as usize) {
+            *slot = Some(name);
+        }
+    }
+
+    /// The routed loop's per-iteration hash key, when the body is a
+    /// Named-wrapped terminal.
+    pub fn get_dfa_loop_named_key(&self, idx: u32) -> Option<&str> {
+        self.dfa_loop_named
+            .get(idx as usize)
+            .and_then(|n| n.as_deref())
     }
 
     /// Get a DFA table
