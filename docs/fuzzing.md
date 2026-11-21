@@ -50,7 +50,7 @@ PARSANOL_FUZZ_REPLAY=fuzz-crashes/case-N.parg \
 ## The honest counter
 
 ```json
-"state": {"hours": 0, "crashes": 0}
+"state": {"hours": 1, "crashes": 0}
 ```
 
 Cumulative heavy-fuzz hours with **0 crashes** since the counter
