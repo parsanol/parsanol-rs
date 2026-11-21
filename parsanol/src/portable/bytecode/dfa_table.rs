@@ -59,32 +59,41 @@ pub struct DfaLoopMeta {
 }
 
 /// One sequence element's value descriptor (tranche 4, corrected in
-/// tranche 5): the characterization matrix (#631) showed the classic
-/// BuildSeq fold NEVER merges — every element lands as its own span.
-/// The bare variants record provenance only (the nested-fragments
-/// slice reads the producing path); the executor keys on `Hash`
-/// alone.
+/// tranche 5, nested in tranche 6): the characterization matrix (#631)
+/// showed the classic BuildSeq fold NEVER merges — every element lands
+/// as its own span. The bare variants record provenance only; the
+/// executor keys on the structured variants. The descriptor is the
+/// plan TREE: `Nested`/`HashNested` carry their children's descriptors
+/// in flattened leaf order (the classic emits one `:sequence` node per
+/// Sequence atom — even a builder-fused one-element inner — and Named
+/// wraps compose as `{name -> nested node}`).
 #[derive(Debug, Clone)]
 pub enum ElementDesc {
     /// A bare span from an inline Str/Re instruction.
     InlineBare,
     /// A bare span delivered through a rule-ref call.
     RefBare,
-    /// A hash wrap `{name: span}` (a Named-wrapped terminal or a
-    /// Named rule ref — the v2 named-tree law).
+    /// A hash wrap `{name: span}` around one bare leaf.
     Hash(String),
+    /// A bare nested sequence: one `:sequence` node whose values are
+    /// the children's (tranche 6).
+    Nested(Vec<ElementDesc>),
+    /// A hash wrap `{name -> :sequence node}` around a nested
+    /// sequence's values (tranche 6).
+    HashNested(String, Vec<ElementDesc>),
 }
 
-/// The routed sequence loop's per-element synthesis plan (tranche 4):
-/// which DFA states close an ELEMENT of the iteration (the cut
-/// positions) and each element's value descriptor. Parallel to
+/// The routed sequence loop's per-element synthesis plan (tranche 4,
+/// leaf-flattened in tranche 6): which DFA states close a LEAF span of
+/// the iteration (nested elements flatten to their leaves — the cut
+/// positions) and the element plan tree over those leaves. Parallel to
 /// `dfa_tables`.
 #[derive(Debug, Clone)]
 pub struct DfaLoopElements {
-    /// Per-DFA-state: the element index whose accept the state closes,
-    /// or `None`. The LAST element's accept is also the iteration
-    /// boundary.
+    /// Per-DFA-state: the LEAF index whose accept the state closes, or
+    /// `None`. The LAST leaf's accept is also the iteration boundary.
     pub accepts_per_state: Vec<Option<u8>>,
-    /// Per element: its value descriptor.
+    /// Per element: its value descriptor (the plan tree; leaves appear
+    /// in the same flattened order the DFA chain records).
     pub names: Vec<ElementDesc>,
 }

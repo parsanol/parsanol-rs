@@ -130,6 +130,63 @@ impl std::hash::BuildHasher for MemoBuild {
 
 type MemoMap = std::collections::HashMap<(usize, usize), MemoEntry, MemoBuild>;
 
+/// The executor-side routed-element plan (tranche 6): the compiler's
+/// descriptor tree with hash names resolved to interned indices —
+/// built once per `DfaRun` dispatch, walked per iteration.
+#[derive(Debug, Clone)]
+enum AsmNode {
+    Bare,
+    Hash(u32),
+    Nested(Vec<AsmNode>),
+    HashNested(u32, Vec<AsmNode>),
+}
+
+/// The plan tree's LEAF count: the cut-buffer size (the builder
+/// records one accept per leaf; nested elements flatten).
+fn plan_leaf_count(names: &[super::dfa_table::ElementDesc]) -> usize {
+    fn count(desc: &super::dfa_table::ElementDesc) -> usize {
+        match desc {
+            super::dfa_table::ElementDesc::InlineBare
+            | super::dfa_table::ElementDesc::RefBare
+            | super::dfa_table::ElementDesc::Hash(_) => 1,
+            super::dfa_table::ElementDesc::Nested(children)
+            | super::dfa_table::ElementDesc::HashNested(_, children) => {
+                children.iter().map(count).sum()
+            }
+        }
+    }
+    names.iter().map(count).sum()
+}
+
+/// Resolve the compiler's descriptor tree into the executor-side plan,
+/// interning hash names once.
+fn resolve_asm_plan(
+    names: &[super::dfa_table::ElementDesc],
+    arena: &mut crate::portable::arena::AstArena,
+) -> Vec<AsmNode> {
+    fn resolve(
+        desc: &super::dfa_table::ElementDesc,
+        arena: &mut crate::portable::arena::AstArena,
+    ) -> AsmNode {
+        match desc {
+            super::dfa_table::ElementDesc::InlineBare | super::dfa_table::ElementDesc::RefBare => {
+                AsmNode::Bare
+            }
+            super::dfa_table::ElementDesc::Hash(name) => {
+                AsmNode::Hash(arena.intern_string_index(name))
+            }
+            super::dfa_table::ElementDesc::Nested(children) => {
+                AsmNode::Nested(children.iter().map(|child| resolve(child, arena)).collect())
+            }
+            super::dfa_table::ElementDesc::HashNested(name, children) => AsmNode::HashNested(
+                arena.intern_string_index(name),
+                children.iter().map(|child| resolve(child, arena)).collect(),
+            ),
+        }
+    }
+    names.iter().map(|d| resolve(d, arena)).collect()
+}
+
 /// What a backtrack frame represents when failure unwinds to it
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FrameKind {
@@ -530,9 +587,10 @@ impl<'a> BytecodeVM<'a> {
     }
 
     /// Push one routed SEQUENCE iteration's value: the
-    /// `:sequence`-tagged array of the per-element values, each cut
-    /// from the iteration's element-accept crossings and wrapped per
-    /// its descriptor (bare span, or the `{name: span}` hash).
+    /// `:sequence`-tagged array of the per-element values, each leaf
+    /// cut from the element-accept crossings and assembled per the
+    /// plan tree (bare span, `{name: span}` hash, the nested
+    /// `:sequence` node, or `{name -> :sequence node}` — tranche 6).
     ///
     /// NO merging: the classic BuildSeq never merges multi-element
     /// spans (characterized 2026-11-22 against 8983451 — str_re,
@@ -547,25 +605,13 @@ impl<'a> BytecodeVM<'a> {
         iter_start: usize,
         cuts: &[usize],
         tag_seq: u32,
-        element_keys: &[Option<u32>],
+        plan: &[AsmNode],
         named_idx: Option<u32>,
     ) {
-        let mut vals: Vec<AstNode> = Vec::with_capacity(element_keys.len());
-        for (i, key) in element_keys.iter().enumerate() {
-            let start = if i == 0 { iter_start } else { cuts[i - 1] };
-            let end = cuts[i];
-            let span = self.arena.input_ref(start, end - start);
-            let wrapped = match key {
-                None => span,
-                Some(key_idx) => {
-                    let (pool_idx, length) = self.arena.store_hash_indexed_key(*key_idx, span);
-                    AstNode::Hash {
-                        pool_index: pool_idx,
-                        length,
-                    }
-                }
-            };
-            vals.push(wrapped);
+        let mut cursor = 0usize;
+        let mut vals: Vec<AstNode> = Vec::with_capacity(plan.len());
+        for node in plan {
+            vals.push(self.assemble_node(node, iter_start, cuts, &mut cursor, tag_seq));
         }
         let (pool_idx, length) = self.arena.store_tagged_array_indexed(tag_seq, &vals);
         let array = AstNode::Array {
@@ -580,6 +626,68 @@ impl<'a> BytecodeVM<'a> {
                     pool_index: hpool,
                     length: hlen,
                 });
+            }
+        }
+    }
+
+    /// Assemble one plan node's value from the leaf cuts (tranche 6).
+    /// A nested node ALWAYS emits its `:sequence` array — the classic
+    /// emits one node per Sequence atom, even a builder-fused
+    /// one-element inner.
+    fn assemble_node(
+        &mut self,
+        node: &AsmNode,
+        iter_start: usize,
+        cuts: &[usize],
+        cursor: &mut usize,
+        tag_seq: u32,
+    ) -> AstNode {
+        let leaf_span = |arena: &mut AstArena, cursor: &mut usize| -> AstNode {
+            let start = if *cursor == 0 {
+                iter_start
+            } else {
+                cuts[*cursor - 1]
+            };
+            let end = cuts[*cursor];
+            *cursor += 1;
+            arena.input_ref(start, end - start)
+        };
+        match node {
+            AsmNode::Bare => leaf_span(self.arena, cursor),
+            AsmNode::Hash(key) => {
+                let span = leaf_span(self.arena, cursor);
+                let (pool_idx, length) = self.arena.store_hash_indexed_key(*key, span);
+                AstNode::Hash {
+                    pool_index: pool_idx,
+                    length,
+                }
+            }
+            AsmNode::Nested(children) => {
+                let mut vals: Vec<AstNode> = Vec::with_capacity(children.len());
+                for child in children {
+                    vals.push(self.assemble_node(child, iter_start, cuts, cursor, tag_seq));
+                }
+                let (pool_idx, length) = self.arena.store_tagged_array_indexed(tag_seq, &vals);
+                AstNode::Array {
+                    pool_index: pool_idx,
+                    length,
+                }
+            }
+            AsmNode::HashNested(key, children) => {
+                let mut vals: Vec<AstNode> = Vec::with_capacity(children.len());
+                for child in children {
+                    vals.push(self.assemble_node(child, iter_start, cuts, cursor, tag_seq));
+                }
+                let (pool_idx, length) = self.arena.store_tagged_array_indexed(tag_seq, &vals);
+                let array = AstNode::Array {
+                    pool_index: pool_idx,
+                    length,
+                };
+                let (hpool, hlen) = self.arena.store_hash_indexed_key(*key, array);
+                AstNode::Hash {
+                    pool_index: hpool,
+                    length: hlen,
+                }
             }
         }
     }
@@ -704,26 +812,18 @@ impl<'a> BytecodeVM<'a> {
             .get_dfa_loop_named_key(table_idx)
             .map(|name| self.arena.intern_string_index(name));
         let elements_plan = self.program.get_dfa_loop_elements(table_idx);
-        let element_keys: Vec<Option<u32>> = elements_plan
-            .map(|plan| {
-                plan.names
-                    .iter()
-                    .map(|d| match d {
-                        super::dfa_table::ElementDesc::Hash(name) => {
-                            Some(self.arena.intern_string_index(name))
-                        }
-                        _ => None,
-                    })
-                    .collect()
-            })
+        let asm_plan: Vec<AsmNode> = elements_plan
+            .map(|plan| resolve_asm_plan(&plan.names, self.arena))
             .unwrap_or_default();
+        let leaf_count = elements_plan
+            .map(|plan| plan_leaf_count(&plan.names))
+            .unwrap_or(0);
 
         let element_accepts: &[Option<u8>] = elements_plan
             .map(|plan| plan.accepts_per_state.as_slice())
             .unwrap_or(&[]);
-        let element_count = elements_plan.map(|plan| plan.names.len()).unwrap_or(0);
-        let mut cuts: Vec<usize> = vec![0; element_count];
-        let tag_seq_idx: Option<u32> = if element_count > 0 {
+        let mut cuts: Vec<usize> = vec![0; leaf_count];
+        let tag_seq_idx: Option<u32> = if leaf_count > 0 {
             Some(match self.tag_seq {
                 Some(idx) => idx,
                 None => {
@@ -761,7 +861,7 @@ impl<'a> BytecodeVM<'a> {
                         last_accept = Some(self.position);
                     }
                     // Tranche 4: an element accept records the cut;
-                    // a chain state carries at most one element accept.
+                    // a chain state carries at most one leaf accept.
                     if let Some(&Some(i)) = element_accepts.get(state as usize) {
                         cuts[i as usize] = self.position;
                     }
@@ -770,12 +870,12 @@ impl<'a> BytecodeVM<'a> {
                         boundary = self.position;
                         let iter_start = iteration_start;
                         iteration_start = self.position;
-                        if element_count > 0 {
+                        if !asm_plan.is_empty() {
                             self.push_assembled_iteration(
                                 iter_start,
                                 &cuts,
                                 tag_seq_idx.unwrap_or_default(),
-                                &element_keys,
+                                &asm_plan,
                                 named_idx,
                             );
                         } else {

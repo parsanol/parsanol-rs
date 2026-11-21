@@ -1038,9 +1038,10 @@ fn differential_dfa_routed_seq_of_refs_match_the_walker() {
     // rs#574 slice B stage 3 tranche 4: a flat Sequence whose atoms
     // are RULE REFS routes with the cut-assembly synthesis — the
     // per-iteration value = tagged `:sequence` of per-element values,
-    // each cut from its element-accept crossing. The classic fold's
-    // per-case merge is reproduced: INLINE span elements merge
-    // adjacent runs; ref-produced spans stay separate.
+    // each cut from its element-accept crossing. Every element
+    // delivers its own span (the classic fold never merges — the
+    // tranche-5 characterization; the earlier merge claim here was
+    // this synthesis compared against itself).
     let seq_refs = GrammarBuilder::new()
         .rule(
             "root",
@@ -1091,11 +1092,9 @@ fn differential_dfa_routed_seq_of_refs_match_the_walker() {
         assert_agree_collapsed(&seq_refs1, input);
         assert_agree_collapsed(&seq_mixed_refs, input);
     }
-    // Pin the routed cut-assembly raw shape: the ref elements stay
-    // SEPARATE spans (the classic fold does not merge ref-produced
-    // spans), and the inline element merges with an adjacent inline
-    // run (the mixed grammar's class + ref: the class stays inline,
-    // the ref separate).
+    // Pin the routed cut-assembly raw shape: every element stays its
+    // OWN span (the classic fold never merges — tranche-5), for
+    // inline and ref elements alike.
     let grammar = Grammar::from_json(&seq_refs).unwrap();
     let program = compile_bytecode(grammar).unwrap();
     let mut a = AstArena::new();
@@ -1173,4 +1172,158 @@ fn differential_fold_merge_characterization() {
             "{name}: the routed raw tree diverges from the walker"
         );
     }
+}
+
+#[test]
+fn differential_dfa_routed_nested_fragments_match_the_walker() {
+    // rs#574 slice B stage 3 tranche 6: loop elements that are
+    // THEMSELVES sequences route with the plan TREE — the classic
+    // emits one `:sequence` node per Sequence atom (even a
+    // builder-fused one-element inner), Named wraps compose as
+    // `{name -> nested node}`, and refs to span-terminal rules
+    // deliver bare spans inside the nested node (the classic probe
+    // matrix, walker-identical on every shape).
+    let nested_bare = GrammarBuilder::new()
+        .rule(
+            "root",
+            dynamic(
+                seq(vec![
+                    dynamic(seq(vec![
+                        dynamic(parser_dsl::re("[ab]")),
+                        dynamic(parser_dsl::str("c")),
+                    ])),
+                    dynamic(parser_dsl::str("d")),
+                ])
+                .many(),
+            ),
+        )
+        .build()
+        .to_json()
+        .unwrap();
+    let nested_named = GrammarBuilder::new()
+        .rule(
+            "root",
+            dynamic(
+                seq(vec![
+                    dynamic(
+                        seq(vec![
+                            dynamic(parser_dsl::re("[ab]")),
+                            dynamic(parser_dsl::str("c")),
+                        ])
+                        .label("inner"),
+                    ),
+                    dynamic(parser_dsl::str("d")),
+                ])
+                .many(),
+            ),
+        )
+        .build()
+        .to_json()
+        .unwrap();
+    let nested_mixed = GrammarBuilder::new()
+        .rule(
+            "root",
+            dynamic(
+                seq(vec![
+                    dynamic(seq(vec![
+                        dynamic(parser_dsl::re("[ab]")),
+                        dynamic(parser_dsl::str("c").label("t")),
+                    ])),
+                    dynamic(parser_dsl::str("d")),
+                ])
+                .many(),
+            ),
+        )
+        .build()
+        .to_json()
+        .unwrap();
+    let nested_refs = GrammarBuilder::new()
+        .rule(
+            "root",
+            dynamic(
+                seq(vec![
+                    dynamic(seq(vec![dynamic(ref_("w")), dynamic(ref_("t"))])),
+                    dynamic(parser_dsl::str("d")),
+                ])
+                .many(),
+            ),
+        )
+        .rule("w", parser_dsl::re("[ab]"))
+        .rule("t", parser_dsl::str("c"))
+        .build()
+        .to_json()
+        .unwrap();
+    let ref_seq_rule_body = GrammarBuilder::new()
+        .rule("root", dynamic(ref_("pair")).many())
+        .rule(
+            "pair",
+            seq(vec![
+                dynamic(parser_dsl::re("[ab]")),
+                dynamic(parser_dsl::str("c")),
+            ]),
+        )
+        .build()
+        .to_json()
+        .unwrap();
+    for (name, g) in [
+        ("nested_bare", &nested_bare),
+        ("nested_named", &nested_named),
+        ("nested_mixed", &nested_mixed),
+        ("nested_refs", &nested_refs),
+        ("ref_seq_rule_body", &ref_seq_rule_body),
+    ] {
+        let grammar = Grammar::from_json(g).unwrap();
+        let program = compile_bytecode(grammar.clone()).unwrap();
+        assert!(
+            program.has_iteration_accept_tables(),
+            "{name}: the nested loop did not route to a DfaRun loop table"
+        );
+    }
+    for input in [
+        "acdbcd", "acd", "", "acdx", "acdbcdx", "d", "acdc", "acd acd",
+    ] {
+        assert_agree_collapsed(&nested_bare, input);
+        assert_agree_collapsed(&nested_named, input);
+        assert_agree_collapsed(&nested_mixed, input);
+        assert_agree_collapsed(&nested_refs, input);
+        assert_agree_collapsed(&ref_seq_rule_body, input);
+    }
+    // RAW equality across the whole battery: the routed plan-tree
+    // synthesis must produce the exact walker raw tree (nested
+    // `:sequence` nodes, hash wraps, per-leaf cuts).
+    for (name, g) in [
+        ("nested_bare", &nested_bare),
+        ("nested_named", &nested_named),
+        ("nested_mixed", &nested_mixed),
+        ("nested_refs", &nested_refs),
+        ("ref_seq_rule_body", &ref_seq_rule_body),
+    ] {
+        let grammar = Grammar::from_json(g).unwrap();
+        let program = compile_bytecode(grammar.clone()).unwrap();
+        for input in ["acdbcd", "acd", "acdx", "acdbcdx", "acd acd"] {
+            let mut vm_arena = AstArena::new();
+            let v = parse_with_vm(&program, input, &mut vm_arena)
+                .unwrap_or_else(|e| panic!("{name} {input}: vm failed: {e}"));
+            let mut pk_arena = AstArena::new();
+            let p = PortableParser::new(&grammar, input, &mut pk_arena)
+                .parse_with_end_pos()
+                .unwrap_or_else(|e| panic!("{name} {input}: walker failed: {e:?}"));
+            assert_eq!(
+                materialize(&v.value, &vm_arena, input),
+                materialize(&p.value, &pk_arena, input),
+                "{name} {input}: the routed raw tree diverges from the walker"
+            );
+        }
+    }
+    // Pin the routed nested raw shape: the inner sequence emits its
+    // own `:sequence` node; every leaf its own span.
+    let grammar = Grammar::from_json(&nested_bare).unwrap();
+    let program = compile_bytecode(grammar).unwrap();
+    let mut a = AstArena::new();
+    let v = parse_with_vm(&program, "acdbcd", &mut a).unwrap();
+    assert_eq!(
+        materialize(&v.value, &a, "acdbcd"),
+        "[3(s:\":repetition\";[3(s:\":sequence\";[3(s:\":sequence\";in:\"a\";in:\"c\";)];in:\"d\";)];[3(s:\":sequence\";[3(s:\":sequence\";in:\"b\";in:\"c\";)];in:\"d\";)];)];",
+        "the routed nested loop's per-iteration value shape"
+    );
 }

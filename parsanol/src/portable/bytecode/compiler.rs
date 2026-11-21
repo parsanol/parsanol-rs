@@ -1188,36 +1188,82 @@ impl Compiler {
                 }
                 _ => false,
             };
-            // An element's value descriptor (tranche 4): InlineBare =
-            // a bare span from an inline Str/Re instruction; RefBare =
-            // a bare span through a rule-ref call; Hash(name) = the
-            // `{name: span}` wrap. Every bare element delivers its own
-            // span (the classic fold never merges — tranche 5).
-            let element_descriptor = |idx: usize| -> Option<super::dfa_table::ElementDesc> {
-                match self.grammar.get_atom(idx) {
-                    Some(Atom::Str { pattern }) if !pattern.is_empty() => {
+            // An element's value plan (tranche 4, recursive in
+            // tranche 6): InlineBare = a bare span from an inline
+            // Str/Re instruction; RefBare = a bare span through a
+            // rule-ref call; Hash(name) = the `{name: span}` wrap;
+            // Nested(children) = the `:sequence` node the classic
+            // emits per Sequence atom; HashNested(name, children) =
+            // `{name -> :sequence node}`. Every bare element delivers
+            // its own span (the classic fold never merges — tranche
+            // 5). The unwrap set (Named/Entity) mirrors the builder's
+            // leaf_chain exactly so the per-leaf cuts and the plan
+            // tree stay in lockstep.
+            fn element_plan(
+                grammar: &Grammar,
+                idx: usize,
+                depth: u8,
+            ) -> Option<super::dfa_table::ElementDesc> {
+                if depth > 64 {
+                    return None;
+                }
+                let is_leaf = |idx: usize| match grammar.get_atom(idx) {
+                    Some(Atom::Str { pattern }) => !pattern.is_empty(),
+                    Some(Atom::Re { pattern }) => {
+                        crate::portable::char_class::CharRanges::from_pattern(pattern).is_some()
+                    }
+                    _ => false,
+                };
+                let child_plans = |atoms: &[usize]| -> Option<Vec<super::dfa_table::ElementDesc>> {
+                    if atoms.is_empty() {
+                        return None;
+                    }
+                    atoms
+                        .iter()
+                        .map(|&c| element_plan(grammar, c, depth + 1))
+                        .collect()
+                };
+                match grammar.get_atom(idx)? {
+                    Atom::Str { .. } if is_leaf(idx) => {
                         Some(super::dfa_table::ElementDesc::InlineBare)
                     }
-                    Some(Atom::Re { pattern })
-                        if crate::portable::char_class::CharRanges::from_pattern(pattern)
-                            .is_some() =>
-                    {
+                    Atom::Re { .. } if is_leaf(idx) => {
                         Some(super::dfa_table::ElementDesc::InlineBare)
                     }
-                    Some(Atom::Named { name, atom }) if is_span_terminal(*atom) => {
-                        Some(super::dfa_table::ElementDesc::Hash(name.clone()))
-                    }
-                    Some(Atom::Entity { atom: target }) => match self.grammar.get_atom(*target) {
-                        Some(Atom::Named { name, atom }) if is_span_terminal(*atom) => {
+                    Atom::Named { name, atom } => match grammar.get_atom(*atom) {
+                        Some(Atom::Sequence { atoms }) => child_plans(atoms).map(|children| {
+                            super::dfa_table::ElementDesc::HashNested(name.clone(), children)
+                        }),
+                        _ if is_leaf(*atom) => {
                             Some(super::dfa_table::ElementDesc::Hash(name.clone()))
                         }
-                        _ if is_span_terminal(*target) => {
-                            Some(super::dfa_table::ElementDesc::RefBare)
-                        }
+                        // A deeper wrap (Named(Named(...)), Named of a
+                        // non-terminal) delivers a shape the flat plan
+                        // cannot name — refuse (the classic path keeps
+                        // it).
+                        _ => None,
+                    },
+                    Atom::Sequence { atoms } => {
+                        child_plans(atoms).map(super::dfa_table::ElementDesc::Nested)
+                    }
+                    Atom::Entity { atom: target } => match grammar.get_atom(*target) {
+                        Some(Atom::Named { name, atom }) => match grammar.get_atom(*atom) {
+                            Some(Atom::Sequence { atoms }) => child_plans(atoms).map(|children| {
+                                super::dfa_table::ElementDesc::HashNested(name.clone(), children)
+                            }),
+                            _ if is_leaf(*atom) => {
+                                Some(super::dfa_table::ElementDesc::Hash(name.clone()))
+                            }
+                            _ => None,
+                        },
+                        _ if is_leaf(*target) => Some(super::dfa_table::ElementDesc::RefBare),
                         _ => None,
                     },
                     _ => None,
                 }
+            }
+            let element_descriptor = |idx: usize| -> Option<super::dfa_table::ElementDesc> {
+                element_plan(&self.grammar, idx, 0)
             };
             let body_shape = match self.grammar.get_atom(atom_idx) {
                 Some(Atom::Str { .. }) | Some(Atom::Re { .. }) if is_span_terminal(atom_idx) => {
@@ -1234,7 +1280,8 @@ impl Compiler {
                         Some((false, Some(name.clone())))
                     }
                     Some(Atom::Sequence { atoms })
-                        if !atoms.is_empty() && atoms.iter().all(|&c| is_span_terminal(c)) =>
+                        if !atoms.is_empty()
+                            && atoms.iter().all(|&c| element_descriptor(c).is_some()) =>
                     {
                         Some((true, Some(name.clone())))
                     }
@@ -1255,7 +1302,8 @@ impl Compiler {
                             Some((false, Some(name.clone())))
                         }
                         Some(Atom::Sequence { atoms })
-                            if !atoms.is_empty() && atoms.iter().all(|&c| is_span_terminal(c)) =>
+                            if !atoms.is_empty()
+                                && atoms.iter().all(|&c| element_descriptor(c).is_some()) =>
                         {
                             Some((true, Some(name.clone())))
                         }
@@ -1265,7 +1313,8 @@ impl Compiler {
                         Some((false, None))
                     }
                     Some(Atom::Sequence { atoms })
-                        if !atoms.is_empty() && atoms.iter().all(|&c| is_span_terminal(c)) =>
+                        if !atoms.is_empty()
+                            && atoms.iter().all(|&c| element_descriptor(c).is_some()) =>
                     {
                         Some((true, None))
                     }
@@ -1292,12 +1341,24 @@ impl Compiler {
                     // unwrapped ref delivers bare). Named-wrapped
                     // sequences get it too: the outer hash wraps the
                     // assembled array (the executor's named_idx).
+                    // Tranche 6: Entity bodies unwrap to the target's
+                    // sequence (the call's value IS the target's value)
+                    // and the plan is the recursive tree (nested
+                    // elements flatten to their leaves in the builder).
                     let seq_atoms: Option<&Vec<usize>> = match self.grammar.get_atom(atom_idx) {
                         Some(Atom::Sequence { atoms }) => Some(atoms),
-                        Some(Atom::Named { atom, .. }) => match self.grammar.get_atom(*atom) {
-                            Some(Atom::Sequence { atoms }) => Some(atoms),
-                            _ => None,
-                        },
+                        Some(Atom::Named { atom, .. }) | Some(Atom::Entity { atom }) => {
+                            match self.grammar.get_atom(*atom) {
+                                Some(Atom::Sequence { atoms }) => Some(atoms),
+                                Some(Atom::Named { atom, .. }) => {
+                                    match self.grammar.get_atom(*atom) {
+                                        Some(Atom::Sequence { atoms }) => Some(atoms),
+                                        _ => None,
+                                    }
+                                }
+                                _ => None,
+                            }
+                        }
                         _ => None,
                     };
                     if let Some(atoms) = seq_atoms {
