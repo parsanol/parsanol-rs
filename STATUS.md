@@ -69,6 +69,19 @@ fleet's rules automaton-lowerable, slice B = the automaton backend
 failure reporter (ts#89) and the Node WASM-poisoning recovery
 (ts#86). The Ruby FFI gate un-red after two days (#583).
 
+**1.5.13 carries slice B stage 1 — the DFA table backend**
+(2026-11-21, PRs #611/#612 merged): dense `states×256` DfaTable +
+Thompson NFA + subset determinization + the rule-level `DfaRun`
+routing. Stage 2 (the routed repetition loops: `build_loop_dfa`,
+iteration_accepts envelope mode, the value-1 single-terminal body
+restriction) lands in the FOLLOWING train — its implementation was
+found uncommitted in the session worktree after #611 merged (the
+merge carried stage 1 + the differential tests only; the tests pass
+trivially without the routing and become real when it lands).
+Trains riding 1.5.13: ruby PR #544 (Cargo.lock), ts PR #91 (vendor
+bake + package.json — the mask-FFI glue grew the wasm ABI), py PR
+#67 (submodule + 1.5.13.0), manifest last per the registry law.
+
 ## Deferred + why
 
 - **Throughput ≤ 0.03 (beating tree-sitter)**: 1.35× remains. The
