@@ -275,3 +275,36 @@ CUT POSITIONS per iteration:
 inner loops; the 2026-11-21 A/B receipt (#625) measured this grammar's
 outer loop still classic. The win scales with the scan-to-tree-build
 ratio (the rule-ref A/B leg measured the hash-write bound).
+
+## Slice B stage 3 tranche 4 SHIPPED (2026-11-21, #627): the cut assembly
+
+The design's contact with reality simplified AND corrected it: the
+thompson chain gives each element its own accept; the per-state
+element-accept index is a FUNCTION (the disjointness proof), and the
+executor's cut buffer records `(element, position)` at each crossing —
+the LAST element's crossing doubles as the iteration boundary, so no
+separate iteration-accept bookkeeping is needed for the sequence path.
+
+**The fold's per-case merge, reproduced**: the probes showed the
+classic BuildSeq fold MERGES adjacent spans produced INLINE (Str/Re
+instructions) but keeps spans delivered through rule-ref CALLS
+separate — the synthesis carries a three-state per-element descriptor
+(`ElementDesc::InlineBare / RefBare / Hash(name)`), and the assembly
+groups consecutive InlineBare runs into one span. Both observed
+classic shapes hold in one executor (the tranche-1 merged pin and the
+seq-of-refs separate pin).
+
+**GOTCHA recorded**: the DSL builder FUSES adjacent literal strings
+at build time (`seq("a","b")` → `Str("ab")`) — a 1-element Sequence
+body must still track its single element or the cut plan desyncs from
+the router's element count (caught by a subtract-with-overflow on the
+tranche-1 fixtures; the fix lowered the element-chain branch to
+`!atoms.is_empty()`).
+
+**Pins**: engagement on three seq-of-refs grammars; collapsed
+walker-identity across the input battery; the raw cut-assembly shape
+(ref elements stay separate spans). Gates: lib 594/594, integration
+rc=0 (37 targets, timing gate included), clippy, fmt, typos,
+semver-checks vs main = no update required. Remaining stage-3 scope:
+NESTED multi-value fragments (the plan becomes a tree) — every flat
+shape now routes.
