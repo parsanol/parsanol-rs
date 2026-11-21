@@ -1188,12 +1188,44 @@ impl Compiler {
                 }
                 _ => false,
             };
+            // An element's value descriptor (tranche 4): InlineBare =
+            // a bare span from an inline Str/Re instruction (adjacent
+            // runs merge, the classic fold); RefBare = a bare span
+            // through a rule-ref call (never merges); Hash(name) =
+            // the `{name: span}` wrap.
+            let element_descriptor = |idx: usize| -> Option<super::dfa_table::ElementDesc> {
+                match self.grammar.get_atom(idx) {
+                    Some(Atom::Str { pattern }) if !pattern.is_empty() => {
+                        Some(super::dfa_table::ElementDesc::InlineBare)
+                    }
+                    Some(Atom::Re { pattern })
+                        if crate::portable::char_class::CharRanges::from_pattern(pattern)
+                            .is_some() =>
+                    {
+                        Some(super::dfa_table::ElementDesc::InlineBare)
+                    }
+                    Some(Atom::Named { name, atom }) if is_span_terminal(*atom) => {
+                        Some(super::dfa_table::ElementDesc::Hash(name.clone()))
+                    }
+                    Some(Atom::Entity { atom: target }) => match self.grammar.get_atom(*target) {
+                        Some(Atom::Named { name, atom }) if is_span_terminal(*atom) => {
+                            Some(super::dfa_table::ElementDesc::Hash(name.clone()))
+                        }
+                        _ if is_span_terminal(*target) => {
+                            Some(super::dfa_table::ElementDesc::RefBare)
+                        }
+                        _ => None,
+                    },
+                    _ => None,
+                }
+            };
             let body_shape = match self.grammar.get_atom(atom_idx) {
                 Some(Atom::Str { .. }) | Some(Atom::Re { .. }) if is_span_terminal(atom_idx) => {
                     Some((false, None))
                 }
                 Some(Atom::Sequence { atoms })
-                    if !atoms.is_empty() && atoms.iter().all(|&c| is_span_terminal(c)) =>
+                    if !atoms.is_empty()
+                        && atoms.iter().all(|&c| element_descriptor(c).is_some()) =>
                 {
                     Some((true, None))
                 }
@@ -1242,7 +1274,7 @@ impl Compiler {
                 _ => None,
             };
             if let Some((seq_wrapped, named)) = body_shape {
-                if let Some((table, iteration_accepts)) =
+                if let Some((table, iteration_accepts, element_accepts)) =
                     super::dfa_build::build_loop_dfa(&self.grammar, atom_idx)
                 {
                     let idx = self
@@ -1253,6 +1285,22 @@ impl Compiler {
                     }
                     if let Some(name) = named {
                         self.program.mark_dfa_loop_named(idx, name);
+                    }
+                    // Tranche 4: a SEQUENCE body gets the per-element
+                    // cut plan — each element's value descriptor (a
+                    // Named-wrapped rule ref hashes; a bare terminal /
+                    // unwrapped ref delivers bare).
+                    if matches!(self.grammar.get_atom(atom_idx), Some(Atom::Sequence { .. })) {
+                        let names: Vec<super::dfa_table::ElementDesc> =
+                            match self.grammar.get_atom(atom_idx) {
+                                Some(Atom::Sequence { atoms }) => atoms
+                                    .iter()
+                                    .filter_map(|&c| element_descriptor(c))
+                                    .collect(),
+                                _ => Vec::new(),
+                            };
+                        self.program
+                            .mark_dfa_loop_elements(idx, element_accepts, names);
                     }
                     self.program.add_instruction(Instruction::dfa_run(idx));
                     return Ok(entry);

@@ -179,6 +179,10 @@ pub struct Program {
     /// classic BuildHash shape) — parallel to `dfa_tables`.
     dfa_loop_named: Vec<Option<String>>,
 
+    /// The routed sequence loop's per-element synthesis plan (tranche
+    /// 4) — parallel to `dfa_tables`.
+    dfa_loop_elements: Vec<Option<super::dfa_table::DfaLoopElements>>,
+
     /// Regex pattern table (for Regex instructions)
     regexes: Vec<String>,
 
@@ -227,6 +231,7 @@ impl Program {
             dfa_loops: Vec::new(),
             dfa_loop_seq_wrapped: Vec::new(),
             dfa_loop_named: Vec::new(),
+            dfa_loop_elements: Vec::new(),
             regexes: Vec::new(),
             keys: Vec::new(),
             labels: Vec::new(),
@@ -252,6 +257,7 @@ impl Program {
             dfa_loops: Vec::new(),
             dfa_loop_seq_wrapped: Vec::new(),
             dfa_loop_named: Vec::new(),
+            dfa_loop_elements: Vec::new(),
             regexes: Vec::new(),
             keys: Vec::with_capacity(strings),
             labels: Vec::new(),
@@ -446,6 +452,7 @@ impl Program {
         }));
         self.dfa_loop_seq_wrapped.push(false);
         self.dfa_loop_named.push(None);
+        self.dfa_loop_elements.push(None);
         idx
     }
 
@@ -496,6 +503,31 @@ impl Program {
         self.dfa_loop_named
             .get(idx as usize)
             .and_then(|n| n.as_deref())
+    }
+
+    /// Mark the routed loop as a SEQUENCE of per-element values (the
+    /// cut-assembly synthesis): per-state element-accept indices and
+    /// per-element value descriptors.
+    pub fn mark_dfa_loop_elements(
+        &mut self,
+        idx: u32,
+        accepts_per_state: Vec<Option<u8>>,
+        names: Vec<super::dfa_table::ElementDesc>,
+    ) {
+        if let Some(slot) = self.dfa_loop_elements.get_mut(idx as usize) {
+            *slot = Some(super::dfa_table::DfaLoopElements {
+                accepts_per_state,
+                names,
+            });
+        }
+    }
+
+    /// The routed sequence loop's element plan, when the body is a
+    /// flat sequence.
+    pub fn get_dfa_loop_elements(&self, idx: u32) -> Option<&super::dfa_table::DfaLoopElements> {
+        self.dfa_loop_elements
+            .get(idx as usize)
+            .and_then(|e| e.as_ref())
     }
 
     /// Get a DFA table

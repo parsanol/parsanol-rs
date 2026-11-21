@@ -529,6 +529,61 @@ impl<'a> BytecodeVM<'a> {
         self.value_stack.push(self.arena.input_ref(start, len));
     }
 
+    /// Push one routed SEQUENCE iteration's value: the
+    /// `:sequence`-tagged array of the per-element values, each cut
+    /// from the iteration's element-accept crossings and wrapped per
+    /// its descriptor (bare span, or the `{name: span}` hash).
+    #[inline]
+    fn push_assembled_iteration(
+        &mut self,
+        iter_start: usize,
+        cuts: &[usize],
+        tag_seq: u32,
+        element_keys: &[Option<u32>],
+        element_inline: &[bool],
+    ) {
+        let mut vals: Vec<AstNode> = Vec::with_capacity(element_keys.len());
+        // Consecutive InlineBare elements merge into ONE span (the
+        // classic BuildSeq fold over inline spans); ref-produced and
+        // hash-wrapped values stay separate.
+        let mut run_start: Option<usize> = None;
+        let mut run_end = 0usize;
+        for i in 0..element_keys.len() {
+            let elem_start = if i == 0 { iter_start } else { cuts[i - 1] };
+            let elem_end = cuts[i];
+            if element_inline[i] {
+                if run_start.is_none() {
+                    run_start = Some(elem_start);
+                }
+                run_end = elem_end;
+            } else {
+                if let Some(rs) = run_start.take() {
+                    vals.push(self.arena.input_ref(rs, run_end - rs));
+                }
+                let span = self.arena.input_ref(elem_start, elem_end - elem_start);
+                let wrapped = match element_keys[i] {
+                    None => span,
+                    Some(key_idx) => {
+                        let (pool_idx, length) = self.arena.store_hash_indexed_key(key_idx, span);
+                        AstNode::Hash {
+                            pool_index: pool_idx,
+                            length,
+                        }
+                    }
+                };
+                vals.push(wrapped);
+            }
+        }
+        if let Some(rs) = run_start.take() {
+            vals.push(self.arena.input_ref(rs, run_end - rs));
+        }
+        let (pool_idx, length) = self.arena.store_tagged_array_indexed(tag_seq, &vals);
+        self.value_stack.push(AstNode::Array {
+            pool_index: pool_idx,
+            length,
+        });
+    }
+
     /// Push one routed-loop iteration's value: the bare span, the
     /// `:sequence`-tagged array wrapping the merged iteration span
     /// (a Sequence body's one-BuildSeq-per-iteration fold shape), and
@@ -648,6 +703,45 @@ impl<'a> BytecodeVM<'a> {
             .program
             .get_dfa_loop_named_key(table_idx)
             .map(|name| self.arena.intern_string_index(name));
+        let elements_plan = self.program.get_dfa_loop_elements(table_idx);
+        let element_keys: Vec<Option<u32>> = elements_plan
+            .map(|plan| {
+                plan.names
+                    .iter()
+                    .map(|d| match d {
+                        super::dfa_table::ElementDesc::Hash(name) => {
+                            Some(self.arena.intern_string_index(name))
+                        }
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let element_inline: Vec<bool> = elements_plan
+            .map(|plan| {
+                plan.names
+                    .iter()
+                    .map(|d| matches!(d, super::dfa_table::ElementDesc::InlineBare))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let element_accepts: &[Option<u8>] = elements_plan
+            .map(|plan| plan.accepts_per_state.as_slice())
+            .unwrap_or(&[]);
+        let element_count = elements_plan.map(|plan| plan.names.len()).unwrap_or(0);
+        let mut cuts: Vec<usize> = vec![0; element_count];
+        let tag_seq_idx: Option<u32> = if element_count > 0 {
+            Some(match self.tag_seq {
+                Some(idx) => idx,
+                None => {
+                    let idx = self.arena.intern_string_index(":sequence");
+                    self.tag_seq = Some(idx);
+                    idx
+                }
+            })
+        } else {
+            None
+        };
         // The routed loop's min rides the registry next to the
         // iteration-accept states; rule tables carry none.
         let min = self.program.get_dfa_loop_min(table_idx).unwrap_or(0);
@@ -673,12 +767,27 @@ impl<'a> BytecodeVM<'a> {
                     if table.is_accept(state) {
                         last_accept = Some(self.position);
                     }
+                    // Tranche 4: an element accept records the cut;
+                    // a chain state carries at most one element accept.
+                    if let Some(&Some(i)) = element_accepts.get(state as usize) {
+                        cuts[i as usize] = self.position;
+                    }
                     if envelope_mode && iteration_accepts.is_some_and(|a| a[state as usize]) {
                         iterations += 1;
                         boundary = self.position;
                         let iter_start = iteration_start;
                         iteration_start = self.position;
-                        self.push_iteration_value(iter_start, boundary, seq_wrapped, named_idx);
+                        if element_count > 0 {
+                            self.push_assembled_iteration(
+                                iter_start,
+                                &cuts,
+                                tag_seq_idx.unwrap_or_default(),
+                                &element_keys,
+                                &element_inline,
+                            );
+                        } else {
+                            self.push_iteration_value(iter_start, boundary, seq_wrapped, named_idx);
+                        }
                     }
                 }
                 None => break,

@@ -57,3 +57,33 @@ pub struct DfaLoopMeta {
     /// The lower bound of the routed repetition.
     pub min: u32,
 }
+
+/// One sequence element's value descriptor (tranche 4). The classic
+/// BuildSeq fold MERGES adjacent spans produced INLINE (Str/Re
+/// instructions) but keeps spans produced through rule-ref CALLS
+/// separate — the synthesis reproduces that per-case shape.
+#[derive(Debug, Clone)]
+pub enum ElementDesc {
+    /// A bare span from an inline Str/Re instruction: consecutive
+    /// InlineBare runs merge into one span (the classic fold).
+    InlineBare,
+    /// A bare span delivered through a rule-ref call: never merges.
+    RefBare,
+    /// A hash wrap `{name: span}` (a Named-wrapped terminal or a
+    /// Named rule ref — the v2 named-tree law). Never merges.
+    Hash(String),
+}
+
+/// The routed sequence loop's per-element synthesis plan (tranche 4):
+/// which DFA states close an ELEMENT of the iteration (the cut
+/// positions) and each element's value descriptor. Parallel to
+/// `dfa_tables`.
+#[derive(Debug, Clone)]
+pub struct DfaLoopElements {
+    /// Per-DFA-state: the element index whose accept the state closes,
+    /// or `None`. The LAST element's accept is also the iteration
+    /// boundary.
+    pub accepts_per_state: Vec<Option<u8>>,
+    /// Per element: its value descriptor.
+    pub names: Vec<ElementDesc>,
+}

@@ -271,7 +271,14 @@ fn fragment_states(
 
 /// Subset determinization over epsilon closures into the dense table.
 fn determinize(nfa: &Nfa, start: u32, accept: u32) -> DfaTable {
-    determinize_marked(nfa, start, accept, &std::collections::HashSet::new()).0
+    determinize_marked(
+        nfa,
+        start,
+        accept,
+        &std::collections::HashSet::new(),
+        &std::collections::HashMap::new(),
+    )
+    .0
 }
 
 /// The deterministic table for the UNBOUNDED LOOP of one body atom:
@@ -279,22 +286,53 @@ fn determinize(nfa: &Nfa, start: u32, accept: u32) -> DfaTable {
 /// state containing a marked node completes one iteration, which the
 /// envelope executor turns into the iteration's span. Any `min` is
 /// enforced by the executor against the crossing count.
-pub fn build_loop_dfa(grammar: &Grammar, body_idx: usize) -> Option<(DfaTable, Vec<bool>)> {
+pub fn build_loop_dfa(
+    grammar: &Grammar,
+    body_idx: usize,
+) -> Option<(DfaTable, Vec<bool>, Vec<Option<u8>>)> {
     // The body must consume at least one byte: a nullable body makes
     // the loop's iteration boundaries degenerate.
     if !consumes_min_one(grammar, body_idx, 0, &mut Vec::new()) {
         return None;
     }
     let mut nfa = Nfa::default();
-    let (bs, body_accept) = thompson(grammar, body_idx, &mut nfa, &mut Vec::new())?;
     let entry = nfa.node();
     let exit = nfa.node();
+
+    // A flat Sequence body: build the chain ELEMENT BY ELEMENT so each
+    // element's accept node is known — the cut positions the executor
+    // assembles the per-element values from (tranche 4). The elements
+    // cross in chain order, so a DFA subset contains at most one
+    // element accept (the disjointness proof keeps the chain linear).
+    let mut element_accepts_of_node: std::collections::HashMap<u32, u8> =
+        std::collections::HashMap::new();
+    let (bs, body_accept) = match grammar.get_atom(body_idx) {
+        Some(Atom::Sequence { atoms }) if !atoms.is_empty() => {
+            let mut cursor = entry;
+            let mut first_start = entry;
+            let mut last_accept = entry;
+            for (i, &child) in atoms.iter().enumerate() {
+                let (cs, ca) = thompson(grammar, child, &mut nfa, &mut Vec::new())?;
+                nfa.edge(cursor, Edge::Epsilon, cs);
+                cursor = ca;
+                if i == 0 {
+                    first_start = cs;
+                }
+                last_accept = ca;
+                element_accepts_of_node.insert(ca, i as u8);
+            }
+            (first_start, last_accept)
+        }
+        _ => thompson(grammar, body_idx, &mut nfa, &mut Vec::new())?,
+    };
     nfa.edge(entry, Edge::Epsilon, bs);
     nfa.edge(body_accept, Edge::Epsilon, bs); // the loop back
     nfa.edge(body_accept, Edge::Epsilon, exit);
     let mut marked = std::collections::HashSet::new();
     marked.insert(body_accept);
-    Some(determinize_marked(&nfa, entry, exit, &marked))
+    let (table, iteration_accepts, element_accepts) =
+        determinize_marked(&nfa, entry, exit, &marked, &element_accepts_of_node);
+    Some((table, iteration_accepts, element_accepts))
 }
 
 /// Whether the atom consumes at least one byte on every match path.
@@ -339,7 +377,8 @@ fn determinize_marked(
     start: u32,
     accept: u32,
     marked: &std::collections::HashSet<u32>,
-) -> (DfaTable, Vec<bool>) {
+    elements: &std::collections::HashMap<u32, u8>,
+) -> (DfaTable, Vec<bool>, Vec<Option<u8>>) {
     // Epsilon closures per NFA node.
     let mut closures: Vec<Vec<u32>> = vec![Vec::new(); nfa.nodes as usize];
     for node in 0..nfa.nodes {
@@ -380,6 +419,8 @@ fn determinize_marked(
     transitions.extend(std::iter::repeat_n(u32::MAX, 256));
     let mut iteration_accepts: Vec<bool> = Vec::new();
     iteration_accepts.push(subsets[0].iter().any(|n| marked.contains(n)));
+    let mut element_accepts: Vec<Option<u8>> = Vec::new();
+    element_accepts.push(subsets[0].iter().find_map(|n| elements.get(n).copied()));
 
     let mut worklist = 0usize;
     while worklist < subsets.len() {
@@ -408,6 +449,11 @@ fn determinize_marked(
                     subsets.push(closed);
                     accepts.push(subsets[id as usize].contains(&accept));
                     iteration_accepts.push(subsets[id as usize].iter().any(|n| marked.contains(n)));
+                    element_accepts.push(
+                        subsets[id as usize]
+                            .iter()
+                            .find_map(|n| elements.get(n).copied()),
+                    );
                     transitions.extend(std::iter::repeat_n(u32::MAX, 256));
                     id
                 }
@@ -422,7 +468,7 @@ fn determinize_marked(
         start: 0,
         state_count: subsets.len() as u32,
     };
-    (table, iteration_accepts)
+    (table, iteration_accepts, element_accepts)
 }
 
 use std::collections::HashMap;
