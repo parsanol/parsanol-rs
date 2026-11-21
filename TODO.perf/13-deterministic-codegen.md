@@ -123,3 +123,19 @@ Slice B = the backend the verdicts route onto:
    prove) — the win = replacing the per-byte instruction streams
    with one table walk; measured against the 0.0418 µs/B baseline,
    targeting the dispatch-loop block (76% of the remaining profile).
+
+## Slice B stage 2 SHIPPED (2026-11-21): the routed repetition loops
+
+The compile-path routing: unlimited plain repetitions with a single
+single-value terminal body (Str / ASCII-class Re) lower to one
+self-contained DfaRun. The loop table marks the body's fragment
+accepts; the executor synthesizes the identical per-iteration spans,
+rewinds to the last boundary on a partial trailing iteration (never
+counts it — the PEG's no-partial rule), checks min against the
+crossings, and builds the same tagged envelope BuildRep constructs.
+Proven walker-identical across full/partial/empty/min-fail/refusal
+inputs (the packrat_differential gate). The value-1 body restriction
+is the honest stage boundary: multi-value bodies (sequences, named
+captures) need the accept-state synthesis metadata — stage 3 — before
+their trees survive. json A/B: unchanged within noise (its bodies
+already bulk-low; the win targets the fleet's literal/class loops).
