@@ -201,3 +201,23 @@ cross-engine contract); the routed synthesis's raw shape exact
 tranche-2 scope (named/capture-wrapped bodies, nested fragments)
 stays on the classic loop. Gates: lib 590/590, integration rc=0,
 clippy/fmt/typos, semver-checks vs main = no update required.
+
+## Slice B stage 3 tranche 2 SHIPPED (2026-11-21, #620): named wraps
+
+Probed first: the classic per-iteration shape for a Named body is
+one `{name: inner}` hash on BOTH engines (the inner = the bare span
+for a terminal body, the `:sequence`-tagged merged span for a flat
+span sequence). The routing accepts Named-wrapped span terminals /
+flat span sequences; the executor emits the hash per iteration via
+the parallel `mark_dfa_loop_named` / `get_dfa_loop_named_key`
+registry (published shapes untouched). CAPTURE/SCOPE/TRIVIA wrappers
+are EXCLUDED by design: their compile arms ride the capture
+machinery (CapMark/RecordCapture/ScopeEnd) which the routed executor
+does not run — routing them would silently drop capture recording
+even though their tree shapes look bare. Pinned: engagement on four
+named grammars, collapsed walker-identity x12 inputs each, the raw
+synthesis shape (`{item-> [:sequence 1x]}` per iteration). Gates:
+lib 591/591, integration green modulo the debug-profile timing gate
+(release 2/2), clippy/fmt/typos, semver clean. Still on the classic
+loop: capture/scope/trivia wrappers, nested multi-value fragments
+(the plan is a tree), non-terminal value atoms.
