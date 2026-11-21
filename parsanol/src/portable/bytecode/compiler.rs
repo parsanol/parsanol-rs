@@ -1203,7 +1203,7 @@ impl Compiler {
                 grammar: &Grammar,
                 idx: usize,
                 depth: u8,
-            ) -> Option<super::dfa_table::ElementDesc> {
+            ) -> Option<super::dfa_table::ElementPlan> {
                 if depth > 64 {
                     return None;
                 }
@@ -1214,7 +1214,7 @@ impl Compiler {
                     }
                     _ => false,
                 };
-                let child_plans = |atoms: &[usize]| -> Option<Vec<super::dfa_table::ElementDesc>> {
+                let child_plans = |atoms: &[usize]| -> Option<Vec<super::dfa_table::ElementPlan>> {
                     if atoms.is_empty() {
                         return None;
                     }
@@ -1224,18 +1224,14 @@ impl Compiler {
                         .collect()
                 };
                 match grammar.get_atom(idx)? {
-                    Atom::Str { .. } if is_leaf(idx) => {
-                        Some(super::dfa_table::ElementDesc::InlineBare)
-                    }
-                    Atom::Re { .. } if is_leaf(idx) => {
-                        Some(super::dfa_table::ElementDesc::InlineBare)
-                    }
+                    Atom::Str { .. } if is_leaf(idx) => Some(super::dfa_table::ElementPlan::Bare),
+                    Atom::Re { .. } if is_leaf(idx) => Some(super::dfa_table::ElementPlan::Bare),
                     Atom::Named { name, atom } => match grammar.get_atom(*atom) {
                         Some(Atom::Sequence { atoms }) => child_plans(atoms).map(|children| {
-                            super::dfa_table::ElementDesc::HashNested(name.clone(), children)
+                            super::dfa_table::ElementPlan::HashNested(name.clone(), children)
                         }),
                         _ if is_leaf(*atom) => {
-                            Some(super::dfa_table::ElementDesc::Hash(name.clone()))
+                            Some(super::dfa_table::ElementPlan::Hash(name.clone()))
                         }
                         // A deeper wrap (Named(Named(...)), Named of a
                         // non-terminal) delivers a shape the flat plan
@@ -1244,25 +1240,50 @@ impl Compiler {
                         _ => None,
                     },
                     Atom::Sequence { atoms } => {
-                        child_plans(atoms).map(super::dfa_table::ElementDesc::Nested)
+                        child_plans(atoms).map(super::dfa_table::ElementPlan::Nested)
                     }
                     Atom::Entity { atom: target } => match grammar.get_atom(*target) {
                         Some(Atom::Named { name, atom }) => match grammar.get_atom(*atom) {
                             Some(Atom::Sequence { atoms }) => child_plans(atoms).map(|children| {
-                                super::dfa_table::ElementDesc::HashNested(name.clone(), children)
+                                super::dfa_table::ElementPlan::HashNested(name.clone(), children)
                             }),
                             _ if is_leaf(*atom) => {
-                                Some(super::dfa_table::ElementDesc::Hash(name.clone()))
+                                Some(super::dfa_table::ElementPlan::Hash(name.clone()))
                             }
                             _ => None,
                         },
-                        _ if is_leaf(*target) => Some(super::dfa_table::ElementDesc::RefBare),
+                        _ if is_leaf(*target) => Some(super::dfa_table::ElementPlan::RefBare),
                         _ => None,
                     },
                     _ => None,
                 }
             }
-            let element_descriptor = |idx: usize| -> Option<super::dfa_table::ElementDesc> {
+            // The flat per-leaf fallback descriptors (`DfaLoopElements`
+            // keeps its published shape): the plan tree flattened, one
+            // `ElementDesc` per leaf in the builder's chain order.
+            fn leaf_descs(
+                plan: &super::dfa_table::ElementPlan,
+                out: &mut Vec<super::dfa_table::ElementDesc>,
+            ) {
+                match plan {
+                    super::dfa_table::ElementPlan::Bare => {
+                        out.push(super::dfa_table::ElementDesc::InlineBare)
+                    }
+                    super::dfa_table::ElementPlan::RefBare => {
+                        out.push(super::dfa_table::ElementDesc::RefBare)
+                    }
+                    super::dfa_table::ElementPlan::Hash(name) => {
+                        out.push(super::dfa_table::ElementDesc::Hash(name.clone()))
+                    }
+                    super::dfa_table::ElementPlan::Nested(children)
+                    | super::dfa_table::ElementPlan::HashNested(_, children) => {
+                        for child in children {
+                            leaf_descs(child, out);
+                        }
+                    }
+                }
+            }
+            let element_descriptor = |idx: usize| -> Option<super::dfa_table::ElementPlan> {
                 element_plan(&self.grammar, idx, 0)
             };
             let body_shape = match self.grammar.get_atom(atom_idx) {
@@ -1362,12 +1383,22 @@ impl Compiler {
                         _ => None,
                     };
                     if let Some(atoms) = seq_atoms {
-                        let names: Vec<super::dfa_table::ElementDesc> = atoms
+                        let plans: Vec<super::dfa_table::ElementPlan> = atoms
                             .iter()
                             .filter_map(|&c| element_descriptor(c))
                             .collect();
+                        // The flat per-leaf fallback (`DfaLoopElements`
+                        // keeps its published shape): the tree
+                        // flattened, one descriptor per leaf in the
+                        // builder's chain order.
+                        let mut names: Vec<super::dfa_table::ElementDesc> =
+                            Vec::with_capacity(plans.len());
+                        for plan in &plans {
+                            leaf_descs(plan, &mut names);
+                        }
                         self.program
                             .mark_dfa_loop_elements(idx, element_accepts, names);
+                        self.program.mark_dfa_loop_element_plans(idx, plans);
                     }
                     self.program.add_instruction(Instruction::dfa_run(idx));
                     return Ok(entry);
@@ -2406,6 +2437,157 @@ mod tests {
             eprintln!("  {count:5}  {reason}");
         }
         assert!(flavors >= 20, "the survey saw only {flavors} flavors");
+    }
+
+    /// The LOOP-ROUTING coverage survey (tranche 6 follow-up): over the
+    /// same fleet, every unbounded Repetition site classifies by body
+    /// shape and reports how many route to DfaRun loop tables. The
+    /// `other` bucket sizes the loop-composition slice (bodies whose
+    /// elements target other loops / non-plan-able shapes).
+    #[test]
+    fn loop_routing_survey_over_the_corpus_fleet() {
+        let dir = match std::env::var("PARG_ARTIFACT_DIR") {
+            Ok(dir) => std::path::PathBuf::from(dir),
+            Err(_) => {
+                let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+                match manifest
+                    .ancestors()
+                    .map(|a| a.join("pubid").join("pubid-grammar").join("artifacts"))
+                    .find(|c| c.is_dir())
+                {
+                    Some(dir) => dir,
+                    None => {
+                        eprintln!(
+                            "skip: no PARG_ARTIFACT_DIR and no sibling pubid-grammar checkout"
+                        );
+                        return;
+                    }
+                }
+            }
+        };
+        // Mirrors the router's element_plan accept set (Named/Entity
+        // transparent; Str non-empty / ASCII-Re leaves; Sequence
+        // descent). Test-side on purpose: the survey MEASURES, the
+        // router GATES.
+        fn plan_able(grammar: &Grammar, idx: usize, depth: u8) -> bool {
+            if depth > 64 {
+                return false;
+            }
+            let leaf = |idx: usize| match grammar.get_atom(idx) {
+                Some(Atom::Str { pattern }) => !pattern.is_empty(),
+                Some(Atom::Re { pattern }) => {
+                    crate::portable::char_class::CharRanges::from_pattern(pattern).is_some()
+                }
+                _ => false,
+            };
+            match grammar.get_atom(idx) {
+                Some(Atom::Str { .. }) | Some(Atom::Re { .. }) => leaf(idx),
+                Some(Atom::Named { atom, .. }) | Some(Atom::Entity { atom }) => {
+                    match grammar.get_atom(*atom) {
+                        Some(Atom::Sequence { atoms }) if !atoms.is_empty() => {
+                            atoms.iter().all(|&c| plan_able(grammar, c, depth + 1))
+                        }
+                        _ => leaf(*atom),
+                    }
+                }
+                Some(Atom::Sequence { atoms }) if !atoms.is_empty() => {
+                    atoms.iter().all(|&c| plan_able(grammar, c, depth + 1))
+                }
+                _ => false,
+            }
+        }
+        fn body_class(grammar: &Grammar, body_idx: usize, depth: u8) -> &'static str {
+            if depth > 64 {
+                return "other";
+            }
+            match grammar.get_atom(body_idx) {
+                Some(Atom::Named { atom, .. }) | Some(Atom::Entity { atom }) => {
+                    match grammar.get_atom(*atom) {
+                        Some(Atom::Str { .. }) | Some(Atom::Re { .. }) => "wrapped-terminal",
+                        Some(Atom::Sequence { atoms }) if !atoms.is_empty() => {
+                            if atoms.iter().all(|&c| plan_able(grammar, c, depth + 1)) {
+                                "wrapped-seq"
+                            } else {
+                                "seq-unplan-able"
+                            }
+                        }
+                        _ => "other",
+                    }
+                }
+                Some(Atom::Str { .. }) | Some(Atom::Re { .. }) => "terminal",
+                Some(Atom::Sequence { atoms }) if !atoms.is_empty() => {
+                    if atoms.iter().all(|&c| plan_able(grammar, c, depth + 1)) {
+                        "seq"
+                    } else {
+                        "seq-unplan-able"
+                    }
+                }
+                _ => "other",
+            }
+        }
+        let mut flavors = 0usize;
+        let mut sites_total = 0usize;
+        let mut routed_total = 0usize;
+        let mut classes: std::collections::BTreeMap<&'static str, (usize, usize)> =
+            Default::default();
+        for entry in std::fs::read_dir(&dir).expect("artifact dir") {
+            let path = entry.expect("entry").path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+                continue;
+            };
+            let Some(grammar_value) = value["entries"]
+                .as_object()
+                .and_then(|e| e.values().next())
+                .map(|e| &e["grammar"])
+            else {
+                continue;
+            };
+            let Ok(grammar) = serde_json::from_value::<Grammar>(grammar_value.clone()) else {
+                continue;
+            };
+            flavors += 1;
+            for idx in 0..grammar.atoms.len() {
+                if let Some(Atom::Repetition {
+                    atom: body,
+                    max: None,
+                    tag: RepetitionTag::Repetition,
+                    ..
+                }) = grammar.get_atom(idx)
+                {
+                    sites_total += 1;
+                    let class = body_class(&grammar, *body, 0);
+                    // SHAPE-ONLY: no build_loop_dfa call here — the
+                    // determinization over arbitrary fleet loops can
+                    // blow up the subset construction (three 100%-CPU
+                    // orphaned test binaries taught this). The class is
+                    // the coverage answer; the builder stays the
+                    // compile-path authority.
+                    let routed = class != "other" && class != "seq-unplan-able";
+                    if routed {
+                        routed_total += 1;
+                    }
+                    let slot = classes.entry(class).or_insert((0, 0));
+                    slot.0 += 1;
+                    if routed {
+                        slot.1 += 1;
+                    }
+                }
+            }
+        }
+        eprintln!(
+            "Loop-routing survey: {flavors} flavors, {sites_total} unbounded loop sites, {routed_total} routed"
+        );
+        for (class, (total, routed)) in &classes {
+            eprintln!("  {routed:5}/{total:5}  {class}");
+        }
+        assert!(flavors >= 20, "the survey saw only {flavors} flavors");
+        assert!(sites_total > 0, "the survey saw no loop sites");
     }
 
     #[test]

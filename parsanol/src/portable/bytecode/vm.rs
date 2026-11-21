@@ -141,50 +141,70 @@ enum AsmNode {
     HashNested(u32, Vec<AsmNode>),
 }
 
-/// The plan tree's LEAF count: the cut-buffer size (the builder
-/// records one accept per leaf; nested elements flatten).
+/// The flat per-leaf descriptors' LEAF count (the fallback path: one
+/// descriptor per leaf).
 fn plan_leaf_count(names: &[super::dfa_table::ElementDesc]) -> usize {
-    fn count(desc: &super::dfa_table::ElementDesc) -> usize {
-        match desc {
-            super::dfa_table::ElementDesc::InlineBare
-            | super::dfa_table::ElementDesc::RefBare
-            | super::dfa_table::ElementDesc::Hash(_) => 1,
-            super::dfa_table::ElementDesc::Nested(children)
-            | super::dfa_table::ElementDesc::HashNested(_, children) => {
-                children.iter().map(count).sum()
-            }
-        }
-    }
-    names.iter().map(count).sum()
+    names.len()
 }
 
-/// Resolve the compiler's descriptor tree into the executor-side plan,
-/// interning hash names once.
+/// The plan tree's LEAF count (the tranche-6 path: nested elements
+/// flatten).
+fn plan_tree_leaf_count(plan: &super::dfa_table::ElementPlan) -> usize {
+    match plan {
+        super::dfa_table::ElementPlan::Bare
+        | super::dfa_table::ElementPlan::RefBare
+        | super::dfa_table::ElementPlan::Hash(_) => 1,
+        super::dfa_table::ElementPlan::Nested(children)
+        | super::dfa_table::ElementPlan::HashNested(_, children) => {
+            children.iter().map(plan_tree_leaf_count).sum()
+        }
+    }
+}
+
+/// Resolve the flat per-leaf descriptors into the executor-side plan
+/// (the fallback path).
 fn resolve_asm_plan(
     names: &[super::dfa_table::ElementDesc],
     arena: &mut crate::portable::arena::AstArena,
 ) -> Vec<AsmNode> {
-    fn resolve(
-        desc: &super::dfa_table::ElementDesc,
-        arena: &mut crate::portable::arena::AstArena,
-    ) -> AsmNode {
-        match desc {
-            super::dfa_table::ElementDesc::InlineBare | super::dfa_table::ElementDesc::RefBare => {
-                AsmNode::Bare
-            }
+    names
+        .iter()
+        .map(|desc| match desc {
             super::dfa_table::ElementDesc::Hash(name) => {
                 AsmNode::Hash(arena.intern_string_index(name))
             }
-            super::dfa_table::ElementDesc::Nested(children) => {
+            _ => AsmNode::Bare,
+        })
+        .collect()
+}
+
+/// Resolve the compiler's plan TREE into the executor-side plan,
+/// interning hash names once (the tranche-6 path).
+fn resolve_plan_tree(
+    plans: &[super::dfa_table::ElementPlan],
+    arena: &mut crate::portable::arena::AstArena,
+) -> Vec<AsmNode> {
+    fn resolve(
+        plan: &super::dfa_table::ElementPlan,
+        arena: &mut crate::portable::arena::AstArena,
+    ) -> AsmNode {
+        match plan {
+            super::dfa_table::ElementPlan::Bare | super::dfa_table::ElementPlan::RefBare => {
+                AsmNode::Bare
+            }
+            super::dfa_table::ElementPlan::Hash(name) => {
+                AsmNode::Hash(arena.intern_string_index(name))
+            }
+            super::dfa_table::ElementPlan::Nested(children) => {
                 AsmNode::Nested(children.iter().map(|child| resolve(child, arena)).collect())
             }
-            super::dfa_table::ElementDesc::HashNested(name, children) => AsmNode::HashNested(
+            super::dfa_table::ElementPlan::HashNested(name, children) => AsmNode::HashNested(
                 arena.intern_string_index(name),
                 children.iter().map(|child| resolve(child, arena)).collect(),
             ),
         }
     }
-    names.iter().map(|d| resolve(d, arena)).collect()
+    plans.iter().map(|p| resolve(p, arena)).collect()
 }
 
 /// What a backtrack frame represents when failure unwinds to it
@@ -812,12 +832,22 @@ impl<'a> BytecodeVM<'a> {
             .get_dfa_loop_named_key(table_idx)
             .map(|name| self.arena.intern_string_index(name));
         let elements_plan = self.program.get_dfa_loop_elements(table_idx);
-        let asm_plan: Vec<AsmNode> = elements_plan
-            .map(|plan| resolve_asm_plan(&plan.names, self.arena))
-            .unwrap_or_default();
-        let leaf_count = elements_plan
-            .map(|plan| plan_leaf_count(&plan.names))
-            .unwrap_or(0);
+        // Tranche 6: the plan TREE supersedes the flat names when
+        // present (nested elements' descriptors live there).
+        let plan_tree: Option<&[super::dfa_table::ElementPlan]> =
+            self.program.get_dfa_loop_element_plans(table_idx);
+        let asm_plan: Vec<AsmNode> = match plan_tree {
+            Some(tree) => resolve_plan_tree(tree, self.arena),
+            None => elements_plan
+                .map(|plan| resolve_asm_plan(&plan.names, self.arena))
+                .unwrap_or_default(),
+        };
+        let leaf_count = match plan_tree {
+            Some(tree) => tree.iter().map(plan_tree_leaf_count).sum(),
+            None => elements_plan
+                .map(|plan| plan_leaf_count(&plan.names))
+                .unwrap_or(0),
+        };
 
         let element_accepts: &[Option<u8>] = elements_plan
             .map(|plan| plan.accepts_per_state.as_slice())

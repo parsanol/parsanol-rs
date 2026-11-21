@@ -59,41 +59,58 @@ pub struct DfaLoopMeta {
 }
 
 /// One sequence element's value descriptor (tranche 4, corrected in
-/// tranche 5, nested in tranche 6): the characterization matrix (#631)
-/// showed the classic BuildSeq fold NEVER merges — every element lands
-/// as its own span. The bare variants record provenance only; the
-/// executor keys on the structured variants. The descriptor is the
-/// plan TREE: `Nested`/`HashNested` carry their children's descriptors
-/// in flattened leaf order (the classic emits one `:sequence` node per
-/// Sequence atom — even a builder-fused one-element inner — and Named
-/// wraps compose as `{name -> nested node}`).
+/// tranche 5): the characterization matrix (#631) showed the classic
+/// BuildSeq fold NEVER merges — every element lands as its own span.
+/// The bare variants record provenance only (the nested-fragments
+/// slice reads the producing path); the executor keys on `Hash`
+/// alone.
 #[derive(Debug, Clone)]
 pub enum ElementDesc {
     /// A bare span from an inline Str/Re instruction.
     InlineBare,
     /// A bare span delivered through a rule-ref call.
     RefBare,
+    /// A hash wrap `{name: span}` (a Named-wrapped terminal or a
+    /// Named rule ref — the v2 named-tree law).
+    Hash(String),
+}
+
+/// The routed sequence loop's element plan TREE (tranche 6): the
+/// nested extension of [`ElementDesc`], on its own type and its own
+/// program registry so the tranche-4 shapes stay frozen (the
+/// additive-registry law). The executor prefers the plan tree; the
+/// `DfaLoopElements` names stay the flat per-leaf fallback.
+#[derive(Debug, Clone)]
+pub enum ElementPlan {
+    /// A bare span from an inline Str/Re instruction.
+    Bare,
+    /// A bare span delivered through a rule-ref call.
+    RefBare,
     /// A hash wrap `{name: span}` around one bare leaf.
     Hash(String),
-    /// A bare nested sequence: one `:sequence` node whose values are
-    /// the children's (tranche 6).
-    Nested(Vec<ElementDesc>),
+    /// A bare nested sequence: ONE `:sequence` node whose values are
+    /// the children's — the classic emits one node per Sequence atom,
+    /// even a builder-fused one-element inner.
+    Nested(Vec<ElementPlan>),
     /// A hash wrap `{name -> :sequence node}` around a nested
-    /// sequence's values (tranche 6).
-    HashNested(String, Vec<ElementDesc>),
+    /// sequence's values (the v2 named-tree law composes).
+    HashNested(String, Vec<ElementPlan>),
 }
 
 /// The routed sequence loop's per-element synthesis plan (tranche 4,
-/// leaf-flattened in tranche 6): which DFA states close a LEAF span of
-/// the iteration (nested elements flatten to their leaves — the cut
-/// positions) and the element plan tree over those leaves. Parallel to
+/// per-leaf cut indices in tranche 6): which DFA states close a LEAF
+/// span of the iteration (nested elements flatten to their leaves —
+/// the cut positions) and the flat per-leaf descriptors. The nested
+/// plan tree rides the program's `dfa_loop_element_plans` registry and
+/// supersedes `names` in the executor when present. Parallel to
 /// `dfa_tables`.
 #[derive(Debug, Clone)]
 pub struct DfaLoopElements {
     /// Per-DFA-state: the LEAF index whose accept the state closes, or
     /// `None`. The LAST leaf's accept is also the iteration boundary.
     pub accepts_per_state: Vec<Option<u8>>,
-    /// Per element: its value descriptor (the plan tree; leaves appear
-    /// in the same flattened order the DFA chain records).
+    /// Per LEAF (the flattened order the DFA chain records): the flat
+    /// fallback descriptor. For flat bodies this is one entry per
+    /// element; nested bodies' tree detail lives in the plan registry.
     pub names: Vec<ElementDesc>,
 }
