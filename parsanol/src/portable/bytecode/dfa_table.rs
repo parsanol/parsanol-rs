@@ -58,19 +58,20 @@ pub struct DfaLoopMeta {
     pub min: u32,
 }
 
-/// One sequence element's value descriptor (tranche 4). The classic
-/// BuildSeq fold MERGES adjacent spans produced INLINE (Str/Re
-/// instructions) but keeps spans produced through rule-ref CALLS
-/// separate — the synthesis reproduces that per-case shape.
+/// One sequence element's value descriptor (tranche 4, corrected in
+/// tranche 5): the characterization matrix (#631) showed the classic
+/// BuildSeq fold NEVER merges — every element lands as its own span.
+/// The bare variants record provenance only (the nested-fragments
+/// slice reads the producing path); the executor keys on `Hash`
+/// alone.
 #[derive(Debug, Clone)]
 pub enum ElementDesc {
-    /// A bare span from an inline Str/Re instruction: consecutive
-    /// InlineBare runs merge into one span (the classic fold).
+    /// A bare span from an inline Str/Re instruction.
     InlineBare,
-    /// A bare span delivered through a rule-ref call: never merges.
+    /// A bare span delivered through a rule-ref call.
     RefBare,
     /// A hash wrap `{name: span}` (a Named-wrapped terminal or a
-    /// Named rule ref — the v2 named-tree law). Never merges.
+    /// Named rule ref — the v2 named-tree law).
     Hash(String),
 }
 

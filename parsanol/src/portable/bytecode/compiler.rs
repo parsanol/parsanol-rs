@@ -1189,10 +1189,10 @@ impl Compiler {
                 _ => false,
             };
             // An element's value descriptor (tranche 4): InlineBare =
-            // a bare span from an inline Str/Re instruction (adjacent
-            // runs merge, the classic fold); RefBare = a bare span
-            // through a rule-ref call (never merges); Hash(name) =
-            // the `{name: span}` wrap.
+            // a bare span from an inline Str/Re instruction; RefBare =
+            // a bare span through a rule-ref call; Hash(name) = the
+            // `{name: span}` wrap. Every bare element delivers its own
+            // span (the classic fold never merges — tranche 5).
             let element_descriptor = |idx: usize| -> Option<super::dfa_table::ElementDesc> {
                 match self.grammar.get_atom(idx) {
                     Some(Atom::Str { pattern }) if !pattern.is_empty() => {
