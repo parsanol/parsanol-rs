@@ -448,3 +448,52 @@ visited once per inner iteration, so a per-state inner-accept
 marking (a second parallel registry) can record envelope cuts
 exactly like the outer loop's. Not a structural wall — an
 engineering slice.
+
+## Slice B stage 3 tranche 7 SHIPPED (2026-11-22): loop-composition envelopes
+
+The tranche-7 probe's design landed: loop bodies whose elements are
+THEMSELVES loops route. The element's value is the inner loop's
+ENVELOPE — one `:repetition` node whose values are the
+per-inner-iteration spans (the classic's exact raw shape; Named
+wraps compose as `{inner -> [:repetition, ...]}`).
+
+**The construction**: `build_loop_dfa_envelopes` (a NEW pub fn — the
+tranche-4 `build_loop_dfa` stays frozen) chains the inner loop's
+copies into the byte chain; every copy accept is an INNER boundary
+(a second parallel lane, `dfa_loop_inner_accepts`); the envelope
+element carries NO element-accept marker at all. The full plan tree
+is a NEW pub type, `ElementPlanTree` (the tranche-6 variants plus
+`Envelope`/`HashEnvelope`), on a NEW registry (`dfa_loop_plan_trees`)
+— extending `ElementPlan` itself is gated TWICE over: variant-adds
+AND even `#[non_exhaustive]` are main-to-main majors (the
+`enum_marked_non_exhaustive` lint fired; both taught the same
+lesson).
+
+**The merge lesson (the marker law, sharpened)**: the zero-path edge
+(an empty envelope must reach the next element) merges the envelope
+boundary into EVERY iteration-boundary state — a state carrying TWO
+element markers, where the single-marker `find_map` lane silently
+drops one (a cut never recorded → a span underflow). The fix is
+structural: envelope elements contribute NO fixed-lane markers — the
+inner lane carries the boundaries, and the assembly's prev-boundary
+walk supplies the span starts (an empty envelope's slot is never
+read). The one-marker-per-state law now holds by construction:
+boundary connectors carry nothing.
+
+**Pins**: four fixtures (bare inner, Named-wrapped inner, bounded
+`a{2}` inner, mixed `([ab]* c [de])`), engagement-asserted, the
+collapsed battery plus RAW walker equality on the whole battery, the
+envelope raw shape pinned (per-inner-iteration spans inside the
+`:repetition` node). Scope: ONE envelope level (nested envelopes
+refuse); Entity-to-loop targets stay classic. Gates: lib 598/598,
+full workspace suite green, clippy -D warnings, fmt, typos,
+semver-checks `--baseline-rev origin/main` = no update required.
+
+**The post-tranche-7 survey** (plan_able now accepts envelope
+elements, shape-only): 59 flavors, 1479 sites, **1062 route-shaped
+(71.8%)** — 435 terminal + 600 wrapped-terminal + 22 seq + 5
+wrapped-seq; the tail narrows to 417 (313 `other`: loop-of-loop
+BODIES, choice bodies, predicates + 104 `seq-unplan-able`). The
+fleet's loop-of-loop INLINE elements were rare (+26 sites); the
+tranche's value is shape-class completeness and the raw-identity law
+for the composition shapes.

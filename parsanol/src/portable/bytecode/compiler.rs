@@ -2609,12 +2609,36 @@ mod tests {
                 }
                 _ => false,
             };
+            fn no_inner_loop(grammar: &Grammar, idx: usize, depth: u8) -> bool {
+                if depth > 64 {
+                    return false;
+                }
+                match grammar.get_atom(idx) {
+                    Some(Atom::Named { atom, .. }) | Some(Atom::Entity { atom }) => {
+                        no_inner_loop(grammar, *atom, depth + 1)
+                    }
+                    Some(Atom::Sequence { atoms }) if !atoms.is_empty() => {
+                        atoms.iter().all(|&c| no_inner_loop(grammar, c, depth + 1))
+                    }
+                    Some(Atom::Str { pattern }) => !pattern.is_empty(),
+                    Some(Atom::Re { pattern }) => {
+                        crate::portable::char_class::CharRanges::from_pattern(pattern).is_some()
+                    }
+                    _ => false,
+                }
+            }
             match grammar.get_atom(idx) {
                 Some(Atom::Str { .. }) | Some(Atom::Re { .. }) => leaf(idx),
+                // Tranche 7: a repetition element routes as an envelope
+                // (ONE level — no nested repetition in its body).
+                Some(Atom::Repetition { atom, .. }) => no_inner_loop(grammar, *atom, depth + 1),
                 Some(Atom::Named { atom, .. }) | Some(Atom::Entity { atom }) => {
                     match grammar.get_atom(*atom) {
                         Some(Atom::Sequence { atoms }) if !atoms.is_empty() => {
                             atoms.iter().all(|&c| plan_able(grammar, c, depth + 1))
+                        }
+                        Some(Atom::Repetition { atom, .. }) => {
+                            no_inner_loop(grammar, *atom, depth + 1)
                         }
                         _ => leaf(*atom),
                     }
