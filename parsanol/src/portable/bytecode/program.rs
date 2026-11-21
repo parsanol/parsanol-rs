@@ -413,6 +413,20 @@ impl Program {
         self.dfa_tables.get(idx as usize)
     }
 
+    /// Whether any loop/rule lowered to a DFA table.
+    pub fn has_dfa_tables(&self) -> bool {
+        !self.dfa_tables.is_empty()
+    }
+
+    /// Whether any table marks iteration-accept states — only the
+    /// routed repetition-loop tables do (stage-1 rule tables leave
+    /// them empty).
+    pub fn has_iteration_accept_tables(&self) -> bool {
+        self.dfa_tables
+            .iter()
+            .any(|t| t.iteration_accepts.iter().any(|&x| x))
+    }
+
     /// Add a neg-scan spec
     pub fn add_neg_spec(&mut self, spec: NegScanSpec) -> u32 {
         let idx = self.neg_specs.len() as u32;

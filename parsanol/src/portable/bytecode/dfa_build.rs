@@ -311,12 +311,12 @@ fn consumes_min_one(grammar: &Grammar, idx: usize, depth: usize, seen: &mut Vec<
         Some(match atom {
             Atom::Str { pattern } => !pattern.is_empty(),
             Atom::Re { .. } => true,
-            Atom::Sequence { atoms } => {
-                atoms.iter().any(|&c| consumes_min_one(grammar, c, depth + 1, seen))
-            }
-            Atom::Alternative { atoms } => {
-                atoms.iter().all(|&c| consumes_min_one(grammar, c, depth + 1, seen))
-            }
+            Atom::Sequence { atoms } => atoms
+                .iter()
+                .any(|&c| consumes_min_one(grammar, c, depth + 1, seen)),
+            Atom::Alternative { atoms } => atoms
+                .iter()
+                .all(|&c| consumes_min_one(grammar, c, depth + 1, seen)),
             Atom::Repetition { atom, min, .. } => {
                 *min >= 1 && consumes_min_one(grammar, *atom, depth + 1, seen)
             }
@@ -325,9 +325,7 @@ fn consumes_min_one(grammar: &Grammar, idx: usize, depth: usize, seen: &mut Vec<
             | Atom::Scope { atom }
             | Atom::Ignore { atom }
             | Atom::Trivia { atom }
-            | Atom::TriviaCapture { atom, .. } => {
-                consumes_min_one(grammar, *atom, depth + 1, seen)
-            }
+            | Atom::TriviaCapture { atom, .. } => consumes_min_one(grammar, *atom, depth + 1, seen),
             Atom::Entity { atom } => consumes_min_one(grammar, *atom, depth + 1, seen),
             _ => false,
         })

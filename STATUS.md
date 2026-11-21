@@ -69,18 +69,20 @@ fleet's rules automaton-lowerable, slice B = the automaton backend
 failure reporter (ts#89) and the Node WASM-poisoning recovery
 (ts#86). The Ruby FFI gate un-red after two days (#583).
 
-**1.5.13 carries slice B stage 1 — the DFA table backend**
-(2026-11-21, PRs #611/#612 merged): dense `states×256` DfaTable +
-Thompson NFA + subset determinization + the rule-level `DfaRun`
-routing. Stage 2 (the routed repetition loops: `build_loop_dfa`,
-iteration_accepts envelope mode, the value-1 single-terminal body
-restriction) lands in the FOLLOWING train — its implementation was
-found uncommitted in the session worktree after #611 merged (the
-merge carried stage 1 + the differential tests only; the tests pass
-trivially without the routing and become real when it lands).
-Trains riding 1.5.13: ruby PR #544 (Cargo.lock), ts PR #91 (vendor
-bake + package.json — the mask-FFI glue grew the wasm ABI), py PR
-#67 (submodule + 1.5.13.0), manifest last per the registry law.
+**The 1.5.13 release carries the wasm depth-budget work** (tag
+parsanol-v1.5.13 → b44c30d); both slice B stages landed AFTER its
+tag and ride the NEXT train. Slice B stage 1 (dense `states×256`
+DfaTable + Thompson NFA + subset determinization + the rule-level
+`DfaRun` routing) is merged (#611); stage 2 (the routed repetition
+loops: `build_loop_dfa`, iteration_accepts envelope mode, the
+value-1 single-terminal body restriction) is recovered in this
+round — its implementation had been left UNCOMMITTED in the session
+worktree (#611 carried stage 1 + the differential tests only; the
+tests pass trivially without the routing and become real when it
+lands). Trains riding 1.5.13: ruby PR #544 (Cargo.lock), ts PR #91
+(vendor bake + package.json — the mask-FFI glue grew the wasm ABI),
+py PR #67 (submodule + 1.5.13.0), manifest last per the registry
+law. The stage-1+2 engine rides the following all-runtimes train.
 
 ## Deferred + why
 
