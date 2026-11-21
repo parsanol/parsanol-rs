@@ -141,9 +141,9 @@ fn thompson(
         Atom::Alternative { atoms } => {
             let (s, a) = (nfa.node(), nfa.node());
             for &branch in atoms {
-                let (bs, ba) = thompson(grammar, branch, nfa, in_progress)?;
+                let (bs, body_accept) = thompson(grammar, branch, nfa, in_progress)?;
                 nfa.edge(s, Edge::Epsilon, bs);
-                nfa.edge(ba, Edge::Epsilon, a);
+                nfa.edge(body_accept, Edge::Epsilon, a);
             }
             Some((s, a))
         }
@@ -164,30 +164,30 @@ fn thompson(
             let (entry, exit) = (nfa.node(), nfa.node());
             let mut cursor = entry;
             for _ in 0..*min {
-                let (bs, ba) = thompson(grammar, *body, nfa, in_progress)?;
+                let (bs, body_accept) = thompson(grammar, *body, nfa, in_progress)?;
                 nfa.edge(cursor, Edge::Epsilon, bs);
-                cursor = ba;
+                cursor = body_accept;
             }
             match max {
                 None => {
-                    let (bs, ba) = thompson(grammar, *body, nfa, in_progress)?;
+                    let (bs, body_accept) = thompson(grammar, *body, nfa, in_progress)?;
                     if *min == 0 {
                         // The zero-iteration path: without it the start
                         // closure never reaches the exit.
                         nfa.edge(cursor, Edge::Epsilon, exit);
                     }
                     nfa.edge(cursor, Edge::Epsilon, bs);
-                    nfa.edge(ba, Edge::Epsilon, bs); // the loop back
-                    nfa.edge(ba, Edge::Epsilon, exit);
+                    nfa.edge(body_accept, Edge::Epsilon, bs); // the loop back
+                    nfa.edge(body_accept, Edge::Epsilon, exit);
                 }
                 Some(m) => {
                     for _ in *min..*m {
                         // epsilon-optional copy
                         let skip = nfa.node();
                         nfa.edge(cursor, Edge::Epsilon, skip);
-                        let (bs, ba) = thompson(grammar, *body, nfa, in_progress)?;
+                        let (bs, body_accept) = thompson(grammar, *body, nfa, in_progress)?;
                         nfa.edge(cursor, Edge::Epsilon, bs);
-                        nfa.edge(ba, Edge::Epsilon, exit);
+                        nfa.edge(body_accept, Edge::Epsilon, exit);
                         cursor = skip;
                     }
                     nfa.edge(cursor, Edge::Epsilon, exit);
@@ -286,14 +286,14 @@ pub fn build_loop_dfa(grammar: &Grammar, body_idx: usize) -> Option<DfaTable> {
         return None;
     }
     let mut nfa = Nfa::default();
-    let (bs, ba) = thompson(grammar, body_idx, &mut nfa, &mut Vec::new())?;
+    let (bs, body_accept) = thompson(grammar, body_idx, &mut nfa, &mut Vec::new())?;
     let entry = nfa.node();
     let exit = nfa.node();
     nfa.edge(entry, Edge::Epsilon, bs);
-    nfa.edge(ba, Edge::Epsilon, bs); // the loop back
-    nfa.edge(ba, Edge::Epsilon, exit);
+    nfa.edge(body_accept, Edge::Epsilon, bs); // the loop back
+    nfa.edge(body_accept, Edge::Epsilon, exit);
     let mut marked = std::collections::HashSet::new();
-    marked.insert(ba);
+    marked.insert(body_accept);
     Some(determinize_marked(&nfa, entry, exit, &marked))
 }
 
