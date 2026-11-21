@@ -309,21 +309,67 @@ semver-checks vs main = no update required. Remaining stage-3 scope:
 NESTED multi-value fragments (the plan becomes a tree) — every flat
 shape now routes.
 
-## Slice B stage 3 tranche 5 OPEN QUESTION (2026-11-22): the fold's merge rule
+## Slice B stage 3 tranche 5 CLOSED (2026-11-22, #631): the fold never merges
 
-The nested-element probe (`*((a b) c)` → the builder-fused
-`Sequence[Str("ab"), Str("c")]`) shows the classic VM delivering the
-two element spans SEPARATE (`[3(s:":sequence"; in:"ab"; in:"c";)]`),
-while the tranche-1 mixed grammar (`re[0-9]` + `"x"`, also a
-2-inline-element seq) showed the classic MERGING them
-(`[2(s:":sequence"; in:"1x";)]`). Both contiguous InputRef pairs,
-both BuildSeq(2) — different fold outcomes. The distinguishing
-factor is NOT yet characterized (candidates: the producing
-instruction class — Char/Span vs String; the value-decode path;
-builder fusion side effects). The nested synthesis cannot be correct
-until the rule is characterized: enumerate the producing-instruction
-pairs × the collapse behavior, pin the matrix, THEN implement
-`ElementDesc::Nested` (whose all-inline inner value = tagged
-`[:sequence, merged_span]` — trivially synthesized once the merge
-rule is known). Engines agree on every observed shape (walker == VM
-on both probes) — this is a characterization task, not a bug.
+The open question is resolved — and the answer falsified tranche 4's
+merge rule.
+
+**The characterization**: the producing-instruction matrix (str_str /
+str_re / re_str / re_re / re_multi_str) run against the CLASSIC
+engine pinned at 8983451: the classic BuildSeq fold NEVER merges.
+Every element lands as its own span (`in:"ab"; in:"d";`) for every
+inline pair; the zero-match legs (re_re, re_multi_str — min=0 loops
+over non-matching classes) agree empty on both engines.
+
+**The falsification**: the "classic merges inline spans" observation
+was CIRCULAR — `assert_agree_collapsed`'s right side was the routed
+VM itself, so the synthesis was compared against itself. The
+"merged" tranche-1 fixture was the DSL builder's literal fusion
+(`seq("a", "b")` → `Str("ab")`: a ONE-element sequence — single-span
+output, not a fold). Tranche 4's `InlineBare` run-merging (#627)
+was built on that misreading; its section above is superseded here.
+
+**The correction (#631)**: `push_assembled_iteration` drops the
+run-merging — every element delivers its own span, byte-identical to
+the classic raw tree. The collapsed wire is unchanged, so the #625 /
+#629 A/B receipts stand (they measure the collapsed wire). The
+element plan now routes through Named/Entity wrappers too
+(`build_loop_dfa` unwraps Named/Entity before the chain check; the
+router extracts `seq_atoms` through the Named wrapper; the assembly
+applies the outer named hash). Pins updated to the separate-span raw
+shapes. New regression: `differential_fold_merge_characterization` —
+walker == VM RAW per producing-instruction pair, engagement-asserted
+(the `has_iteration_accept_tables` law).
+
+**Aftermath**: `ElementDesc::InlineBare / RefBare` describe
+provenance only (inline Str/Re instruction vs rule-ref call) — both
+deliver a separate bare span; the executor keys on `Hash` alone. The
+distinction stays because the nested-fragments slice reads the
+producing path. Gates: lib 595/595, integration rc=0 (37 targets,
+timing gate included), clippy, fmt, typos, semver-checks vs main = no
+update required. Remaining stage-3 scope: NESTED multi-value
+fragments (the plan becomes a tree).
+
+## Slice B stage 3 tranche 6 DESIGN GROUNDING (2026-11-22): the nested raw law
+
+Probed the CLASSIC engine (walker-identical on every shape) for loop
+elements that are THEMSELVES sequences — the remaining stage-3 scope:
+
+- `*(([ab] c) d)`: the iteration value keeps the nested grouping —
+  `:sequence[ :sequence[in:"a"; in:"c";]; in:"d"; ]`. Every element
+  its own span; every Sequence atom emits its own `:sequence` node.
+- `*((inner: [ab] c) d)`: the Named wrap is
+  `{inner -> :sequence[in:"a"; in:"c";];}` — a hash around the
+  nested node (the v2 named-tree law composes).
+- `*((("ab" "cd")) e)` (builder-fused inner → `Str("abcd")`): the
+  fused ONE-element inner sequence STILL emits its `:sequence`
+  wrapper (`:sequence[in:"abcd";]`) — fusion changes element counts,
+  never removes nodes.
+- `*((w t) d)` with `w`/`t` span-terminal rules: the refs deliver
+  BARE spans inside the nested node (no `{w: ...}` hash).
+
+**The design consequence**: the element plan becomes a tree
+(`NestedSeq(children)` always emits the node; `Hash(name)` wraps;
+bare leaves), and the executor's cut buffer needs SUB-CUTS within an
+element's span (each leaf's accept already lands in the DFA chain —
+the flattening is free; only the assembly is tree-shaped).
