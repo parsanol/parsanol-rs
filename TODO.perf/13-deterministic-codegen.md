@@ -373,3 +373,40 @@ elements that are THEMSELVES sequences — the remaining stage-3 scope:
 bare leaves), and the executor's cut buffer needs SUB-CUTS within an
 element's span (each leaf's accept already lands in the DFA chain —
 the flattening is free; only the assembly is tree-shaped).
+
+## Slice B stage 3 tranche 6 SHIPPED (2026-11-22, #633): the plan tree
+
+The grounded design landed: the element plan became a TREE
+(`ElementDesc::Nested(children)` — one `:sequence` node per Sequence
+atom, ALWAYS, even a builder-fused one-element inner;
+`HashNested(name, children)` — `{name -> :sequence node}`), the
+builder chains LEAF BY LEAF (`leaf_chain` flattens nested elements
+depth-first, unwrapping Named/Entity exactly as the plan does — the
+per-leaf cut indices and the plan tree in lockstep; the determinized
+table is unchanged vs whole-subtree Thompson, only the accept
+bookkeeping is per-leaf), and the executor assembles recursively
+(the plan resolved once with interned keys, the cut buffer sized to
+the leaf count).
+
+**The bonus catch**: the ref-to-seq-rule loop BODY (an Entity body
+unwrapping to a Sequence) had routed since tranche 4 with a
+seq_wrapped plan and NO element cuts — it delivered ONE merged span
+per iteration raw (`[:sequence, "ac"]`) where the classic delivers
+per-element spans (`[:sequence, "a", "c"]`). Collapsed-identical (the
+collapse merges contiguous InputRef runs — the same veil the tranche-5
+falsification hid behind), raw-divergent. Tranche 6's Entity unwrap in
+the seq-atom extraction plus the recursive plan makes it
+walker-identical; the `ref_seq_rule_body` fixture pins it.
+
+**Pins**: five nested fixtures (bare / named / mixed hash-leaf / refs
+/ ref-to-seq-rule body), engagement-asserted (`has_iteration_accept_tables`), the collapsed battery plus RAW walker equality on the whole
+battery, the nested raw shape pinned. Gates: lib 596/596, integration
+rc=0 (workspace suite green), clippy -D warnings, fmt, typos,
+semver-checks vs main = no update required.
+
+**Stage-3 scope after tranche 6**: every INLINE flat and nested shape
+routes. Remaining (a later slice): loop-COMPOSITION routing — bodies
+whose elements target other LOOPS (the bench fleet's outer
+`0*(sep word)` shapes measured in the 2026-11-21 receipt are
+seq-of-refs, already routed; loop-elements-of-loops remain classic)
+and Entity targets whose shapes the plan cannot name.
