@@ -181,3 +181,23 @@ atoms mid-chain, and non-Sequence tags. Also gated on the owner's
 zero-match `""` decision (rs#574) — a zero-iteration envelope's
 delivery may change under (a), and stage 3's flat path inherits
 whatever that decision sets.
+
+## Slice B stage 3 tranche 1 SHIPPED (2026-11-21, #618): flat sequences
+
+The design simplified on contact: a flat Sequence's thompson chain has
+ONE fragment accept (the chain end) — no cut stack, no per-accept
+plans. The only missing piece was the per-iteration VALUE wrap: the
+classic path emits one BuildSeq per iteration whose fold merges the
+adjacent fragment spans into a single span, so the routed executor
+wraps the iteration span in a `:sequence` tag behind a parallel
+registry flag (`mark_dfa_loop_sequence` / `get_dfa_loop_sequence_wrapped`
+— `DfaLoopMeta` keeps its published fields). The routing widens to
+flat Sequences of value-1 span terminals (non-empty Str / ASCII-class
+Re). Pinned: engagement assertions on four sequence grammars;
+collapsed walker-identity x12 inputs each (the walker's raw tier
+splits mixed literal+span values — the collapsed wire is the
+cross-engine contract); the routed synthesis's raw shape exact
+(`[3(s:":repetition";[2(s:":sequence";in:"1x";)];...)]`). The
+tranche-2 scope (named/capture-wrapped bodies, nested fragments)
+stays on the classic loop. Gates: lib 590/590, integration rc=0,
+clippy/fmt/typos, semver-checks vs main = no update required.
