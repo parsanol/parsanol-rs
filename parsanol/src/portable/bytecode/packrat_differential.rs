@@ -710,11 +710,10 @@ fn differential_dfa_routed_loops_match_the_walker() {
     }
     // The class-body cases ride only the inputs where every site
     // matches: a zero-match `*class` loop hits a PRE-EXISTING
-    // walker-vs-VM divergence (the walker folds the empty loop to an
-    // empty InputRef; the VM keeps the tagged empty array — both
-    // before and after the routing, so it is not a stage-2
-    // regression). That quirk is filed on rs#574 for its own fix;
-    // this differential pins the routing against the walker on the
+    // cross-engine divergence (the shipped ruby delivers "" for a
+    // zero-match loop; the rs engines keep the tagged empty array —
+    // filed on rs#574 for the owner's contract decision). This
+    // differential pins the routing against the walker on the
     // agreement domain.
     for input in ["0123456789", "0123"] {
         assert_agree_collapsed(&re_loop, input);
@@ -722,4 +721,104 @@ fn differential_dfa_routed_loops_match_the_walker() {
     for input in ["0123!", "x!", "ababab!"] {
         assert_agree_collapsed(&re_loop_in_seq, input);
     }
+}
+
+#[test]
+fn differential_dfa_routed_sequence_loops_match_the_walker() {
+    // rs#574 slice B stage 3: a FLAT Sequence of value-1 span
+    // terminals routes to one DfaRun whose per-iteration value is the
+    // `:sequence`-tagged array wrapping the merged iteration span —
+    // the exact shape the classic path's per-iteration BuildSeq fold
+    // produces. Raw-tree identity (not just collapsed): the synthesis
+    // merges by construction the way BuildSeq's fold merges.
+    let seq_str = GrammarBuilder::new()
+        .rule(
+            "root",
+            seq(vec![
+                dynamic(parser_dsl::str("a")),
+                dynamic(parser_dsl::str("b")),
+            ])
+            .many(),
+        )
+        .build()
+        .to_json()
+        .unwrap();
+    let seq_str1 = GrammarBuilder::new()
+        .rule(
+            "root",
+            seq(vec![
+                dynamic(parser_dsl::str("a")),
+                dynamic(parser_dsl::str("b")),
+            ])
+            .many1(),
+        )
+        .build()
+        .to_json()
+        .unwrap();
+    let seq_mixed = GrammarBuilder::new()
+        .rule(
+            "root",
+            seq(vec![
+                dynamic(parser_dsl::re("[0-9]")),
+                dynamic(parser_dsl::str("x")),
+            ])
+            .many(),
+        )
+        .build()
+        .to_json()
+        .unwrap();
+    let seq_triple = GrammarBuilder::new()
+        .rule(
+            "root",
+            seq(vec![
+                dynamic(parser_dsl::str("<")),
+                dynamic(parser_dsl::re("[a-z]")),
+                dynamic(parser_dsl::str(">")),
+            ])
+            .many(),
+        )
+        .build()
+        .to_json()
+        .unwrap();
+    for g in [&seq_str, &seq_str1, &seq_mixed, &seq_triple] {
+        let grammar = Grammar::from_json(g).unwrap();
+        let program = compile_bytecode(grammar).unwrap();
+        assert!(
+            program.has_iteration_accept_tables(),
+            "the sequence loop did not route to a DfaRun loop table"
+        );
+    }
+    for input in [
+        "",
+        "ab",
+        "abab",
+        "ababx",
+        "aba",
+        "abb",
+        "1x2x3x",
+        "1x!",
+        "x!",
+        "<a><b><c>",
+        "<a><b",
+        "<>",
+    ] {
+        assert_agree_collapsed(&seq_str, input);
+        assert_agree_collapsed(&seq_str1, input);
+        assert_agree_collapsed(&seq_mixed, input);
+        assert_agree_collapsed(&seq_triple, input);
+    }
+    // Pin the routed synthesis's raw shape: one tagged :sequence array
+    // per iteration wrapping the MERGED iteration span — the classic
+    // path's BuildSeq fold result. (The walker's raw tier splits mixed
+    // literal+span values; the collapsed wire is the cross-engine
+    // contract, per this file's header.)
+    let grammar = Grammar::from_json(&seq_mixed).unwrap();
+    let program = compile_bytecode(grammar).unwrap();
+    let mut a = AstArena::new();
+    let v = parse_with_vm(&program, "1x2x", &mut a).unwrap();
+    assert_eq!(
+        materialize(&v.value, &a, "1x2x"),
+        "[3(s:\":repetition\";[2(s:\":sequence\";in:\"1x\";)];[2(s:\":sequence\";in:\"2x\";)];)];",
+        "the routed sequence loop's per-iteration value shape"
+    );
 }
