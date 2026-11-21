@@ -373,3 +373,78 @@ elements that are THEMSELVES sequences — the remaining stage-3 scope:
 bare leaves), and the executor's cut buffer needs SUB-CUTS within an
 element's span (each leaf's accept already lands in the DFA chain —
 the flattening is free; only the assembly is tree-shaped).
+
+## Slice B stage 3 tranche 6 SHIPPED (2026-11-22, #633): the plan tree
+
+The grounded design landed: the element plan became a TREE
+(`ElementDesc::Nested(children)` — one `:sequence` node per Sequence
+atom, ALWAYS, even a builder-fused one-element inner;
+`HashNested(name, children)` — `{name -> :sequence node}`), the
+builder chains LEAF BY LEAF (`leaf_chain` flattens nested elements
+depth-first, unwrapping Named/Entity exactly as the plan does — the
+per-leaf cut indices and the plan tree in lockstep; the determinized
+table is unchanged vs whole-subtree Thompson, only the accept
+bookkeeping is per-leaf), and the executor assembles recursively
+(the plan resolved once with interned keys, the cut buffer sized to
+the leaf count).
+
+**The bonus catch**: the ref-to-seq-rule loop BODY (an Entity body
+unwrapping to a Sequence) had routed since tranche 4 with a
+seq_wrapped plan and NO element cuts — it delivered ONE merged span
+per iteration raw (`[:sequence, "ac"]`) where the classic delivers
+per-element spans (`[:sequence, "a", "c"]`). Collapsed-identical (the
+collapse merges contiguous InputRef runs — the same veil the tranche-5
+falsification hid behind), raw-divergent. Tranche 6's Entity unwrap in
+the seq-atom extraction plus the recursive plan makes it
+walker-identical; the `ref_seq_rule_body` fixture pins it.
+
+**Pins**: five nested fixtures (bare / named / mixed hash-leaf / refs
+/ ref-to-seq-rule body), engagement-asserted (`has_iteration_accept_tables`), the collapsed battery plus RAW walker equality on the whole
+battery, the nested raw shape pinned. Gates: lib 596/596, integration
+rc=0 (workspace suite green), clippy -D warnings, fmt, typos,
+semver-checks vs main = no update required.
+
+**Round 2 (the semver correction)**: CI's semver gate compares
+against MAIN (the local `cargo semver-checks` default compares
+against the LAST RELEASE — 1.5.13 — and masked the break). Round 1
+added `Nested`/`HashNested` variants to `ElementDesc` (on main since
+tranche 4) — a main-to-main major, the additive-registry law's exact
+case. Round 2: `ElementDesc` returns to its exact main shape; the
+plan tree is a NEW pub type (`ElementPlan`) on a NEW parallel
+registry (`dfa_loop_element_plans`); `DfaLoopElements` keeps its
+published struct (names = the flat per-leaf fallback). LAW UPDATE:
+the local semver gate must run `--baseline-rev origin/main` to
+mirror CI.
+
+**The fleet coverage survey** (`loop_routing_survey_over_the_corpus_fleet`,
+shape-only classification — the first draft called `build_loop_dfa`
+per site and the determinization over arbitrary fleet loops blew up
+the subset construction, spinning three orphaned 100%-CPU test
+binaries): over the pubid fleet artifacts —
+
+- 59 flavors, 1479 unbounded loop sites, **1036 route-shaped
+  (70.0%)**: 435 `terminal` (tranche 1) + 600 `wrapped-terminal`
+  (tranches 2/3) + 1 `wrapped-seq` (tranches 4-6).
+- The unrouted tail (443 sites, 30.0%): 313 `other` (loop-of-loop
+  bodies, choice bodies, predicates) + 130 `seq-unplan-able`
+  (structured / recursive sequences) — the loop-composition slice's
+  material, now sized.
+- The pubid fleet carries ZERO plain-seq loop bodies; that shape
+  lives in the bench grammars the 2026-11-21 A/B receipt measured.
+
+**Stage-3 scope after tranche 6**: every INLINE flat and nested shape
+routes. Remaining (a later slice): loop-COMPOSITION routing — bodies
+whose elements target other LOOPS (the bench fleet's outer
+`0*(sep word)` shapes measured in the 2026-11-21 receipt are
+seq-of-refs, already routed; loop-elements-of-loops remain classic)
+and Entity targets whose shapes the plan cannot name. The survey
+sizes that tail at 443 fleet sites; the tranche-7 probe (2026-11-22)
+REVISED the feasibility read: the classic delivers
+`[:sequence, [:repetition, per-inner-span...], span]` for
+loop-of-loop bodies (walker-identical; Named composes as
+`{inner -> [:repetition, ...]}`), and the inner boundaries ARE
+recoverable — in the chained construction the inner accept node is
+visited once per inner iteration, so a per-state inner-accept
+marking (a second parallel registry) can record envelope cuts
+exactly like the outer loop's. Not a structural wall — an
+engineering slice.
