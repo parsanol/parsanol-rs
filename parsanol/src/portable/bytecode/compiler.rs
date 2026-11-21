@@ -1208,6 +1208,37 @@ impl Compiler {
                     }
                     _ => None,
                 },
+                // A rule reference: the classic path lowers it as a
+                // subroutine call to the target's compile, so the
+                // per-iteration value = the TARGET's shape — a
+                // Named-wrapped rule hashes (`{name: inner}`, the v2
+                // named-tree law), an unwrapped DSL-style rule body
+                // delivers bare / seq shapes directly. Entity cycles
+                // refuse in thompson, so no recursion reaches here.
+                Some(Atom::Entity { atom: target }) => match self.grammar.get_atom(*target) {
+                    Some(Atom::Named { name, atom }) => match self.grammar.get_atom(*atom) {
+                        Some(Atom::Str { .. }) | Some(Atom::Re { .. })
+                            if is_span_terminal(*atom) =>
+                        {
+                            Some((false, Some(name.clone())))
+                        }
+                        Some(Atom::Sequence { atoms })
+                            if !atoms.is_empty() && atoms.iter().all(|&c| is_span_terminal(c)) =>
+                        {
+                            Some((true, Some(name.clone())))
+                        }
+                        _ => None,
+                    },
+                    Some(Atom::Str { .. }) | Some(Atom::Re { .. }) if is_span_terminal(*target) => {
+                        Some((false, None))
+                    }
+                    Some(Atom::Sequence { atoms })
+                        if !atoms.is_empty() && atoms.iter().all(|&c| is_span_terminal(c)) =>
+                    {
+                        Some((true, None))
+                    }
+                    _ => None,
+                },
                 _ => None,
             };
             if let Some((seq_wrapped, named)) = body_shape {

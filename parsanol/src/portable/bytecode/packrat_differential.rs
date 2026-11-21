@@ -897,3 +897,138 @@ fn differential_dfa_routed_named_loops_match_the_walker() {
         "the routed named loop's per-iteration value shape"
     );
 }
+
+#[test]
+fn differential_dfa_routed_rule_ref_loops_match_the_walker() {
+    // rs#574 slice B stage 3 tranche 3: a RULE REFERENCE as the loop
+    // body routes — the classic path lowers it as a subroutine call
+    // to the target's compile, so the per-iteration value = the
+    // target's shape: a Named-wrapped rule hashes ({name: inner}, the
+    // v2 named-tree law); an unwrapped DSL-style rule body delivers
+    // bare spans / seq-tagged spans directly.
+    let ref_named = GrammarBuilder::new()
+        .rule("root", dynamic(ref_("sub")).many())
+        .rule("sub", parser_dsl::str("a"))
+        .build()
+        .to_json()
+        .unwrap();
+    let ref_seq = GrammarBuilder::new()
+        .rule("root", dynamic(ref_("sub")).many())
+        .rule(
+            "sub",
+            seq(vec![
+                dynamic(parser_dsl::str("a")),
+                dynamic(parser_dsl::str("b")),
+            ]),
+        )
+        .build()
+        .to_json()
+        .unwrap();
+    let ref_named_label = GrammarBuilder::new()
+        .rule("root", dynamic(ref_("sub")).many())
+        .rule("sub", parser_dsl::str("a").label("tag"))
+        .build()
+        .to_json()
+        .unwrap();
+    let ref_terminal = GrammarBuilder::new()
+        .rule("root", dynamic(ref_("sub")).many())
+        .rule("sub", parser_dsl::re("[0-9]"))
+        .build()
+        .to_json()
+        .unwrap();
+    for g in [&ref_named, &ref_seq, &ref_terminal] {
+        let grammar = Grammar::from_json(g).unwrap();
+        let program = compile_bytecode(grammar).unwrap();
+        assert!(
+            program.has_iteration_accept_tables(),
+            "the rule-ref loop did not route to a DfaRun loop table"
+        );
+    }
+    // A DOUBLE-wrapped target (rule Named -> label Named) refuses the
+    // routing for now — its per-iteration value nests hashes; it rides
+    // the classic loop and joins the collapsed comparisons only.
+    for input in [
+        "", "a", "aa", "abab", "abx", "123", "12!", "1a2b", "xyz", "",
+    ] {
+        assert_agree_collapsed(&ref_named, input);
+        assert_agree_collapsed(&ref_seq, input);
+        assert_agree_collapsed(&ref_named_label, input);
+        assert_agree_collapsed(&ref_terminal, input);
+    }
+    // Pin the routed synthesis's raw shapes: an unwrapped DSL-style
+    // target delivers bare spans; a seq target delivers the tagged
+    // array; a Named target hashes.
+    let grammar = Grammar::from_json(&ref_named).unwrap();
+    let program = compile_bytecode(grammar).unwrap();
+    let mut a = AstArena::new();
+    let v = parse_with_vm(&program, "aaa", &mut a).unwrap();
+    assert_eq!(
+        materialize(&v.value, &a, "aaa"),
+        "[4(s:\":repetition\";in:\"a\";in:\"a\";in:\"a\";)];",
+        "the unwrapped rule-ref loop's per-iteration value shape"
+    );
+    let grammar = Grammar::from_json(&ref_seq).unwrap();
+    let program = compile_bytecode(grammar).unwrap();
+    let mut a = AstArena::new();
+    let v = parse_with_vm(&program, "abab", &mut a).unwrap();
+    let got = materialize(&v.value, &a, "abab");
+    let want =
+        "[3(s:\":repetition\";[2(s:\":sequence\";in:\"ab\";)];[2(s:\":sequence\";in:\"ab\";)];)];";
+    assert_eq!(
+        got, want,
+        "the seq-target rule-ref loop's per-iteration value shape"
+    );
+}
+
+#[test]
+fn scratch_dbg_route() {
+    let g = GrammarBuilder::new()
+        .rule("root", dynamic(ref_("sub")).many())
+        .rule("sub", parser_dsl::str("a"))
+        .build()
+        .to_json()
+        .unwrap();
+    let grammar = Grammar::from_json(&g).unwrap();
+    for (i, atom) in grammar.atoms.iter().enumerate() {
+        eprintln!("atom[{i}] = {atom:?}");
+    }
+    for (name, g) in [
+        (
+            "ref_named",
+            GrammarBuilder::new()
+                .rule("sub", parser_dsl::str("a"))
+                .rule("root", dynamic(ref_("sub")).many())
+                .build()
+                .to_json()
+                .unwrap(),
+        ),
+        (
+            "ref_seq",
+            GrammarBuilder::new()
+                .rule(
+                    "sub",
+                    seq(vec![
+                        dynamic(parser_dsl::str("a")),
+                        dynamic(parser_dsl::str("b")),
+                    ]),
+                )
+                .rule("root", dynamic(ref_("sub")).many())
+                .build()
+                .to_json()
+                .unwrap(),
+        ),
+        (
+            "ref_terminal",
+            GrammarBuilder::new()
+                .rule("sub", parser_dsl::re("[0-9]"))
+                .rule("root", dynamic(ref_("sub")).many())
+                .build()
+                .to_json()
+                .unwrap(),
+        ),
+    ] {
+        let grammar = Grammar::from_json(&g).unwrap();
+        let program = compile_bytecode(grammar).unwrap();
+        eprintln!("{name} routed={}", program.has_iteration_accept_tables());
+    }
+}
