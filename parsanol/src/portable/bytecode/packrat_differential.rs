@@ -1032,3 +1032,77 @@ fn scratch_dbg_route() {
         eprintln!("{name} routed={}", program.has_iteration_accept_tables());
     }
 }
+
+#[test]
+fn differential_dfa_routed_seq_of_refs_match_the_walker() {
+    // rs#574 slice B stage 3 tranche 4: a flat Sequence whose atoms
+    // are RULE REFS routes with the cut-assembly synthesis — the
+    // per-iteration value = tagged `:sequence` of per-element values,
+    // each cut from its element-accept crossing. The classic fold's
+    // per-case merge is reproduced: INLINE span elements merge
+    // adjacent runs; ref-produced spans stay separate.
+    let seq_refs = GrammarBuilder::new()
+        .rule(
+            "root",
+            dynamic(seq(vec![dynamic(ref_("sep")), dynamic(ref_("word"))]).many()),
+        )
+        .rule("sep", parser_dsl::str(" "))
+        .rule("word", parser_dsl::str("ab"))
+        .build()
+        .to_json()
+        .unwrap();
+    let seq_refs1 = GrammarBuilder::new()
+        .rule(
+            "root",
+            dynamic(seq(vec![dynamic(ref_("sep")), dynamic(ref_("word"))]).many1()),
+        )
+        .rule("sep", parser_dsl::str(" "))
+        .rule("word", parser_dsl::str("ab"))
+        .build()
+        .to_json()
+        .unwrap();
+    let seq_mixed_refs = GrammarBuilder::new()
+        .rule(
+            "root",
+            dynamic(
+                seq(vec![
+                    dynamic(parser_dsl::re("[0-9]")),
+                    dynamic(ref_("word")),
+                ])
+                .many(),
+            ),
+        )
+        .rule("word", parser_dsl::str("ab"))
+        .build()
+        .to_json()
+        .unwrap();
+    for g in [&seq_refs, &seq_refs1, &seq_mixed_refs] {
+        let grammar = Grammar::from_json(g).unwrap();
+        let program = compile_bytecode(grammar).unwrap();
+        assert!(
+            program.has_iteration_accept_tables(),
+            "the seq-of-refs loop did not route to a DfaRun loop table"
+        );
+    }
+    for input in [
+        " ab", " ab ab", " ab abx", " abab", " ab ab ", "  ab", "ab ab", "9ab9ab", " ab9", "9",
+    ] {
+        assert_agree_collapsed(&seq_refs, input);
+        assert_agree_collapsed(&seq_refs1, input);
+        assert_agree_collapsed(&seq_mixed_refs, input);
+    }
+    // Pin the routed cut-assembly raw shape: the ref elements stay
+    // SEPARATE spans (the classic fold does not merge ref-produced
+    // spans), and the inline element merges with an adjacent inline
+    // run (the mixed grammar's class + ref: the class stays inline,
+    // the ref separate).
+    let grammar = Grammar::from_json(&seq_refs).unwrap();
+    let program = compile_bytecode(grammar).unwrap();
+    let mut a = AstArena::new();
+    let v = parse_with_vm(&program, " ab ab", &mut a).unwrap();
+    assert_eq!(
+        materialize(&v.value, &a, " ab ab"),
+        "[3(s:\":repetition\";[3(s:\":sequence\";in:\" \";in:\"ab\";)];[3(s:\":sequence\";in:\" \";in:\"ab\";)];)];",
+        "the routed seq-of-refs loop's per-iteration value shape"
+    );
+}
