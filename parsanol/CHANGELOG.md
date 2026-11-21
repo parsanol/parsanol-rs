@@ -109,6 +109,9 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ## [Unreleased]
 
+- Release v1.5.13
+- Validate JavaScript budgets before integer conversion
+- Expose a bounded per-call depth budget for WASM artifact parsing
 - Validate JavaScript budgets before integer conversion
 - Expose a bounded per-call depth budget for WASM artifact parsing
 - The mask FFI: the constrained-decoding surface crosses the C ABI (rs#530)
