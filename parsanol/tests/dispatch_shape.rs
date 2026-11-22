@@ -258,13 +258,18 @@ fn single_byte_choices_merge_to_charsets_inside_repetitions() {
         }
         i += 1;
     }
-    assert_eq!(
-        spans, 1,
-        "the ws single-byte choice must lower to ONE Span (the bulk run)"
+    // Tranche 8: the single-byte choice body now ROUTES to a DfaRun
+    // table — the routing is the compile-path authority and supersedes
+    // the charset merge (the DFA replaces BOTH the Span and the
+    // per-char Choice). Either bulk form is correct; per-character
+    // choice machinery never is.
+    assert!(
+        spans == 1 || program.has_iteration_accept_tables(),
+        "the ws single-byte choice must lower to ONE Span (the bulk run) or route to a DfaRun table; got {spans} spans and no table"
     );
     assert_eq!(
         choices, 0,
-        "no per-character choice machinery may remain (the loop's own iteration Choice included — the Span run replaces it)"
+        "no per-character choice machinery may remain (the loop's own iteration Choice included — the Span/DfaRun replaces it)"
     );
 
     // acceptance identical: the merged grammar still parses 'a' with
