@@ -2728,7 +2728,11 @@ impl<'a> PortableParser<'a> {
         }
 
         // Tag the array for proper transformation: :maybe flattens to
-        // nil-or-value, :repetition flattens to an array
+        // nil-or-value, :repetition flattens to an array. A zero-match
+        // repetition builds the TAGGED EMPTY array (rs#574's ruby
+        // marker): the flatten layers apply the named-vs-unnamed law —
+        // ruby's flatten_repetition returns [] under a Named wrapper
+        // and "" (the plain empty string) elsewhere.
         let tag_str = match tag {
             RepetitionTag::Maybe => ":maybe",
             RepetitionTag::Repetition => ":repetition",
@@ -2818,6 +2822,17 @@ impl<'a> PortableParser<'a> {
                     pool_index: pool_idx,
                     length: len,
                 }
+            }
+        } else if actual_count == 0 {
+            // The ruby zero-match marker (rs#574): the TAGGED EMPTY
+            // array — the general loop's shape. The flatten layers
+            // apply the named-vs-unnamed law off it ([] under a Named
+            // wrapper, "" elsewhere). The bare zero-length span this
+            // path used to deliver broke the named law (ruby []).
+            let (pool_idx, len) = self.arena.store_tagged_array(":repetition", &[]);
+            AstNode::Array {
+                pool_index: pool_idx,
+                length: len,
             }
         } else {
             self.arena.input_ref(pos, actual_count)

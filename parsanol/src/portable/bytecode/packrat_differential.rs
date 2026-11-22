@@ -708,18 +708,253 @@ fn differential_dfa_routed_loops_match_the_walker() {
         assert_agree_collapsed(&str_loop, input);
         assert_agree_collapsed(&str_loop1, input);
     }
-    // The class-body cases ride only the inputs where every site
-    // matches: a zero-match `*class` loop hits a PRE-EXISTING
-    // cross-engine divergence (the shipped ruby delivers "" for a
-    // zero-match loop; the rs engines keep the tagged empty array —
-    // filed on rs#574 for the owner's contract decision). This
-    // differential pins the routing against the walker on the
-    // agreement domain.
-    for input in ["0123456789", "0123"] {
+    // The class-body cases run the FULL input matrix: the pre-existing
+    // zero-match cross-engine divergence (ruby "" vs the rs tagged
+    // empty array) is FIXED — every engine delivers the bare
+    // zero-length span at the loop's position (rs#574, the ruby
+    // contract), so the agreement domain covers zero-match class
+    // loops too. The zero-match shapes themselves are pinned by
+    // `zero_match_loops_deliver_the_ruby_empty_string`.
+    for input in [
+        "",
+        "a",
+        "ab",
+        "abab",
+        "ababx",
+        "ababab!",
+        "0123456789",
+        "0123",
+        "0123!",
+        "x!",
+        "!",
+        "aba",
+        "abb",
+    ] {
         assert_agree_collapsed(&re_loop, input);
     }
-    for input in ["0123!", "x!", "ababab!"] {
+    // The seq-embedded class loop's full matrix too: the zero-match
+    // inner delivers the zero-length span the sequence fold crosses
+    // (ruby joins the "" member) — both engines fold identically.
+    for input in [
+        "",
+        "a",
+        "ab",
+        "abab",
+        "ababx",
+        "ababab!",
+        "0123456789",
+        "0123",
+        "0123!",
+        "x!",
+        "!",
+        "aba",
+        "abb",
+    ] {
         assert_agree_collapsed(&re_loop_in_seq, input);
+    }
+}
+
+#[test]
+fn zero_match_loops_deliver_the_ruby_empty_string() {
+    // rs#574, the owner's contract decision (a): every zero-match min=0
+    // repetition carries ruby's marker — the TAGGED EMPTY array in the
+    // raw tree — and the flatten layers apply ruby's
+    // flatten_repetition named law off it: the plain empty string ""
+    // unnamed (the owner's probe matrix, ruby 1.5.13), [] at a Named
+    // wrapper's direct value (the tgpp `(*part) as parts` corpus
+    // shape). Pinned in the walker, the classic VM (BuildRep), and the
+    // routed DfaRun lane alike.
+    let class_loop = GrammarBuilder::new()
+        .rule("root", re("[0-9]").many())
+        .build()
+        .to_json()
+        .unwrap();
+    let str_loop = GrammarBuilder::new()
+        .rule("root", dynamic(parser_dsl::str("ab")).many())
+        .build()
+        .to_json()
+        .unwrap();
+    let body_named_loop = GrammarBuilder::new()
+        .rule("root", dynamic(parser_dsl::str("a").label("r")).many())
+        .build()
+        .to_json()
+        .unwrap();
+    // A Named-WRAPPED loop (inside a sequence, the tgpp
+    // `parts = (*part) as parts` shape): ruby's named law keeps the
+    // empty list ([]), it never joins to "".
+    let named_wrapped_loop = GrammarBuilder::new()
+        .rule(
+            "root",
+            seq(vec![dynamic(parser_dsl::str("a").many().label("parts"))]),
+        )
+        .build()
+        .to_json()
+        .unwrap();
+    // A choice body never routes: this fixture pins the CLASSIC
+    // BuildRep lane. If routing ever learns choice bodies, this
+    // assertion flags the fixture for a lane re-check.
+    let alt_loop = GrammarBuilder::new()
+        .rule(
+            "root",
+            choice(vec![
+                dynamic(parser_dsl::str("a")),
+                dynamic(parser_dsl::str("b")),
+            ])
+            .many(),
+        )
+        .build()
+        .to_json()
+        .unwrap();
+    for (g, routes) in [
+        (&class_loop, true),
+        (&str_loop, true),
+        (&body_named_loop, true),
+        (&alt_loop, false),
+    ] {
+        let grammar = Grammar::from_json(g).unwrap();
+        let program = compile_bytecode(grammar.clone()).unwrap();
+        assert_eq!(
+            program.has_iteration_accept_tables(),
+            routes,
+            "unexpected routing lane for this fixture"
+        );
+        let fixture = if std::ptr::eq(g, &class_loop) {
+            "class_loop"
+        } else if std::ptr::eq(g, &str_loop) {
+            "str_loop"
+        } else if std::ptr::eq(g, &body_named_loop) {
+            "body_named_loop"
+        } else {
+            "alt_loop"
+        };
+        for input in ["", "x!", "zz"] {
+            let mut w_arena = AstArena::new();
+            let w = PortableParser::new(&grammar, input, &mut w_arena)
+                .parse_with_end_pos()
+                .expect("the walker parses a zero-match loop");
+            assert_eq!(w.end_pos, 0, "zero-match end_pos, {fixture} {input:?}");
+            assert!(
+                matches!(
+                    &w.value,
+                    crate::portable::ast::AstNode::Array { length: 1, .. }
+                ),
+                "walker raw zero-match marker (the tagged empty array), {fixture} {input:?}: {}",
+                materialize(&w.value, &w_arena, input)
+            );
+            assert_eq!(
+                materialize(&collapse_ast(&w.value, &mut w_arena), &w_arena, input),
+                "s:\"\";",
+                "walker collapsed zero-match wire (ruby's plain empty string), {fixture} {input:?}"
+            );
+
+            let mut v_arena = AstArena::new();
+            let v = parse_with_vm(&program, input, &mut v_arena)
+                .expect("the VM parses a zero-match loop");
+            assert_eq!(v.end_pos, 0, "zero-match end_pos, {fixture} {input:?}");
+            assert!(
+                matches!(
+                    &v.value,
+                    crate::portable::ast::AstNode::Array { length: 1, .. }
+                ),
+                "VM raw zero-match marker (the tagged empty array), {fixture} {input:?}: {}",
+                materialize(&v.value, &v_arena, input)
+            );
+            assert_eq!(
+                materialize(&collapse_ast(&v.value, &mut v_arena), &v_arena, input),
+                "s:\"\";",
+                "VM collapsed zero-match wire (ruby's plain empty string), {fixture} {input:?}"
+            );
+        }
+    }
+
+    // The named law at the shape lane (to_parslet_compatible, the parg
+    // corpus surface): the Named-wrapped zero-match loop keeps the
+    // empty list — ruby's `return [] if named && list.empty?` — while
+    // the unnamed root joins to "".
+    {
+        let grammar = Grammar::from_json(&named_wrapped_loop).unwrap();
+        let mut arena = AstArena::new();
+        let w = PortableParser::new(&grammar, "", &mut arena)
+            .parse_with_end_pos()
+            .expect("the walker parses a zero-match loop");
+        let shaped =
+            crate::portable::parslet_transform::to_parslet_compatible(&w.value, &mut arena, "");
+        let shaped_text = materialize(&shaped, &arena, "");
+        assert!(
+            shaped_text.contains("\"parts\"->[0()]"),
+            "the Named-wrapped zero-match loop keeps the empty list (ruby []): {shaped_text}"
+        );
+        assert!(
+            !shaped_text.contains("s:\"\""),
+            "the Named-wrapped zero-match loop never joins to \"\": {shaped_text}"
+        );
+        let grammar = Grammar::from_json(&str_loop).unwrap();
+        let mut arena = AstArena::new();
+        let w = PortableParser::new(&grammar, "", &mut arena)
+            .parse_with_end_pos()
+            .expect("the walker parses a zero-match loop");
+        let shaped =
+            crate::portable::parslet_transform::to_parslet_compatible(&w.value, &mut arena, "");
+        assert_eq!(
+            materialize(&shaped, &arena, ""),
+            "s:\"\";",
+            "the unnamed zero-match loop joins to the plain empty string"
+        );
+    }
+
+    // The fold crosses a zero-match member: a MID-position zero-match
+    // inner (the "a!" sequence) joins into one span — ruby merges the
+    // "" member the same way. (The raw tree carries the tagged empty
+    // marker; collapse folds it as a zero-length gap.)
+    let mid_seq = GrammarBuilder::new()
+        .rule(
+            "root",
+            seq(vec![
+                dynamic(parser_dsl::str("a")),
+                dynamic(re("[0-9]").many()),
+                dynamic(parser_dsl::str("!")),
+            ]),
+        )
+        .build()
+        .to_json()
+        .unwrap();
+    for input in ["a!", "a1!"] {
+        assert_agree_collapsed(&mid_seq, input);
+    }
+    {
+        let grammar = Grammar::from_json(&mid_seq).unwrap();
+        let program = compile_bytecode(grammar).unwrap();
+        let mut arena = AstArena::new();
+        let v = parse_with_vm(&program, "a!", &mut arena).unwrap();
+        let collapsed = collapse_ast(&v.value, &mut arena);
+        assert_eq!(
+            materialize(&collapsed, &arena, "a!"),
+            "in:\"a!\";",
+            "the zero-match member folds away into one span"
+        );
+    }
+
+    // min=1 still raises on zero matches (the probe's RAISE row).
+    let str_loop1 = GrammarBuilder::new()
+        .rule("root", dynamic(parser_dsl::str("ab")).many1())
+        .build()
+        .to_json()
+        .unwrap();
+    for input in ["", "x!"] {
+        let grammar = Grammar::from_json(&str_loop1).unwrap();
+        let program = compile_bytecode(grammar.clone()).unwrap();
+        let mut w_arena = AstArena::new();
+        assert!(
+            PortableParser::new(&grammar, input, &mut w_arena)
+                .parse_with_end_pos()
+                .is_err(),
+            "min=1 raises on a zero match, input {input:?}"
+        );
+        let mut v_arena = AstArena::new();
+        assert!(
+            parse_with_vm(&program, input, &mut v_arena).is_err(),
+            "min=1 raises on a zero match, input {input:?}"
+        );
     }
 }
 

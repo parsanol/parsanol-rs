@@ -1571,9 +1571,14 @@ impl Compiler {
                 // must jump to the BODY, not the Choice - the frame is kept
                 // and updated, so a later failure keeps completed iterations.
                 if let Some(set_idx) = self.try_get_charset_for_atom(atom_idx) {
-                    // Character-class body: a single Span matches the whole run.
+                    // Character-class body: one Span matches the whole
+                    // run and OWNS the rep register (no RepCount after
+                    // it — the ScanClass discipline): a zero-member run
+                    // counts nothing, so BuildRep delivers the ruby
+                    // empty string (rs#574); a non-empty run counts one
+                    // iteration carrying the whole-run span. No Choice
+                    // machinery remains (the dispatch-shape gate).
                     self.program.add_instruction(Instruction::span(set_idx));
-                    self.program.add_instruction(Instruction::rep_count());
                 } else if let Some(ranges) = self.try_get_class_ranges_for_atom(atom_idx) {
                     // Class-choice body (multi-byte ranges included):
                     // the bulk ScanClass run replaces the per-char

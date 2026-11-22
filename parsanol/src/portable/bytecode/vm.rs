@@ -755,8 +755,8 @@ impl<'a> BytecodeVM<'a> {
     /// A nested node ALWAYS emits its `:sequence` array — the classic
     /// emits one node per Sequence atom, even a builder-fused
     /// one-element inner. An envelope ALWAYS emits its `:repetition`
-    /// array — one value per inner-iteration crossing (empty when the
-    /// inner loop matched zero times).
+    /// array — one value per inner-iteration crossing (the tagged
+    /// EMPTY array at zero inner iterations, rs#574's ruby marker).
     #[allow(clippy::too_many_arguments)]
     fn assemble_node(
         &mut self,
@@ -820,7 +820,9 @@ impl<'a> BytecodeVM<'a> {
             // envelope never crosses its boundary state) — the walk's
             // `prev` is the truth: the envelope starts where the
             // previous element ended and, when empty, the next element
-            // starts there too.
+            // starts there too. A ZERO-inner-iteration envelope builds
+            // the TAGGED EMPTY array (rs#574's ruby marker) — the
+            // flatten layers apply the named law off it.
             AsmNode::Envelope(ordinal) => {
                 let env_start = *prev;
                 let env = &inner_cuts[*ordinal];
@@ -1139,7 +1141,9 @@ impl<'a> BytecodeVM<'a> {
                 return Ok(ExecutionResult::Fail);
             }
             // BuildRep(maybe = false) with the pushed spans: the same
-            // tagged envelope, byte-identical to the Choice loop's.
+            // tagged envelope, byte-identical to the Choice loop's. A
+            // zero-match run builds the TAGGED EMPTY array (rs#574's
+            // ruby marker) — the flatten layers apply the named law.
             let tag = match self.tag_rep {
                 Some(idx) => idx,
                 None => {
@@ -1778,7 +1782,20 @@ impl<'a> BytecodeVM<'a> {
                     }
                 }
 
-                self.push_span_value(start);
+                // The instruction owns the register, exactly like
+                // ScanClass ("no RepCount after the run" in the
+                // lowering): a ZERO-length run is not an iteration —
+                // nothing is pushed and the register is untouched, so
+                // BuildRep sees n = 0 and delivers the ruby empty
+                // string (rs#574), never a stalled empty iteration.
+                if self.position > start {
+                    self.push_span_value(start);
+                    if let Some(reg) = self.rep_registers.last_mut() {
+                        reg.count += 1;
+                        reg.last_end = self.position;
+                        reg.stalled = false;
+                    }
+                }
                 Ok(ExecutionResult::Continue)
             }
 

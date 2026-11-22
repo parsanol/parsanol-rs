@@ -497,3 +497,66 @@ BODIES, choice bodies, predicates + 104 `seq-unplan-able`). The
 fleet's loop-of-loop INLINE elements were rare (+26 sites); the
 tranche's value is shape-class completeness and the raw-identity law
 for the composition shapes.
+
+## The zero-match contract LANDED (2026-11-22): ruby's named law, both flatten layers
+
+The stage-2 differential's filed divergence (rs engines delivering the
+tagged empty array where ruby delivers `""` at a zero-match `min=0`
+loop) is fixed — but the owner's probe matrix was INCOMPLETE, and the
+corpus caught it: ruby's `CanFlatten#flatten_repetition(list, named)`
+(the SSOT) returns `[]` when the repetition value is a Named wrapper's
+DIRECT value and the plain empty string `""` everywhere else. The tgpp
+corpus case pins the named half: `parts = (*part) as parts` at zero
+matches delivers `{"parts": []}`, not `{"parts": ""}`.
+
+**The design (ruby's architecture, ported):** the engines keep
+producing the TAGGED EMPTY array (ruby's own marker — the raw-tree
+contract is unchanged), and BOTH flatten layers implement the shallow
+named law off it:
+
+- `collapse_ast` (the native wire) gains the additive
+  `collapse_ast_named(node, arena, named)`: a hash value recurses
+  `named=true` (ruby's Named boundary), array children recurse
+  `false`; the EMPTY repetition stays the tagged array under
+  `named=true` and folds to the interned empty string elsewhere; a
+  ZERO-LENGTH repetition result (e.g. the stalled one-iteration case)
+  folds to the plain empty string in both contexts (ruby's join); and
+  empty-string / zero-length-span members now act as zero-length gaps
+  in the fold accounting (ruby's `join_string_list` merges them), so a
+  zero-match INNER loop folds away inside a sequence — the `re_seq`
+  row of the owner's matrix (`[0-9]* "!"` on `"!"` → one `"!"` span).
+- `to_parslet_compatible` (the parg shape lane) gains the private
+  named-aware form: hash values (single- and multi-key) recurse
+  `named=true`; the EMPTY repetition returns the empty list at a hash
+  value and the empty string elsewhere. The single-key machinery's
+  existing repetition wrapping keeps delivering `[]` (why the corpus
+  was green pre-change for the named half).
+
+**Two engine corrections that fall out** (the fold layers made them
+reachable): the bulk class path's zero-run now delivers the tagged
+empty array (it delivered a bare zero-length span — a Named-wrapped
+class loop would have rendered `{ws: ""}` where ruby gives `{ws:
+[]}`), and the classic charset Span loop OWNS the rep register (the
+ScanClass discipline; the lowering drops its RepCount) — a zero-member
+run counts nothing instead of the stalled-iteration miscount, with NO
+Choice machinery (the dispatch-shape gates stay at zero). Dynamic-block
+capture values gain ruby parity too (ruby's Capture flattens unnamed —
+`""`).
+
+**Pins**: `zero_match_loops_deliver_the_ruby_empty_string` (the probe
+matrix as a table-driven test: class/str/body-named loops on
+{`""`, `"x!"`, `"zz"`} asserting the raw tagged-empty marker on both
+engines + the collapsed plain-empty-string wire + the shape lane's
+named law (`[]` under a Named wrapper, `""` unnamed) + the
+fold-across pin + the min=1 raise); the stage-2 differential's
+class-body matrix widened to the FULL input set (#615's zero-match
+scoping is obsolete — the agreement domain covers it now).
+
+**Gates**: lib 599/599, full workspace suite green (48 suites incl.
+the tgpp ruby-oracle corpus case), clippy -D warnings, fmt, typos,
+semver-checks `--baseline-rev origin/main` = no update required.
+Scope guards: the stalled-iteration discipline is untouched (a body
+that MATCHES empty still counts its first stalled iteration on both
+engines); absent optionals keep the `[:maybe]` tag and its
+(nil/`""`) laws; the raw-tree contract is unchanged (the corpus pins
+the raw shapes that existed before).
