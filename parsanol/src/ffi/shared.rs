@@ -41,13 +41,24 @@ fn is_empty_maybe(node: &AstNode, arena: &AstArena) -> bool {
     false
 }
 
-/// * A `:sequence` whose children are InputRefs (plus Nil / absent-optional
-///   zero-length gaps) collapses to one InputRef spanning them.
+/// * A `:sequence` whose children are InputRefs (plus Nil / absent-optional /
+///   empty-string zero-length gaps) collapses to one InputRef spanning them.
 /// * A `:repetition` whose children are ALL InputRefs collapses the same way
 ///   (Ruby joins all-string repetitions into one Slice).
-/// * Empty `:repetition`/`:maybe` tagged arrays keep their tags: downstream
-///   flattening needs them for the named-vs-unnamed distinction ([]/nil/"").
+/// * A ZERO-LENGTH repetition result (no children, or children folding to
+///   nothing) delivers ruby's `flatten_repetition` shapes: under a Named
+///   wrapper's DIRECT value the tagged empty array is KEPT (ruby `[]`);
+///   anywhere else it folds to the plain empty string (ruby's join).
+///   Empty `:maybe` tagged arrays keep their tags: downstream flattening
+///   needs them for the named-vs-unnamed distinction ([]/nil/"").
 pub fn collapse_ast(node: &AstNode, arena: &mut AstArena) -> AstNode {
+    collapse_ast_named(node, arena, false)
+}
+
+/// [`collapse_ast`] with ruby's `named` flag: TRUE exactly at a Named
+/// wrapper's DIRECT value (shallow — children recurse unnamed, matching
+/// `CanFlatten#flatten`, which threads the flag only one level).
+pub fn collapse_ast_named(node: &AstNode, arena: &mut AstArena, named: bool) -> AstNode {
     match node {
         AstNode::Array { pool_index, length } => {
             let items = arena.get_array(*pool_index as usize, *length as usize);
@@ -71,28 +82,54 @@ pub fn collapse_ast(node: &AstNode, arena: &mut AstArena) -> AstNode {
                 return node.clone();
             };
 
+            // The EMPTY repetition (rs#574): ruby's flatten_repetition
+            // returns [] at a Named wrapper's direct value, the plain
+            // empty string (the zero-join) everywhere else.
+            if tag == ":repetition" && items.len() == 1 {
+                if named {
+                    return node.clone();
+                }
+                return arena.intern_string("");
+            }
+
             let mut collapsed: Vec<AstNode> = Vec::with_capacity(items.len());
             let mut all_input_ref = true;
             let mut all_zero_len_gaps = true;
             let mut has_input_ref = false;
+            let mut has_empty_join = false;
             let mut contiguous = true;
             let mut start: u32 = 0;
             let mut last_end: Option<u32> = None;
 
             for child in items.iter().skip(1) {
-                let c = collapse_ast(child, arena);
+                let c = collapse_ast_named(child, arena, false);
                 match &c {
                     AstNode::InputRef { offset, length } => {
-                        has_input_ref = true;
-                        match last_end {
-                            None => start = *offset,
-                            Some(e) => {
-                                if *offset != e {
-                                    contiguous = false;
+                        if *length > 0 {
+                            has_input_ref = true;
+                            match last_end {
+                                None => start = *offset,
+                                Some(e) => {
+                                    if *offset != e {
+                                        contiguous = false;
+                                    }
                                 }
                             }
+                            last_end = Some(offset + length);
+                        } else {
+                            // Ruby joins "" members without disturbing
+                            // the run (join_string_list).
+                            has_empty_join = true;
                         }
-                        last_end = Some(offset + length);
+                    }
+                    AstNode::StringRef { pool_index } => {
+                        let (s, _, _, _) = arena.get_string_parts(*pool_index as usize);
+                        if s.is_empty() {
+                            has_empty_join = true;
+                        } else {
+                            all_input_ref = false;
+                            all_zero_len_gaps = false;
+                        }
                     }
                     AstNode::Nil => {
                         all_input_ref = false;
@@ -109,16 +146,22 @@ pub fn collapse_ast(node: &AstNode, arena: &mut AstArena) -> AstNode {
             }
 
             // :sequence folds when every child contributes only input bytes
-            // (InputRefs, Nil, or absent optionals); :repetition is stricter
-            // still: only InputRefs (Ruby keeps an array for nil members).
+            // (InputRefs, Nil, empty strings, or absent optionals);
+            // :repetition is stricter still: only InputRefs and the empty
+            // join members (Ruby keeps an array for nil members).
             let foldable = if tag == ":repetition" {
-                all_input_ref && has_input_ref
+                all_input_ref && (has_input_ref || has_empty_join)
             } else {
                 tag == ":sequence" && has_input_ref && all_zero_len_gaps
             };
 
             if foldable && contiguous {
                 let length = last_end.map(|e| e - start).unwrap_or(0);
+                if length == 0 {
+                    // Ruby's zero-join is a PLAIN empty string (no
+                    // slice/position), named or not.
+                    return arena.intern_string("");
+                }
                 return arena.input_ref(start as usize, length as usize);
             }
 
@@ -129,7 +172,9 @@ pub fn collapse_ast(node: &AstNode, arena: &mut AstArena) -> AstNode {
             let pairs = arena.get_hash_items(*pool_index as usize, *length as usize);
             let mut refs: Vec<(&str, AstNode)> = Vec::with_capacity(pairs.len());
             for (key, value) in &pairs {
-                refs.push((key.as_str(), collapse_ast(value, arena)));
+                // A hash value is the Named wrapper's DIRECT value
+                // (ruby CanFlatten's named=true, shallow).
+                refs.push((key.as_str(), collapse_ast_named(value, arena, true)));
             }
             let (pool_index, length) = arena.store_hash(&refs);
             AstNode::Hash { pool_index, length }

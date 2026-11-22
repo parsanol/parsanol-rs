@@ -108,6 +108,21 @@ use super::ast::AstNode;
 /// // transformed: {:name => "test"} instead of ["SCHEMA ", {:name => "test"}, ";"]
 /// ```
 pub fn to_parslet_compatible(node: &AstNode, arena: &mut AstArena, input: &str) -> AstNode {
+    to_parslet_compatible_in(node, arena, input, false)
+}
+
+/// [`to_parslet_compatible`] with ruby's `named` flag (rs#574): TRUE
+/// exactly at a hash value (each key's value is a Named capture's
+/// direct value), FALSE at sequence members and the root — the shallow
+/// thread of `CanFlatten#flatten`. Drives the zero-match repetition
+/// law: ruby's flatten_repetition returns [] under a Named wrapper and
+/// the plain empty string (the zero-join) elsewhere.
+fn to_parslet_compatible_in(
+    node: &AstNode,
+    arena: &mut AstArena,
+    input: &str,
+    named: bool,
+) -> AstNode {
     match node {
         AstNode::Array { pool_index, length } => {
             let items = arena.get_array(*pool_index as usize, *length as usize);
@@ -129,14 +144,22 @@ pub fn to_parslet_compatible(node: &AstNode, arena: &mut AstArena, input: &str) 
                     if content.is_empty() {
                         return arena.intern_string("");
                     }
-                    return to_parslet_compatible(&content[0], arena, input);
+                    return to_parslet_compatible_in(&content[0], arena, input, false);
                 }
                 // Repetitions keep their items (joined only when every
                 // item is a string); they never merge named captures.
+                // The EMPTY repetition is ruby's zero-match marker:
+                // [] under a Named wrapper, "" (the zero-join) elsewhere.
                 Some(":repetition") => {
+                    if content.is_empty() {
+                        if named {
+                            return store_array_node(&[], arena);
+                        }
+                        return arena.intern_string("");
+                    }
                     let transformed_items: Vec<AstNode> = content
                         .iter()
-                        .map(|item| to_parslet_compatible(item, arena, input))
+                        .map(|item| to_parslet_compatible_in(item, arena, input, false))
                         .collect();
                     return flatten_repetition(&transformed_items, arena, input);
                 }
@@ -151,7 +174,7 @@ pub fn to_parslet_compatible(node: &AstNode, arena: &mut AstArena, input: &str) 
 
             let transformed_items: Vec<AstNode> = content
                 .iter()
-                .map(|item| to_parslet_compatible(item, arena, input))
+                .map(|item| to_parslet_compatible_in(item, arena, input, false))
                 .collect();
             flatten_sequence(&transformed_items, arena, input)
         }
@@ -351,7 +374,9 @@ fn transform_single_key_hash(
     if raw_value_is_absent_maybe(value, arena) {
         return wrap_with_key(key_str, AstNode::Nil, arena);
     }
-    let transformed = to_parslet_compatible(value, arena, input);
+    // The key's value is the Named capture's direct value (named=true,
+    // rs#574's shallow flag).
+    let transformed = to_parslet_compatible_in(value, arena, input, true);
 
     let is_tagged_repetition = is_tagged_with(value, ":repetition", arena);
     let is_raw_array_repetition = array_items_of(value, arena)
@@ -437,7 +462,9 @@ fn transform_multi_key_hash(
             let value = if raw_value_is_absent_maybe(v, arena) {
                 AstNode::Nil
             } else {
-                to_parslet_compatible(v, arena, input)
+                // Each key's value is a Named capture's direct value
+                // (named=true, rs#574's shallow flag).
+                to_parslet_compatible_in(v, arena, input, true)
             };
             (k.clone(), value)
         })
