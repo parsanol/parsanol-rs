@@ -109,6 +109,21 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ## [Unreleased]
 
+- Release v1.5.14 (the stages 1-7 engine + the zero-match contract) ([#638](https://github.com/parsanol/parsanol-rs/pull/638))
+- The zero-match contract: ruby's named law in both flatten layers (rs#574) ([#637](https://github.com/parsanol/parsanol-rs/pull/637))
+- The tranche-7 receipt (loop-composition envelopes) + the envelope-aware survey ([#636](https://github.com/parsanol/parsanol-rs/pull/636))
+- Slice B stage 7: loop-composition envelopes routed (the inner lane) ([#635](https://github.com/parsanol/parsanol-rs/pull/635))
+- Slice B stage 6: nested sequence fragments routed (the plan tree) ([#633](https://github.com/parsanol/parsanol-rs/pull/633))
+- Tranche-5 receipt (the fold never merges) + the falsified merge-rule doc fix ([#632](https://github.com/parsanol/parsanol-rs/pull/632))
+- Slice B stage 5: the raw-tier correction (the classic fold never merges) ([#631](https://github.com/parsanol/parsanol-rs/pull/631))
+- Slice B stage 3 tranche 4: sequence-of-refs loops route (the cut assembly) ([#627](https://github.com/parsanol/parsanol-rs/pull/627))
+- Slice B stage 3 tranche 3: rule-reference loop bodies route ([#623](https://github.com/parsanol/parsanol-rs/pull/623))
+- Slice B stage 3 tranche 2: named-wrapped loop bodies route ([#620](https://github.com/parsanol/parsanol-rs/pull/620))
+- Slice B stage 3: flat sequence bodies route to the loop tables ([#618](https://github.com/parsanol/parsanol-rs/pull/618))
+- Slice B stage 2: the routed repetition loops (rs#574 Phase 2) ([#615](https://github.com/parsanol/parsanol-rs/pull/615))
+- Release v1.5.13
+- Slice B stage 2: the routed repetition loops (rs#574 Phase 2)
+- Slice B stage 1: the DFA table backend primitives (rs#574 Phase 2)
 - Release v1.5.13
 - Validate JavaScript budgets before integer conversion
 - Expose a bounded per-call depth budget for WASM artifact parsing
