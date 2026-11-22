@@ -560,3 +560,50 @@ that MATCHES empty still counts its first stalled iteration on both
 engines); absent optionals keep the `[:maybe]` tag and its
 (nil/`""`) laws; the raw-tree contract is unchanged (the corpus pins
 the raw shapes that existed before).
+
+## Slice B stage 3 tranche 8 SHIPPED (2026-11-22): choice bodies routed
+
+The largest tail bucket routes: a loop body that is an Alternative of
+bare span arms with pairwise-disjoint non-nullable FIRST sets lowers to
+one DfaRun. Disjointness is the provability precondition checked
+locally on the body (the same requirement the rule-level proof makes):
+under it PEG ordered-choice == DFA longest-match exactly, so the routed
+table is semantics-exact; overlapping-arm choices refuse and the
+classic loop keeps its ordered-choice behavior (the engagement-refusal
+fixture pins that).
+
+**The construction**: `element_plan`'s Alternative arm yields ONE Bare
+leaf (the per-iteration value is one bare span whichever arm matched);
+the builder's element loop forks every arm's fragment from the element
+entry and joins them into one shared node, with EVERY arm's accept
+marking the SAME leaf slot (the one-marker-per-state law holds —
+different states, one slot). Whole-body choices ride the existing
+whole-subtree thompson union; named-wrapped choices take the flat
+named shape (`{name: span}`). A choice element inside a flat sequence
+counts as one leaf in lockstep with the plan. No new pub types: the
+existing `ElementPlanTree` names every tranche-8 shape.
+
+**The envelope-exit catch** (the tranche-7 latent bug the arithmetic
+tail flushed out): a min>=1 UNBOUNDED envelope element had NO exit from
+its last mandatory copy — the boundary was reachable only through the
+tail copy, so `ws* op ws* 1*digit` (the arithmetic tail, the first
+mixed envelope+choice real shape) demanded a SECOND inner iteration
+before any outer iteration could close; "1+2" parsed as bare "1". The
+fix: the last mandatory copy's accept reaches the boundary (unbounded
+max may stop at the minimum). The backend-parity suite caught it
+exactly as the corpus/differential gates are designed to.
+
+**Pins**: the tranche-8 differential (whole-body choice / named choice
+/ choice-as-element, engagement-asserted; the overlapping-FIRST
+refusal; RAW walker==VM equality on the core inputs; the per-iteration
+shape pins; the arithmetic-tail envelope-exit regression with the
+walker==VM battery). The zero-match spec's classic-lane fixture
+migrated from a choice body (which now routes — the fixture's own
+comment promised the re-check) to a capture-wrapped body.
+
+**The post-tranche-8 survey** (shape-only, 61 flavors): **1300/1490
+sites route-shaped (87.2%)** — 435 terminal + 606 wrapped-terminal +
+230 choice + 24 seq + 5 wrapped-seq. The tail narrows to 190: 86
+`other` (loop-of-loop bodies, predicates, structured/recursive
+sequences inside choices) + 104 `seq-unplan-able`. The choice class
+reports the shape; the disjointness gate is the router's refinement.

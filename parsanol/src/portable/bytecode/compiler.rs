@@ -1266,6 +1266,25 @@ impl Compiler {
                     Atom::Sequence { atoms } => {
                         child_plans(atoms).map(super::dfa_table::ElementPlanTree::Nested)
                     }
+                    // Tranche 8: a CHOICE whose arms are all bare span
+                    // leaves — the per-element value is ONE bare span
+                    // (the matched arm), one leaf slot. Named or
+                    // structured arms refuse: the flat plan cannot name
+                    // an arm-dependent hash; the classic path keeps
+                    // those (a later slice).
+                    Atom::Alternative { atoms } if !atoms.is_empty() => {
+                        let all_bare = atoms.iter().all(|&a| {
+                            matches!(
+                                element_plan(grammar, a, depth + 1),
+                                Some(super::dfa_table::ElementPlanTree::Bare)
+                            )
+                        });
+                        if all_bare {
+                            Some(super::dfa_table::ElementPlanTree::Bare)
+                        } else {
+                            None
+                        }
+                    }
                     // An inner LOOP element (tranche 7): the element's
                     // value is the inner loop's ENVELOPE — one
                     // `:repetition` node of per-iteration values. The
@@ -1360,8 +1379,57 @@ impl Compiler {
             let element_descriptor = |idx: usize| -> Option<super::dfa_table::ElementPlanTree> {
                 element_plan(&self.grammar, idx, 0)
             };
+            // Tranche 8's provability precondition: a choice body's arms
+            // must have pairwise-disjoint non-nullable FIRST sets — the
+            // rule-level provability proof's same requirement, checked
+            // locally on the loop body (PEG ordered-choice == DFA
+            // longest-match exactly under disjointness).
+            let choice_disjoint = |atom_idx: usize| -> bool {
+                let mut arms: Vec<usize> = Vec::new();
+                let mut cur = atom_idx;
+                for _ in 0..16 {
+                    match self.grammar.get_atom(cur) {
+                        Some(Atom::Entity { atom }) | Some(Atom::Named { atom, .. }) => cur = *atom,
+                        Some(Atom::Alternative { atoms }) if !atoms.is_empty() => {
+                            arms = atoms.clone();
+                            break;
+                        }
+                        _ => return false,
+                    }
+                }
+                if arms.is_empty() {
+                    return false;
+                }
+                let mut visited = std::collections::HashSet::new();
+                let mut sets: Vec<Vec<u8>> = Vec::with_capacity(arms.len());
+                for &arm in &arms {
+                    match self.provable_first_set(arm, &mut visited) {
+                        Some((set, true)) => sets.push(set),
+                        _ => return false,
+                    }
+                }
+                for i in 0..sets.len() {
+                    for j in (i + 1)..sets.len() {
+                        if sets[i].iter().any(|b| sets[j].contains(b)) {
+                            return false;
+                        }
+                    }
+                }
+                true
+            };
             let body_shape = match self.grammar.get_atom(atom_idx) {
                 Some(Atom::Str { .. }) | Some(Atom::Re { .. }) if is_span_terminal(atom_idx) => {
+                    Some((false, None))
+                }
+                // Tranche 8: a CHOICE body of bare span arms with
+                // pairwise-disjoint FIRST sets — the per-iteration value
+                // is ONE bare span (the matched arm), so the shape is
+                // the single-terminal shape and the routed executor's
+                // whole-span push is raw-identical to the classic.
+                Some(Atom::Alternative { .. })
+                    if choice_disjoint(atom_idx)
+                        && element_plan(&self.grammar, atom_idx, 0).is_some() =>
+                {
                     Some((false, None))
                 }
                 Some(Atom::Sequence { atoms })
@@ -1372,6 +1440,16 @@ impl Compiler {
                 }
                 Some(Atom::Named { name, atom }) => match self.grammar.get_atom(*atom) {
                     Some(Atom::Str { .. }) | Some(Atom::Re { .. }) if is_span_terminal(*atom) => {
+                        Some((false, Some(name.clone())))
+                    }
+                    Some(Atom::Alternative { .. })
+                        if choice_disjoint(*atom)
+                            && element_plan(&self.grammar, *atom, 0).is_some() =>
+                    {
+                        // A Named choice: the hash wraps ONE value per
+                        // iteration ({name: the matched arm's span}) —
+                        // the classic BuildHash shape, the flat plan
+                        // names it.
                         Some((false, Some(name.clone())))
                     }
                     Some(Atom::Sequence { atoms })
@@ -2658,6 +2736,50 @@ mod tests {
             if depth > 64 {
                 return "other";
             }
+            // Tranche 8: a choice of bare span arms classifies "choice"
+            // (the disjointness precondition is the router's gate — the
+            // survey measures the shape; overlapping-arm choices stay
+            // "other").
+            fn choice_span_arms(grammar: &Grammar, idx: usize, depth: u8) -> Option<()> {
+                if depth > 64 {
+                    return None;
+                }
+                let bare_leaf = |i: usize| -> Option<()> {
+                    let mut cur = i;
+                    for _ in 0..16 {
+                        match grammar.get_atom(cur)? {
+                            Atom::Entity { atom } | Atom::Named { atom, .. } => cur = *atom,
+                            other => {
+                                return match other {
+                                    Atom::Str { pattern } if !pattern.is_empty() => Some(()),
+                                    Atom::Re { pattern } => {
+                                        crate::portable::char_class::CharRanges::from_pattern(
+                                            pattern,
+                                        )?;
+                                        Some(())
+                                    }
+                                    _ => None,
+                                };
+                            }
+                        }
+                    }
+                    None
+                };
+                let mut cur = idx;
+                for _ in 0..16 {
+                    match grammar.get_atom(cur)? {
+                        Atom::Entity { atom } | Atom::Named { atom, .. } => cur = *atom,
+                        Atom::Alternative { atoms } if !atoms.is_empty() => {
+                            for &a in atoms {
+                                bare_leaf(a)?;
+                            }
+                            return Some(());
+                        }
+                        _ => return None,
+                    }
+                }
+                None
+            }
             match grammar.get_atom(body_idx) {
                 Some(Atom::Named { atom, .. }) | Some(Atom::Entity { atom }) => {
                     match grammar.get_atom(*atom) {
@@ -2669,6 +2791,7 @@ mod tests {
                                 "seq-unplan-able"
                             }
                         }
+                        _ if choice_span_arms(grammar, *atom, depth + 1).is_some() => "choice",
                         _ => "other",
                     }
                 }
@@ -2680,6 +2803,7 @@ mod tests {
                         "seq-unplan-able"
                     }
                 }
+                _ if choice_span_arms(grammar, body_idx, depth + 1).is_some() => "choice",
                 _ => "other",
             }
         }

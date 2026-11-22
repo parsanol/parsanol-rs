@@ -793,15 +793,12 @@ fn zero_match_loops_deliver_the_ruby_empty_string() {
     // A choice body never routes: this fixture pins the CLASSIC
     // BuildRep lane. If routing ever learns choice bodies, this
     // assertion flags the fixture for a lane re-check.
+    // A capture-wrapped body never routes (the capture machinery rides
+    // the classic loop) — this fixture keeps pinning the classic
+    // BuildRep lane. The choice-body fixture that originally held this
+    // slot began routing in tranche 8.
     let alt_loop = GrammarBuilder::new()
-        .rule(
-            "root",
-            choice(vec![
-                dynamic(parser_dsl::str("a")),
-                dynamic(parser_dsl::str("b")),
-            ])
-            .many(),
-        )
+        .rule("root", capture("x", dynamic(parser_dsl::str("a"))).many())
         .build()
         .to_json()
         .unwrap();
@@ -1693,4 +1690,240 @@ fn differential_dfa_routed_loop_composition_envelopes_match_the_walker() {
         "[3(s:\":repetition\";[3(s:\":sequence\";[3(s:\":repetition\";in:\"a\";in:\"a\";)];in:\"c\";)];[3(s:\":sequence\";[4(s:\":repetition\";in:\"a\";in:\"b\";in:\"b\";)];in:\"c\";)];)];",
         "the routed loop-composition loop's per-iteration value shape"
     );
+}
+
+#[test]
+fn differential_dfa_routed_choice_bodies_match_the_walker() {
+    // rs#574 slice B stage 3 tranche 8: a loop body that is an
+    // Alternative of bare span arms with pairwise-disjoint FIRST sets
+    // routes — the per-iteration value is ONE bare span (the matched
+    // arm), raw-identical to the classic ordered-choice loop's value.
+    // Disjointness is the provability precondition: under it PEG
+    // ordered-choice == DFA longest-match, so the routed table is exact.
+    let choice_loop = GrammarBuilder::new()
+        .rule(
+            "root",
+            choice(vec![
+                dynamic(parser_dsl::str("a")),
+                dynamic(parser_dsl::str("b")),
+                dynamic(parser_dsl::str("cd")),
+            ])
+            .many(),
+        )
+        .build()
+        .to_json()
+        .unwrap();
+    let named_choice_loop = GrammarBuilder::new()
+        .rule(
+            "root",
+            choice(vec![
+                dynamic(parser_dsl::str("a")),
+                dynamic(parser_dsl::str("b")),
+            ])
+            .label("n")
+            .many(),
+        )
+        .build()
+        .to_json()
+        .unwrap();
+    // A choice ELEMENT inside a flat sequence body: one leaf slot, the
+    // matched arm's span between its neighbors.
+    let choice_in_seq = GrammarBuilder::new()
+        .rule(
+            "root",
+            dynamic(
+                seq(vec![
+                    dynamic(parser_dsl::str("x")),
+                    dynamic(choice(vec![
+                        dynamic(parser_dsl::str("a")),
+                        dynamic(parser_dsl::str("b")),
+                    ])),
+                    dynamic(parser_dsl::str("y")),
+                ])
+                .label("pair"),
+            )
+            .many(),
+        )
+        .build()
+        .to_json()
+        .unwrap();
+    // Overlapping FIRSTs refuse the routing (PEG ordered-choice would
+    // diverge from DFA longest-match) — the classic path keeps the
+    // loop; the engagement assertion pins the refusal.
+    let overlapping = GrammarBuilder::new()
+        .rule(
+            "root",
+            choice(vec![
+                dynamic(parser_dsl::str("ab")),
+                dynamic(parser_dsl::str("a")),
+            ])
+            .many(),
+        )
+        .build()
+        .to_json()
+        .unwrap();
+
+    for g in [&choice_loop, &named_choice_loop, &choice_in_seq] {
+        let grammar = Grammar::from_json(g).unwrap();
+        let program = compile_bytecode(grammar.clone()).unwrap();
+        assert!(
+            program.has_iteration_accept_tables(),
+            "the choice-body loop did not route to a DfaRun loop table"
+        );
+    }
+    {
+        let grammar = Grammar::from_json(&overlapping).unwrap();
+        let program = compile_bytecode(grammar.clone()).unwrap();
+        assert!(
+            !program.has_iteration_accept_tables(),
+            "overlapping FIRSTs must refuse the routing (PEG ordered-choice semantics)"
+        );
+    }
+
+    for input in [
+        "", "a", "ab", "ab2", "cd", "abcd", "cdab", "bacd", "abcdae", "xyxy", "xayxby", "xaybxy",
+        "xqy", "e",
+    ] {
+        assert_agree_collapsed(&choice_loop, input);
+        assert_agree_collapsed(&named_choice_loop, input);
+        assert_agree_collapsed(&choice_in_seq, input);
+        assert_agree_collapsed(&overlapping, input);
+    }
+
+    // Raw equality on the core inputs: the routed per-iteration value
+    // (one bare span, the matched arm) is identical to the classic's.
+    for input in ["ab", "cdab", "xaybxy", "abcdae"] {
+        let grammar = Grammar::from_json(&choice_loop).unwrap();
+        let program = compile_bytecode(grammar.clone()).unwrap();
+        let mut w_arena = AstArena::new();
+        let w = PortableParser::new(&grammar, input, &mut w_arena)
+            .parse_with_end_pos()
+            .expect("the walker parses");
+        let mut v_arena = AstArena::new();
+        let v = parse_with_vm(&program, input, &mut v_arena).expect("the VM parses");
+        assert_eq!(w.end_pos, v.end_pos, "end_pos differs for {input:?}");
+        assert_eq!(
+            materialize(&w.value, &w_arena, input),
+            materialize(&v.value, &v_arena, input),
+            "RAW tree differs for {input:?}"
+        );
+    }
+
+    // The routed raw shape pin: one bare span per iteration, the
+    // matched arm's text.
+    {
+        let grammar = Grammar::from_json(&choice_loop).unwrap();
+        let program = compile_bytecode(grammar).unwrap();
+        let mut a = AstArena::new();
+        let v = parse_with_vm(&program, "cdab", &mut a).unwrap();
+        let shape = materialize(&v.value, &a, "cdab");
+        assert!(
+            shape.contains("s:\":repetition\";")
+                && shape.contains("in:\"cd\";")
+                && shape.contains("in:\"a\";")
+                && shape.contains("in:\"b\";"),
+            "the routed choice loop's per-iteration value shape: {shape}"
+        );
+    }
+    // The named choice's per-iteration hash.
+    {
+        let grammar = Grammar::from_json(&named_choice_loop).unwrap();
+        let program = compile_bytecode(grammar).unwrap();
+        let mut a = AstArena::new();
+        let v = parse_with_vm(&program, "ab", &mut a).unwrap();
+        let shape = materialize(&v.value, &a, "ab");
+        assert!(
+            shape.contains("s:\":repetition\";")
+                && shape.contains("{\"n\"->in:\"a\";};")
+                && shape.contains("{\"n\"->in:\"b\";};"),
+            "the routed named choice loop's per-iteration value shape: {shape}"
+        );
+    }
+    // The choice element's slot between its neighbors.
+    {
+        let grammar = Grammar::from_json(&choice_in_seq).unwrap();
+        let program = compile_bytecode(grammar).unwrap();
+        let mut a = AstArena::new();
+        let v = parse_with_vm(&program, "xayxby", &mut a).unwrap();
+        let shape = materialize(&v.value, &a, "xayxby");
+        assert!(
+            shape.contains("{\"pair\"->[4(s:\":sequence\";in:\"x\";in:\"a\";in:\"y\";)];};")
+                && shape.contains("{\"pair\"->[4(s:\":sequence\";in:\"x\";in:\"b\";in:\"y\";)];};"),
+            "the routed choice-element slot shape: {shape}"
+        );
+    }
+
+    // Tranche-8's envelope-exit catch (the Specs guard): a min>=1
+    // UNBOUNDED envelope element inside a routed loop body must let the
+    // outer iteration close after the mandatory copies — the arithmetic
+    // tail `ws* op ws* 1*digit` (the op = a choice element) parsed "1"
+    // and stopped at the first "+" before the fix: the number element
+    // demanded a SECOND inner iteration before any boundary was
+    // reachable. The grammar is the backend parity suite's
+    // arithmetic_grammar shape.
+    let arithmetic_tail = {
+        let mut g = Grammar::new();
+        let digit = g.add_atom(Atom::Re {
+            pattern: "[0-9]".to_string(),
+        });
+        let number = g.add_atom(Atom::Repetition {
+            atom: digit,
+            min: 1,
+            max: None,
+            tag: crate::portable::grammar::RepetitionTag::Repetition,
+        });
+        let plus = g.add_atom(Atom::Str {
+            pattern: "+".to_string(),
+        });
+        let minus = g.add_atom(Atom::Str {
+            pattern: "-".to_string(),
+        });
+        let op = g.add_atom(Atom::Alternative {
+            atoms: vec![plus, minus],
+        });
+        let ws = g.add_atom(Atom::Re {
+            pattern: "[ \t]".to_string(),
+        });
+        let ws_opt = g.add_atom(Atom::Repetition {
+            atom: ws,
+            min: 0,
+            max: None,
+            tag: crate::portable::grammar::RepetitionTag::Repetition,
+        });
+        let op_and_num = g.add_atom(Atom::Sequence {
+            atoms: vec![ws_opt, op, ws_opt, number],
+        });
+        g.root = op_and_num;
+        g.to_json().unwrap()
+    };
+    {
+        let grammar = Grammar::from_json(&arithmetic_tail).unwrap();
+        let program = compile_bytecode(grammar.clone()).unwrap();
+        assert!(
+            program.has_iteration_accept_tables(),
+            "the mixed envelope/choice tail did not route"
+        );
+        for (input, end) in [("+2", 2usize), (" + 2 ", 4), ("+-1", 0)] {
+            let mut w_arena = AstArena::new();
+            let w = PortableParser::new(&grammar, input, &mut w_arena).parse_with_end_pos();
+            let mut v_arena = AstArena::new();
+            let v = parse_with_vm(&program, input, &mut v_arena);
+            match (&w, &v) {
+                (Ok(w), Ok(v)) => {
+                    assert_eq!(
+                        w.end_pos, v.end_pos,
+                        "envelope-exit end_pos differs for {input:?}"
+                    );
+                    assert_eq!(
+                        v.end_pos, end,
+                        "envelope-exit consumed length for {input:?}"
+                    );
+                }
+                (Err(_), Err(_)) => {}
+                (w, v) => {
+                    panic!("envelope-exit success/failure mismatch for {input:?}: w={w:?} v={v:?}")
+                }
+            }
+        }
+    }
 }

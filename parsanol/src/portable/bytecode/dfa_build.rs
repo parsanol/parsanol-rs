@@ -522,6 +522,51 @@ pub fn build_loop_dfa_envelopes(grammar: &Grammar, body_idx: usize) -> Option<Lo
         }
         Some((idx, min, max))
     }
+    // Whether an atom is a CHOICE of bare span leaves (tranche 8): an
+    // Alternative (Named/Entity wrappers unwrap) whose arms each resolve
+    // to one non-empty Str or class Re leaf. The arm atom ids return in
+    // order; anything else — an arm that is a sequence, a nested
+    // alternative, an envelope, a named wrap around a non-leaf — refuses
+    // (the classic path keeps the shape).
+    fn choice_span_arms(grammar: &Grammar, idx: usize, depth: u8) -> Option<Vec<usize>> {
+        if depth > 64 {
+            return None;
+        }
+        let bare_leaf = |i: usize| -> Option<usize> {
+            let mut cur = i;
+            for _ in 0..16 {
+                match grammar.get_atom(cur)? {
+                    Atom::Entity { atom } | Atom::Named { atom, .. } => cur = *atom,
+                    other => {
+                        return match other {
+                            Atom::Str { pattern } if !pattern.is_empty() => Some(cur),
+                            Atom::Re { pattern } => {
+                                CharRanges::from_pattern(pattern)?;
+                                Some(cur)
+                            }
+                            _ => None,
+                        };
+                    }
+                }
+            }
+            None
+        };
+        let mut cur = idx;
+        for _ in 0..16 {
+            match grammar.get_atom(cur)? {
+                Atom::Entity { atom } | Atom::Named { atom, .. } => cur = *atom,
+                Atom::Alternative { atoms } if !atoms.is_empty() => {
+                    let mut arms = Vec::with_capacity(atoms.len());
+                    for &a in atoms {
+                        arms.push(bare_leaf(a)?);
+                    }
+                    return Some(arms);
+                }
+                _ => return None,
+            }
+        }
+        None
+    }
     let (bs, body_accept) = match grammar.get_atom(body_idx) {
         Some(Atom::Sequence { atoms }) if !atoms.is_empty() => {
             let mut cursor = entry;
@@ -583,6 +628,18 @@ pub fn build_loop_dfa_envelopes(grammar: &Grammar, body_idx: usize) -> Option<Lo
                             nfa.edge(accept, Edge::Epsilon, boundary);
                             if inner_min == 0 {
                                 nfa.edge(cursor, Edge::Epsilon, boundary);
+                            } else {
+                                // The mandatory copies' EXIT: after
+                                // inner_min iterations an unbounded
+                                // loop may stop — the last mandatory
+                                // copy's accept reaches the boundary
+                                // too. (Tranche-8 catch: the arithmetic
+                                // tail's `1*digit` number element
+                                // demanded a SECOND inner iteration
+                                // before any outer iteration could
+                                // close — the min=0 fixtures never
+                                // walked this path.)
+                                nfa.edge(tail_start, Edge::Epsilon, boundary);
                             }
                             pos = boundary;
                         }
@@ -614,6 +671,36 @@ pub fn build_loop_dfa_envelopes(grammar: &Grammar, body_idx: usize) -> Option<Lo
                     if first_element {
                         first_element = false;
                     }
+                    continue;
+                }
+                // Tranche 8: a CHOICE element — an Alternative whose arms
+                // all unwrap to bare span leaves. The arms chain as a
+                // fork/join union; EVERY arm's accept marks the SAME
+                // leaf slot (the per-iteration value is one bare span
+                // whichever arm matched — the one-marker-per-state law
+                // holds: different states, one slot). The plan counts
+                // the choice as ONE leaf in lockstep.
+                if let Some(arms) = choice_span_arms(grammar, child, 0) {
+                    if arms.is_empty() || arms.len() > u8::MAX as usize {
+                        return None;
+                    }
+                    let element_entry = cursor;
+                    let join = nfa.node();
+                    for &arm in &arms {
+                        let (ls, la) = thompson(grammar, arm, &mut nfa, &mut Vec::new())?;
+                        element_accepts_of_node.insert(la, leaf_i);
+                        nfa.edge(element_entry, Edge::Epsilon, ls);
+                        nfa.edge(la, Edge::Epsilon, join);
+                    }
+                    leaf_i += 1;
+                    if first_element {
+                        // The first byte seeds the fork: the union's
+                        // start subset covers every arm's entry.
+                        first_start = element_entry;
+                        first_element = false;
+                    }
+                    last_accept = join;
+                    cursor = join;
                     continue;
                 }
                 let mut leaves = Vec::with_capacity(2);
