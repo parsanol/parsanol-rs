@@ -132,6 +132,13 @@ impl AstArena {
         // String pool: typically smaller than node count (only for keys/literals)
         let string_capacity = (estimated_nodes / 4).max(32);
 
+        // The array pool's true demand is ~1.4 entries/byte on the
+        // per-char corpora (the pool probe: doc3.json 151,823 B →
+        // 216,954 entries); the /4-based seed doubled twice per parse,
+        // each growth a large-block realloc copy. Seed at 2x the input
+        // so the json-class corpora never grow (Phase 2, rs#574).
+        let array_capacity = input_len.saturating_mul(2).max(estimated_nodes * 2);
+
         // String data: estimate ~8 bytes per string on average
         let string_data_capacity = string_capacity * 8;
 
@@ -139,7 +146,7 @@ impl AstArena {
             string_data: Vec::with_capacity(string_data_capacity),
             string_pool: Vec::with_capacity(string_capacity),
             string_hash: HashMap::with_capacity(string_capacity),
-            array_pool: Vec::with_capacity(estimated_nodes * 2),
+            array_pool: Vec::with_capacity(array_capacity),
             hash_pool: Vec::with_capacity(estimated_nodes),
             input: None,
             id: ARENA_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
@@ -163,6 +170,18 @@ impl AstArena {
     #[inline]
     pub fn capacity(&self) -> usize {
         self.array_pool.capacity()
+    }
+
+    /// The pool occupancy snapshot (array, hash, string-pool, string-data)
+    /// — the tree-build sizing probes.
+    #[inline]
+    pub fn pool_stats(&self) -> (usize, usize, usize, usize) {
+        (
+            self.array_pool.len(),
+            self.hash_pool.len(),
+            self.string_pool.len(),
+            self.string_data.len(),
+        )
     }
 
     /// Get the current number of allocated arrays
@@ -323,6 +342,16 @@ impl AstArena {
         tag_pool_index: u32,
         items: &[AstNode],
     ) -> (u32, u32) {
+        // Chunked pool growth (Phase 2, rs#574): a tree-dwarfing-input
+        // corpus makes the pool double from the small pre-sized seed
+        // many times, and each macOS realloc of a large block pays the
+        // vm_copy page trap the profile shows. Reserving in >=8192-
+        // entry steps cuts the growth count without changing any
+        // observable behavior.
+        let needed = items.len() + 1;
+        if self.array_pool.len() + needed > self.array_pool.capacity() {
+            self.array_pool.reserve(needed.max(8192));
+        }
         let start = self.array_pool.len() as u32;
         self.array_pool.push(ArrayPoolEntry {
             value: AstNode::StringRef {

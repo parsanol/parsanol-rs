@@ -607,3 +607,75 @@ sites route-shaped (87.2%)** — 435 terminal + 606 wrapped-terminal +
 `other` (loop-of-loop bodies, predicates, structured/recursive
 sequences inside choices) + 104 `seq-unplan-able`. The choice class
 reports the shape; the disjointness gate is the router's refinement.
+
+## The tail census (2026-11-22, shape-only, post-tranche-8)
+
+The 190 unrouted fleet sites' exact shapes (the atom-level census; the
+classes overlap the rs survey's coarser buckets):
+
+- **~34 choice-with-structured-arms** (choice-of-sequence arms mostly,
+  19 sites of `choice-of-seq x2` alone): routeable by generalizing
+  tranche-8's fork/join to per-arm LEAF RANGES — the matched arm is
+  the one whose last-leaf slot carries a cut; the assembly picks the
+  arm by that slot. Requires a plan-tree Choice variant → the
+  additive-registry ladder (a new pub type on a new parallel registry;
+  extending `ElementPlanTree` would repeat the unreleased-major trap
+  that produced the ladder).
+- **58 seq-with-inner-loop** (bounded/unbounded inner loops inside
+  sequence bodies): the tranche-7 envelope machinery already owns the
+  unbounded half; the census's loose inner-shape test over-counts —
+  the rs survey's seq class (24) is the true covered figure; the
+  residue is structured inner bodies.
+- **11 loop-of-loop bodies** (`(x*)*`): two-level inner lanes — an
+  engineering slice, small.
+- **9 lookahead-guarded bodies**: zero-width predicates — the
+  byte-driven DFA has no machinery for them; a later architecture
+  slice.
+- **The recursive/structured residue** (the `seq-unplan-able` bulk):
+  recursion is architecturally unrouteable by a finite DFA — these
+  sites belong to the classic path permanently, or to Phase 2's LR
+  tables (which handle recursion via the table's call model).
+
+**Strategic read**: the remaining coverage tranches total ~50-90
+routeable sites with each slice needing the new-type ladder or new
+zero-width machinery — diminishing returns against Phase 2, which is
+the mission-critical throughput lever (the 0.03 µs/B gate).
+
+## Phase 2 OPENED (2026-11-22): the measured state on the work machine
+
+The SOTA json corpus (447,801 B, the runners' own verification-gated
+lane, min-of-N), same machine, same run:
+
+- **parsanol VM: 0.0444 µs/B** (17.1–21.7 ms per pass) — the tranche
+  campaign's coverage work closed the gap from the recorded 1.93x to
+  **1.25x** against tree-sitter.
+- tree-sitter (rust): 0.0354 µs/B (15.8 ms).
+- parsanol interpreter (the walker): 0.480 µs/B (the walker's 10.8x
+  distance to the VM is why the compiled-VM lane is the only lane that
+  matters for the gate).
+- Lark LALR (python): 0.427; ANTLR (python3): 2.533.
+
+**The profile (sample, 4161 samples over a 400-round VM run)**:
+
+- The **VM dispatch loop holds ~88%** of samples (the instruction
+  fetch/decode/stream cost itself — the LR-fusion target: remove the
+  dispatch for fused regions, the jit#458 lesson's corrected framing:
+  not operand-specialization, but REGION FUSION — whole-rule tables
+  that skip the instruction stream entirely).
+- **`store_tagged_array_indexed` ~8-10%** — the arena's array pool
+  reallocs per store (RawVec growth + memmove + mach_vm_copy traps in
+  the profile): the pre-sized/chunked pool is the identifiable
+  non-dispatch win.
+- **`exec_dfa_run` ~10.6%** — the routed loops; inside it the
+  per-invocation `cuts`/`inner_cuts` buffer allocations (from_elem +
+  memmove ≈3%) — hoistable into per-VM scratch.
+
+**The Phase-2 slice plan** (evidence-ranked):
+1. The arena array-pool chunking (kill the per-store realloc) —
+   measurable, bounded, ~8-10% of the VM lane.
+2. The routed-loop buffer reuse (per-VM scratch for cuts/inner_cuts) —
+   ~3%.
+3. The LR-table fusion proper: whole-rule tables driving the value
+   stack directly (tree-sitter's GLR-free deterministic core path) —
+   the 88% dispatch cost's structural answer; the design continues in
+   the next session with the instruction-histogram detail.
