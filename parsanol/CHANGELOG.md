@@ -109,6 +109,9 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ## [Unreleased]
 
+- Rs#574 multi-byte class slice: UTF-8 sequence chains route composite choice bodies ([#653](https://github.com/parsanol/parsanol-rs/pull/653))
+- Rs#574 stage 3 tranche 9: per-arm choice slots route composite choice bodies ([#652](https://github.com/parsanol/parsanol-rs/pull/652))
+- Phase 2: the instruction histogram and the revised slice plan ([#647](https://github.com/parsanol/parsanol-rs/pull/647))
 - Phase 2 opened: the measured state, the profile, and the arena pool resize ([#643](https://github.com/parsanol/parsanol-rs/pull/643))
 - Slice B stage 8: choice-body loops routed (the envelope-exit catch) ([#641](https://github.com/parsanol/parsanol-rs/pull/641))
 - Release v1.5.13

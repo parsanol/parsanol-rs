@@ -10,7 +10,7 @@ name = "parsanol-lsp"
 path = "src/main.rs"
 
 [dependencies]
-parsanol = { path = "../parsanol", version = "1.5.15" }
+parsanol = { path = "../parsanol", version = "1.5.16" }
 serde_json = "1"
 
 [lib]
