@@ -883,3 +883,55 @@ records for the 5-slot fixture). REVERTED uncommitted; the overlap
 refusal remains the shipped state, the design above stands, and the
 implementation is the next session's focused slice with a clean
 probe budget.
+
+## The class-run tranche MEASURED AND REVERTED (2026-11-23, the session's deepest cycle)
+
+The complete class-run implementation (byte-driven exit, the gated
+boundary law, the plan cache, the single-bare fast path) ROUTES the
+json string interior — **dispatch −81.6%** (628,324 → 115,424, Regex
+10.2% → 0.28%) — but the interleaved wall A/B measures **+33-40%
+REGRESSION** (A 22.5-24 ms vs B 16-18 ms), and the control experiment
+(the class-run disabled, everything else in) returns to parity — the
+regression is entirely the routed interior's runtime, NOT the
+scaffolding. REVERTED per the A/B law; the implementation is preserved
+at /tmp/class-run-tranche.patch (698 lines).
+
+**What the cycle established** (all recorded for the next session):
+
+1. **The first design's fatal flaw** (an epsilon boundary) made the
+   run states iteration-accepts — a mid-run crossing fired per byte
+   and the arm-pick mis-fired. THE FIX: the exit is a BYTE edge on
+   the class's non-first bytes → the run states' closures exclude
+   body_accept → crossings fire only on the exit byte, which lands
+   in the accept state.
+2. **The exit-byte re-consumption law**: the crossing boundary = the
+   incremental max cut (`last_cut`, updated O(1) at the cut
+   recording); when it is behind the position, the position rewinds
+   so the accept state's restart edges re-consume the exit byte as
+   the next iteration's first byte — the walker's greedy-inner
+   semantics, exactly. The law MUST be gated per table
+   (`mark_dfa_loop_boundary_law`): applied unconditionally it
+   rewinds ENVELOPE-lane tables whose slotless elements don't
+   advance the cuts — the arithmetic-tail test hung re-parsing
+   forever (the session's SIGKILL/hang catch).
+3. **The per-invocation plan resolve** (resolve_plan_tree9 +
+   AsmNode allocations per exec_dfa_run call) showed up in the
+   profile as malloc/free/drop_glue — fixed with a per-VM plan cache
+   (resolve once per table, clone the small Vec per invocation).
+4. **The interior table = 53 states** (54 KB dense) — the utf8
+   chains + the hex run + the restart arms.
+5. **The single-bare fast path** (the fired arm = one bare span →
+   the value IS the whole-iteration span: a direct scan + push,
+   no assembly) — barely moved the wall.
+
+**THE SHARPENED PHASE-2 CONCLUSION**: the interior's routed per-char
+iterations are VALUE NOISE — the walker emits one span per char, but
+the json grammar's `string` capture consumes the WHOLE string, so the
+per-char values collapse at the named level. The classic choice loop's
+~18 ns/char dispatch+fold BEATS the DfaRun's table walk + per-char
+value push (~25-45 ns/char). The winning shape is NOT routing the
+interior loop: it is routing the WHOLE STRING (`"` interior `"` as ONE
+table with ONE value = the whole-string span) — a string-level scan
+(the slice-4 bulk-scan shape with escape-aware continuation). That is
+the next design, and with it the ~60% of json bytes collapse into ONE
+instruction with ONE value.
