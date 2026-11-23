@@ -698,3 +698,44 @@ The read for the LR fusion: the exec_dfa_run lane's real cost is not
 its allocations (they are small and warm) — the dispatch loop's 88%
 share is the structural target, and the fusion must remove
 INSTRUCTIONS, not bookkeeping.
+
+## Phase 2's instruction histogram (2026-11-23): where the dispatch spends json
+
+`histogram_probe_json` (the opcode counts over the SOTA json corpus's
+largest doc, 151,823 B, the compiled-VM lane): **628,324 dispatched
+instructions = 4.14 per byte**.
+
+| share | opcode | what it is |
+|---|---|---|
+| 17.0% | ByteDispatch | the value/member choice dispatch |
+| 16.2% | Jump | loop backs + choice falls |
+| 16.2% | RepCount | per-iteration counting (classic loops) |
+| 16.0% | PartialCommit | per-iteration commits (classic loops) |
+| 10.2% | Regex | per-char class matching — THE STRING INTERIOR |
+| 7.3% | CharSet | per-char class matching (the ws-style bodies) |
+| 4.4/4.2% | Call/Return | rule boundaries |
+| 2.1/1.6% | BuildSeq/BuildHash | the value nodes |
+
+**The design read**: ~49% of ALL dispatch is CLASSIC PER-CHAR LOOP
+MACHINERY (RepCount + PartialCommit + Regex + CharSet), and the
+single biggest byte-share inside it is the STRING INTERIOR — the
+`( escaped / char_unescaped )*` body that slice 4's neg-scan premise
+falsified for the neg-scan fusion but that TRANCHE 8's choice routing
+plus the per-arm leaf slots open properly: `escaped` is a flat
+leaf-sequence arm and `char_unescaped` is a one-leaf arm — with
+per-arm cut slots the DFA consumes the interior as one DfaRun and the
+assembly picks the arm by which slot carries a cut. That moves
+~60%-of-bytes work out of the dispatch loop.
+
+**The Phase-2 slice plan (revised, evidence-ranked)**:
+1. **Tranche 9: choice arms with per-arm leaf-slot ranges** — the
+   string interior routes (the new-type ladder: a Choice plan variant
+   on a NEW pub type/registry per the additive law). The gate: the
+   arms' FIRST sets pairwise-disjoint (the provability precondition,
+   as tranche 8).
+2. The loop-scaffolding share that remains classic after tranche 9
+   (RepCount/Jump/PartialCommit on the residual bodies) — the LR
+   fusion proper: whole-rule tables driving the value stack, the
+   design continues against the post-tranche-9 histogram.
+3. ByteDispatch's share drops with every routed choice — re-measure
+   per slice.
