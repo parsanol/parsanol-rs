@@ -173,6 +173,9 @@ pub struct Program {
     /// tagged array (a Sequence body's BuildSeq shape) — parallel to
     /// `dfa_tables`, keeping `DfaLoopMeta` at its published fields.
     dfa_loop_seq_wrapped: Vec<bool>,
+    /// Tranche 9: the body root is a per-arm CHOICE (the executor
+    /// assembles it directly, no `:sequence` tag).
+    dfa_loop_choice_root: Vec<bool>,
 
     /// The routed loop's per-iteration hash key when the body is a
     /// Named-wrapped terminal (`{name: span}` per iteration, the
@@ -197,6 +200,9 @@ pub struct Program {
     /// `dfa_tables`; loop-composition envelopes live here so the
     /// tranche-6 `ElementPlan` registry keeps its type.
     dfa_loop_plan_trees: Vec<Option<Vec<super::dfa_table::ElementPlanTree>>>,
+    /// Tranche 9: the per-arm CHOICE plan trees (the additive-registry
+    /// law's fifth rung) — parallel to `dfa_tables`.
+    dfa_loop_plan_trees9: Vec<Option<Vec<super::dfa_table::ElementPlanTree9>>>,
 
     /// Regex pattern table (for Regex instructions)
     regexes: Vec<String>,
@@ -245,11 +251,13 @@ impl Program {
             dfa_tables: Vec::new(),
             dfa_loops: Vec::new(),
             dfa_loop_seq_wrapped: Vec::new(),
+            dfa_loop_choice_root: Vec::new(),
             dfa_loop_named: Vec::new(),
             dfa_loop_elements: Vec::new(),
             dfa_loop_element_plans: Vec::new(),
             dfa_loop_inner_accepts: Vec::new(),
             dfa_loop_plan_trees: Vec::new(),
+            dfa_loop_plan_trees9: Vec::new(),
             regexes: Vec::new(),
             keys: Vec::new(),
             labels: Vec::new(),
@@ -274,11 +282,13 @@ impl Program {
             dfa_tables: Vec::new(),
             dfa_loops: Vec::new(),
             dfa_loop_seq_wrapped: Vec::new(),
+            dfa_loop_choice_root: Vec::new(),
             dfa_loop_named: Vec::new(),
             dfa_loop_elements: Vec::new(),
             dfa_loop_element_plans: Vec::new(),
             dfa_loop_inner_accepts: Vec::new(),
             dfa_loop_plan_trees: Vec::new(),
+            dfa_loop_plan_trees9: Vec::new(),
             regexes: Vec::new(),
             keys: Vec::with_capacity(strings),
             labels: Vec::new(),
@@ -472,11 +482,13 @@ impl Program {
             min,
         }));
         self.dfa_loop_seq_wrapped.push(false);
+        self.dfa_loop_choice_root.push(false);
         self.dfa_loop_named.push(None);
         self.dfa_loop_elements.push(None);
         self.dfa_loop_element_plans.push(None);
         self.dfa_loop_inner_accepts.push(None);
         self.dfa_loop_plan_trees.push(None);
+        self.dfa_loop_plan_trees9.push(None);
         idx
     }
 
@@ -501,6 +513,22 @@ impl Program {
     /// `dfa_loops` — `DfaLoopMeta` keeps its published fields.
     pub fn get_dfa_loop_sequence_wrapped(&self, idx: u32) -> bool {
         self.dfa_loop_seq_wrapped.get(idx as usize).copied() == Some(true)
+    }
+
+    /// Whether the routed loop's body root is a per-arm CHOICE
+    /// (tranche 9): the executor assembles the Choice root DIRECTLY
+    /// as the iteration value (no `:sequence` tag — the classic
+    /// choice loop's per-iteration value is the matched arm's value).
+    pub fn get_dfa_loop_choice_root(&self, idx: u32) -> bool {
+        self.dfa_loop_choice_root.get(idx as usize).copied() == Some(true)
+    }
+
+    /// Mark the routed loop's body root as a per-arm CHOICE (tranche
+    /// 9).
+    pub fn mark_dfa_loop_choice_root(&mut self, idx: u32) {
+        if let Some(slot) = self.dfa_loop_choice_root.get_mut(idx as usize) {
+            *slot = true;
+        }
     }
 
     /// Mark the routed loop's per-iteration value as a `:sequence`-
@@ -542,6 +570,17 @@ impl Program {
             *slot = Some(super::dfa_table::DfaLoopElements {
                 accepts_per_state,
                 names,
+            });
+        }
+    }
+
+    /// Mark ONLY the per-state cut driver (the tranche-9 lane: the
+    /// executor rides the 9 plan trees; the flat names stay unused).
+    pub fn mark_dfa_loop_element_cuts(&mut self, idx: u32, accepts_per_state: Vec<Option<u8>>) {
+        if let Some(slot) = self.dfa_loop_elements.get_mut(idx as usize) {
+            *slot = Some(super::dfa_table::DfaLoopElements {
+                accepts_per_state,
+                names: Vec::new(),
             });
         }
     }
@@ -614,6 +653,28 @@ impl Program {
         idx: u32,
     ) -> Option<&[super::dfa_table::ElementPlanTree]> {
         self.dfa_loop_plan_trees
+            .get(idx as usize)
+            .and_then(|p| p.as_deref())
+    }
+
+    /// Tranche 9: mark the body's per-arm CHOICE plan trees (the
+    /// additive-registry law's fifth rung).
+    pub fn mark_dfa_loop_plan_trees9(
+        &mut self,
+        idx: u32,
+        plans: Vec<super::dfa_table::ElementPlanTree9>,
+    ) {
+        if let Some(slot) = self.dfa_loop_plan_trees9.get_mut(idx as usize) {
+            *slot = Some(plans);
+        }
+    }
+
+    /// Tranche 9: the body's per-arm CHOICE plan trees, when present.
+    pub fn get_dfa_loop_plan_trees9(
+        &self,
+        idx: u32,
+    ) -> Option<&[super::dfa_table::ElementPlanTree9]> {
+        self.dfa_loop_plan_trees9
             .get(idx as usize)
             .and_then(|p| p.as_deref())
     }

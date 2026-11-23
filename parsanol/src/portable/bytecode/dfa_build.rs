@@ -527,7 +527,7 @@ pub fn build_loop_dfa_envelopes(grammar: &Grammar, body_idx: usize) -> Option<Lo
     // to one non-empty Str or class Re leaf. The arm atom ids return in
     // order; anything else — an arm that is a sequence, a nested
     // alternative, an envelope, a named wrap around a non-leaf — refuses
-    // (the classic path keeps the shape).
+    // (the shape falls to the tranche-9 builder or the classic path).
     fn choice_span_arms(grammar: &Grammar, idx: usize, depth: u8) -> Option<Vec<usize>> {
         if depth > 64 {
             return None;
@@ -566,6 +566,115 @@ pub fn build_loop_dfa_envelopes(grammar: &Grammar, body_idx: usize) -> Option<Lo
             }
         }
         None
+    }
+    // Tranche 9's recursive fragment builder (the per-arm CHOICE):
+    // walks the atom tree building BOTH the NFA fragment and the plan
+    // in lockstep - the fragment starts at `fork` (the caller wired
+    // it), every leaf's accept takes its sequential slot and
+    // epsilon-joins into the returned join node. v1 scope: leaves,
+    // flat sequences, Named wraps around leaves/sequences, and nested
+    // choices; envelope elements inside tranche-9 shapes refuse (the
+    // classic path keeps those bodies).
+    #[allow(clippy::too_many_arguments)]
+    fn build_plan9(
+        grammar: &Grammar,
+        atom_idx: usize,
+        nfa: &mut Nfa,
+        fork: u32,
+        element_accepts_of_node: &mut std::collections::HashMap<u32, u8>,
+        first_slot: u8,
+        depth: u8,
+    ) -> Option<(u32, super::dfa_table::ElementPlanTree9, u8)> {
+        if depth > 64 || first_slot > u8::MAX - 16 {
+            return None;
+        }
+        // Unwrap Named/Entity, remembering the outermost name (the
+        // plan's hash wrap; the NFA is name-blind).
+        let mut cur = atom_idx;
+        let mut name: Option<String> = None;
+        let plan_atom: &Atom = loop {
+            match grammar.get_atom(cur)? {
+                Atom::Entity { atom } => cur = *atom,
+                Atom::Named { atom, name: n } => {
+                    if name.is_none() {
+                        name = Some(n.clone());
+                    }
+                    cur = *atom;
+                }
+                other => break other,
+            }
+        };
+        let join = nfa.node();
+        match plan_atom {
+            Atom::Str { .. } | Atom::Re { .. } => {
+                let (ls, la) = thompson(grammar, cur, nfa, &mut Vec::new())?;
+                nfa.edge(fork, Edge::Epsilon, ls);
+                element_accepts_of_node.insert(la, first_slot);
+                nfa.edge(la, Edge::Epsilon, join);
+                let plan = match name {
+                    Some(n) => super::dfa_table::ElementPlanTree9::Hash(n),
+                    None => super::dfa_table::ElementPlanTree9::Bare,
+                };
+                Some((join, plan, 1))
+            }
+            Atom::Sequence { atoms } if !atoms.is_empty() => {
+                let mut child_plans = Vec::with_capacity(atoms.len());
+                let mut slot = first_slot;
+                let mut from = fork;
+                for &child in atoms {
+                    let (child_join, plan, count) = build_plan9(
+                        grammar,
+                        child,
+                        nfa,
+                        from,
+                        element_accepts_of_node,
+                        slot,
+                        depth + 1,
+                    )?;
+                    child_plans.push(plan);
+                    slot = slot.saturating_add(count);
+                    from = child_join;
+                }
+                let plan = match name {
+                    Some(n) => super::dfa_table::ElementPlanTree9::HashNested(n, child_plans),
+                    None => super::dfa_table::ElementPlanTree9::Nested(child_plans),
+                };
+                let count = slot.saturating_sub(first_slot);
+                Some((from, plan, count))
+            }
+            Atom::Alternative { atoms } if !atoms.is_empty() => {
+                // A named wrap around a choice refuses (v1: unnamed
+                // arms only; the classic path keeps those).
+                if name.is_some() {
+                    return None;
+                }
+                let mut arm_plans = Vec::with_capacity(atoms.len());
+                let mut total = 0u8;
+                for &arm in atoms {
+                    let (arm_join, plan, count) = build_plan9(
+                        grammar,
+                        arm,
+                        nfa,
+                        fork,
+                        element_accepts_of_node,
+                        first_slot.saturating_add(total),
+                        depth + 1,
+                    )?;
+                    nfa.edge(arm_join, Edge::Epsilon, join);
+                    arm_plans.push(super::dfa_table::ElementPlanChoiceArm9 {
+                        plan: Box::new(plan),
+                        leaf_count: count,
+                    });
+                    total = total.saturating_add(count);
+                }
+                Some((
+                    join,
+                    super::dfa_table::ElementPlanTree9::Choice(arm_plans),
+                    total,
+                ))
+            }
+            _ => None,
+        }
     }
     let (bs, body_accept) = match grammar.get_atom(body_idx) {
         Some(Atom::Sequence { atoms }) if !atoms.is_empty() => {
@@ -679,7 +788,10 @@ pub fn build_loop_dfa_envelopes(grammar: &Grammar, body_idx: usize) -> Option<Lo
                 // leaf slot (the per-iteration value is one bare span
                 // whichever arm matched — the one-marker-per-state law
                 // holds: different states, one slot). The plan counts
-                // the choice as ONE leaf in lockstep.
+                // the choice as ONE leaf in lockstep. This lane keeps
+                // the flat plan's slot numbering (the json A/B measured
+                // routing these shapes through the tranche-9 per-arm
+                // machinery as a regression).
                 if let Some(arms) = choice_span_arms(grammar, child, 0) {
                     if arms.is_empty() || arms.len() > u8::MAX as usize {
                         return None;
@@ -697,6 +809,33 @@ pub fn build_loop_dfa_envelopes(grammar: &Grammar, body_idx: usize) -> Option<Lo
                         // The first byte seeds the fork: the union's
                         // start subset covers every arm's entry.
                         first_start = element_entry;
+                        first_element = false;
+                    }
+                    last_accept = join;
+                    cursor = join;
+                    continue;
+                }
+                // Tranche 9 (the shapes tranche 8's shared-slot lane
+                // cannot express): the per-arm CHOICE element — arms
+                // may be flat leaf sequences WITH nested choices (the
+                // string interior's shape). Every leaf of arm i marks
+                // its own slot in the arm's contiguous range; the
+                // assembly picks the arm whose LAST leaf slot carries
+                // a cut.
+                if let Some((join, _plan9, count)) = build_plan9(
+                    grammar,
+                    child,
+                    &mut nfa,
+                    cursor,
+                    &mut element_accepts_of_node,
+                    leaf_i,
+                    0,
+                ) {
+                    leaf_i = leaf_i.saturating_add(count);
+                    if first_element {
+                        // The first byte seeds the fork: the union's
+                        // start subset covers every arm's entry.
+                        first_start = cursor;
                         first_element = false;
                     }
                     last_accept = join;
@@ -729,6 +868,27 @@ pub fn build_loop_dfa_envelopes(grammar: &Grammar, body_idx: usize) -> Option<Lo
                 last_accept = ca;
             }
             (first_start, last_accept)
+        }
+        // Tranche 9: a whole-body CHOICE that tranche 8 cannot express
+        // (sequence arms, nested choices) — the per-arm fork/join with
+        // per-arm leaf slots, in lockstep with the compiler's plan9_of
+        // gate. A bare-arm choice body keeps the plain union (its
+        // per-iteration value is ONE whole-span push — no cuts, the
+        // tranche-8 lane; the json A/B measured the per-arm machinery
+        // on these shapes as a ~50% regression).
+        Some(Atom::Alternative { atoms })
+            if !atoms.is_empty() && choice_span_arms(grammar, body_idx, 0).is_none() =>
+        {
+            let (join, _plan9, _count) = build_plan9(
+                grammar,
+                body_idx,
+                &mut nfa,
+                entry,
+                &mut element_accepts_of_node,
+                0,
+                0,
+            )?;
+            (entry, join)
         }
         _ => thompson(grammar, body_idx, &mut nfa, &mut Vec::new())?,
     };

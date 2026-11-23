@@ -765,3 +765,42 @@ The measured prize: the string interior is ~60% of json bytes riding
 per-char Regex + loop scaffolding today (10.2% Regex + its
 RepCount/Jump/PartialCommit share); one DfaRun over it is the largest
 single step toward the 0.03 gate.
+
+## Stage 3 tranche 9 SHIPPED (2026-11-23, #652): the per-arm choice slots
+
+The recursion (per-arm plan subtrees) landed on its own registry:
+`ElementPlanTree9::Choice` + `ElementPlanChoiceArm9` (additive, no
+edits to published shapes; semver 223 pass). `build_plan9` walks the
+arm's atom tree building the NFA fragment and the plan in lockstep —
+arm i's leaves take the arm's contiguous slot range, the assembly
+picks the arm whose LAST-leaf cut carries THIS iteration's boundary
+(strictly after `prev`, so the shared cut buffer's stale
+earlier-iteration values cannot win the pick), and the choice hands
+back `start + total` so the parent's slot numbering survives the
+union. The gate stays tranche 8's: pairwise-disjoint non-nullable
+FIRST sets.
+
+**The regression catch**: the first cut routed every choice body
+through the per-arm machinery — including tranche 8's bare-arm bodies.
+The interleaved json A/B measured a ~50% regression (27.3-28.6 ms vs
+17.8-18.8 ms): the flat lanes' whole-span push is cheaper than the
+per-arm pick for bodies where it suffices. The landed split keeps
+`choice_span_arms` bodies on tranche 8's shared-slot lanes exactly
+(builder + markings + executor); only the tranche-9-only shapes take
+the new machinery. Post-split json A/B: parity within noise (16.9-18.0
+vs 16.8-18.8 ms interleaved minima).
+
+**Scope honesty**: the json grammar's exact interior does NOT route
+yet — its `[^"\\]` arm is a negated Unicode class whose complement
+spans multi-byte codepoints, and the stage-1 byte table refuses those
+(a multi-byte member consumes 2-4 bytes as ONE value; a one-transition
+byte edge cannot represent that — the deferred multi-byte class
+slice). The shipped fixture is the ASCII-bounded interior: it routes,
+and the differential battery pins escapes, mixed arm leaf counts, and
+per-arm slot reuse across iterations (the stale-cut hazard).
+
+**The A/B read**: the loop-heavy escape/plain grammar (the tranche-9
+shape, 396,189 B corpus, min-of-15 interleaved) shows PARITY (54.6 vs
+56.1 ms mins) — the per-iteration arm-pick costs what the per-byte
+dispatch saving delivers. The LR fusion (Phase 2) must fold the
+arm-pick into the table walk: that is where tranche-9's win lives.

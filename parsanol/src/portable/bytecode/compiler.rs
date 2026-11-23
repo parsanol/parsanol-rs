@@ -1345,6 +1345,94 @@ impl Compiler {
                     _ => None,
                 }
             }
+            // Tranche 9's plan mirror (the recursive per-arm CHOICE):
+            // the SAME DFS walk order as the builder's build_plan9 —
+            // children in order, slots sequential — so the per-leaf
+            // slot numbering stays in lockstep by construction. The
+            // envelope elements mirror as slot-less (the tranche-7
+            // lane); nested choices recurse.
+            fn plan9_of(
+                grammar: &Grammar,
+                atom_idx: usize,
+                depth: u8,
+            ) -> Option<super::dfa_table::ElementPlanTree9> {
+                use super::dfa_table::{ElementPlanChoiceArm9, ElementPlanTree9};
+                if depth > 64 {
+                    return None;
+                }
+                let is_leaf = |idx: usize| match grammar.get_atom(idx) {
+                    Some(Atom::Str { pattern }) => !pattern.is_empty(),
+                    Some(Atom::Re { pattern }) => {
+                        crate::portable::char_class::CharRanges::from_pattern(pattern).is_some()
+                    }
+                    _ => false,
+                };
+                let mut cur = atom_idx;
+                let mut name: Option<String> = None;
+                let plan_atom = loop {
+                    match grammar.get_atom(cur)? {
+                        Atom::Entity { atom } => cur = *atom,
+                        Atom::Named { atom, name: n } => {
+                            if name.is_none() {
+                                name = Some(n.clone());
+                            }
+                            cur = *atom;
+                        }
+                        other => break other,
+                    }
+                };
+                match plan_atom {
+                    Atom::Str { .. } | Atom::Re { .. } => {
+                        if !is_leaf(cur) {
+                            return None;
+                        }
+                        Some(match name {
+                            Some(n) => ElementPlanTree9::Hash(n),
+                            None => ElementPlanTree9::Bare,
+                        })
+                    }
+                    Atom::Sequence { atoms } if !atoms.is_empty() => {
+                        let mut children = Vec::with_capacity(atoms.len());
+                        for &child in atoms {
+                            children.push(plan9_of(grammar, child, depth + 1)?);
+                        }
+                        Some(match name {
+                            Some(n) => ElementPlanTree9::HashNested(n, children),
+                            None => ElementPlanTree9::Nested(children),
+                        })
+                    }
+                    Atom::Alternative { atoms } if !atoms.is_empty() => {
+                        // A named wrap around a choice refuses (v1:
+                        // unnamed arms only).
+                        if name.is_some() {
+                            return None;
+                        }
+                        let mut arms = Vec::with_capacity(atoms.len());
+                        for &arm in atoms {
+                            let plan = plan9_of(grammar, arm, depth + 1)?;
+                            arms.push(ElementPlanChoiceArm9 {
+                                leaf_count: plan.leaf_count(),
+                                plan: Box::new(plan),
+                            });
+                        }
+                        Some(ElementPlanTree9::Choice(arms))
+                    }
+                    Atom::Repetition {
+                        atom: body,
+                        tag: RepetitionTag::Repetition | RepetitionTag::Maybe,
+                        ..
+                    } => {
+                        // The tranche-7 envelope lane, mirrored: the
+                        // envelope occupies NO leaf slot.
+                        let inner = plan9_of(grammar, *body, depth + 1)?;
+                        Some(match name {
+                            Some(n) => ElementPlanTree9::HashEnvelope(n, Box::new(inner)),
+                            None => ElementPlanTree9::Envelope(Box::new(inner)),
+                        })
+                    }
+                    _ => None,
+                }
+            }
             // The flat per-leaf fallback descriptors (`DfaLoopElements`
             // keeps its published shape): the plan tree flattened, one
             // `ElementDesc` per leaf in the builder's chain order.
@@ -1421,20 +1509,24 @@ impl Compiler {
                 Some(Atom::Str { .. }) | Some(Atom::Re { .. }) if is_span_terminal(atom_idx) => {
                     Some((false, None))
                 }
-                // Tranche 8: a CHOICE body of bare span arms with
-                // pairwise-disjoint FIRST sets — the per-iteration value
-                // is ONE bare span (the matched arm), so the shape is
-                // the single-terminal shape and the routed executor's
-                // whole-span push is raw-identical to the classic.
+                // Tranche 8/9: a CHOICE body with pairwise-disjoint
+                // FIRST sets — tranche 8's bare-span arms ride the flat
+                // element plan; tranche 9 widens to per-arm slot plans
+                // (sequence arms, nested choices). Whichever plan
+                // compiler accepts the body routes; the executor
+                // prefers the 9 registry when present.
                 Some(Atom::Alternative { .. })
                     if choice_disjoint(atom_idx)
-                        && element_plan(&self.grammar, atom_idx, 0).is_some() =>
+                        && (element_plan(&self.grammar, atom_idx, 0).is_some()
+                            || plan9_of(&self.grammar, atom_idx, 0).is_some()) =>
                 {
                     Some((false, None))
                 }
                 Some(Atom::Sequence { atoms })
                     if !atoms.is_empty()
-                        && atoms.iter().all(|&c| element_descriptor(c).is_some()) =>
+                        && atoms
+                            .iter()
+                            .all(|&c| plan9_of(&self.grammar, c, 0).is_some()) =>
                 {
                     Some((true, None))
                 }
@@ -1444,7 +1536,7 @@ impl Compiler {
                     }
                     Some(Atom::Alternative { .. })
                         if choice_disjoint(*atom)
-                            && element_plan(&self.grammar, *atom, 0).is_some() =>
+                            && plan9_of(&self.grammar, *atom, 0).is_some() =>
                     {
                         // A Named choice: the hash wraps ONE value per
                         // iteration ({name: the matched arm's span}) —
@@ -1454,7 +1546,9 @@ impl Compiler {
                     }
                     Some(Atom::Sequence { atoms })
                         if !atoms.is_empty()
-                            && atoms.iter().all(|&c| element_descriptor(c).is_some()) =>
+                            && atoms
+                                .iter()
+                                .all(|&c| plan9_of(&self.grammar, c, 0).is_some()) =>
                     {
                         Some((true, Some(name.clone())))
                     }
@@ -1476,7 +1570,9 @@ impl Compiler {
                         }
                         Some(Atom::Sequence { atoms })
                             if !atoms.is_empty()
-                                && atoms.iter().all(|&c| element_descriptor(c).is_some()) =>
+                                && atoms
+                                    .iter()
+                                    .all(|&c| plan9_of(&self.grammar, c, 0).is_some()) =>
                         {
                             Some((true, Some(name.clone())))
                         }
@@ -1487,7 +1583,9 @@ impl Compiler {
                     }
                     Some(Atom::Sequence { atoms })
                         if !atoms.is_empty()
-                            && atoms.iter().all(|&c| element_descriptor(c).is_some()) =>
+                            && atoms
+                                .iter()
+                                .all(|&c| plan9_of(&self.grammar, c, 0).is_some()) =>
                     {
                         Some((true, None))
                     }
@@ -1540,7 +1638,59 @@ impl Compiler {
                         }
                         _ => None,
                     };
+                    // Tranche 9: the per-arm CHOICE plan trees — ONLY
+                    // for the shapes whose iterations ride the
+                    // assembly AND only when tranche 8's flat plan
+                    // cannot express the body: a bare-arm choice root
+                    // keeps the flat lane (its per-iteration value is
+                    // ONE bare span — the whole-span push is cheaper
+                    // than the per-arm pick, and the json A/B measured
+                    // the hijack as a ~50% regression). The executor
+                    // prefers this registry when present.
+                    let unwrapped_body = {
+                        let mut cur = atom_idx;
+                        for _ in 0..16 {
+                            match self.grammar.get_atom(cur) {
+                                Some(Atom::Entity { atom }) | Some(Atom::Named { atom, .. }) => {
+                                    cur = *atom
+                                }
+                                _ => break,
+                            }
+                        }
+                        cur
+                    };
+                    let flat8 = element_plan(&self.grammar, unwrapped_body, 0).is_some();
+                    let is_choice_root = matches!(
+                        self.grammar.get_atom(unwrapped_body),
+                        Some(Atom::Alternative { .. })
+                    );
+                    let elements9: Option<Vec<super::dfa_table::ElementPlanTree9>> = if flat8 {
+                        None
+                    } else {
+                        match self.grammar.get_atom(unwrapped_body) {
+                            Some(Atom::Sequence { atoms }) => atoms
+                                .iter()
+                                .map(|&c| plan9_of(&self.grammar, c, 0))
+                                .collect::<Option<Vec<_>>>(),
+                            Some(Atom::Alternative { .. }) => {
+                                plan9_of(&self.grammar, unwrapped_body, 0).map(|p| vec![p])
+                            }
+                            _ => None,
+                        }
+                    };
+                    if let Some(trees9) = elements9 {
+                        self.program.mark_dfa_loop_plan_trees9(idx, trees9);
+                    }
+                    if is_choice_root && !flat8 {
+                        self.program.mark_dfa_loop_choice_root(idx);
+                        // The per-arm cut driver: without it the walk
+                        // records no cuts and the assembly's arm-pick
+                        // finds none set (the empty-span fallback).
+                        self.program
+                            .mark_dfa_loop_element_cuts(idx, element_accepts.clone());
+                    }
                     if let Some(atoms) = seq_atoms {
+                        let all7 = atoms.iter().all(|&c| element_descriptor(c).is_some());
                         let plans: Vec<super::dfa_table::ElementPlanTree> = atoms
                             .iter()
                             .filter_map(|&c| element_descriptor(c))
@@ -1548,61 +1698,73 @@ impl Compiler {
                         // The flat per-leaf fallback (`DfaLoopElements`
                         // keeps its published shape): the tree
                         // flattened, one descriptor per leaf in the
-                        // builder's chain order.
-                        let mut names: Vec<super::dfa_table::ElementDesc> =
-                            Vec::with_capacity(plans.len());
-                        for plan in &plans {
-                            leaf_descs(plan, &mut names);
-                        }
-                        self.program
-                            .mark_dfa_loop_elements(idx, element_accepts, names);
-                        // The tranche-6 registry only carries bodies
-                        // WITHOUT envelopes (its type is frozen); the
-                        // full tree rides the tranche-7 registry.
-                        fn castable(plan: &super::dfa_table::ElementPlanTree) -> bool {
-                            match plan {
-                                super::dfa_table::ElementPlanTree::Envelope(_)
-                                | super::dfa_table::ElementPlanTree::HashEnvelope(_, _) => false,
-                                super::dfa_table::ElementPlanTree::Nested(children)
-                                | super::dfa_table::ElementPlanTree::HashNested(_, children) => {
-                                    children.iter().all(castable)
-                                }
-                                _ => true,
+                        // builder's chain order. A tranche-9-only body
+                        // (nested choices — element_plan refuses some
+                        // elements) rides the 9 registry alone: the
+                        // tranche-7/6 markings are skipped (their plan
+                        // list would misalign with the builder's
+                        // per-arm slot numbering).
+                        if all7 {
+                            let mut names: Vec<super::dfa_table::ElementDesc> =
+                                Vec::with_capacity(plans.len());
+                            for plan in &plans {
+                                leaf_descs(plan, &mut names);
                             }
+                            self.program
+                                .mark_dfa_loop_elements(idx, element_accepts, names);
                         }
-                        fn cast(
-                            plan: &super::dfa_table::ElementPlanTree,
-                        ) -> super::dfa_table::ElementPlan {
-                            match plan {
-                                super::dfa_table::ElementPlanTree::Bare => {
-                                    super::dfa_table::ElementPlan::Bare
+                        if all7 {
+                            // The tranche-6 registry only carries bodies
+                            // WITHOUT envelopes (its type is frozen); the
+                            // full tree rides the tranche-7 registry.
+                            fn castable(plan: &super::dfa_table::ElementPlanTree) -> bool {
+                                match plan {
+                                    super::dfa_table::ElementPlanTree::Envelope(_)
+                                    | super::dfa_table::ElementPlanTree::HashEnvelope(_, _) => {
+                                        false
+                                    }
+                                    super::dfa_table::ElementPlanTree::Nested(children)
+                                    | super::dfa_table::ElementPlanTree::HashNested(_, children) => {
+                                        children.iter().all(castable)
+                                    }
+                                    _ => true,
                                 }
-                                super::dfa_table::ElementPlanTree::RefBare => {
-                                    super::dfa_table::ElementPlan::RefBare
-                                }
-                                super::dfa_table::ElementPlanTree::Hash(name) => {
-                                    super::dfa_table::ElementPlan::Hash(name.clone())
-                                }
-                                super::dfa_table::ElementPlanTree::Nested(children) => {
-                                    super::dfa_table::ElementPlan::Nested(
-                                        children.iter().map(cast).collect(),
-                                    )
-                                }
-                                super::dfa_table::ElementPlanTree::HashNested(name, children) => {
-                                    super::dfa_table::ElementPlan::HashNested(
+                            }
+                            fn cast(
+                                plan: &super::dfa_table::ElementPlanTree,
+                            ) -> super::dfa_table::ElementPlan {
+                                match plan {
+                                    super::dfa_table::ElementPlanTree::Bare => {
+                                        super::dfa_table::ElementPlan::Bare
+                                    }
+                                    super::dfa_table::ElementPlanTree::RefBare => {
+                                        super::dfa_table::ElementPlan::RefBare
+                                    }
+                                    super::dfa_table::ElementPlanTree::Hash(name) => {
+                                        super::dfa_table::ElementPlan::Hash(name.clone())
+                                    }
+                                    super::dfa_table::ElementPlanTree::Nested(children) => {
+                                        super::dfa_table::ElementPlan::Nested(
+                                            children.iter().map(cast).collect(),
+                                        )
+                                    }
+                                    super::dfa_table::ElementPlanTree::HashNested(
+                                        name,
+                                        children,
+                                    ) => super::dfa_table::ElementPlan::HashNested(
                                         name.clone(),
                                         children.iter().map(cast).collect(),
-                                    )
+                                    ),
+                                    _ => unreachable!("castable() excludes the envelope variants"),
                                 }
-                                _ => unreachable!("castable() excludes the envelope variants"),
                             }
+                            if plans.iter().all(castable) {
+                                let flat: Vec<super::dfa_table::ElementPlan> =
+                                    plans.iter().map(cast).collect();
+                                self.program.mark_dfa_loop_element_plans(idx, flat);
+                            }
+                            self.program.mark_dfa_loop_plan_trees(idx, plans);
                         }
-                        if plans.iter().all(castable) {
-                            let flat: Vec<super::dfa_table::ElementPlan> =
-                                plans.iter().map(cast).collect();
-                            self.program.mark_dfa_loop_element_plans(idx, flat);
-                        }
-                        self.program.mark_dfa_loop_plan_trees(idx, plans);
                     }
                     // Tranche 7: the inner-boundary lane (envelope
                     // elements' per-inner-iteration cuts).
