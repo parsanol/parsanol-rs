@@ -32,6 +32,7 @@ pub mod compiler;
 pub mod dfa_build;
 pub mod dfa_table;
 pub mod error;
+/// The instruction-histogram probe (Phase 2's measurement tool).
 pub mod histogram_probe;
 pub mod instruction;
 pub mod optimizer;

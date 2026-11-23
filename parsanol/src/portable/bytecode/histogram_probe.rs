@@ -1,4 +1,8 @@
 #![cfg(test)]
+//! The instruction-histogram probe (Phase 2, rs#574): the opcode
+//! counts over the SOTA json corpus's largest doc, the design
+//! measurement behind the tranche-9/LR-fusion slice plan. Skip-guarded
+//! like the corpus gates.
 
 #[test]
 fn histogram_probe_json() {
@@ -48,7 +52,7 @@ fn histogram_probe_json() {
             }
         }
     }
-    rows.sort_by(|a, b| b.0.cmp(&a.0));
+    rows.sort_by_key(|row| std::cmp::Reverse(row.0));
     println!("total dispatched: {total}");
     for (c, name) in rows.iter().take(18) {
         println!(
