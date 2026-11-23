@@ -1933,12 +1933,12 @@ fn differential_dfa_routed_choice_bodies_match_the_walker() {
 // assembly picks the arm whose LAST leaf slot carries this iteration's
 // boundary cut. The prize shape is the string interior
 // (escape / char)* — mixed arm leaf counts (2 vs 1) with per-arm slot
-// ranges. v1 scope: the ASCII-bounded interior — the JSON grammar's
-// exact `[^"\\]` arm is a NEGATED UNICODE class whose complement
-// spans multi-byte codepoints; the stage-1 byte table refuses those
-// (a multi-byte member consumes 2-4 bytes as ONE value, which a
-// one-transition byte edge cannot represent), so that shape stays on
-// the classic path until the multi-byte class slice.
+// ranges. The multi-byte class slice lifts the stage-1 ASCII law:
+// classes with members above 0x7F lower to UTF-8 sequence chains
+// (regex-syntax's canonical Utf8Sequences decomposition), so the
+// JSON grammar's exact `[^"\\]` arm routes and a multi-byte codepoint
+// still consumes ALL its bytes as ONE iteration value (the walker's
+// match_at shape).
 #[test]
 fn differential_dfa_routed_per_arm_choice_slots_match_the_walker() {
     // The ASCII-bounded string interior: `"` (escape / char)* `"`,
@@ -1968,6 +1968,66 @@ fn differential_dfa_routed_per_arm_choice_slots_match_the_walker() {
         .build()
         .to_json()
         .unwrap();
+    // The JSON grammar's EXACT interior minus the u-hexquad: the char
+    // arm is the negated Unicode class `[^"\\]` — multi-byte members
+    // ride UTF-8 sequence chains and one `é`/emoji iteration is ONE
+    // span. (The hexquad itself — `u` + min-4-unbounded hexclass — is
+    // refused by the ENVELOPE-TAIL OVERLAP law, pinned below: the
+    // hexclass's bytes intersect the loop restart's plain-char bytes,
+    // so the subset construction would merge the greedy-tail and
+    // loop-restart interpretations into one single-path state.)
+    let negated_interior = GrammarBuilder::new()
+        .rule(
+            "root",
+            seq(vec![
+                dynamic(parser_dsl::str("\"")),
+                dynamic(
+                    choice(vec![
+                        dynamic(seq(vec![
+                            dynamic(parser_dsl::str("\\")),
+                            dynamic(re(r#"["\\/bfnrt]"#)),
+                        ])),
+                        dynamic(re(r#"[^"\\]"#)),
+                    ])
+                    .many(),
+                ),
+                dynamic(parser_dsl::str("\"")),
+            ]),
+        )
+        .build()
+        .to_json()
+        .unwrap();
+    // The ENVELOPE-TAIL OVERLAP refusal pin: the escape arm's
+    // min-4-unbounded hexclass (the json u-hexquad shape) overlaps the
+    // loop restart's plain-char bytes — the routed lane must refuse
+    // the body (the classic loop keeps it).
+    let hexquad_interior = GrammarBuilder::new()
+        .rule(
+            "root",
+            seq(vec![
+                dynamic(parser_dsl::str("\"")),
+                dynamic(
+                    choice(vec![
+                        dynamic(seq(vec![
+                            dynamic(parser_dsl::str("\\")),
+                            dynamic(choice(vec![
+                                dynamic(re(r#"["\\/bfnrt]"#)),
+                                dynamic(seq(vec![
+                                    dynamic(parser_dsl::str("u")),
+                                    dynamic(re("[0-9a-fA-F]").repeat(4, None)),
+                                ])),
+                            ])),
+                        ])),
+                        dynamic(re(r#"[^"\\]"#)),
+                    ])
+                    .many(),
+                ),
+                dynamic(parser_dsl::str("\"")),
+            ]),
+        )
+        .build()
+        .to_json()
+        .unwrap();
     // A mixed-count choice body where the LONGER arm fires on a later
     // iteration than the shorter one — per-arm slot reuse across
     // iterations (the stale-cut pick hazard).
@@ -1987,13 +2047,28 @@ fn differential_dfa_routed_per_arm_choice_slots_match_the_walker() {
         .to_json()
         .unwrap();
 
-    for g in [&string_interior, &mixed] {
+    for g in [&string_interior, &negated_interior, &mixed] {
         let grammar = Grammar::from_json(g).unwrap();
         let program = compile_bytecode(grammar.clone()).unwrap();
         assert!(
             program.has_iteration_accept_tables(),
             "the per-arm choice body did not route to a DfaRun loop table"
         );
+    }
+    {
+        let grammar = Grammar::from_json(&hexquad_interior).unwrap();
+        let program = compile_bytecode(grammar.clone()).unwrap();
+        // The INTERIOR's choice loop must refuse (the overlap law);
+        // the hexquad's own nested loop still routes via tranche 8's
+        // bare-arm lane, so the pin is the absence of any tranche-9
+        // plan tree — the interior is the grammar's only tranche-9
+        // candidate.
+        for idx in 0..8u32 {
+            assert!(
+                program.get_dfa_loop_plan_trees9(idx).is_none(),
+                "the hexquad-overlap interior routed (the envelope-tail overlap law must refuse it)"
+            );
+        }
     }
 
     for input in [
@@ -2003,12 +2078,65 @@ fn differential_dfa_routed_per_arm_choice_slots_match_the_walker() {
         "\"a\\\"b\"",
         "\"a\\\\b\"",
         "\"ab\\\"cd\\\\ef gh\"",
+        "\"a\\nb\\t\\/c\"",
         "\"xzy\"",
         "\"zxz\"",
         "\"xyxy\"",
         "\"xyxzy\"",
     ] {
-        let grammar = Grammar::from_json(&string_interior).unwrap();
+        for g in [&string_interior, &negated_interior] {
+            let grammar = Grammar::from_json(g).unwrap();
+            let program = compile_bytecode(grammar.clone()).unwrap();
+            let mut w_arena = AstArena::new();
+            let w = PortableParser::new(&grammar, input, &mut w_arena).parse_with_end_pos();
+            let mut v_arena = AstArena::new();
+            let v = parse_with_vm(&program, input, &mut v_arena);
+            match (&w, &v) {
+                (Ok(w), Ok(v)) => {
+                    assert_eq!(
+                        w.end_pos, v.end_pos,
+                        "string-interior end_pos differs for {input:?}"
+                    );
+                    assert_eq!(
+                        materialize(&w.value, &w_arena, input),
+                        materialize(&v.value, &v_arena, input),
+                        "string-interior tree differs for {input:?}"
+                    );
+                }
+                (Err(_), Err(_)) => {}
+                (w, v) => panic!(
+                    "string-interior success/failure mismatch for {input:?}: w={w:?} v={v:?}"
+                ),
+            }
+        }
+    }
+    for input in ["", "z", "xy", "xyzx", "xyxyz", "zxxy", "xyxzxy"] {
+        assert_agree_collapsed(&mixed, input);
+    }
+    // The refused hexquad body stays EXACT on the classic path —
+    // including the greedy tail swallowing following hex digits.
+    for input in [
+        "\"\"",
+        "\"a\\u0041b\"",
+        "\"\\u00e9x\"",
+        "\"a\\n\\u0041\\/b\"",
+    ] {
+        assert_agree_collapsed(&hexquad_interior, input);
+    }
+
+    // The multi-byte members: one iteration per CODEPOINT — `é` (2
+    // bytes) and an astral emoji (4 bytes) are single spans between
+    // the ASCII chars, and a truncated sequence mid-string is no
+    // member at all (both engines reject).
+    for input in [
+        "\"café\"",
+        "\"naïve\"",
+        "\"a\u{1F600}b\"",
+        "\"e\u{0301}\"",
+        "\"xy\u{E9}",
+        "\"\u{4e2d}\u{6587}\"",
+    ] {
+        let grammar = Grammar::from_json(&negated_interior).unwrap();
         let program = compile_bytecode(grammar.clone()).unwrap();
         let mut w_arena = AstArena::new();
         let w = PortableParser::new(&grammar, input, &mut w_arena).parse_with_end_pos();
@@ -2018,22 +2146,34 @@ fn differential_dfa_routed_per_arm_choice_slots_match_the_walker() {
             (Ok(w), Ok(v)) => {
                 assert_eq!(
                     w.end_pos, v.end_pos,
-                    "string-interior end_pos differs for {input:?}"
+                    "multi-byte end_pos differs for {input:?}"
                 );
                 assert_eq!(
                     materialize(&w.value, &w_arena, input),
                     materialize(&v.value, &v_arena, input),
-                    "string-interior tree differs for {input:?}"
+                    "multi-byte tree differs for {input:?}"
                 );
             }
             (Err(_), Err(_)) => {}
             (w, v) => {
-                panic!("string-interior success/failure mismatch for {input:?}: w={w:?} v={v:?}")
+                panic!("multi-byte success/failure mismatch for {input:?}: w={w:?} v={v:?}")
             }
         }
     }
-    for input in ["", "z", "xy", "xyzx", "xyxyz", "zxxy", "xyxzxy"] {
-        assert_agree_collapsed(&mixed, input);
+    // The per-iteration VALUE for a multi-byte char is ONE span.
+    {
+        let grammar = Grammar::from_json(&negated_interior).unwrap();
+        let program = compile_bytecode(grammar).unwrap();
+        let mut a = AstArena::new();
+        let input = "\"xy\u{E9}\"";
+        let v = parse_with_vm(&program, input, &mut a).unwrap();
+        let shape = materialize(&v.value, &a, input);
+        assert!(
+            shape.contains("in:\"x\";")
+                && shape.contains("in:\"y\";")
+                && shape.contains("in:\"\u{E9}\";"),
+            "the multi-byte iteration value is one whole-codepoint span: {shape}"
+        );
     }
 
     // The per-arm slot shape pin: each interior char is ONE bare span

@@ -860,6 +860,11 @@ impl<'a> BytecodeVM<'a> {
             let end = cuts[*cursor];
             *cursor += 1;
             *prev = end;
+            assert!(
+                end >= start,
+                "leaf span underflow: slot={} prev={start} cut={end} cuts={cuts:?}",
+                *cursor - 1
+            );
             arena.input_ref(start, end - start)
         };
         match node {
@@ -951,19 +956,26 @@ impl<'a> BytecodeVM<'a> {
                     length: hlen,
                 }
             }
-            // Tranche 9: the per-arm CHOICE — pick the arm whose LAST
-            // leaf slot carries a cut STRICTLY AFTER `prev` (the
-            // iteration's own arm end; `cuts` is shared across
-            // iterations, so stale earlier-iteration values sit at or
-            // before `prev` and must not win the pick), then assemble
-            // that arm's plan recursively — it consumes exactly its
-            // leaf_count slots.
+            // Tranche 9: the per-arm CHOICE — pick the first arm whose
+            // slot RANGE carries a cut STRICTLY AFTER `prev`. Only the
+            // fired arm writes its own range this iteration (the
+            // ranges are disjoint; `cuts` is shared across iterations,
+            // so stale earlier-iteration values sit at or before
+            // `prev` and must not win the pick). The whole-range scan
+            // (not a last-slot read) is required when an arm's paths
+            // end at DIFFERENT slots — the escape arm's simple branch
+            // ends two slots before its u-hexquad branch. Then
+            // assemble the arm's plan recursively — it consumes
+            // exactly its leaf_count slots.
             AsmNode::Choice(arms) => {
                 let mut offset = *cursor;
                 let mut matched: Option<&AsmChoiceArm> = None;
                 for arm in arms {
-                    let last = offset + arm.leaf_count as usize - 1;
-                    if cuts.get(last).copied().unwrap_or(0) > *prev {
+                    let range = offset..offset + arm.leaf_count as usize;
+                    if cuts
+                        .get(range.clone())
+                        .is_some_and(|slice| slice.iter().any(|&c| c > *prev))
+                    {
                         matched = Some(arm);
                         break;
                     }

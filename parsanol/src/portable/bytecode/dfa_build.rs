@@ -56,26 +56,46 @@ fn bits_of(bytes: &[u8]) -> Box<[bool; 256]> {
     Box::new(bits)
 }
 
-/// The single-byte ASCII class for an `Re` atom, or `None` when the
-/// pattern spans codepoints the byte-level builder refuses.
-fn ascii_class_bits(pattern: &str) -> Option<Box<[bool; 256]>> {
-    let ranges = CharRanges::from_pattern(pattern)?;
+/// The Thompson fragment for one character class: ASCII members ride a
+/// single-byte edge; members above 0x7F ride UTF-8 sequence chains
+/// (regex-syntax's canonical `Utf8Sequences` decomposition). A
+/// multi-byte codepoint consumes ALL its bytes as ONE leaf match — the
+/// walker's `CharRanges::match_at` shape — so the routed loop's
+/// per-iteration value for `é` stays one span, not two. Every path
+/// epsilon-joins into ONE accept (loop leaves need a single
+/// `(start, accept)` pair for the cut-slot law).
+fn class_fragment(nfa: &mut Nfa, ranges: &CharRanges) -> (u32, u32) {
+    let start = nfa.node();
+    let accept = nfa.node();
     let mut bits = [false; 256];
     for (lo, hi) in ranges.codepoint_ranges() {
-        // Stage 1: ASCII single-byte codepoints only — a multi-byte
-        // codepoint edge is a byte-sequence chain, and a mixed class's
-        // UTF-8 prefixes need their own construction (a later slice).
-        if lo > 0x7F || hi > 0x7F {
-            return None;
+        if lo <= 0x7F {
+            for cp in lo..=hi.min(0x7F) {
+                bits[cp as usize] = true;
+            }
         }
-        for cp in lo..=hi.min(lo + 0xFFFF) {
-            bits[cp as usize] = true;
-        }
-        if hi > lo + 0xFFFF {
-            break;
+        if hi > 0x7F {
+            let seq_lo = char::from_u32(lo.max(0x80)).expect("HIR ranges are scalar");
+            let seq_hi = char::from_u32(hi).expect("HIR ranges are scalar");
+            for seq in regex_syntax::utf8::Utf8Sequences::new(seq_lo, seq_hi) {
+                let mut from = start;
+                for r in seq.as_slice() {
+                    let mut edge = [false; 256];
+                    for b in r.start..=r.end {
+                        edge[b as usize] = true;
+                    }
+                    let to = nfa.node();
+                    nfa.edge(from, Edge::Bytes(Box::new(edge)), to);
+                    from = to;
+                }
+                nfa.edge(from, Edge::Epsilon, accept);
+            }
         }
     }
-    Some(Box::new(bits))
+    if bits.iter().any(|&b| b) {
+        nfa.edge(start, Edge::Bytes(Box::new(bits)), accept);
+    }
+    (start, accept)
 }
 
 /// Build the DFA table for `rule_idx`, or `None` when the atom tree
@@ -118,10 +138,8 @@ fn thompson(
             }
         }
         Atom::Re { pattern } => {
-            let bits = ascii_class_bits(pattern)?;
-            let (s, a) = (nfa.node(), nfa.node());
-            nfa.edge(s, Edge::Bytes(bits), a);
-            Some((s, a))
+            let ranges = CharRanges::from_pattern(pattern)?;
+            Some(class_fragment(nfa, &ranges))
         }
         Atom::Sequence { atoms } => {
             // Chain the fragments with epsilon joins.
@@ -238,8 +256,16 @@ fn fragment_states(
     let n = match atom {
         Atom::Str { pattern } => pattern.len().max(1) as u32,
         Atom::Re { pattern } => {
-            let _ = ascii_class_bits(pattern)?;
-            1
+            let ranges = CharRanges::from_pattern(pattern)?;
+            // The UTF-8 chain fan-out bound: at most 3 canonical
+            // sequences x 4 byte positions per non-ASCII range.
+            let mut n = 1u32;
+            for &(_, hi) in ranges.codepoint_ranges().iter() {
+                if hi > 0x7F {
+                    n += 12;
+                }
+            }
+            n
         }
         Atom::Sequence { atoms } | Atom::Alternative { atoms } => {
             let mut total = 0;
@@ -508,6 +534,15 @@ pub fn build_loop_dfa_envelopes(grammar: &Grammar, body_idx: usize) -> Option<Lo
                     }
                     Some(())
                 }
+                // A choice of no-inner-loop bodies: the inner copy
+                // lowers as ONE thompson fork/join fragment (the
+                // u-hexquad's choice-of-hex-classes shape).
+                Atom::Alternative { atoms } if !atoms.is_empty() => {
+                    for &child in atoms {
+                        no_inner_loop(grammar, child, depth + 1)?;
+                    }
+                    Some(())
+                }
                 Atom::Str { pattern } if !pattern.is_empty() => Some(()),
                 Atom::Re { pattern } => {
                     CharRanges::from_pattern(pattern)?;
@@ -571,10 +606,10 @@ pub fn build_loop_dfa_envelopes(grammar: &Grammar, body_idx: usize) -> Option<Lo
     // walks the atom tree building BOTH the NFA fragment and the plan
     // in lockstep - the fragment starts at `fork` (the caller wired
     // it), every leaf's accept takes its sequential slot and
-    // epsilon-joins into the returned join node. v1 scope: leaves,
-    // flat sequences, Named wraps around leaves/sequences, and nested
-    // choices; envelope elements inside tranche-9 shapes refuse (the
-    // classic path keeps those bodies).
+    // epsilon-joins into the returned join node. Scope: leaves, flat
+    // sequences, Named wraps around leaves/sequences, nested choices,
+    // exact-copy repetitions, and tranche-7 ENVELOPES (the inner-copy
+    // chain rides the inner-cut lane; the envelope occupies no slot).
     #[allow(clippy::too_many_arguments)]
     fn build_plan9(
         grammar: &Grammar,
@@ -582,8 +617,11 @@ pub fn build_loop_dfa_envelopes(grammar: &Grammar, body_idx: usize) -> Option<Lo
         nfa: &mut Nfa,
         fork: u32,
         element_accepts_of_node: &mut std::collections::HashMap<u32, u8>,
+        inner_accepts_of_node: &mut std::collections::HashMap<u32, u8>,
+        env_counter: &mut u8,
         first_slot: u8,
         depth: u8,
+        restart: Option<&[u8]>,
     ) -> Option<(u32, super::dfa_table::ElementPlanTree9, u8)> {
         if depth > 64 || first_slot > u8::MAX - 16 {
             return None;
@@ -628,8 +666,11 @@ pub fn build_loop_dfa_envelopes(grammar: &Grammar, body_idx: usize) -> Option<Lo
                         nfa,
                         from,
                         element_accepts_of_node,
+                        inner_accepts_of_node,
+                        env_counter,
                         slot,
                         depth + 1,
+                        restart,
                     )?;
                     child_plans.push(plan);
                     slot = slot.saturating_add(count);
@@ -657,8 +698,11 @@ pub fn build_loop_dfa_envelopes(grammar: &Grammar, body_idx: usize) -> Option<Lo
                         nfa,
                         fork,
                         element_accepts_of_node,
+                        inner_accepts_of_node,
+                        env_counter,
                         first_slot.saturating_add(total),
                         depth + 1,
+                        restart,
                     )?;
                     nfa.edge(arm_join, Edge::Epsilon, join);
                     arm_plans.push(super::dfa_table::ElementPlanChoiceArm9 {
@@ -673,9 +717,166 @@ pub fn build_loop_dfa_envelopes(grammar: &Grammar, body_idx: usize) -> Option<Lo
                     total,
                 ))
             }
+            // The EXACT-COPY repetition (min == max): n chained copies
+            // of the body — the json escape arm's u-hexquad
+            // `4*(hexclass)` shape. Each copy takes its own leaf slot
+            // (the classic loop's per-copy iteration value). Bounded
+            // small: the unroll must stay inside the byte-driven
+            // builder's sanity range.
+            Atom::Repetition {
+                atom: body,
+                min,
+                max: Some(max),
+                tag: RepetitionTag::Repetition,
+            } if *min == *max && (1..=8).contains(min) => {
+                let mut child_plans = Vec::with_capacity(*min);
+                let mut slot = first_slot;
+                let mut from = fork;
+                for _ in 0..*min {
+                    let (copy_join, plan, count) = build_plan9(
+                        grammar,
+                        *body,
+                        nfa,
+                        from,
+                        element_accepts_of_node,
+                        inner_accepts_of_node,
+                        env_counter,
+                        slot,
+                        depth + 1,
+                        restart,
+                    )?;
+                    child_plans.push(plan);
+                    slot = slot.saturating_add(count);
+                    from = copy_join;
+                }
+                let plan = match name {
+                    Some(n) => super::dfa_table::ElementPlanTree9::HashNested(n, child_plans),
+                    None => super::dfa_table::ElementPlanTree9::Nested(child_plans),
+                };
+                Some((from, plan, slot.saturating_sub(first_slot)))
+            }
+            // The ENVELOPE (tranche 7's lane, mirrored into the
+            // tranche-9 recursion): an unbounded/optional repetition
+            // whose body leaf-chains — the json escape arm's
+            // u-hexquad `min=4, max=None` shape lives here. The inner
+            // copies ride the INNER-CUT lane (every copy accept is an
+            // inner boundary); the envelope occupies NO leaf slot —
+            // the assembly's prev walk supplies its spans.
+            Atom::Repetition { .. } => {
+                let (inner_body, inner_min, inner_max) = envelope_of(grammar, cur)?;
+                // The envelope-tail overlap law: the greedy inner tail
+                // and the enclosing loop's restart share one DFA
+                // state whenever the inner body's bytes intersect the
+                // restart's — the subset construction merges both
+                // interpretations (the walker's greedy-inner
+                // preference is not expressible in a single-path
+                // table), and the marker law breaks. Refuse; the
+                // classic path keeps the body (the json u-hexquad's
+                // hexclass overlaps the plain-char restart).
+                let rst = restart?;
+                let inner_first = first_bytes_of(grammar, inner_body, 0)?;
+                if inner_first.iter().any(|b| rst.contains(b)) {
+                    return None;
+                }
+                let env_i = *env_counter;
+                *env_counter = env_i.checked_add(1)?;
+                // The inner copy lowers as ONE thompson fragment —
+                // choice bodies fork/join, sequences chain — the copy
+                // accept is the inner boundary (the executor's
+                // per-inner-iteration cut).
+                let mut chain_inner_copy = |nfa: &mut Nfa, from: u32, element: u8| -> Option<u32> {
+                    let (ls, la) = thompson(grammar, inner_body, nfa, &mut Vec::new())?;
+                    nfa.edge(from, Edge::Epsilon, ls);
+                    inner_accepts_of_node.insert(la, element);
+                    Some(la)
+                };
+                let mut pos = fork;
+                for _ in 0..inner_min {
+                    pos = chain_inner_copy(nfa, pos, env_i)?;
+                }
+                match inner_max {
+                    None => {
+                        // The unbounded tail: one copy, the loop back
+                        // to the tail's start, and a fresh connector.
+                        let tail_start = pos;
+                        let accept = chain_inner_copy(nfa, pos, env_i)?;
+                        nfa.edge(accept, Edge::Epsilon, tail_start);
+                        let boundary = nfa.node();
+                        nfa.edge(accept, Edge::Epsilon, boundary);
+                        if inner_min == 0 {
+                            nfa.edge(fork, Edge::Epsilon, boundary);
+                        } else {
+                            // The mandatory copies' exit: after
+                            // inner_min iterations the unbounded loop
+                            // may stop (the tranche-8 catch — without
+                            // this edge the iteration could never
+                            // close).
+                            nfa.edge(tail_start, Edge::Epsilon, boundary);
+                        }
+                        pos = boundary;
+                    }
+                    Some(m) => {
+                        for _ in inner_min..m {
+                            let boundary = nfa.node();
+                            nfa.edge(pos, Edge::Epsilon, boundary);
+                            let accept = chain_inner_copy(nfa, pos, env_i)?;
+                            nfa.edge(accept, Edge::Epsilon, boundary);
+                            pos = boundary;
+                        }
+                        if inner_min == 0 {
+                            // The zero-copy path IS the connector.
+                        }
+                    }
+                }
+                // The plan subtree under Envelope is discarded by the
+                // resolver (the executor's envelope assembly reads the
+                // inner-cut lane); Bare keeps the tree total.
+                let plan = match name {
+                    Some(n) => super::dfa_table::ElementPlanTree9::HashEnvelope(
+                        n,
+                        Box::new(super::dfa_table::ElementPlanTree9::Bare),
+                    ),
+                    None => super::dfa_table::ElementPlanTree9::Envelope(Box::new(
+                        super::dfa_table::ElementPlanTree9::Bare,
+                    )),
+                };
+                Some((pos, plan, 0))
+            }
             _ => None,
         }
     }
+    // The lead bytes an atom can start a match with (the envelope
+    // overlap law's probe); None when unprovable.
+    fn first_bytes_of(grammar: &Grammar, idx: usize, depth: u8) -> Option<Vec<u8>> {
+        if depth > 64 {
+            return None;
+        }
+        match grammar.get_atom(idx)? {
+            Atom::Named { atom, .. } | Atom::Entity { atom } => {
+                first_bytes_of(grammar, *atom, depth + 1)
+            }
+            Atom::Str { pattern } if !pattern.is_empty() => Some(vec![pattern.as_bytes()[0]]),
+            Atom::Re { pattern } => Some(CharRanges::from_pattern(pattern)?.first_bytes()),
+            Atom::Sequence { atoms } if !atoms.is_empty() => {
+                first_bytes_of(grammar, atoms[0], depth + 1)
+            }
+            Atom::Alternative { atoms } if !atoms.is_empty() => {
+                let mut union: Vec<u8> = Vec::new();
+                for &child in atoms {
+                    for b in first_bytes_of(grammar, child, depth + 1)? {
+                        if !union.contains(&b) {
+                            union.push(b);
+                        }
+                    }
+                }
+                Some(union)
+            }
+            _ => None,
+        }
+    }
+    // The enclosing loop's restart bytes (the body's FIRST set): the
+    // envelope overlap law's probe. Unprovable = envelopes refuse.
+    let restart = first_bytes_of(grammar, body_idx, 0);
     let (bs, body_accept) = match grammar.get_atom(body_idx) {
         Some(Atom::Sequence { atoms }) if !atoms.is_empty() => {
             let mut cursor = entry;
@@ -828,8 +1029,11 @@ pub fn build_loop_dfa_envelopes(grammar: &Grammar, body_idx: usize) -> Option<Lo
                     &mut nfa,
                     cursor,
                     &mut element_accepts_of_node,
+                    &mut inner_accepts_of_node,
+                    &mut env_i,
                     leaf_i,
                     0,
+                    restart.as_deref(),
                 ) {
                     leaf_i = leaf_i.saturating_add(count);
                     if first_element {
@@ -879,14 +1083,18 @@ pub fn build_loop_dfa_envelopes(grammar: &Grammar, body_idx: usize) -> Option<Lo
         Some(Atom::Alternative { atoms })
             if !atoms.is_empty() && choice_span_arms(grammar, body_idx, 0).is_none() =>
         {
+            let mut env9 = 0u8;
             let (join, _plan9, _count) = build_plan9(
                 grammar,
                 body_idx,
                 &mut nfa,
                 entry,
                 &mut element_accepts_of_node,
+                &mut inner_accepts_of_node,
+                &mut env9,
                 0,
                 0,
+                restart.as_deref(),
             )?;
             (entry, join)
         }

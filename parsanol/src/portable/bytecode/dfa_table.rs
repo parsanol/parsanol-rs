@@ -201,7 +201,12 @@ impl ElementPlanTree9 {
                 children.iter().map(|c| c.leaf_count()).sum::<u8>()
             }
             ElementPlanTree9::Envelope(inner) | ElementPlanTree9::HashEnvelope(_, inner) => {
-                inner.leaf_count()
+                // The envelope occupies NO leaf slot: its boundary
+                // info lives in the inner-cut lane (the resolver
+                // discards the inner plan — the executor's envelope
+                // assembly reads the cuts directly).
+                let _ = inner;
+                0
             }
             ElementPlanTree9::Choice(arms) => arms.iter().map(|arm| arm.leaf_count).sum::<u8>(),
         }
