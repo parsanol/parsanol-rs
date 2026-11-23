@@ -32,6 +32,7 @@ pub mod compiler;
 pub mod dfa_build;
 pub mod dfa_table;
 pub mod error;
+pub mod histogram_probe;
 pub mod instruction;
 pub mod optimizer;
 pub mod packrat_differential;
