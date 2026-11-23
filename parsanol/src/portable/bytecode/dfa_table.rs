@@ -143,3 +143,67 @@ pub struct DfaLoopElements {
     /// element; nested bodies' tree detail lives in the plan registry.
     pub names: Vec<ElementDesc>,
 }
+
+/// The routed loop's CHOICE-arm plan (tranche 9): one alternative's
+/// subtree plus its leaf-slot count. The arms' slot ranges are
+/// contiguous in order — arm i occupies slots `[start, start +
+/// leaf_count)` where `start` sums the preceding arms' counts.
+#[derive(Debug, Clone)]
+pub struct ElementPlanChoiceArm9 {
+    /// The arm's plan subtree (recursive: an arm may contain a nested
+    /// choice — the json string body's escaped arm does).
+    pub plan: Box<ElementPlanTree9>,
+    /// The arm subtree's leaf-slot count.
+    pub leaf_count: u8,
+}
+
+/// The routed loop's plan tree, tranche 9: the `ElementPlanTree`
+/// variants plus the per-arm CHOICE, on its own type and its own
+/// program registry (the additive-registry law — the ladder's fifth
+/// rung). The executor prefers this registry; the tranche-7 tree
+/// stays for bodies without per-arm choices. v1 scope: choice arms
+/// are unnamed (a hash-wrapped arm refuses — the classic path keeps
+/// those).
+#[derive(Debug, Clone)]
+pub enum ElementPlanTree9 {
+    /// A bare span from an inline Str/Re instruction.
+    Bare,
+    /// A bare span delivered through a rule-ref call.
+    RefBare,
+    /// A hash wrap `{name: span}` around one bare leaf.
+    Hash(String),
+    /// A bare nested sequence: ONE `:sequence` node per Sequence atom.
+    Nested(Vec<ElementPlanTree9>),
+    /// A hash wrap `{name -> :sequence node}` around a nested
+    /// sequence's values.
+    HashNested(String, Vec<ElementPlanTree9>),
+    /// An inner loop's ENVELOPE: ONE `:repetition` node whose values
+    /// are the per-inner-iteration values (tranche 7's lane, mirrored).
+    Envelope(Box<ElementPlanTree9>),
+    /// A hash wrap `{name -> :repetition node}` around an inner loop's
+    /// envelope (mirrored from tranche 7).
+    HashEnvelope(String, Box<ElementPlanTree9>),
+    /// A CHOICE of per-arm plans (tranche 9): the DFA consumes the
+    /// arms as one fork/join union, every leaf of arm i marks its own
+    /// slot in the arm's range, and the assembly picks the arm whose
+    /// LAST leaf slot carries a cut. The gate is tranche 8's: the
+    /// arms' FIRST sets pairwise-disjoint and non-nullable.
+    Choice(Vec<ElementPlanChoiceArm9>),
+}
+
+impl ElementPlanTree9 {
+    /// The subtree's leaf-slot count (the tranche-9 plan's slot
+    /// bookkeeping; lockstep with the builder's per-leaf walk).
+    pub fn leaf_count(&self) -> u8 {
+        match self {
+            ElementPlanTree9::Bare | ElementPlanTree9::RefBare | ElementPlanTree9::Hash(_) => 1,
+            ElementPlanTree9::Nested(children) | ElementPlanTree9::HashNested(_, children) => {
+                children.iter().map(|c| c.leaf_count()).sum::<u8>()
+            }
+            ElementPlanTree9::Envelope(inner) | ElementPlanTree9::HashEnvelope(_, inner) => {
+                inner.leaf_count()
+            }
+            ElementPlanTree9::Choice(arms) => arms.iter().map(|arm| arm.leaf_count).sum::<u8>(),
+        }
+    }
+}

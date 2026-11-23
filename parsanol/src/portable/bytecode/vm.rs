@@ -143,12 +143,99 @@ enum AsmNode {
     HashNested(u32, Vec<AsmNode>),
     Envelope(usize),
     HashEnvelope(u32, usize),
+    /// Tranche 9: the per-arm CHOICE — the assembly picks the arm
+    /// whose LAST leaf slot carries a cut (the arms' ranges are
+    /// contiguous from the choice's first slot).
+    Choice(Vec<AsmChoiceArm>),
+}
+
+/// One tranche-9 choice arm's resolved plan + slot count.
+#[derive(Debug, Clone)]
+struct AsmChoiceArm {
+    plan: Box<AsmNode>,
+    leaf_count: u8,
 }
 
 /// The flat per-leaf descriptors' LEAF count (the fallback path: one
 /// descriptor per leaf).
 fn plan_leaf_count(names: &[super::dfa_table::ElementDesc]) -> usize {
     names.len()
+}
+
+/// The tranche-9 tree's ENVELOPE count (the dynamic inner-cut lane).
+fn plan_tree9_envelope_count(plans: &[super::dfa_table::ElementPlanTree9]) -> usize {
+    fn count(plan: &super::dfa_table::ElementPlanTree9) -> usize {
+        match plan {
+            super::dfa_table::ElementPlanTree9::Envelope(_)
+            | super::dfa_table::ElementPlanTree9::HashEnvelope(_, _) => 1,
+            super::dfa_table::ElementPlanTree9::Nested(children)
+            | super::dfa_table::ElementPlanTree9::HashNested(_, children) => {
+                children.iter().map(count).sum()
+            }
+            super::dfa_table::ElementPlanTree9::Choice(arms) => {
+                arms.iter().map(|arm| count(&arm.plan)).sum()
+            }
+            _ => 0,
+        }
+    }
+    plans.iter().map(count).sum()
+}
+
+/// Resolve the tranche-9 plan tree (the per-arm CHOICE lane) into the
+/// executor-side plan.
+fn resolve_plan_tree9(
+    plans: &[super::dfa_table::ElementPlanTree9],
+    arena: &mut crate::portable::arena::AstArena,
+) -> Vec<AsmNode> {
+    fn resolve(
+        plan: &super::dfa_table::ElementPlanTree9,
+        arena: &mut crate::portable::arena::AstArena,
+        env_counter: &mut usize,
+    ) -> AsmNode {
+        match plan {
+            super::dfa_table::ElementPlanTree9::Bare
+            | super::dfa_table::ElementPlanTree9::RefBare => AsmNode::Bare,
+            super::dfa_table::ElementPlanTree9::Hash(name) => {
+                AsmNode::Hash(arena.intern_string_index(name))
+            }
+            super::dfa_table::ElementPlanTree9::Nested(children) => AsmNode::Nested(
+                children
+                    .iter()
+                    .map(|child| resolve(child, arena, env_counter))
+                    .collect(),
+            ),
+            super::dfa_table::ElementPlanTree9::HashNested(name, children) => AsmNode::HashNested(
+                arena.intern_string_index(name),
+                children
+                    .iter()
+                    .map(|child| resolve(child, arena, env_counter))
+                    .collect(),
+            ),
+            super::dfa_table::ElementPlanTree9::Envelope(_) => {
+                let ordinal = *env_counter;
+                *env_counter += 1;
+                AsmNode::Envelope(ordinal)
+            }
+            super::dfa_table::ElementPlanTree9::HashEnvelope(name, _) => {
+                let ordinal = *env_counter;
+                *env_counter += 1;
+                AsmNode::HashEnvelope(arena.intern_string_index(name), ordinal)
+            }
+            super::dfa_table::ElementPlanTree9::Choice(arms) => AsmNode::Choice(
+                arms.iter()
+                    .map(|arm| AsmChoiceArm {
+                        plan: Box::new(resolve(&arm.plan, arena, env_counter)),
+                        leaf_count: arm.leaf_count,
+                    })
+                    .collect(),
+            ),
+        }
+    }
+    let mut env_counter = 0usize;
+    plans
+        .iter()
+        .map(|p| resolve(p, arena, &mut env_counter))
+        .collect()
 }
 
 /// Count the ENVELOPE elements of a full plan tree (the dynamic
@@ -864,6 +951,47 @@ impl<'a> BytecodeVM<'a> {
                     length: hlen,
                 }
             }
+            // Tranche 9: the per-arm CHOICE — pick the arm whose LAST
+            // leaf slot carries a cut STRICTLY AFTER `prev` (the
+            // iteration's own arm end; `cuts` is shared across
+            // iterations, so stale earlier-iteration values sit at or
+            // before `prev` and must not win the pick), then assemble
+            // that arm's plan recursively — it consumes exactly its
+            // leaf_count slots.
+            AsmNode::Choice(arms) => {
+                let mut offset = *cursor;
+                let mut matched: Option<&AsmChoiceArm> = None;
+                for arm in arms {
+                    let last = offset + arm.leaf_count as usize - 1;
+                    if cuts.get(last).copied().unwrap_or(0) > *prev {
+                        matched = Some(arm);
+                        break;
+                    }
+                    offset += arm.leaf_count as usize;
+                }
+                let Some(arm) = matched else {
+                    // No arm's last slot carries a cut: the walk never
+                    // matched any arm here. The gate's non-nullable
+                    // arms make this unreachable in practice; the safe
+                    // fallback is the empty span at prev (never read
+                    // unset cuts — that would underflow the span).
+                    let start = *prev;
+                    let total: usize = arms.iter().map(|a| a.leaf_count as usize).sum();
+                    *cursor += total;
+                    return self.arena.input_ref(start, 0);
+                };
+                // The parent's slot contract: the choice consumed its
+                // FULL slot range (the per-arm union), not just the
+                // matched arm's leaves — the following elements' slots
+                // were numbered past every arm's range.
+                let total: usize = arms.iter().map(|a| a.leaf_count as usize).sum();
+                let start_slots = *cursor;
+                *cursor = offset;
+                let value =
+                    self.assemble_node(&arm.plan, cuts, cursor, prev, tag_seq, inner_cuts, tag_rep);
+                *cursor = start_slots + total;
+                value
+            }
         }
     }
 
@@ -987,25 +1115,34 @@ impl<'a> BytecodeVM<'a> {
             .get_dfa_loop_named_key(table_idx)
             .map(|name| self.arena.intern_string_index(name));
         let elements_plan = self.program.get_dfa_loop_elements(table_idx);
+        // Tranche 9: the per-arm CHOICE trees supersede everything.
+        let plan_trees9: Option<&[super::dfa_table::ElementPlanTree9]> =
+            self.program.get_dfa_loop_plan_trees9(table_idx);
         // Tranche 7: the FULL plan tree (envelopes) supersedes the
         // tranche-6 tree, which supersedes the flat names.
         let plan_trees: Option<&[super::dfa_table::ElementPlanTree]> =
             self.program.get_dfa_loop_plan_trees(table_idx);
         let plan_tree: Option<&[super::dfa_table::ElementPlan]> =
             self.program.get_dfa_loop_element_plans(table_idx);
-        let asm_plan: Vec<AsmNode> = match (plan_trees, plan_tree) {
-            (Some(tree), _) => resolve_plan_tree(tree, self.arena),
-            (None, Some(tree)) => resolve_plan_tree_flat(tree, self.arena),
-            (None, None) => elements_plan
-                .map(|plan| resolve_asm_plan(&plan.names, self.arena))
-                .unwrap_or_default(),
+        let asm_plan: Vec<AsmNode> = match plan_trees9 {
+            Some(trees) => resolve_plan_tree9(trees, self.arena),
+            None => match (plan_trees, plan_tree) {
+                (Some(tree), _) => resolve_plan_tree(tree, self.arena),
+                (None, Some(tree)) => resolve_plan_tree_flat(tree, self.arena),
+                (None, None) => elements_plan
+                    .map(|plan| resolve_asm_plan(&plan.names, self.arena))
+                    .unwrap_or_default(),
+            },
         };
-        let leaf_count = match (plan_trees, plan_tree) {
-            (Some(tree), _) => tree.iter().map(plan_tree_leaf_count).sum(),
-            (None, Some(tree)) => tree.iter().map(plan_tree_leaf_count_flat).sum(),
-            (None, None) => elements_plan
-                .map(|plan| plan_leaf_count(&plan.names))
-                .unwrap_or(0),
+        let leaf_count = match plan_trees9 {
+            Some(trees) => trees.iter().map(|t| t.leaf_count() as usize).sum(),
+            None => match (plan_trees, plan_tree) {
+                (Some(tree), _) => tree.iter().map(plan_tree_leaf_count).sum(),
+                (None, Some(tree)) => tree.iter().map(plan_tree_leaf_count_flat).sum(),
+                (None, None) => elements_plan
+                    .map(|plan| plan_leaf_count(&plan.names))
+                    .unwrap_or(0),
+            },
         };
 
         let element_accepts: &[Option<u8>] = elements_plan
@@ -1017,9 +1154,12 @@ impl<'a> BytecodeVM<'a> {
             .program
             .get_dfa_loop_inner_accepts(table_idx)
             .unwrap_or(&[]);
-        let env_count = plan_trees
-            .map(|tree| plan_tree_envelope_count(tree))
-            .unwrap_or(0);
+        let env_count = match plan_trees9 {
+            Some(trees) => plan_tree9_envelope_count(trees),
+            None => plan_trees
+                .map(|tree| plan_tree_envelope_count(tree))
+                .unwrap_or(0),
+        };
         let mut inner_cuts: Vec<Vec<usize>> = vec![Vec::new(); env_count];
         let mut cuts: Vec<usize> = vec![0; leaf_count];
         // A body of ONLY envelope elements still builds a `:sequence`
@@ -1102,7 +1242,40 @@ impl<'a> BytecodeVM<'a> {
                         boundary = self.position;
                         let iter_start = iteration_start;
                         iteration_start = self.position;
-                        if !asm_plan.is_empty() {
+                        let choice_root = self.program.get_dfa_loop_choice_root(table_idx);
+                        if choice_root && !asm_plan.is_empty() {
+                            // Tranche 9: the body root is a per-arm
+                            // CHOICE — assemble it DIRECTLY as the
+                            // iteration value (the classic choice loop's
+                            // per-iteration value is the matched arm's
+                            // value; no `:sequence` tag). Optionally
+                            // Named-wrapped as `{name: inner}`.
+                            let mut cursor = 0usize;
+                            let mut prev = iter_start;
+                            let value = self.assemble_node(
+                                &asm_plan[0],
+                                &cuts,
+                                &mut cursor,
+                                &mut prev,
+                                tag_seq_idx.unwrap_or_default(),
+                                &inner_cuts,
+                                tag_rep_idx,
+                            );
+                            match named_idx {
+                                None => self.value_stack.push(value),
+                                Some(key_idx) => {
+                                    let (hpool, hlen) =
+                                        self.arena.store_hash_indexed_key(key_idx, value);
+                                    self.value_stack.push(AstNode::Hash {
+                                        pool_index: hpool,
+                                        length: hlen,
+                                    });
+                                }
+                            }
+                            for list in inner_cuts.iter_mut() {
+                                list.clear();
+                            }
+                        } else if !asm_plan.is_empty() {
                             self.push_assembled_iteration(
                                 iter_start,
                                 &cuts,

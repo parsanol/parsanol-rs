@@ -1927,3 +1927,131 @@ fn differential_dfa_routed_choice_bodies_match_the_walker() {
         }
     }
 }
+
+// rs#574 slice B stage 3 tranche 9: per-arm CHOICE slots — the arms'
+// leaf slots are contiguous ranges inside the arm union, and the
+// assembly picks the arm whose LAST leaf slot carries this iteration's
+// boundary cut. The prize shape is the string interior
+// (escape / char)* — mixed arm leaf counts (2 vs 1) with per-arm slot
+// ranges. v1 scope: the ASCII-bounded interior — the JSON grammar's
+// exact `[^"\\]` arm is a NEGATED UNICODE class whose complement
+// spans multi-byte codepoints; the stage-1 byte table refuses those
+// (a multi-byte member consumes 2-4 bytes as ONE value, which a
+// one-transition byte edge cannot represent), so that shape stays on
+// the classic path until the multi-byte class slice.
+#[test]
+fn differential_dfa_routed_per_arm_choice_slots_match_the_walker() {
+    // The ASCII-bounded string interior: `"` (escape / char)* `"`,
+    // where escape is a TWO-leaf sequence arm (backslash + the escaped
+    // char) and char is a one-leaf class arm (printable ASCII minus
+    // quote and backslash). The arms' FIRST sets are disjoint (\ vs
+    // non-\), so PEG ordered-choice == DFA longest-match and the
+    // routed table is exact.
+    let string_interior = GrammarBuilder::new()
+        .rule(
+            "root",
+            seq(vec![
+                dynamic(parser_dsl::str("\"")),
+                dynamic(
+                    choice(vec![
+                        dynamic(seq(vec![
+                            dynamic(parser_dsl::str("\\")),
+                            dynamic(re(r#"["\\]"#)),
+                        ])),
+                        dynamic(re("[a-zA-Z0-9_ ]")),
+                    ])
+                    .many(),
+                ),
+                dynamic(parser_dsl::str("\"")),
+            ]),
+        )
+        .build()
+        .to_json()
+        .unwrap();
+    // A mixed-count choice body where the LONGER arm fires on a later
+    // iteration than the shorter one — per-arm slot reuse across
+    // iterations (the stale-cut pick hazard).
+    let mixed = GrammarBuilder::new()
+        .rule(
+            "root",
+            choice(vec![
+                dynamic(seq(vec![
+                    dynamic(parser_dsl::str("x")),
+                    dynamic(parser_dsl::str("y")),
+                ])),
+                dynamic(parser_dsl::str("z")),
+            ])
+            .many(),
+        )
+        .build()
+        .to_json()
+        .unwrap();
+
+    for g in [&string_interior, &mixed] {
+        let grammar = Grammar::from_json(g).unwrap();
+        let program = compile_bytecode(grammar.clone()).unwrap();
+        assert!(
+            program.has_iteration_accept_tables(),
+            "the per-arm choice body did not route to a DfaRun loop table"
+        );
+    }
+
+    for input in [
+        "\"\"",
+        "\"a\"",
+        "\"ab\"",
+        "\"a\\\"b\"",
+        "\"a\\\\b\"",
+        "\"ab\\\"cd\\\\ef gh\"",
+        "\"xzy\"",
+        "\"zxz\"",
+        "\"xyxy\"",
+        "\"xyxzy\"",
+    ] {
+        let grammar = Grammar::from_json(&string_interior).unwrap();
+        let program = compile_bytecode(grammar.clone()).unwrap();
+        let mut w_arena = AstArena::new();
+        let w = PortableParser::new(&grammar, input, &mut w_arena).parse_with_end_pos();
+        let mut v_arena = AstArena::new();
+        let v = parse_with_vm(&program, input, &mut v_arena);
+        match (&w, &v) {
+            (Ok(w), Ok(v)) => {
+                assert_eq!(
+                    w.end_pos, v.end_pos,
+                    "string-interior end_pos differs for {input:?}"
+                );
+                assert_eq!(
+                    materialize(&w.value, &w_arena, input),
+                    materialize(&v.value, &v_arena, input),
+                    "string-interior tree differs for {input:?}"
+                );
+            }
+            (Err(_), Err(_)) => {}
+            (w, v) => {
+                panic!("string-interior success/failure mismatch for {input:?}: w={w:?} v={v:?}")
+            }
+        }
+    }
+    for input in ["", "z", "xy", "xyzx", "xyxyz", "zxxy", "xyxzxy"] {
+        assert_agree_collapsed(&mixed, input);
+    }
+
+    // The per-arm slot shape pin: each interior char is ONE bare span
+    // per iteration — the two-leaf escape arm contributes its WHOLE
+    // `\x` span (the sequence arm's merged leaves), the class arm its
+    // single char.
+    {
+        let grammar = Grammar::from_json(&string_interior).unwrap();
+        let program = compile_bytecode(grammar).unwrap();
+        let mut a = AstArena::new();
+        let v = parse_with_vm(&program, "\"a\\\"b\"", &mut a).unwrap();
+        let shape = materialize(&v.value, &a, "\"a\\\"b\"");
+        assert!(
+            shape.contains("in:\"\\\"\";")
+                && shape.contains("in:\"a\";")
+                && shape.contains("in:\"\\\"\";")
+                && shape.contains("in:\"b\";"),
+            "the per-arm slot iteration values: {shape}"
+        );
+    }
+}
