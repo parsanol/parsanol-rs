@@ -679,3 +679,22 @@ lane, min-of-N), same machine, same run:
    stack directly (tree-sitter's GLR-free deterministic core path) —
    the 88% dispatch cost's structural answer; the design continues in
    the next session with the instruction-histogram detail.
+
+## Phase 2 slice 2 REVERTED (2026-11-23, measured): the DfaRun scratch/cache
+
+The profile's exec_dfa_run allocations (the per-invocation
+`cuts`/`inner_cuts` from_elem + the plan re-resolution, ~3% of
+samples) were addressed with per-VM scratch buffers (mem::take
+around the body) plus a per-table asm-plan cache (remove/insert). The
+interleaved A/B (alternating saved binaries, 5 rounds): baseline
+17.1–18.3 ms, the scratch build 18.8–19.1 ms — a consistent ~5-8%
+REGRESSION. The cache bookkeeping (two hash ops + the take/restore)
+costs more than the small-plan allocation it saves: the fleet's
+routed plans are 1–3 leaves, and `resolve_plan_tree` on a 1–3-node
+tree is a handful of cheap interns. REVERTED; recorded per the
+jit#458 discipline.
+
+The read for the LR fusion: the exec_dfa_run lane's real cost is not
+its allocations (they are small and warm) — the dispatch loop's 88%
+share is the structural target, and the fusion must remove
+INSTRUCTIONS, not bookkeeping.
