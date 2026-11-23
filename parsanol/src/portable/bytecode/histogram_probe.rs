@@ -87,7 +87,8 @@ fn t9_string_shape_probe() {
             ));
         }
         fn visit_string_ref(&mut self, pool: u32, arena: &crate::portable::arena::AstArena) {
-            self.0.push_str(&format!("s:{:?};", arena.get_string(pool as usize)));
+            self.0
+                .push_str(&format!("s:{:?};", arena.get_string(pool as usize)));
         }
         fn visit_array_start(&mut self, _: u32, length: u32) {
             self.0.push_str(&format!("[{length}("));
