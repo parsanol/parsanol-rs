@@ -840,3 +840,37 @@ interior is the ENVELOPE-TAIL DISAMBIGUATION: a priority-labeled
 subset construction (tail edges win where the tail's bytes lead) or
 a two-lane table — that is Phase 2's next design work, and with it
 the ~60%-of-bytes interior + the LR fusion land together.
+
+## The class-run envelope DESIGN (2026-11-23, the hexquad's unlock)
+
+The overlap law's positive counterpart: for an envelope with
+`min >= 1, max = None`, and a SINGLE-CLASS-LEAF body (the json
+u-hexquad's `4*(hexclass)`), the walker's classic lowering gives ONE
+span for the whole run (the Span-owning-rep law — observed:
+`in:"0041b"`). The routed equivalent needs NO inner-cut lane and NO
+ambiguity:
+
+- NFA: `min-1` UNMARKED byte-edge copies of the class, then ONE RUN
+  state — a self-loop on the class bytes carrying the element marker
+  of the run's single slot — epsilon into the boundary. The boundary
+  is unreachable before min bytes (structurally: only the run state
+  reaches it).
+- Plan: ONE Bare slot (leaf_count 1); the cut = the run's end. The
+  assembly's span = `[prev, cut]` = the whole run — byte-identical
+  to the classic's shape.
+- Why the overlap dissolves: the run state's marker stays live
+  across the merged states (run ∪ entry), while the restart arms
+  carry markers only AFTER their bytes land — by which time the run
+  state has exited (a non-class byte). The marker collision never
+  forms; the table stays single-path. On a class byte the merged
+  state updates the run's cut (the greedy tail); on any other byte
+  the run state has no transition and the restart interprets — the
+  walker's greedy-inner semantics, exactly.
+
+Gate: min >= 1, max = None, the body = a single leaf (Str/Re —
+class_fragment's chain form works for multi-byte members too), and
+the class-run bytes still must not collide with... nothing: the law
+above replaces the overlap refusal FOR THIS SHAPE ONLY; other
+envelope shapes keep the refusal. The differential fixture: the
+json-exact interior (hexquad included) routes and replays the greedy
+tail (the `0041b` swallow case pins it).
