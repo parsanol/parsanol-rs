@@ -739,3 +739,29 @@ assembly picks the arm by which slot carries a cut. That moves
    design continues against the post-tranche-9 histogram.
 3. ByteDispatch's share drops with every routed choice — re-measure
    per slice.
+
+## Tranche 9's ground truth (2026-11-23): the json string interior's exact shape
+
+The SOTA artifact's string body: `[36] = *( [35] )` where
+
+- `[35] = ( [x20-21]? / [x23-5b] / [x5d-10ffff] / [34] )` — FOUR arms,
+- `[34] = Sequence[17, 33]` — the escaped arm: the backslash class then
+  `[33] = ( 9 bare class arms / Sequence[26, 31] )` — a NESTED choice
+  with a sequence arm of its own.
+
+So the escaped arm is NOT a flat leaf sequence: tranche 9 needs the
+RECURSIVE per-arm plan — each arm's plan is an ElementPlanTree-shaped
+subtree (the existing type), the new pub type carries
+`Choice { arms: Vec<(arm-plan, leaf-count)>, leaf_count }` on its own
+registry, the builder walks the arm's atom tree depth-first marking
+the per-leaf slots in the plan's leaf order (lockstep), and the
+assembly picks the arm by its LAST leaf slot's cut, then assembles the
+arm's plan recursively. The gate stays tranche 8's: the arms' FIRST
+sets pairwise-disjoint and non-nullable ([35]'s arms qualify: the
+classes partition the byte range, the escaped arm starts at the
+backslash).
+
+The measured prize: the string interior is ~60% of json bytes riding
+per-char Regex + loop scaffolding today (10.2% Regex + its
+RepCount/Jump/PartialCommit share); one DfaRun over it is the largest
+single step toward the 0.03 gate.
