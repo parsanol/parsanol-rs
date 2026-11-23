@@ -900,7 +900,7 @@ at /tmp/class-run-tranche.patch (698 lines).
 
 1. **The first design's fatal flaw** (an epsilon boundary) made the
    run states iteration-accepts — a mid-run crossing fired per byte
-   and the arm-pick mis-fired. THE FIX: the exit is a BYTE edge on
+   and the arm-pick fired wrongly. THE FIX: the exit is a BYTE edge on
    the class's non-first bytes → the run states' closures exclude
    body_accept → crossings fire only on the exit byte, which lands
    in the accept state.
