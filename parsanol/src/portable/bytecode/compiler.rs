@@ -1178,7 +1178,16 @@ impl Compiler {
         // loop — they ride the capture machinery, which the routed
         // executor does not run — as do nested multi-value fragments
         // (their synthesis plan is a tree, a later slice).
-        if max.is_none() && !maybe && matches!(tag, RepetitionTag::Repetition) {
+        if max.is_none()
+            && !maybe
+            && matches!(tag, RepetitionTag::Repetition)
+            // The bulk ScanClass run keeps priority over the routed
+            // loop for its exact shape (a class / class-choice body
+            // with non-ASCII members): one instruction consuming the
+            // whole run beats the table walk + per-char cut records
+            // (the dispatch-shape gate pins the ScanClass lowering).
+            && self.try_get_class_ranges_for_atom(atom_idx).is_none()
+        {
             // A SPAN TERMINAL (routes bare); the wrapper decides the
             // per-iteration value shape.
             let is_span_terminal = |idx: usize| match self.grammar.get_atom(idx) {
@@ -1416,6 +1425,25 @@ impl Compiler {
                             });
                         }
                         Some(ElementPlanTree9::Choice(arms))
+                    }
+                    // The EXACT-COPY repetition (min == max) mirrors
+                    // the builder's unroll: n copies of the body plan,
+                    // one leaf slot each (the json escape arm's
+                    // u-hexquad shape). MUST precede the envelope arm.
+                    Atom::Repetition {
+                        atom: body,
+                        min,
+                        max: Some(max),
+                        tag: RepetitionTag::Repetition,
+                    } if *min == *max && (1..=8).contains(min) => {
+                        let mut children = Vec::with_capacity(*min);
+                        for _ in 0..*min {
+                            children.push(plan9_of(grammar, *body, depth + 1)?);
+                        }
+                        Some(match name {
+                            Some(n) => ElementPlanTree9::HashNested(n, children),
+                            None => ElementPlanTree9::Nested(children),
+                        })
                     }
                     Atom::Repetition {
                         atom: body,
@@ -1680,14 +1708,17 @@ impl Compiler {
                     };
                     if let Some(trees9) = elements9 {
                         self.program.mark_dfa_loop_plan_trees9(idx, trees9);
+                        // The tranche-9 cut driver for EVERY plan lane
+                        // (choice roots AND sequence bodies with
+                        // composite elements): without it the walk
+                        // records no cuts and the assembly reads unset
+                        // slots (the leaf-span underflow the json-like
+                        // parity test caught).
+                        self.program
+                            .mark_dfa_loop_element_cuts(idx, element_accepts.clone());
                     }
                     if is_choice_root && !flat8 {
                         self.program.mark_dfa_loop_choice_root(idx);
-                        // The per-arm cut driver: without it the walk
-                        // records no cuts and the assembly's arm-pick
-                        // finds none set (the empty-span fallback).
-                        self.program
-                            .mark_dfa_loop_element_cuts(idx, element_accepts.clone());
                     }
                     if let Some(atoms) = seq_atoms {
                         let all7 = atoms.iter().all(|&c| element_descriptor(c).is_some());

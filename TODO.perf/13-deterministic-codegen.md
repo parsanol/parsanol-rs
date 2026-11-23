@@ -804,3 +804,82 @@ shape, 396,189 B corpus, min-of-15 interleaved) shows PARITY (54.6 vs
 56.1 ms mins) — the per-iteration arm-pick costs what the per-byte
 dispatch saving delivers. The LR fusion (Phase 2) must fold the
 arm-pick into the table walk: that is where tranche-9's win lives.
+
+## Multi-byte class slice SHIPPED (2026-11-23, #653): UTF-8 sequence chains
+
+The stage-1 ASCII law lifted: `class_fragment` lowers classes with
+members above 0x7F to regex-syntax's canonical `Utf8Sequences` chains
+(a multi-byte codepoint consumes ALL its bytes as ONE leaf match —
+the walker's match_at shape), so the per-arm choice lane routes
+bodies with negated Unicode classes. Riding with it: the exact-copy
+arm (min==max unroll) + the tranche-7 envelope arm mirrored into
+build_plan9, and THREE correctness fixes the battery forced:
+`leaf_count` counts envelopes as zero slots (the mirror counted the
+inner subtree — the executor's cut buffer desynced, the json-like
+parity test's leaf-span underflow), the arm-pick scans the arm's
+WHOLE slot range (an arm's paths can end at different slots — the
+last-slot read missed fired arms), and the ScanClass yield at the
+eligibility gate (the bulk scan keeps its shape; the dispatch_shape
+gate caught the hijack).
+
+**The envelope-tail overlap law** (the hexquad's structural catch):
+when the envelope tail's bytes intersect the loop restart's bytes,
+the subset construction merges the greedy-tail and loop-restart
+interpretations into one single-path DFA state — the walker's
+greedy-inner preference is not expressible — so the routed lane
+refuses and the classic path keeps the body. JSON's exact interior
+refuses on this law (the u-hexquad's hexclass overlaps the
+plain-char restart); its pin is in the battery alongside the refused
+body's classic-path exactness.
+
+**Receipts** (interleaved min-of-15): json parity within noise
+(17.6-18.3 vs 17.8-18.8 ms; histogram byte-identical at 628,324
+dispatched); the multibyte loop-heavy escape/plain corpus parity
+(25.3-27.8 vs 24.9-28.7 ms). The tranche that unlocks the json
+interior is the ENVELOPE-TAIL DISAMBIGUATION: a priority-labeled
+subset construction (tail edges win where the tail's bytes lead) or
+a two-lane table — that is Phase 2's next design work, and with it
+the ~60%-of-bytes interior + the LR fusion land together.
+
+## The class-run envelope DESIGN (2026-11-23, the hexquad's unlock)
+
+The overlap law's positive counterpart: for an envelope with
+`min >= 1, max = None`, and a SINGLE-CLASS-LEAF body (the json
+u-hexquad's `4*(hexclass)`), the walker's classic lowering gives ONE
+span for the whole run (the Span-owning-rep law — observed:
+`in:"0041b"`). The routed equivalent needs NO inner-cut lane and NO
+ambiguity:
+
+- NFA: `min-1` UNMARKED byte-edge copies of the class, then ONE RUN
+  state — a self-loop on the class bytes carrying the element marker
+  of the run's single slot — epsilon into the boundary. The boundary
+  is unreachable before min bytes (structurally: only the run state
+  reaches it).
+- Plan: ONE Bare slot (leaf_count 1); the cut = the run's end. The
+  assembly's span = `[prev, cut]` = the whole run — byte-identical
+  to the classic's shape.
+- Why the overlap dissolves: the run state's marker stays live
+  across the merged states (run ∪ entry), while the restart arms
+  carry markers only AFTER their bytes land — by which time the run
+  state has exited (a non-class byte). The marker collision never
+  forms; the table stays single-path. On a class byte the merged
+  state updates the run's cut (the greedy tail); on any other byte
+  the run state has no transition and the restart interprets — the
+  walker's greedy-inner semantics, exactly.
+
+Gate: min >= 1, max = None, the body = a single leaf (Str/Re —
+class_fragment's chain form works for multi-byte members too), and
+the class-run bytes still must not collide with... nothing: the law
+above replaces the overlap refusal FOR THIS SHAPE ONLY; other
+envelope shapes keep the refusal. The differential fixture: the
+json-exact interior (hexquad included) routes and replays the greedy
+tail (the `0041b` swallow case pins it).
+
+**(Implementation note, same day)**: the class-run's first cut routed
+the hexquad interior but the assembly read WRONG slots (cuts landed
+on neighboring slots — the marker/assembly interplay needs a
+minimal-probe trace: dump the DFA states' markers + the walk's cut
+records for the 5-slot fixture). REVERTED uncommitted; the overlap
+refusal remains the shipped state, the design above stands, and the
+implementation is the next session's focused slice with a clean
+probe budget.
