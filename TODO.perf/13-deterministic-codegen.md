@@ -874,3 +874,12 @@ above replaces the overlap refusal FOR THIS SHAPE ONLY; other
 envelope shapes keep the refusal. The differential fixture: the
 json-exact interior (hexquad included) routes and replays the greedy
 tail (the `0041b` swallow case pins it).
+
+**(Implementation note, same day)**: the class-run's first cut routed
+the hexquad interior but the assembly read WRONG slots (cuts landed
+on neighboring slots — the marker/assembly interplay needs a
+minimal-probe trace: dump the DFA states' markers + the walk's cut
+records for the 5-slot fixture). REVERTED uncommitted; the overlap
+refusal remains the shipped state, the design above stands, and the
+implementation is the next session's focused slice with a clean
+probe budget.
