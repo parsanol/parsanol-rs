@@ -804,3 +804,39 @@ shape, 396,189 B corpus, min-of-15 interleaved) shows PARITY (54.6 vs
 56.1 ms mins) — the per-iteration arm-pick costs what the per-byte
 dispatch saving delivers. The LR fusion (Phase 2) must fold the
 arm-pick into the table walk: that is where tranche-9's win lives.
+
+## Multi-byte class slice SHIPPED (2026-11-23, #653): UTF-8 sequence chains
+
+The stage-1 ASCII law lifted: `class_fragment` lowers classes with
+members above 0x7F to regex-syntax's canonical `Utf8Sequences` chains
+(a multi-byte codepoint consumes ALL its bytes as ONE leaf match —
+the walker's match_at shape), so the per-arm choice lane routes
+bodies with negated Unicode classes. Riding with it: the exact-copy
+arm (min==max unroll) + the tranche-7 envelope arm mirrored into
+build_plan9, and THREE correctness fixes the battery forced:
+`leaf_count` counts envelopes as zero slots (the mirror counted the
+inner subtree — the executor's cut buffer desynced, the json-like
+parity test's leaf-span underflow), the arm-pick scans the arm's
+WHOLE slot range (an arm's paths can end at different slots — the
+last-slot read missed fired arms), and the ScanClass yield at the
+eligibility gate (the bulk scan keeps its shape; the dispatch_shape
+gate caught the hijack).
+
+**The envelope-tail overlap law** (the hexquad's structural catch):
+when the envelope tail's bytes intersect the loop restart's bytes,
+the subset construction merges the greedy-tail and loop-restart
+interpretations into one single-path DFA state — the walker's
+greedy-inner preference is not expressible — so the routed lane
+refuses and the classic path keeps the body. JSON's exact interior
+refuses on this law (the u-hexquad's hexclass overlaps the
+plain-char restart); its pin is in the battery alongside the refused
+body's classic-path exactness.
+
+**Receipts** (interleaved min-of-15): json parity within noise
+(17.6-18.3 vs 17.8-18.8 ms; histogram byte-identical at 628,324
+dispatched); the multibyte loop-heavy escape/plain corpus parity
+(25.3-27.8 vs 24.9-28.7 ms). The tranche that unlocks the json
+interior is the ENVELOPE-TAIL DISAMBIGUATION: a priority-labeled
+subset construction (tail edges win where the tail's bytes lead) or
+a two-lane table — that is Phase 2's next design work, and with it
+the ~60%-of-bytes interior + the LR fusion land together.
