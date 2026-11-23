@@ -63,3 +63,61 @@ fn histogram_probe_json() {
         );
     }
 }
+
+#[test]
+fn t9_string_shape_probe() {
+    use crate::portable::arena::AstArena;
+    use crate::portable::bytecode::{compile_bytecode, vm::VMConfig, BytecodeVM};
+    use crate::portable::visitor::{walk, Visitor};
+    use crate::PargArtifact;
+    let Ok(text) = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../benchmarks/sota/json-artifact.json"
+    )) else {
+        eprintln!("skip");
+        return;
+    };
+    struct M(String);
+    impl Visitor for M {
+        fn visit_input_ref(&mut self, offset: u32, length: u32, input: &str) {
+            self.0.push_str(&format!(
+                "in:{:?}@{};",
+                &input[offset as usize..offset as usize + length as usize],
+                offset
+            ));
+        }
+        fn visit_string_ref(&mut self, pool: u32, arena: &crate::portable::arena::AstArena) {
+            self.0.push_str(&format!("s:{:?};", arena.get_string(pool as usize)));
+        }
+        fn visit_array_start(&mut self, _: u32, length: u32) {
+            self.0.push_str(&format!("[{length}("));
+        }
+        fn visit_array_end(&mut self, _: u32, _: u32) {
+            self.0.push_str(")];");
+        }
+        fn visit_hash_start(&mut self, _: u32, _: u32) {
+            self.0.push('{');
+        }
+        fn visit_hash_key(&mut self, key: &str) {
+            self.0.push_str(&format!("{key:?}->"));
+        }
+        fn visit_hash_end(&mut self, _: u32, _: u32) {
+            self.0.push_str("};");
+        }
+    }
+    let artifact = PargArtifact::from_json(&text).unwrap();
+    let grammar = artifact.grammar("main").unwrap();
+    let program = compile_bytecode(grammar).unwrap();
+    let input = "{\"a\": \"bc\"}";
+    let mut arena = AstArena::for_input(input.len());
+    let mut vm = BytecodeVM::new(&program, input, &mut arena, VMConfig::default());
+    let r = vm.run().unwrap();
+    let out = walk(&r.value, &arena, input, M(String::new())).0;
+    println!("walker-shaped vm tree: {out}");
+    let mut w_arena = AstArena::for_input(input.len());
+    let grammar2 = artifact.grammar("main").unwrap();
+    let mut parser = crate::portable::PortableParser::new(&grammar2, input, &mut w_arena);
+    let w = parser.parse_with_end_pos().unwrap();
+    let wout = walk(&w.value, &w_arena, input, M(String::new())).0;
+    println!("walker tree: {wout}");
+}
