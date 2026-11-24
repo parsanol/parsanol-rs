@@ -546,17 +546,6 @@ pub enum Instruction {
         max: u32,
     },
 
-    /// Consume one whole-string span (rs#574 option A): the
-    /// quote-delimited rule body `quote *( interior ) quote` in ONE
-    /// instruction — the escape-aware kernel scans to the closing
-    /// quote and pushes a single span value covering it, quotes
-    /// included. The per-char iteration spans leave the wire (the
-    /// trees move; the corpus re-bakes).
-    StringSpan {
-        /// Index into the string-span spec table
-        spec_idx: u32,
-    },
-
     /// Custom atom invocation
     ///
     /// Invokes a custom atom registered via `register_custom_atom()`.
@@ -654,6 +643,21 @@ pub enum Instruction {
     ByteDispatch {
         /// Index into the program's dispatch table pool
         table_idx: u32,
+    },
+
+    /// Consume one whole-string span (rs#574 option A): the
+    /// quote-delimited rule body `quote *( interior ) quote` in ONE
+    /// instruction — the escape-aware kernel scans to the closing
+    /// quote and pushes a single span value covering it, quotes
+    /// included. The per-char iteration spans leave the wire (the
+    /// trees move; the corpus re-bakes).
+    ///
+    /// Declared LAST: the enum carries implicit discriminants, and a
+    /// mid-enum insertion shifts every later variant's numeric value
+    /// (the `as isize` surface) — the release-plz 2.0.0 lesson.
+    StringSpan {
+        /// Index into the string-span spec table
+        spec_idx: u32,
     },
 }
 
