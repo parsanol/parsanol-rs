@@ -35,6 +35,7 @@ pub mod error;
 /// The instruction-histogram probe (Phase 2's measurement tool).
 pub mod histogram_probe;
 pub mod instruction;
+pub mod lr_table;
 pub mod optimizer;
 pub mod packrat_differential;
 pub mod pattern_analysis;
