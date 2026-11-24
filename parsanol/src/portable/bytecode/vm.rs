@@ -751,6 +751,18 @@ impl<'a> BytecodeVM<'a> {
                     }
                     continue;
                 }
+                Instruction::LrRun { table_idx } => {
+                    // Like DfaRun, a rule-graph run legitimately
+                    // fails — the same backtrack handling.
+                    if matches!(self.exec_lr_run(*table_idx)?, ExecutionResult::Continue) {
+                        self.ip += 1;
+                    } else if !self.backtrack()? {
+                        return Err(ParseError::Failed {
+                            position: self.furthest_failure,
+                        });
+                    }
+                    continue;
+                }
                 _ => {}
             }
 
@@ -1524,6 +1536,99 @@ impl<'a> BytecodeVM<'a> {
         }
     }
 
+    /// The rule-graph lane (rs#574 Phase 2, option B): the LR(1)
+    /// table parses the rule's input in ONE step and pushes ONE
+    /// value — the rule's tree, converted to the arena's node model.
+    /// The shapes mirror the classic exactly (the slice-2
+    /// differential pins the LrValue level; this conversion carries
+    /// them to the wire).
+    #[inline(never)]
+    fn exec_lr_run(&mut self, table_idx: u32) -> Result<ExecutionResult, ParseError> {
+        let table = self
+            .program
+            .get_lr_table(table_idx)
+            .ok_or_else(|| ParseError::Internal {
+                message: format!("Invalid LR-table index: {table_idx}"),
+            })?;
+        let start = self.position;
+        let input = self.input;
+        let slice = &input[start..];
+        match crate::portable::bytecode::lr_table::lr_run(table, slice) {
+            Ok((value, end)) => {
+                let node = self.lr_value_to_node(value, start)?;
+                self.value_stack.push(node);
+                self.position = start + end;
+                Ok(ExecutionResult::Continue)
+            }
+            Err(e) => {
+                let saved = self.position;
+                self.position = start + e.pos;
+                self.track_failure_with_context();
+                self.position = saved;
+                Ok(ExecutionResult::Fail)
+            }
+        }
+    }
+
+    /// The LrValue → arena-node conversion (the same-trees wire).
+    fn lr_value_to_node(
+        &mut self,
+        value: crate::portable::bytecode::lr_table::LrValue,
+        base: usize,
+    ) -> Result<AstNode, ParseError> {
+        use crate::portable::bytecode::lr_table::LrValue;
+        Ok(match value {
+            LrValue::Nil => AstNode::Nil,
+            LrValue::Span { start, end } => self.arena.input_ref(base + start, end - start),
+            LrValue::Seq(children) => {
+                let nodes = children
+                    .into_iter()
+                    .map(|c| self.lr_value_to_node(c, base))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let tag = match self.tag_seq {
+                    Some(idx) => idx,
+                    None => {
+                        let idx = self.arena.intern_string_index(":sequence");
+                        self.tag_seq = Some(idx);
+                        idx
+                    }
+                };
+                let (pool_idx, len) = self.arena.store_tagged_array_indexed(tag, &nodes);
+                AstNode::Array {
+                    pool_index: pool_idx,
+                    length: len,
+                }
+            }
+            LrValue::Rep(children) => {
+                let nodes = children
+                    .into_iter()
+                    .map(|c| self.lr_value_to_node(c, base))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let tag = match self.tag_rep {
+                    Some(idx) => idx,
+                    None => {
+                        let idx = self.arena.intern_string_index(":repetition");
+                        self.tag_rep = Some(idx);
+                        idx
+                    }
+                };
+                let (pool_idx, len) = self.arena.store_tagged_array_indexed(tag, &nodes);
+                AstNode::Array {
+                    pool_index: pool_idx,
+                    length: len,
+                }
+            }
+            LrValue::Named { name, inner } => {
+                let node = self.lr_value_to_node(*inner, base)?;
+                let (pool_idx, len) = self.arena.store_hash(&[(&name, node)]);
+                AstNode::Hash {
+                    pool_index: pool_idx,
+                    length: len,
+                }
+            }
+        })
+    }
+
     fn execute_instruction(&mut self, instr: &Instruction) -> Result<ExecutionResult, ParseError> {
         if let Some(counts) = &mut self.opcode_counts {
             counts[instr.opcode() as usize] += 1;
@@ -2032,6 +2137,10 @@ impl<'a> BytecodeVM<'a> {
 
             Instruction::StringSpan { .. } => {
                 unreachable!("StringSpan is dispatched in run")
+            }
+
+            Instruction::LrRun { .. } => {
+                unreachable!("LrRun is dispatched in run")
             }
 
             Instruction::Custom { id } => {

@@ -162,6 +162,11 @@ pub struct Program {
     /// serialized.
     string_span_specs: Vec<crate::portable::string_shape::StringSpanSpec>,
 
+    /// LR(1) tables for prover-accepted rule graphs (rs#574 Phase 2,
+    /// option B). Not serialized: the program compiles from the
+    /// grammar at load.
+    lr_tables: Vec<crate::portable::bytecode::lr_table::LrTable>,
+
     /// Byte-dispatch tables for alternatives (256 relative offsets each)
     dispatch_tables: Vec<[i32; 256]>,
 
@@ -271,6 +276,7 @@ impl Program {
             char_ranges: Vec::new(),
             neg_specs: Vec::new(),
             string_span_specs: Vec::new(),
+            lr_tables: Vec::new(),
             scan_plans: Vec::new(),
             has_invoke_dynamic: false,
             rule_memoizable: None,
@@ -303,6 +309,7 @@ impl Program {
             char_ranges: Vec::new(),
             neg_specs: Vec::new(),
             string_span_specs: Vec::new(),
+            lr_tables: Vec::new(),
             scan_plans: Vec::new(),
             has_invoke_dynamic: false,
             rule_memoizable: None,
@@ -731,6 +738,19 @@ impl Program {
         idx: u32,
     ) -> Option<&crate::portable::string_shape::StringSpanSpec> {
         self.string_span_specs.get(idx as usize)
+    }
+
+    /// Add an LR(1) table (the rule-graph lane)
+    pub fn add_lr_table(&mut self, table: crate::portable::bytecode::lr_table::LrTable) -> u32 {
+        let idx = self.lr_tables.len() as u32;
+        self.lr_tables.push(table);
+        idx
+    }
+
+    /// Get an LR(1) table
+    #[inline]
+    pub fn get_lr_table(&self, idx: u32) -> Option<&crate::portable::bytecode::lr_table::LrTable> {
+        self.lr_tables.get(idx as usize)
     }
 
     /// Get the number of character sets in the table
