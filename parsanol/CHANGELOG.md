@@ -109,6 +109,10 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ## [Unreleased]
 
+- The StringSpan variant moves to the enum tail: the implicit discriminants of every later Instruction variant shifted (Custom 30->31, ..., ByteDispatch 45->46) when the variant landed mid-enum — the numeric as-isize surface must not move
+- The lits helper renames to post_literals
+- Rs#574 option A: the string-scan shape — one whole-string span on the wire
+- Rs#574 the LR fusion slice 1: the LrTable type + the canonical LR(1) builder (WIP, the recursion-lowering count desync documented) ([#663](https://github.com/parsanol/parsanol-rs/pull/663))
 - The string-shape probe (the value-noise finding's evidence tool) ([#658](https://github.com/parsanol/parsanol-rs/pull/658))
 - Rs#574 multi-byte class slice: UTF-8 sequence chains route composite choice bodies ([#653](https://github.com/parsanol/parsanol-rs/pull/653))
 - Rs#574 stage 3 tranche 9: per-arm choice slots route composite choice bodies ([#652](https://github.com/parsanol/parsanol-rs/pull/652))
