@@ -725,6 +725,18 @@ impl<'a> BytecodeVM<'a> {
                     self.ip += 1;
                     continue;
                 }
+                Instruction::StringSpan { spec_idx } => {
+                    // Like DfaRun, a whole-string scan legitimately
+                    // fails — route through the backtrack handling.
+                    if matches!(self.exec_string_span(*spec_idx)?, ExecutionResult::Continue) {
+                        self.ip += 1;
+                    } else if !self.backtrack()? {
+                        return Err(ParseError::Failed {
+                            position: self.furthest_failure,
+                        });
+                    }
+                    continue;
+                }
                 Instruction::DfaRun { table_idx } => {
                     // Unlike the scans (which always Continue), a DFA
                     // run legitimately fails — route that through the
@@ -1482,6 +1494,36 @@ impl<'a> BytecodeVM<'a> {
         Ok(ExecutionResult::Continue)
     }
 
+    /// The whole-string scan (rs#574 option A): one instruction
+    /// consumes `quote interior* quote` and pushes ONE span value
+    /// covering it, quotes included. Failure restores the entry
+    /// position and reports the deepest offset the scan reached —
+    /// the classic choice loop's end state.
+    #[inline(never)]
+    fn exec_string_span(&mut self, spec_idx: u32) -> Result<ExecutionResult, ParseError> {
+        let spec =
+            self.program
+                .get_string_span_spec(spec_idx)
+                .ok_or_else(|| ParseError::Internal {
+                    message: format!("Invalid string-span spec index: {spec_idx}"),
+                })?;
+        let start = self.position;
+        match spec.scan(self.input, start) {
+            Ok(end) => {
+                self.position = end;
+                self.push_span_value(start);
+                Ok(ExecutionResult::Continue)
+            }
+            Err(break_pos) => {
+                let saved = self.position;
+                self.position = break_pos;
+                self.track_failure_with_context();
+                self.position = saved;
+                Ok(ExecutionResult::Fail)
+            }
+        }
+    }
+
     fn execute_instruction(&mut self, instr: &Instruction) -> Result<ExecutionResult, ParseError> {
         if let Some(counts) = &mut self.opcode_counts {
             counts[instr.opcode() as usize] += 1;
@@ -1986,6 +2028,10 @@ impl<'a> BytecodeVM<'a> {
 
             Instruction::ScanClass { .. } | Instruction::ScanUntil { .. } => {
                 unreachable!("scan instructions are dispatched in run")
+            }
+
+            Instruction::StringSpan { .. } => {
+                unreachable!("StringSpan is dispatched in run")
             }
 
             Instruction::Custom { id } => {

@@ -73,6 +73,11 @@ pub struct Compiler {
     /// True while emitting a rule's own body (the body itself compiles
     /// inline; only references to OTHER rules become calls).
     compiling_rule_body: bool,
+
+    /// The string-shape detection memo (rs#574 option A): per rule
+    /// body, the whole-string spec when the rule is quote-delimited.
+    string_shape_memo:
+        std::collections::HashMap<usize, Option<crate::portable::string_shape::StringSpanSpec>>,
 }
 
 impl Compiler {
@@ -95,6 +100,7 @@ impl Compiler {
             compiled_rules: std::collections::HashSet::new(),
             compiling_rule_body: false,
             emitted_dispatch: false,
+            string_shape_memo: std::collections::HashMap::new(),
         }
     }
 
@@ -1260,9 +1266,21 @@ impl Compiler {
                         })
                     }
                     Atom::Named { name, atom } => match grammar.get_atom(*atom) {
-                        Some(Atom::Sequence { atoms }) => child_plans(atoms).map(|children| {
-                            super::dfa_table::ElementPlanTree::HashNested(name.clone(), children)
-                        }),
+                        Some(Atom::Sequence { atoms })
+                            if !crate::portable::string_shape::is_string_shaped(grammar, *atom) =>
+                        {
+                            child_plans(atoms).map(|children| {
+                                super::dfa_table::ElementPlanTree::HashNested(
+                                    name.clone(),
+                                    children,
+                                )
+                            })
+                        }
+                        _ if crate::portable::string_shape::is_string_shaped(grammar, *atom) => {
+                            // The kernel owns the rule's lowering; the
+                            // routed table cannot express it (option A).
+                            None
+                        }
                         _ if is_leaf(*atom) => {
                             Some(super::dfa_table::ElementPlanTree::Hash(name.clone()))
                         }
@@ -1335,22 +1353,35 @@ impl Compiler {
                             super::dfa_table::ElementPlanTree::Envelope(Box::new(inner))
                         })
                     }
-                    Atom::Entity { atom: target } => match grammar.get_atom(*target) {
-                        Some(Atom::Named { name, atom }) => match grammar.get_atom(*atom) {
-                            Some(Atom::Sequence { atoms }) => child_plans(atoms).map(|children| {
-                                super::dfa_table::ElementPlanTree::HashNested(
-                                    name.clone(),
-                                    children,
-                                )
-                            }),
-                            _ if is_leaf(*atom) => {
-                                Some(super::dfa_table::ElementPlanTree::Hash(name.clone()))
+                    Atom::Entity { atom: target } => {
+                        // A string-shaped ref routes nowhere: the
+                        // kernel owns the rule's lowering, and
+                        // inlining its atoms would resurrect the
+                        // per-char wire (rs#574 option A).
+                        if crate::portable::string_shape::is_string_shaped(grammar, *target) {
+                            return None;
+                        }
+                        match grammar.get_atom(*target) {
+                            Some(Atom::Named { name, atom }) => match grammar.get_atom(*atom) {
+                                Some(Atom::Sequence { atoms }) => {
+                                    child_plans(atoms).map(|children| {
+                                        super::dfa_table::ElementPlanTree::HashNested(
+                                            name.clone(),
+                                            children,
+                                        )
+                                    })
+                                }
+                                _ if is_leaf(*atom) => {
+                                    Some(super::dfa_table::ElementPlanTree::Hash(name.clone()))
+                                }
+                                _ => None,
+                            },
+                            _ if is_leaf(*target) => {
+                                Some(super::dfa_table::ElementPlanTree::RefBare)
                             }
                             _ => None,
-                        },
-                        _ if is_leaf(*target) => Some(super::dfa_table::ElementPlanTree::RefBare),
-                        _ => None,
-                    },
+                        }
+                    }
                     _ => None,
                 }
             }
@@ -1367,6 +1398,12 @@ impl Compiler {
             ) -> Option<super::dfa_table::ElementPlanTree9> {
                 use super::dfa_table::{ElementPlanChoiceArm9, ElementPlanTree9};
                 if depth > 64 {
+                    return None;
+                }
+                // The string-scan shape refuses the tranche-9 mirror
+                // too: the kernel owns the rule, the per-char slots
+                // are gone (rs#574 option A).
+                if crate::portable::string_shape::is_string_shaped(grammar, atom_idx) {
                     return None;
                 }
                 let is_leaf = |idx: usize| match grammar.get_atom(idx) {
@@ -2072,6 +2109,20 @@ impl Compiler {
     fn compile_named(&mut self, name: &str, atom_idx: usize) -> Result<usize, CompileError> {
         let entry = self.program.instruction_count();
 
+        // The string-scan shape (rs#574 option A): a quote-delimited
+        // rule emits ONE whole-string span — quotes folded in, the
+        // per-char iteration spans gone from the wire (the trees
+        // move; the corpus re-bakes with the shape).
+        if let Some(spec) = self.string_span_spec_for(atom_idx) {
+            let spec_idx = self.program.add_string_span_spec(spec);
+            let name_idx = self.program.add_string(name);
+            self.program
+                .add_instruction(Instruction::string_span(spec_idx));
+            self.program
+                .add_instruction(Instruction::build_hash(name_idx));
+            return Ok(entry);
+        }
+
         // The tree-walker wraps the child value as {name: value}.
         let name_idx = self.program.add_string(name);
         self.compile_atom(atom_idx)?;
@@ -2079,6 +2130,19 @@ impl Compiler {
             .add_instruction(Instruction::build_hash(name_idx));
 
         Ok(entry)
+    }
+
+    /// The string-shape detection, memoized per rule body.
+    fn string_span_spec_for(
+        &mut self,
+        atom_idx: usize,
+    ) -> Option<crate::portable::string_shape::StringSpanSpec> {
+        if let Some(cached) = self.string_shape_memo.get(&atom_idx) {
+            return cached.clone();
+        }
+        let spec = crate::portable::string_shape::detect(&self.grammar, atom_idx);
+        self.string_shape_memo.insert(atom_idx, spec.clone());
+        spec
     }
     /// Compile lookahead (positive or negative)
     fn compile_lookahead(
