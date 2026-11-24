@@ -75,6 +75,7 @@ pub mod source_map;
 pub mod spine;
 pub mod streaming;
 pub mod streaming_builder;
+pub mod string_shape;
 pub mod transform;
 pub mod visitor;
 

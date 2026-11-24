@@ -294,6 +294,9 @@ pub enum Opcode {
 
     /// Run a provable rule's DFA table (rs#574 slice B)
     DfaRun = 44,
+
+    /// Consume one whole-string span (the string-scan shape, option A)
+    StringSpan = 45,
 }
 
 /// Capture kind for capture instructions
@@ -543,6 +546,17 @@ pub enum Instruction {
         max: u32,
     },
 
+    /// Consume one whole-string span (rs#574 option A): the
+    /// quote-delimited rule body `quote *( interior ) quote` in ONE
+    /// instruction — the escape-aware kernel scans to the closing
+    /// quote and pushes a single span value covering it, quotes
+    /// included. The per-char iteration spans leave the wire (the
+    /// trees move; the corpus re-bakes).
+    StringSpan {
+        /// Index into the string-span spec table
+        spec_idx: u32,
+    },
+
     /// Custom atom invocation
     ///
     /// Invokes a custom atom registered via `register_custom_atom()`.
@@ -678,6 +692,7 @@ impl Instruction {
             Instruction::DfaRun { .. } => Opcode::DfaRun,
             Instruction::ScanClass { .. } => Opcode::ScanClass,
             Instruction::ScanUntil { .. } => Opcode::ScanUntil,
+            Instruction::StringSpan { .. } => Opcode::StringSpan,
             Instruction::Custom { .. } => Opcode::Custom,
             Instruction::PushScope => Opcode::PushScope,
             Instruction::PopScope => Opcode::PopScope,
@@ -711,6 +726,7 @@ impl Instruction {
                 | Instruction::TestAny { .. }
                 | Instruction::Fail
                 | Instruction::FailTwice
+                | Instruction::StringSpan { .. }
                 | Instruction::Throw { .. }
                 | Instruction::ThrowRec { .. }
         )
@@ -955,6 +971,12 @@ impl Instruction {
         Instruction::ScanUntil { spec_idx, max }
     }
 
+    /// Create a StringSpan instruction
+    #[inline]
+    pub fn string_span(spec_idx: u32) -> Self {
+        Instruction::StringSpan { spec_idx }
+    }
+
     /// Create a Custom instruction
     #[inline]
     pub fn custom(id: u64) -> Self {
@@ -980,6 +1002,9 @@ impl fmt::Display for Instruction {
             Instruction::Any { n } => write!(f, "Any {}", n),
             Instruction::DfaRun { table_idx } => {
                 write!(f, "DfaRun {table_idx}")
+            }
+            Instruction::StringSpan { spec_idx } => {
+                write!(f, "StringSpan [{spec_idx}]")
             }
             Instruction::Char { byte } => {
                 let c = *byte as char;

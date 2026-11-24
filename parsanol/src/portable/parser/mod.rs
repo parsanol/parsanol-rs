@@ -346,6 +346,10 @@ pub struct PortableParser<'a> {
     /// alternatives + the schemaBody retry). Outcomes spanning a
     /// drain are not stored.
     trivia_drained: bool,
+    /// The string-shape memo (rs#574 option A): per named-rule body,
+    /// the whole-string spec when the rule is quote-delimited.
+    string_span_rules:
+        std::collections::HashMap<usize, Option<crate::portable::string_shape::StringSpanSpec>>,
     /// Dynamic dispatch outcome replay (rs#174): outer backtracking
     /// re-invokes the same dispatch at the same position with the same
     /// captures; each re-invocation re-parsed its fragment with a fresh
@@ -639,6 +643,7 @@ impl<'a> PortableParser<'a> {
             trivia_depth: 0,
             pending_trivia: Vec::new(),
             trivia_drained: false,
+            string_span_rules: std::collections::HashMap::new(),
             dynamic_outcomes: std::collections::HashMap::new(),
             rollback_on_failure,
             strict_rollback_on_failure: rollback_on_failure,
@@ -732,6 +737,7 @@ impl<'a> PortableParser<'a> {
             trivia_depth: 0,
             pending_trivia: Vec::new(),
             trivia_drained: false,
+            string_span_rules: std::collections::HashMap::new(),
             dynamic_outcomes: std::collections::HashMap::new(),
             rollback_on_failure: false,
             strict_rollback_on_failure: false,
@@ -3065,6 +3071,12 @@ impl<'a> PortableParser<'a> {
         pos: usize,
         consume_all: bool,
     ) -> Result<AtomResult, ParseError> {
+        // The string-scan shape (rs#574 option A): the whole-string
+        // kernel owns quote-delimited rules on this engine too — the
+        // trees carry ONE span, matching the VM.
+        if let Some(spec) = self.string_span_spec_for(atom_id) {
+            return self.parse_named_string_span(name, spec, pos);
+        }
         // Full snapshot/restore (take_pending_trivia_snapshot parity):
         // an inner Named that succeeded empty can have drained pending
         // units; when THIS capture fails, the drained units must come
@@ -3133,6 +3145,89 @@ impl<'a> PortableParser<'a> {
             end_pos: result.end_pos,
             capture_state: None,
         })
+    }
+
+    /// The string-shape memo lookup (lazily populated per rule body).
+    fn string_span_spec_for(
+        &mut self,
+        atom_id: usize,
+    ) -> Option<crate::portable::string_shape::StringSpanSpec> {
+        if !self.string_span_rules.contains_key(&atom_id) {
+            let spec = crate::portable::string_shape::detect(self.grammar, atom_id);
+            self.string_span_rules.insert(atom_id, spec);
+        }
+        self.string_span_rules.get(&atom_id).cloned().flatten()
+    }
+
+    /// The whole-string named capture (rs#574 option A): the kernel
+    /// scans `quote interior* quote`; the value is ONE span, quotes
+    /// included. The trivia discipline mirrors `parse_named` — the
+    /// pending snapshot restores on failure, the drain attaches on
+    /// success.
+    fn parse_named_string_span(
+        &mut self,
+        name: &str,
+        spec: crate::portable::string_shape::StringSpanSpec,
+        pos: usize,
+    ) -> Result<AtomResult, ParseError> {
+        let pending_snapshot = self.pending_trivia.clone();
+        match spec.scan(self.input_bytes, pos) {
+            Ok(end) => {
+                let value = self.arena.input_ref(pos, end - pos);
+                if !self.pending_trivia.is_empty() {
+                    self.trivia_drained = true;
+                    let taken: Vec<(String, String, u32)> =
+                        std::mem::take(&mut self.pending_trivia);
+                    let units: Vec<AstNode> = taken
+                        .into_iter()
+                        .map(|(label, text, offset)| {
+                            let text_node = self.arena.intern_string_with_offset(&text, offset);
+                            let (pool_idx, len) = self.arena.store_hash(&[(&label, text_node)]);
+                            AstNode::Hash {
+                                pool_index: pool_idx,
+                                length: len,
+                            }
+                        })
+                        .collect();
+                    let (arr_idx, arr_len) = self.arena.store_tagged_array(":repetition", &units);
+                    let comments = AstNode::Array {
+                        pool_index: arr_idx,
+                        length: arr_len,
+                    };
+                    let (pool_idx, len) = self
+                        .arena
+                        .store_hash(&[(name, value), ("comments", comments)]);
+                    return Ok(AtomResult {
+                        value: AstNode::Hash {
+                            pool_index: pool_idx,
+                            length: len,
+                        },
+                        end_pos: end,
+                        capture_state: None,
+                    });
+                }
+                let (pool_idx, len) = self.arena.store_hash(&[(name, value)]);
+                Ok(AtomResult {
+                    value: AstNode::Hash {
+                        pool_index: pool_idx,
+                        length: len,
+                    },
+                    end_pos: end,
+                    capture_state: None,
+                })
+            }
+            Err(break_pos) => {
+                self.pending_trivia = pending_snapshot;
+                let mut label = std::mem::take(&mut self.label_buf);
+                label.clear();
+                label.push_str("string literal");
+                self.note_failure_ref(break_pos, &label);
+                self.label_buf = label;
+                Err(ParseError::Failed {
+                    position: break_pos,
+                })
+            }
+        }
     }
 
     #[inline]

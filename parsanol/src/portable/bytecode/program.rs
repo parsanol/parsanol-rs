@@ -157,6 +157,11 @@ pub struct Program {
     /// the per-iteration terminal. Not serialized.
     neg_specs: Vec<NegScanSpec>,
 
+    /// Whole-string specs (for StringSpan runs, rs#574 option A): the
+    /// quote, the interior class union, the escape pair. Not
+    /// serialized.
+    string_span_specs: Vec<crate::portable::string_shape::StringSpanSpec>,
+
     /// Byte-dispatch tables for alternatives (256 relative offsets each)
     dispatch_tables: Vec<[i32; 256]>,
 
@@ -265,6 +270,7 @@ impl Program {
             rule_addresses: HashMap::new(),
             char_ranges: Vec::new(),
             neg_specs: Vec::new(),
+            string_span_specs: Vec::new(),
             scan_plans: Vec::new(),
             has_invoke_dynamic: false,
             rule_memoizable: None,
@@ -296,6 +302,7 @@ impl Program {
             rule_addresses: HashMap::new(),
             char_ranges: Vec::new(),
             neg_specs: Vec::new(),
+            string_span_specs: Vec::new(),
             scan_plans: Vec::new(),
             has_invoke_dynamic: false,
             rule_memoizable: None,
@@ -705,6 +712,25 @@ impl Program {
     #[inline]
     pub fn get_neg_spec(&self, idx: u32) -> Option<&NegScanSpec> {
         self.neg_specs.get(idx as usize)
+    }
+
+    /// Add a whole-string spec (the string-scan shape)
+    pub fn add_string_span_spec(
+        &mut self,
+        spec: crate::portable::string_shape::StringSpanSpec,
+    ) -> u32 {
+        let idx = self.string_span_specs.len() as u32;
+        self.string_span_specs.push(spec);
+        idx
+    }
+
+    /// Get a whole-string spec
+    #[inline]
+    pub fn get_string_span_spec(
+        &self,
+        idx: u32,
+    ) -> Option<&crate::portable::string_shape::StringSpanSpec> {
+        self.string_span_specs.get(idx as usize)
     }
 
     /// Get the number of character sets in the table
