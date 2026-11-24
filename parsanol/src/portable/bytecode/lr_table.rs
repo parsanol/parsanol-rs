@@ -48,6 +48,9 @@ pub struct LrTable {
     /// terminal bytes/classes inlined in the item sets; a production's
     /// rhs = the atom-tree lowering's symbol ids.
     pub productions: Vec<LrProduction>,
+    /// The Named production kinds intern their rule names here
+    /// (`ProductionKind::Named` indexes this table).
+    pub names: Vec<String>,
     /// The start state.
     /// The start state.
     pub start: u32,
@@ -94,6 +97,10 @@ pub enum ProductionKind {
     Span,
     /// The tagged empty (an empty production).
     Empty,
+    /// The repetition envelope fold: the aux chain's `body aux` /
+    /// empty productions fold into ONE flat `:repetition` node (the
+    /// classic's envelope), not a right-nested chain.
+    Repetition,
 }
 
 /// The item: production `p`, the dot at `dot`, the lookahead byte
@@ -118,8 +125,10 @@ pub fn build_lr_table(grammar: &Grammar, entry: usize) -> Result<LrTable, LrBuil
     let mut lower = Lowering::default();
     let entry_nt = lower.lower_rule(grammar, entry, 0)?;
     let productions = lower.productions;
+    let names = lower.names;
     let nt_count = lower.nonterminal_count as u32;
-    let table = lr1_construct(&productions, nt_count, entry_nt)?;
+    let mut table = lr1_construct(&productions, nt_count, entry_nt)?;
+    table.names = names;
     Ok(table)
 }
 
@@ -131,6 +140,8 @@ struct Lowering {
     /// The rule (or auxiliary) atom id → the nonterminal id.
     rule_nt: std::collections::HashMap<usize, u32>,
     nonterminal_count: usize,
+    /// The Named rule names, internd in production order.
+    names: Vec<String>,
     /// The pending rhs symbol lists per in-progress rule (recursion).
     _pending: std::collections::HashSet<usize>,
 }
@@ -222,6 +233,34 @@ impl Lowering {
                 if max.is_some_and(|m| m.saturating_sub(*min) > 8) {
                     return Err(LrBuildError("unroll".into()));
                 }
+                // The class-run law (the classic's merged Span run): a
+                // `*`-form repetition over a SINGLE terminal body
+                // lowers to the left-recursive merge — the whole run
+                // collapses into ONE span value, byte-identical to
+                // the classic's class-run shape.
+                if *min == 0 && max.is_none() && matches!(tag, RepetitionTag::Repetition) {
+                    if let Ok(mut syms) = self.lower_symbol(grammar, *atom, depth + 1) {
+                        if syms.len() == 1 {
+                            let sym = syms.pop().expect("one symbol");
+                            let run_nt = self.new_nt();
+                            self.rule_nt.insert(idx, run_nt);
+                            self.productions.push(LrProduction {
+                                lhs: run_nt,
+                                rhs: vec![Symbol::NonTerminal(run_nt), sym],
+                                kind: ProductionKind::Span,
+                            });
+                            self.productions.push(LrProduction {
+                                lhs: run_nt,
+                                rhs: Vec::new(),
+                                kind: ProductionKind::Repetition,
+                            });
+                            return Ok(vec![(
+                                vec![Symbol::NonTerminal(run_nt)],
+                                ProductionKind::Pass,
+                            )]);
+                        }
+                    }
+                }
                 let body = self.lower_fragment(grammar, *atom, depth + 1)?;
                 let mut prods = Vec::new();
                 for _ in 0..*min {
@@ -236,12 +275,12 @@ impl Lowering {
                         self.productions.push(LrProduction {
                             lhs: aux,
                             rhs,
-                            kind: ProductionKind::Sequence,
+                            kind: ProductionKind::Repetition,
                         });
                         self.productions.push(LrProduction {
                             lhs: aux,
                             rhs: Vec::new(),
-                            kind: ProductionKind::Empty,
+                            kind: ProductionKind::Repetition,
                         });
                         if *min == 0 {
                             prods.push((vec![Symbol::NonTerminal(aux)], ProductionKind::Pass));
@@ -353,11 +392,10 @@ impl Lowering {
         self.lower_symbol(grammar, idx, depth)
     }
 
-    fn intern_name(&mut self, _name: &str) -> u32 {
-        // The name interns in the Program's string table at compile;
-        // slice 1 tracks the ordinal — the executor interns.
-        self.nonterminal_count += 0;
-        0
+    fn intern_name(&mut self, name: &str) -> u32 {
+        let id = self.names.len() as u32;
+        self.names.push(name.to_string());
+        id
     }
 }
 
@@ -509,7 +547,10 @@ fn lr1_construct(
                 }
             }
             for (pi, prod) in prods.iter().enumerate() {
-                if prod.lhs == *nt && !prod.rhs.is_empty() {
+                // Empty productions included: their dot-0 item is
+                // already complete, and the ε reduce needs it in the
+                // state (the standard construction).
+                if prod.lhs == *nt {
                     let cand = Item {
                         p: pi as u32,
                         dot: 0,
@@ -677,9 +718,154 @@ fn lr1_construct(
         goto,
         nonterminal_count,
         productions: prods,
+        names: Vec::new(),
         start: 0,
         state_count: states.len() as u32,
     })
+}
+
+/// The value an LR reduce produces (slice 2's structural model — the
+/// same-trees law's shapes; the arena wiring rides slice 3's compiler
+/// seam).
+#[derive(Debug, Clone, PartialEq)]
+pub enum LrValue {
+    /// A consumed span: `[start, end)` over the input bytes (a
+    /// terminal production's merged run, or one shifted byte).
+    Span {
+        /// The inclusive start offset.
+        start: usize,
+        /// The exclusive end offset.
+        end: usize,
+    },
+    /// The children's values as one `:sequence` node.
+    Seq(Vec<LrValue>),
+    /// The iterations as one flat `:repetition` node.
+    Rep(Vec<LrValue>),
+    /// `{name: inner}` — the v2 named law.
+    Named {
+        /// The rule name.
+        name: String,
+        /// The wrapped value.
+        inner: Box<LrValue>,
+    },
+    /// The tagged empty (an empty production).
+    Nil,
+}
+
+/// The executor's failure: an ACTION-table error (the byte cannot
+/// continue any viable production) or a truncated input — the same
+/// acceptance contract as the classic (the rule fails at the deepest
+/// offset).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LrRunError(pub String);
+
+/// Run the LR(1) table over `input` (the ENTRY rule; consume-all).
+///
+/// The EOF convention is slice 1's sentinel: byte column 0 carries
+/// the accept/reduce-at-EOF actions, and byte 0 never appears in
+/// valid UTF-8 input.
+pub fn lr_run(table: &LrTable, input: &[u8]) -> Result<LrValue, LrRunError> {
+    // The parse stack: one state + one value + one span-start per
+    // stack symbol.
+    let mut states = vec![table.start];
+    let mut values: Vec<LrValue> = Vec::new();
+    let mut starts: Vec<usize> = Vec::new();
+    let mut pos = 0usize;
+    loop {
+        let state = *states.last().expect("the LR stack never empties");
+        let (byte, eof) = match input.get(pos) {
+            Some(&b) if b != 0 => (b as usize, false),
+            // End of input (or a NUL byte, which the sentinel owns —
+            // valid UTF-8 never contains it, so this is EOF).
+            _ => (0usize, true),
+        };
+        let slot = table.action_index[state as usize * 256 + byte];
+        if slot == u32::MAX {
+            return Err(LrRunError(match eof {
+                true => format!("unexpected end of input at byte {pos}"),
+                false => format!("unexpected byte 0x{byte:02x} at offset {pos}"),
+            }));
+        }
+        match &table.actions[slot as usize] {
+            LrAction::Shift(next) => {
+                values.push(LrValue::Span {
+                    start: pos,
+                    end: pos + 1,
+                });
+                starts.push(pos);
+                states.push(*next);
+                pos += 1;
+            }
+            LrAction::Reduce(p) => {
+                let prod = table
+                    .productions
+                    .get(*p as usize)
+                    .ok_or_else(|| LrRunError(format!("bad production {}", *p)))?;
+                let n = prod.rhs.len();
+                let start = if n == 0 {
+                    pos
+                } else {
+                    let idx = starts.len() - n;
+                    starts[idx]
+                };
+                // Pop the rhs's values (in order).
+                let popped: Vec<LrValue> = values.split_off(values.len() - n);
+                starts.truncate(starts.len() - n);
+                states.truncate(states.len() - n);
+                let value = match &prod.kind {
+                    ProductionKind::Named(id) => {
+                        let name = table.names.get(*id as usize).cloned().unwrap_or_default();
+                        let inner = popped
+                            .into_iter()
+                            .next()
+                            .expect("Named productions carry one symbol");
+                        LrValue::Named {
+                            name,
+                            inner: Box::new(inner),
+                        }
+                    }
+                    ProductionKind::Sequence => LrValue::Seq(popped),
+                    ProductionKind::Repetition => {
+                        // The envelope fold: `aux → body aux`
+                        // prepends the body's iteration to the rest's
+                        // accumulated list; the empty production
+                        // starts it.
+                        let mut it = popped.into_iter();
+                        let mut items = Vec::new();
+                        if let Some(head) = it.next() {
+                            items.push(head);
+                            if let Some(LrValue::Rep(rest)) = it.next() {
+                                items.extend(rest);
+                            }
+                        }
+                        LrValue::Rep(items)
+                    }
+                    ProductionKind::Pass => popped
+                        .into_iter()
+                        .next()
+                        .expect("Pass productions carry one symbol"),
+                    ProductionKind::Span => LrValue::Span { start, end: pos },
+                    ProductionKind::Empty => LrValue::Nil,
+                };
+                // The GOTO from the state now on top.
+                let top = *states.last().expect("the LR stack never empties");
+                let next = table.goto
+                    [top as usize * (table.nonterminal_count as usize + 1) + prod.lhs as usize];
+                if next == u32::MAX {
+                    return Err(LrRunError(format!(
+                        "missing goto for nt {} at state {top}",
+                        prod.lhs
+                    )));
+                }
+                values.push(value);
+                starts.push(start);
+                states.push(next);
+            }
+            LrAction::Accept => {
+                return Ok(values.pop().expect("accept carries the entry value"));
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -769,5 +955,122 @@ mod tests {
         let grammar = crate::portable::grammar::Grammar::from_json(&text).unwrap();
         let table = build_lr_table(&grammar, g.root).expect("the left-recursive build");
         assert!(table.state_count > 1);
+    }
+
+    /// The t9-format mapper (the differential's common currency): the
+    /// same shape strings the walker visitor prints (the tagged
+    /// arrays, the hashes, the input refs).
+    fn lr_value_sexpr(v: &LrValue, input: &str, out: &mut String) {
+        match v {
+            LrValue::Span { start, end } => {
+                out.push_str(&format!("in:{:?}@{};", &input[*start..*end], start))
+            }
+            LrValue::Seq(children) => {
+                out.push_str(&format!("[{}(", children.len() + 1));
+                out.push_str("s:\":sequence\";");
+                for c in children {
+                    lr_value_sexpr(c, input, out);
+                }
+                out.push_str(")];");
+            }
+            LrValue::Rep(iterations) => {
+                out.push_str(&format!("[{}(", iterations.len() + 1));
+                out.push_str("s:\":repetition\";");
+                for c in iterations {
+                    lr_value_sexpr(c, input, out);
+                }
+                out.push_str(")];");
+            }
+            LrValue::Named { name, inner } => {
+                out.push('{');
+                out.push_str(&format!("{name:?}->"));
+                lr_value_sexpr(inner, input, out);
+                out.push_str("};");
+            }
+            LrValue::Nil => {}
+        }
+    }
+
+    /// The walker's tree in the same t9 format (the t9 probe's M
+    /// visitor).
+    fn walker_sexpr(
+        value: &crate::portable::ast::AstNode,
+        arena: &crate::portable::arena::AstArena,
+        input: &str,
+    ) -> String {
+        use crate::portable::visitor::{walk, Visitor};
+        struct M(String);
+        impl Visitor for M {
+            fn visit_input_ref(&mut self, offset: u32, length: u32, input: &str) {
+                self.0.push_str(&format!(
+                    "in:{:?}@{};",
+                    &input[offset as usize..offset as usize + length as usize],
+                    offset
+                ));
+            }
+            fn visit_string_ref(&mut self, pool: u32, arena: &crate::portable::arena::AstArena) {
+                self.0
+                    .push_str(&format!("s:{:?};", arena.get_string(pool as usize)));
+            }
+            fn visit_array_start(&mut self, _: u32, length: u32) {
+                self.0.push_str(&format!("[{length}("));
+            }
+            fn visit_array_end(&mut self, _: u32, _: u32) {
+                self.0.push_str(")];");
+            }
+            fn visit_hash_start(&mut self, _: u32, _: u32) {
+                self.0.push('{');
+            }
+            fn visit_hash_key(&mut self, key: &str) {
+                self.0.push_str(&format!("{key:?}->"));
+            }
+            fn visit_hash_end(&mut self, _: u32, _: u32) {
+                self.0.push_str("};");
+            }
+        }
+        walk(value, arena, input, M(String::new())).0
+    }
+
+    /// THE SAME-TREES LAW (slice 2's differential pin): the LR
+    /// executor's value trees match the classic walker's byte for
+    /// byte on the recursive spine — acceptance, the spans, the
+    /// envelopes, the named wraps.
+    #[test]
+    fn lr_run_matches_the_walker_on_the_spine() {
+        use crate::portable::arena::AstArena;
+        use crate::portable::PortableParser;
+        let value = choice(vec![
+            dynamic(seq(vec![
+                dynamic(parser_dsl::str("{")),
+                dynamic(ref_("value")),
+                dynamic(parser_dsl::str("}")),
+            ])),
+            dynamic(re("[a-z]").many()),
+        ]);
+        let g = GrammarBuilder::new()
+            .rule("value", value)
+            .build()
+            .to_json()
+            .unwrap();
+        let grammar = crate::portable::grammar::Grammar::from_json(&g).unwrap();
+        let table = build_lr_table(&grammar, grammar.root).expect("the spine builds");
+
+        for input in ["abc", "{a}", "{{a}}", "{abc}{d}", "", "{xyz}{p}{qq}"] {
+            let mut arena = AstArena::for_input(input.len());
+            let grammar2 = crate::portable::grammar::Grammar::from_json(&g).unwrap();
+            let mut parser = PortableParser::new(&grammar2, input, &mut arena);
+            let walker = parser.parse();
+            let lr = lr_run(&table, input.as_bytes());
+            match (walker, lr) {
+                (Ok(w), Ok(v)) => {
+                    let mut s = String::new();
+                    lr_value_sexpr(&v, input, &mut s);
+                    let ws = walker_sexpr(&w, &arena, input);
+                    assert_eq!(s, ws, "the LR tree diverged from the walker on {input:?}");
+                }
+                (Err(_), Err(_)) => {}
+                (w, l) => panic!("acceptance diverged on {input:?}: walker={w:?} lr={l:?}"),
+            }
+        }
     }
 }
