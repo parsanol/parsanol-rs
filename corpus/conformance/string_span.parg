@@ -1,0 +1,25 @@
+## Semantics: U2 (rs#574 option A) — the whole-string shape: a
+## quote-delimited named rule (quote Rep{0,∞}( interior ) quote) emits
+## ONE span value, quotes folded in; the per-char iteration spans
+## leave the wire. Accept/reject and the failure surface stay
+## identical to the choice loop it replaces.
+grammar ConformanceStringSpan version "1.0.0" edition "v2" {
+  ## The json string rule's shape: the plain run excludes quote and
+  ## backslash; the escape set is the two-char forms plus the
+  ## u-hexquad (ABNF 4*, open-ended — hex sits inside the plain run).
+  string = ( %x22 *( %x20-21 / %x23-5B / %x5D-10FFFF / %x5C ( %x22 / %x5C / %x2F / %x62 / %x66 / %x6E / %x72 / %x74 / ( %x75 4*( %x30-39 / %x41-46 / %x61-66 ) ) ) ) %x22 ) as string
+
+  entry main: string
+
+  test main {
+    accept "\"plain\""
+    accept "\"\""
+    accept "\"esc \\\" q\""
+    accept "\"hex \\u0041\""
+    accept "\"日本語 \\u0041 ☃\""
+    reject "\"short \\u123\""
+    reject "\"bad \\q escape\""
+    reject "\"unterminated"
+    capture "\"whole \\u0042\"" { string: "\"whole \\u0042\"" }
+  }
+}
