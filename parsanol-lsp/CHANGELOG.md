@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Release v1.5.17 ([#659](https://github.com/parsanol/parsanol-rs/pull/659))
 - Release v1.5.13
 - Release v1.5.7
 - Release v1.5.7
