@@ -536,11 +536,16 @@ fn lr1_construct(
     let symbol_id = |sym: &Symbol,
                      symbols: &mut Vec<Symbol>,
                      ids: &mut std::collections::HashMap<Vec<u8>, usize>,
-                     nt_count: u32|
+                     _nt_count: u32|
      -> usize {
+        // EVERY symbol kind interns uniformly (the edge walk reads
+        // symbols[id] back); the kind byte keeps Byte/Class/NonTerminal
+        // keys disjoint.
         let key: Vec<u8> = match sym {
             Symbol::NonTerminal(nt) => {
-                return nt_count as usize + *nt as usize;
+                let mut k = vec![2u8];
+                k.extend(nt.to_le_bytes());
+                k
             }
             Symbol::Byte(b) => vec![0u8, *b],
             Symbol::Class(bits) => {
@@ -687,17 +692,12 @@ mod tests {
     /// object = "{" value "}"; string = the class run. LEFT-recursive
     /// free, RIGHT-recursive through value — the LR machine's home
     /// territory.
-    // KNOWN BUG (the next session's opener): the recursion lowering's
-    // nonterminal ids desync from the count the construction captures
-    // (the index panic below) — the ref-cycle dedupe keys on atom ids
-    // the aux path inserts under a different key. The trace: the spine
-    // grammar lowers nt 0 (root) then the ref resolves to a FRESH nt
-    // (3+) while `first`/`nullable` sized to the count captured
-    // BEFORE... the fix = one lowering pass building the rule map
-    // BEFORE the FIRST fixpoint (the pass structure slice 1's doc
-    // describes).
+    // The earlier "lowering count desync" theory was wrong: the panic
+    // was symbol_id returning nt_count+nt for NonTerminal symbols
+    // WITHOUT interning them, so the GOTO edge's symbols[id] indexed
+    // out of bounds. The interning is uniform now (the kind byte
+    // disambiguates the keys).
     #[test]
-    #[ignore = "the recursion-lowering count desync (see the comment)"]
     fn lr_builds_the_recursive_spine() {
         let value = choice(vec![
             dynamic(seq(vec![
@@ -738,7 +738,6 @@ mod tests {
     /// The LEFT-recursive variant (X → "{" X "}"), also LR-expressible
     /// (LR's superpower over the DFA backend).
     #[test]
-    #[ignore = "the recursion-lowering count desync (see the comment)"]
     fn lr_builds_left_recursion() {
         let mut g = crate::portable::grammar::Grammar::new();
         let open = g.add_atom(Atom::Str {
