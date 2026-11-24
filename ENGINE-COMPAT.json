@@ -1,9 +1,9 @@
 {
-  "engine_commit": "e58cff396f06766f0b287dd1da25fec84b6c9cd6",
-  "crates": "1.5.18",
-  "npm": "1.5.18",
-  "rubygems": "1.5.18",
-  "pypi": "1.5.18.0",
-  "released_at": "2026-11-24T08:20:00Z",
-  "_comment": "ruby#421 -- the engine-compat manifest. Every release train updates the pairings as it rides; tools/check_engine_compat.py verifies the manifest against the live registries in CI (tag <-> engine_commit, crates, npm, rubygems, pypi). Runtime versions follow the engine-linked scheme {engine-semver}.{runtime-single-digit} (npm: the engine semver, the 4th segment is invalid there) -- the leptris precedent. The rubygems/npm entries follow the current train's actual spellings (1.5.15, 3-segment). The 1.5.18 train carries the string-scan shape (rs#574 option A, rs#666): the whole-string wire change; the armv7-musl PyPI wheel sits this train out (the pypa image bump's rust std, noted on parsanol-python#72)."
+  "engine_commit": "a6cd663096aedb8be25f25ccff8890d0becd21c6",
+  "crates": "1.5.19",
+  "npm": "1.5.19",
+  "rubygems": "1.5.19",
+  "pypi": "1.5.19.0",
+  "released_at": "2026-11-24T15:42:56Z",
+  "_comment": "ruby#421 -- the engine-compat manifest. Every release train updates the pairings as it rides; tools/check_engine_compat.py verifies the manifest against the live registries in CI (tag <-> engine_commit, crates, npm, rubygems, pypi). Runtime versions follow the engine-linked scheme {engine-semver}.{runtime-single-digit} (npm: the engine semver, the 4th segment is invalid there) -- the leptris precedent. The rubygems/npm entries follow the current train's actual spellings (1.5.15, 3-segment). The 1.5.19 train carries the LR slice-3 machinery (rs#574: the strict construction, the executor, the seam gated inert pending 3b) + the classic tag cache."
 }
