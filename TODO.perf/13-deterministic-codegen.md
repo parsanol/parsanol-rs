@@ -935,3 +935,59 @@ table with ONE value = the whole-string span) — a string-level scan
 (the slice-4 bulk-scan shape with escape-aware continuation). That is
 the next design, and with it the ~60% of json bytes collapse into ONE
 instruction with ONE value.
+
+## The LR fusion DESIGN (2026-11-24, option B's program): the recursive-spine table
+
+With the string interior blocked on the shape decision (the value-
+noise finding above), the remaining structural lever is the LR
+fusion proper: ONE automaton driving json's RECURSIVE spine —
+value/member/object/array — the machinery a byte-driven DFA
+architecturally lacks (recursion) and the dispatch loop pays for
+today: ByteDispatch 17% (the value/member choice per VALUE) +
+Call/Return 8.6% (the rule boundaries) + the object/member loops'
+RepCount/Jump/PartialCommit share.
+
+**The model** (the classic LR(1) table with a value stack):
+
+- STATE: `u32`; the table row = 256 byte-transitions + ACTIONS.
+- SHIFT: byte consumed, state = next, position advances — the DfaRun
+  walk's inner loop, one instruction per BYTE REGION (not per char).
+- CALL: a rule reference = push (return-state, capture-frame);
+  ENTER the rule's start state. Recursion = the stack (object →
+  member → value → object), bounded by the existing depth guard.
+- REDUCE: a rule completion pops the call, produces the rule's value
+  (the v2 named law: the Named rules produce `{name: inner}`; the
+  anonymous ones produce spans/sequences per the existing shape
+  laws — the SAME trees the classic emits, byte-identical).
+- ACCEPT: the entry rule's completion.
+
+**The wire-shape contract** (what makes this a PERF slice, not a
+semantic one): the LR machine emits THE SAME trees as the classic
+compile — the differential battery pins it (the corpus replay +
+packrat_differential). No shape decision needed.
+
+**The gates** (per rule graph): the fixpoint prover (slice 1)
+accepts the grammar's recursive spine (json's is right-recursive —
+the edition-2 note); the table build refuses unbounded ambiguity
+(the LR conflicts = refuse, the classic keeps the rule).
+
+**The build order** (slices, each A/B-gated):
+1. The `LrTable` type + the builder: the LR(1) item sets over a
+   rule graph the prover accepts; the json spine as the first
+   target. New pub types on NEW registries (the additive law).
+2. The `LrRun { table_idx }` instruction + the executor walk
+   (state/stack/values), the reduce actions producing the v2 shapes.
+3. The compiler seam: the ENTRY rule lowers to LrRun when the
+   prover accepts the whole graph; the sub-rules the LR table
+   covers become table-internal (their classic code dead-stripped).
+4. The A/B: json min-of-15 interleaved vs 1.5.17. The win =
+   ByteDispatch+Call/Return+the object/member loop scaffolding
+   (~25-30% of dispatch) out of the loop; the strings/ws/numbers
+   stay on their existing lanes (the interior classic until the
+   shape decision, the ws loops already DfaRun-routed).
+
+**The measured ceiling for option B** (before the shape decision):
+ByteDispatch 17% + Call/Return 8.6% + the member/object loop share
+(~8-10%) ≈ 25-35% of dispatch ≈ 0.8-1.1 dispatched/byte removed —
+json ~0.037 → ~0.030-0.032 µs/B projected — AT the gate, not
+through it; through the gate needs option A's shape.
