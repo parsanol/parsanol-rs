@@ -297,6 +297,9 @@ pub enum Opcode {
 
     /// Consume one whole-string span (the string-scan shape, option A)
     StringSpan = 45,
+
+    /// Run a rule graph's LR(1) table (rs#574 Phase 2, option B)
+    LrRun = 46,
 }
 
 /// Capture kind for capture instructions
@@ -659,6 +662,15 @@ pub enum Instruction {
         /// Index into the string-span spec table
         spec_idx: u32,
     },
+
+    /// Parse a whole rule graph through its LR(1) table (rs#574
+    /// Phase 2, option B): ONE instruction consumes the rule's input
+    /// and pushes ONE value (the rule's tree). Declared LAST: the
+    /// enum carries implicit discriminants — the release-plz lesson.
+    LrRun {
+        /// Index into the program's LR-table registry
+        table_idx: u32,
+    },
 }
 
 impl Instruction {
@@ -697,6 +709,7 @@ impl Instruction {
             Instruction::ScanClass { .. } => Opcode::ScanClass,
             Instruction::ScanUntil { .. } => Opcode::ScanUntil,
             Instruction::StringSpan { .. } => Opcode::StringSpan,
+            Instruction::LrRun { .. } => Opcode::LrRun,
             Instruction::Custom { .. } => Opcode::Custom,
             Instruction::PushScope => Opcode::PushScope,
             Instruction::PopScope => Opcode::PopScope,
@@ -731,6 +744,7 @@ impl Instruction {
                 | Instruction::Fail
                 | Instruction::FailTwice
                 | Instruction::StringSpan { .. }
+                | Instruction::LrRun { .. }
                 | Instruction::Throw { .. }
                 | Instruction::ThrowRec { .. }
         )
@@ -981,6 +995,12 @@ impl Instruction {
         Instruction::StringSpan { spec_idx }
     }
 
+    /// Create an LrRun instruction
+    #[inline]
+    pub fn lr_run(table_idx: u32) -> Self {
+        Instruction::LrRun { table_idx }
+    }
+
     /// Create a Custom instruction
     #[inline]
     pub fn custom(id: u64) -> Self {
@@ -1009,6 +1029,9 @@ impl fmt::Display for Instruction {
             }
             Instruction::StringSpan { spec_idx } => {
                 write!(f, "StringSpan [{spec_idx}]")
+            }
+            Instruction::LrRun { table_idx } => {
+                write!(f, "LrRun [{table_idx}]")
             }
             Instruction::Char { byte } => {
                 let c = *byte as char;

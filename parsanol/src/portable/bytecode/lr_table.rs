@@ -21,8 +21,16 @@ use crate::portable::grammar::{Atom, Grammar, RepetitionTag};
 /// One LR parse action.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LrAction {
-    /// Consume the byte, enter the state.
-    Shift(u32),
+    /// Consume the symbol's bytes, enter the state. The symbol id
+    /// indexes [`LrTable::symbols`] — the executor needs the symbol
+    /// to know the consumed length (a Ranges shift decodes one
+    /// codepoint and takes its whole UTF-8 length).
+    Shift {
+        /// The state to enter.
+        next: u32,
+        /// The consumed symbol (its id indexes [`LrTable::symbols`]).
+        symbol: u32,
+    },
     /// Reduce by production `p` (produce its value, pop its symbols,
     /// goto on the production's nonterminal).
     Reduce(u32),
@@ -51,6 +59,9 @@ pub struct LrTable {
     /// The Named production kinds intern their rule names here
     /// (`ProductionKind::Named` indexes this table).
     pub names: Vec<String>,
+    /// The distinct terminal symbols (the Shift actions' `symbol`
+    /// ids index this).
+    pub symbols: Vec<Symbol>,
     /// The start state.
     /// The start state.
     pub start: u32,
@@ -78,8 +89,14 @@ pub enum Symbol {
     /// One exact byte.
     Byte(u8),
     /// Any byte in the ASCII class bitmap (members above 0x7F ride
-    /// the later multi-byte slice — the stage-1 law).
+    /// the codepoint ranges below).
     Class(Box<[bool; 256]>),
+    /// Any codepoint in the ranges (the multibyte class, the
+    /// tranche-254 mirror): the executor decodes one codepoint and
+    /// consumes its whole UTF-8 length in ONE shift; the table's
+    /// lookahead carries the LEAD bytes only (continuation bytes
+    /// cannot start a terminal).
+    Ranges(Vec<(u32, u32)>),
     /// A nonterminal reference (the goto).
     NonTerminal(u32),
 }
@@ -101,6 +118,11 @@ pub enum ProductionKind {
     /// empty productions fold into ONE flat `:repetition` node (the
     /// classic's envelope), not a right-nested chain.
     Repetition,
+    /// The bounded-optional's TAKEN arm: the value = the body's own
+    /// shape (one child = that value; several = their `:sequence`
+    /// node) with the chain tail dropped — the classic's present
+    /// Maybe flattening.
+    MaybeTaken,
 }
 
 /// The item: production `p`, the dot at `dot`, the lookahead byte
@@ -122,12 +144,30 @@ pub struct LrBuildError(pub String);
 /// build the canonical LR(1) table. Refuses anything the byte-level
 /// model can't express — the classic keeps the rule.
 pub fn build_lr_table(grammar: &Grammar, entry: usize) -> Result<LrTable, LrBuildError> {
+    lr_table_construction(grammar, entry, false)
+}
+
+/// The STRICT variant: any applied conflict resolution (the
+/// shift-preference / longest-reduce laws) refuses. A resolved table
+/// parses deterministic INPUTS identically but diverges from the PEG
+/// on the ordered-choice/greedy-recovery classes — the compiler seam
+/// only takes naturally conflict-free graphs, and the differential
+/// gates every one it takes.
+pub fn build_lr_table_strict(grammar: &Grammar, entry: usize) -> Result<LrTable, LrBuildError> {
+    lr_table_construction(grammar, entry, true)
+}
+
+fn lr_table_construction(
+    grammar: &Grammar,
+    entry: usize,
+    strict: bool,
+) -> Result<LrTable, LrBuildError> {
     let mut lower = Lowering::default();
     let entry_nt = lower.lower_rule(grammar, entry, 0)?;
     let productions = lower.productions;
     let names = lower.names;
     let nt_count = lower.nonterminal_count as u32;
-    let mut table = lr1_construct(&productions, nt_count, entry_nt)?;
+    let mut table = lr1_construct(&productions, nt_count, entry_nt, strict)?;
     table.names = names;
     Ok(table)
 }
@@ -144,6 +184,104 @@ struct Lowering {
     names: Vec<String>,
     /// The pending rhs symbol lists per in-progress rule (recursion).
     _pending: std::collections::HashSet<usize>,
+}
+
+/// The LEAD-byte bitset of a codepoint range set: the exact set of
+/// possible first bytes across the members' UTF-8 encodings (the
+/// continuation bytes cannot start a terminal, so the table's
+/// lookaheads and edge rows carry leads only).
+fn ranges_lead_bits(ranges: &[(u32, u32)]) -> [bool; 256] {
+    let mut bits = [false; 256];
+    for &(lo, hi) in ranges {
+        let hi = hi.min(0x10_FFFF);
+        if hi < lo {
+            continue;
+        }
+        let shapes = [
+            (lo, hi.min(0x7F)),
+            (lo.max(0x80), hi.min(0x7FF)),
+            (lo.max(0x800), hi.min(0xFFFF)),
+            (lo.max(0x10000), hi),
+        ];
+        for (plo, phi) in shapes {
+            if plo > phi {
+                continue;
+            }
+            if phi <= 0x7F {
+                for b in plo..=phi {
+                    bits[b as usize] = true;
+                }
+            } else if phi <= 0x7FF {
+                for b in (0xC0 | (plo >> 6))..=(0xC0 | (phi >> 6)) {
+                    bits[b as usize] = true;
+                }
+            } else if phi <= 0xFFFF {
+                for b in (0xE0 | (plo >> 12))..=(0xE0 | (phi >> 12)) {
+                    bits[b as usize] = true;
+                }
+            } else {
+                for b in (0xF0 | (plo >> 18))..=(0xF0 | (phi >> 18)) {
+                    bits[b as usize] = true;
+                }
+            }
+        }
+    }
+    bits
+}
+
+/// The class symbol for a decoded pattern: ASCII members stay in the
+/// byte bitmap; anything beyond 0x7F rides the codepoint ranges.
+fn class_symbol(ranges: &[(u32, u32)]) -> Symbol {
+    if ranges.iter().all(|&(lo, _)| lo <= 0x7F) && ranges.iter().all(|&(_, hi)| hi <= 0x7F) {
+        let mut bits = [false; 256];
+        for &(lo, hi) in ranges {
+            for cp in lo..=hi {
+                bits[cp as usize] = true;
+            }
+        }
+        Symbol::Class(Box::new(bits))
+    } else {
+        Symbol::Ranges(ranges.to_vec())
+    }
+}
+
+/// The ASCII case-fold literal: `(?i:text)` (the %i"..." compile
+/// form, regexp-escaped) lowers to one fold-pair class per position
+/// — json's true/false/null faces. Anything beyond plain escaped
+/// ASCII refuses (the classic keeps the rule).
+fn fold_literal_symbols(pattern: &str) -> Option<Vec<Symbol>> {
+    let rest = pattern.strip_prefix("(?i:")?;
+    let text = rest.strip_suffix(')')?;
+    if text.is_empty() || !text.is_ascii() {
+        return None;
+    }
+    let mut out = Vec::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        let c = if c == '\\' {
+            // The escape form: \X where X is a punctuation char —
+            // the escaped literal itself.
+            let e = chars.next()?;
+            if e.is_alphanumeric() {
+                return None;
+            }
+            e
+        } else {
+            c
+        };
+        if !c.is_ascii() {
+            return None;
+        }
+        let lower = c.to_ascii_lowercase();
+        let upper = c.to_ascii_uppercase();
+        let (lo, hi) = if lower == upper {
+            (u32::from(lower), u32::from(lower))
+        } else {
+            (u32::from(lower), u32::from(upper))
+        };
+        out.push(class_symbol(&[(lo, hi)]));
+    }
+    Some(out)
 }
 
 impl Lowering {
@@ -244,11 +382,30 @@ impl Lowering {
                             let sym = syms.pop().expect("one symbol");
                             let run_nt = self.new_nt();
                             self.rule_nt.insert(idx, run_nt);
+                            // RIGHT-recursive: run -> sym run | sym. The
+                            // Repetition fold assembles the flat span
+                            // list; the base case carries no epsilon —
+                            // the canonical construction refuses the
+                            // left-recursive merge (its epsilon reduces
+                            // at the run's own first bytes).
+                            // The Span kind merges on reduce: the
+                            // chain's value = ONE span over the whole
+                            // run (the classic's merged-run shape).
                             self.productions.push(LrProduction {
                                 lhs: run_nt,
-                                rhs: vec![Symbol::NonTerminal(run_nt), sym],
+                                rhs: vec![sym.clone(), Symbol::NonTerminal(run_nt)],
                                 kind: ProductionKind::Span,
                             });
+                            self.productions.push(LrProduction {
+                                lhs: run_nt,
+                                rhs: vec![sym],
+                                kind: ProductionKind::Span,
+                            });
+                            // The zero-run: `*` = 0+. Its letter-byte
+                            // conflict with the shift resolves by the
+                            // shift-preference law (the greedy loop);
+                            // at the follow bytes the empty
+                            // `:repetition` envelope reduces.
                             self.productions.push(LrProduction {
                                 lhs: run_nt,
                                 rhs: Vec::new(),
@@ -287,9 +444,34 @@ impl Lowering {
                         }
                     }
                     (Some(m), _) => {
+                        // The optional span lowers to a right-recursive
+                        // bounded chain: opt_k -> body-syms opt_{k-1}
+                        // (MaybeTaken) | opt_{k-1} (Pass); opt_0 -> ε.
+                        // The values flatten like the classic's Maybe
+                        // (present = the body's shape, absent = nil).
+                        let mut prev = self.new_nt();
+                        self.productions.push(LrProduction {
+                            lhs: prev,
+                            rhs: Vec::new(),
+                            kind: ProductionKind::Empty,
+                        });
                         for _ in *min..*m {
-                            prods.push((body.clone(), ProductionKind::Pass));
+                            let aux = self.new_nt();
+                            let mut with = body.clone();
+                            with.push(Symbol::NonTerminal(prev));
+                            self.productions.push(LrProduction {
+                                lhs: aux,
+                                rhs: with,
+                                kind: ProductionKind::MaybeTaken,
+                            });
+                            self.productions.push(LrProduction {
+                                lhs: aux,
+                                rhs: vec![Symbol::NonTerminal(prev)],
+                                kind: ProductionKind::Pass,
+                            });
+                            prev = aux;
                         }
+                        prods.push((vec![Symbol::NonTerminal(prev)], ProductionKind::Pass));
                     }
                 }
                 Ok(prods)
@@ -314,19 +496,13 @@ impl Lowering {
                 Ok(vec![(rhs, ProductionKind::Span)])
             }
             Some(Atom::Re { pattern }) => {
+                if let Some(syms) = fold_literal_symbols(pattern) {
+                    return Ok(vec![(syms, ProductionKind::Span)]);
+                }
                 let ranges = CharRanges::from_pattern(pattern)
                     .ok_or_else(|| LrBuildError("class".into()))?;
-                let mut bits = [false; 256];
-                for (lo, hi) in ranges.codepoint_ranges() {
-                    if lo > 0x7F {
-                        return Err(LrBuildError("multibyte".into()));
-                    }
-                    for cp in lo..=hi.min(0x7F) {
-                        bits[cp as usize] = true;
-                    }
-                }
                 Ok(vec![(
-                    vec![Symbol::Class(Box::new(bits))],
+                    vec![class_symbol(&ranges.codepoint_ranges())],
                     ProductionKind::Span,
                 )])
             }
@@ -355,18 +531,12 @@ impl Lowering {
                 Ok(out)
             }
             Some(Atom::Re { pattern }) => {
+                if let Some(syms) = fold_literal_symbols(pattern) {
+                    return Ok(syms);
+                }
                 let ranges = CharRanges::from_pattern(pattern)
                     .ok_or_else(|| LrBuildError("class".into()))?;
-                let mut bits = [false; 256];
-                for (lo, hi) in ranges.codepoint_ranges() {
-                    if lo > 0x7F {
-                        return Err(LrBuildError("multibyte".into()));
-                    }
-                    for cp in lo..=hi.min(0x7F) {
-                        bits[cp as usize] = true;
-                    }
-                }
-                Ok(vec![Symbol::Class(Box::new(bits))])
+                Ok(vec![class_symbol(&ranges.codepoint_ranges())])
             }
             Some(Atom::Named { .. }) | Some(Atom::Entity { .. }) => {
                 let nt = self.lower_rule(grammar, idx, depth)?;
@@ -405,6 +575,7 @@ fn lr1_construct(
     productions: &[LrProduction],
     nonterminal_count: u32,
     entry_nt: u32,
+    strict: bool,
 ) -> Result<LrTable, LrBuildError> {
     // The augmented start production: S' → entry, EOF-lookahead.
     let mut prods = productions.to_vec();
@@ -447,6 +618,16 @@ fn lr1_construct(
                         }
                         all_nullable = false;
                     }
+                    Symbol::Ranges(ranges) => {
+                        let leads = ranges_lead_bits(ranges);
+                        for (b, &on) in leads.iter().enumerate() {
+                            if on && !first[lhs][b] {
+                                first[lhs][b] = true;
+                                changed = true;
+                            }
+                        }
+                        all_nullable = false;
+                    }
                     Symbol::NonTerminal(nt) => {
                         let s = *nt as usize;
                         let row = first[s];
@@ -474,8 +655,10 @@ fn lr1_construct(
 
     // The item sets: canonical LR(1) with byte-class lookaheads.
     // States = deduplicated closure sets; the edges = per symbol.
-    let mut start_look = [false; 256];
-    start_look[0] = true; // the EOF-ish sentinel byte 0 (never in the input's members)
+    // The accept item's lookahead is the WILDCARD: the rule lane
+    // accepts a PREFIX (the LrRun instruction sits inside a larger
+    // program — the caller owns consume-all).
+    let start_look = [true; 256];
     let start_state_items = vec![Item {
         p: accept_prod as u32,
         dot: 0,
@@ -517,6 +700,15 @@ fn lr1_construct(
                     }
                     Symbol::Class(bits) => {
                         for (b, &on) in bits.iter().enumerate() {
+                            if on {
+                                la[b] = true;
+                            }
+                        }
+                        beta_nullable = false;
+                    }
+                    Symbol::Ranges(ranges) => {
+                        let leads = ranges_lead_bits(ranges);
+                        for (b, &on) in leads.iter().enumerate() {
                             if on {
                                 la[b] = true;
                             }
@@ -594,6 +786,14 @@ fn lr1_construct(
                 k.extend(bits.iter().map(|&b| b as u8));
                 k
             }
+            Symbol::Ranges(ranges) => {
+                let mut k = vec![3u8];
+                for &(lo, hi) in ranges {
+                    k.extend(lo.to_le_bytes());
+                    k.extend(hi.to_le_bytes());
+                }
+                k
+            }
         };
         if let Some(&id) = ids.get(&key) {
             return id;
@@ -646,22 +846,52 @@ fn lr1_construct(
                 }
             };
             let from = worklist - 1;
+            // The Shift action carries the symbol id: the executor
+            // needs the symbol to know the consumed length (a Ranges
+            // shift decodes one codepoint).
+            // The shift-preference resolution (the PEG-greedy law):
+            // a loop's continue-the-run shift beats the epsilon/base
+            // reduce at the same byte — exactly the classic's greedy
+            // semantics. The reduce keeps its other lookahead bytes.
+            // Any non-shift/reduce pair (reduce/reduce,
+            // accept/reduce) still refuses — the ordered-choice
+            // class is not deterministically reducible.
+            let shift = |actions: &mut Vec<LrAction>,
+                         slot: &mut u32,
+                         act: LrAction,
+                         from: usize,
+                         b: usize|
+             -> Result<(), LrBuildError> {
+                if *slot == u32::MAX {
+                    actions.push(act);
+                    *slot = (actions.len() - 1) as u32;
+                    Ok(())
+                } else if actions[*slot as usize] != act {
+                    match &actions[*slot as usize] {
+                        // The shift arrives at a reduce-taken byte:
+                        // the greedy law — the shift replaces it.
+                        LrAction::Reduce(_) if !strict => {
+                            actions.push(act);
+                            *slot = (actions.len() - 1) as u32;
+                            Ok(())
+                        }
+                        _ => Err(LrBuildError(format!("conflict at state {from} byte {b}"))),
+                    }
+                } else {
+                    Ok(())
+                }
+            };
             match &symbols[id] {
                 Symbol::NonTerminal(nt) => {
                     goto[from * (nonterminal_count as usize + 1) + *nt as usize] = next;
                 }
                 Symbol::Byte(b) => {
                     let col = from * 256 + *b as usize;
-                    let slot = &mut action_index[col];
-                    let act = LrAction::Shift(next);
-                    if *slot == u32::MAX {
-                        actions.push(act);
-                        *slot = (actions.len() - 1) as u32;
-                    } else if actions[*slot as usize] != act {
-                        return Err(LrBuildError(format!(
-                            "shift/reduce conflict at state {from} byte {b}"
-                        )));
-                    }
+                    let act = LrAction::Shift {
+                        next,
+                        symbol: id as u32,
+                    };
+                    shift(&mut actions, &mut action_index[col], act, from, *b as usize)?;
                 }
                 Symbol::Class(bits) => {
                     for (b, &on) in bits.iter().enumerate() {
@@ -669,16 +899,25 @@ fn lr1_construct(
                             continue;
                         }
                         let col = from * 256 + b;
-                        let slot = &mut action_index[col];
-                        let act = LrAction::Shift(next);
-                        if *slot == u32::MAX {
-                            actions.push(act);
-                            *slot = (actions.len() - 1) as u32;
-                        } else if actions[*slot as usize] != act {
-                            return Err(LrBuildError(format!(
-                                "shift/reduce conflict at state {from} byte {b}"
-                            )));
+                        let act = LrAction::Shift {
+                            next,
+                            symbol: id as u32,
+                        };
+                        shift(&mut actions, &mut action_index[col], act, from, b)?;
+                    }
+                }
+                Symbol::Ranges(ranges) => {
+                    let leads = ranges_lead_bits(ranges);
+                    for (b, &on) in leads.iter().enumerate() {
+                        if !on {
+                            continue;
                         }
+                        let col = from * 256 + b;
+                        let act = LrAction::Shift {
+                            next,
+                            symbol: id as u32,
+                        };
+                        shift(&mut actions, &mut action_index[col], act, from, b)?;
                     }
                 }
             }
@@ -701,9 +940,43 @@ fn lr1_construct(
                     if *slot == u32::MAX {
                         actions.push(act.clone());
                         *slot = (actions.len() - 1) as u32;
+                    } else if matches!(actions[*slot as usize], LrAction::Shift { .. }) {
+                        // The shift-preference law: the loop's
+                        // continue-shift beats this reduce at this
+                        // byte; the reduce keeps its other bytes.
+                        // STRICT: the resolution refuses.
+                        if strict {
+                            return Err(LrBuildError(format!(
+                                "resolved conflict at state {} byte {b}",
+                                worklist - 1
+                            )));
+                        }
+                        continue;
                     } else if actions[*slot as usize] != act {
+                        // The same-LHS reduce/reduce class: the
+                        // greedy law prefers the LONGER rhs (the
+                        // production that consumed more input).
+                        if let (LrAction::Reduce(old_p), LrAction::Reduce(new_p)) =
+                            (&actions[*slot as usize], &act)
+                        {
+                            if strict {
+                                return Err(LrBuildError(format!(
+                                    "resolved conflict at state {} byte {b}",
+                                    worklist - 1
+                                )));
+                            }
+                            let old_len = prods[*old_p as usize].rhs.len();
+                            let new_len = prods[*new_p as usize].rhs.len();
+                            if new_len > old_len {
+                                actions.push(act.clone());
+                                *slot = (actions.len() - 1) as u32;
+                                continue;
+                            } else if new_len <= old_len {
+                                continue;
+                            }
+                        }
                         return Err(LrBuildError(format!(
-                            "shift/reduce conflict at state {} byte {b}",
+                            "conflict at state {} byte {b}",
                             worklist - 1
                         )));
                     }
@@ -719,6 +992,7 @@ fn lr1_construct(
         nonterminal_count,
         productions: prods,
         names: Vec::new(),
+        symbols,
         start: 0,
         state_count: states.len() as u32,
     })
@@ -752,19 +1026,59 @@ pub enum LrValue {
     Nil,
 }
 
+#[inline]
+fn utf8_char_len(first_byte: u8) -> usize {
+    if first_byte & 0x80 == 0 {
+        1
+    } else if first_byte & 0xE0 == 0xC0 {
+        2
+    } else if first_byte & 0xF0 == 0xE0 {
+        3
+    } else if first_byte & 0xF8 == 0xF0 {
+        4
+    } else {
+        1
+    }
+}
+
+#[inline]
+fn decode_utf8_codepoint(bytes: &[u8]) -> u32 {
+    let b0 = bytes[0];
+    if b0 < 0x80 {
+        b0 as u32
+    } else if b0 < 0xE0 {
+        ((u32::from(b0) & 0x1F) << 6) | (u32::from(bytes[1]) & 0x3F)
+    } else if b0 < 0xF0 {
+        ((u32::from(b0) & 0x0F) << 12)
+            | ((u32::from(bytes[1]) & 0x3F) << 6)
+            | (u32::from(bytes[2]) & 0x3F)
+    } else {
+        ((u32::from(b0) & 0x07) << 18)
+            | ((u32::from(bytes[1]) & 0x3F) << 12)
+            | ((u32::from(bytes[2]) & 0x3F) << 6)
+            | (u32::from(bytes[3]) & 0x3F)
+    }
+}
+
 /// The executor's failure: an ACTION-table error (the byte cannot
 /// continue any viable production) or a truncated input — the same
-/// acceptance contract as the classic (the rule fails at the deepest
-/// offset).
+/// acceptance contract as the classic. `pos` = the failure offset
+/// (relative to the slice the caller passed).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LrRunError(pub String);
+pub struct LrRunError {
+    /// The failure offset.
+    pub pos: usize,
+    /// The human-readable cause.
+    pub msg: String,
+}
 
 /// Run the LR(1) table over `input` (the ENTRY rule; consume-all).
+/// Returns the value tree and the consumed end offset.
 ///
 /// The EOF convention is slice 1's sentinel: byte column 0 carries
 /// the accept/reduce-at-EOF actions, and byte 0 never appears in
 /// valid UTF-8 input.
-pub fn lr_run(table: &LrTable, input: &[u8]) -> Result<LrValue, LrRunError> {
+pub fn lr_run(table: &LrTable, input: &[u8]) -> Result<(LrValue, usize), LrRunError> {
     // The parse stack: one state + one value + one span-start per
     // stack symbol.
     let mut states = vec![table.start];
@@ -781,26 +1095,58 @@ pub fn lr_run(table: &LrTable, input: &[u8]) -> Result<LrValue, LrRunError> {
         };
         let slot = table.action_index[state as usize * 256 + byte];
         if slot == u32::MAX {
-            return Err(LrRunError(match eof {
-                true => format!("unexpected end of input at byte {pos}"),
-                false => format!("unexpected byte 0x{byte:02x} at offset {pos}"),
-            }));
+            return Err(LrRunError {
+                pos,
+                msg: match eof {
+                    true => format!("unexpected end of input at byte {pos}"),
+                    false => format!("unexpected byte 0x{byte:02x} at offset {pos}"),
+                },
+            });
         }
         match &table.actions[slot as usize] {
-            LrAction::Shift(next) => {
+            LrAction::Shift { next, symbol } => {
+                // The consumed length rides the symbol: Byte/Class
+                // take one byte; a Ranges shift decodes one codepoint
+                // and takes its whole UTF-8 length (the member check
+                // is exact — a lead byte without a full valid member
+                // encoding fails, like the classic's class check).
+                let len = match table.symbols.get(*symbol as usize) {
+                    Some(Symbol::Ranges(ranges)) => {
+                        let b = input[pos];
+                        let char_len = utf8_char_len(b);
+                        if pos + char_len > input.len() {
+                            return Err(LrRunError {
+                                pos,
+                                msg: format!("truncated codepoint at offset {pos}"),
+                            });
+                        }
+                        let cp = decode_utf8_codepoint(&input[pos..pos + char_len]);
+                        if !ranges.iter().any(|&(lo, hi)| cp >= lo && cp <= hi) {
+                            return Err(LrRunError {
+                                pos,
+                                msg: format!("unexpected codepoint at offset {pos}"),
+                            });
+                        }
+                        char_len
+                    }
+                    _ => 1,
+                };
                 values.push(LrValue::Span {
                     start: pos,
-                    end: pos + 1,
+                    end: pos + len,
                 });
                 starts.push(pos);
                 states.push(*next);
-                pos += 1;
+                pos += len;
             }
             LrAction::Reduce(p) => {
                 let prod = table
                     .productions
                     .get(*p as usize)
-                    .ok_or_else(|| LrRunError(format!("bad production {}", *p)))?;
+                    .ok_or_else(|| LrRunError {
+                        pos,
+                        msg: format!("bad production {}", *p),
+                    })?;
                 let n = prod.rhs.len();
                 let start = if n == 0 {
                     pos
@@ -846,23 +1192,34 @@ pub fn lr_run(table: &LrTable, input: &[u8]) -> Result<LrValue, LrRunError> {
                         .expect("Pass productions carry one symbol"),
                     ProductionKind::Span => LrValue::Span { start, end: pos },
                     ProductionKind::Empty => LrValue::Nil,
+                    ProductionKind::MaybeTaken => {
+                        // The body's own shape; the chain tail (the
+                        // last popped value) drops.
+                        let mut popped = popped;
+                        popped.pop();
+                        match popped.len() {
+                            0 => LrValue::Nil,
+                            1 => popped.into_iter().next().expect("one"),
+                            _ => LrValue::Seq(popped),
+                        }
+                    }
                 };
                 // The GOTO from the state now on top.
                 let top = *states.last().expect("the LR stack never empties");
                 let next = table.goto
                     [top as usize * (table.nonterminal_count as usize + 1) + prod.lhs as usize];
                 if next == u32::MAX {
-                    return Err(LrRunError(format!(
-                        "missing goto for nt {} at state {top}",
-                        prod.lhs
-                    )));
+                    return Err(LrRunError {
+                        pos,
+                        msg: format!("missing goto for nt {} at state {top}", prod.lhs),
+                    });
                 }
                 values.push(value);
                 starts.push(start);
                 states.push(next);
             }
             LrAction::Accept => {
-                return Ok(values.pop().expect("accept carries the entry value"));
+                return Ok((values.pop().expect("accept carries the entry value"), pos));
             }
         }
     }
@@ -885,13 +1242,16 @@ mod tests {
     // disambiguates the keys).
     #[test]
     fn lr_builds_the_recursive_spine() {
+        // The arms are FIRST-disjoint ('{' vs a letter): the
+        // canonical construction refuses the ordered-choice ε-arm
+        // (the PEG-greedy class) — exactly the designed boundary.
         let value = choice(vec![
             dynamic(seq(vec![
                 dynamic(parser_dsl::str("{")),
                 dynamic(ref_("value")),
                 dynamic(parser_dsl::str("}")),
             ])),
-            dynamic(re("[a-z]").many()),
+            dynamic(seq(vec![dynamic(re("[a-z]")), dynamic(re("[a-z]").many())])),
         ]);
         let g = GrammarBuilder::new()
             .rule("value", value)
@@ -909,7 +1269,7 @@ mod tests {
             table
                 .actions
                 .iter()
-                .any(|a| matches!(a, LrAction::Shift(_))),
+                .any(|a| matches!(a, LrAction::Shift { .. })),
             "the shift actions exist"
         );
         assert!(
@@ -1039,13 +1399,15 @@ mod tests {
     fn lr_run_matches_the_walker_on_the_spine() {
         use crate::portable::arena::AstArena;
         use crate::portable::PortableParser;
+        // The FIRST-disjoint arms (the canonical construction
+        // refuses the ordered-choice epsilon arm).
         let value = choice(vec![
             dynamic(seq(vec![
                 dynamic(parser_dsl::str("{")),
                 dynamic(ref_("value")),
                 dynamic(parser_dsl::str("}")),
             ])),
-            dynamic(re("[a-z]").many()),
+            dynamic(seq(vec![dynamic(re("[a-z]")), dynamic(re("[a-z]").many())])),
         ]);
         let g = GrammarBuilder::new()
             .rule("value", value)
@@ -1062,12 +1424,15 @@ mod tests {
             let walker = parser.parse();
             let lr = lr_run(&table, input.as_bytes());
             match (walker, lr) {
-                (Ok(w), Ok(v)) => {
+                (Ok(w), Ok((v, end))) if end == input.len() => {
                     let mut s = String::new();
                     lr_value_sexpr(&v, input, &mut s);
                     let ws = walker_sexpr(&w, &arena, input);
                     assert_eq!(s, ws, "the LR tree diverged from the walker on {input:?}");
                 }
+                // A prefix accept (end < len) = the walker's
+                // Incomplete rejection.
+                (Err(_), Ok(_)) => {}
                 (Err(_), Err(_)) => {}
                 (w, l) => panic!("acceptance diverged on {input:?}: walker={w:?} lr={l:?}"),
             }

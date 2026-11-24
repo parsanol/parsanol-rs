@@ -78,6 +78,12 @@ pub struct Compiler {
     /// body, the whole-string spec when the rule is quote-delimited.
     string_shape_memo:
         std::collections::HashMap<usize, Option<crate::portable::string_shape::StringSpanSpec>>,
+
+    /// The LR lowering memo (rs#574 Phase 2, option B): per rule
+    /// body, the LR(1) table when the construction accepts the
+    /// graph.
+    lr_table_memo:
+        std::collections::HashMap<usize, Option<crate::portable::bytecode::lr_table::LrTable>>,
 }
 
 impl Compiler {
@@ -101,6 +107,7 @@ impl Compiler {
             compiling_rule_body: false,
             emitted_dispatch: false,
             string_shape_memo: std::collections::HashMap::new(),
+            lr_table_memo: std::collections::HashMap::new(),
         }
     }
 
@@ -2123,6 +2130,29 @@ impl Compiler {
             return Ok(entry);
         }
 
+        // The LR lane (rs#574 Phase 2, option B): a rule graph the
+        // STRICT canonical LR(1) construction accepts lowers to ONE
+        // LrRun — the recursive-spine machine. SLICE-3B GATE: the
+        // lane is INERT until the construction's PEG-parity is
+        // proven across the fleet — the resolved-conflict classes
+        // (the greedy-loop shift-preference, the ordered-choice
+        // arms) parse deterministic inputs identically but diverge
+        // from the PEG on the recovery classes, and the corpus
+        // differential caught real divergence through the strict
+        // gate on the 1.5.x fleet grammars. The flip: make
+        // lr_table_for return the strict table once
+        // rs#574 slice 3b lands the follow-set proof.
+        if false {
+            if let Some(table) = self.lr_table_for(atom_idx) {
+                let idx = self.program.add_lr_table(table);
+                let name_idx = self.program.add_string(name);
+                self.program.add_instruction(Instruction::lr_run(idx));
+                self.program
+                    .add_instruction(Instruction::build_hash(name_idx));
+                return Ok(entry);
+            }
+        }
+
         // The tree-walker wraps the child value as {name: value}.
         let name_idx = self.program.add_string(name);
         self.compile_atom(atom_idx)?;
@@ -2130,6 +2160,22 @@ impl Compiler {
             .add_instruction(Instruction::build_hash(name_idx));
 
         Ok(entry)
+    }
+
+    /// The LR lowering attempt, memoized per rule body. `None` = the
+    /// construction refused (the classic keeps the rule).
+    fn lr_table_for(
+        &mut self,
+        atom_idx: usize,
+    ) -> Option<crate::portable::bytecode::lr_table::LrTable> {
+        if let Some(cached) = self.lr_table_memo.get(&atom_idx) {
+            return cached.clone();
+        }
+        let table =
+            crate::portable::bytecode::lr_table::build_lr_table_strict(&self.grammar, atom_idx)
+                .ok();
+        self.lr_table_memo.insert(atom_idx, table.clone());
+        table
     }
 
     /// The string-shape detection, memoized per rule body.
