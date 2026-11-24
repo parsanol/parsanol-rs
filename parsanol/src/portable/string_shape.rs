@@ -439,7 +439,7 @@ mod tests {
         let l_r = mk_lit(&mut g, "r");
         let l_t = mk_lit(&mut g, "t");
         let l_u = mk_lit(&mut g, "u");
-        let lits = g.add_atom(Atom::Alternative {
+        let post_literals = g.add_atom(Atom::Alternative {
             atoms: vec![l_quote, l_bslash, l_slash, l_b, l_f, l_n, l_r, l_t],
         });
         let hex = g.add_atom(Atom::Re {
@@ -455,7 +455,7 @@ mod tests {
             atoms: vec![l_u, hexquad],
         });
         let post = g.add_atom(Atom::Alternative {
-            atoms: vec![lits, u_form],
+            atoms: vec![post_literals, u_form],
         });
         let escape_pair = g.add_atom(Atom::Sequence {
             atoms: vec![esc, post],
