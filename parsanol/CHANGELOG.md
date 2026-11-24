@@ -109,6 +109,7 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ## [Unreleased]
 
+- Rs#574 the LR fusion slice 1: the LrTable type + the canonical LR(1) builder (WIP, the recursion-lowering count desync documented) ([#663](https://github.com/parsanol/parsanol-rs/pull/663))
 - The string-shape probe (the value-noise finding's evidence tool) ([#658](https://github.com/parsanol/parsanol-rs/pull/658))
 - Rs#574 multi-byte class slice: UTF-8 sequence chains route composite choice bodies ([#653](https://github.com/parsanol/parsanol-rs/pull/653))
 - Rs#574 stage 3 tranche 9: per-arm choice slots route composite choice bodies ([#652](https://github.com/parsanol/parsanol-rs/pull/652))
