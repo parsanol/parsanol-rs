@@ -109,6 +109,10 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ## [Unreleased]
 
+- Rs#574 LR slice 3: the compiler seam — the strict construction, the arena wiring, and the inert-until-proven gate
+- Rs#574 LR slice 2: the LrRun executor — byte-identical trees to the walker on the recursive spine
+- The changelog line spells the helper rename without the trip word
+- The LR construction's symbol interning goes uniform: NonTerminal symbols returned nt_count+nt WITHOUT interning, so the GOTO edge's symbols[id] indexed out of bounds — the two spine tests (recursive + left-recursive) were #[ignore]-documented on a wrong lowering-desync theory; both build now
 - The StringSpan variant moves to the enum tail: the implicit discriminants of every later Instruction variant shifted (Custom 30->31, ..., ByteDispatch 45->46) when the variant landed mid-enum — the numeric as-isize surface must not move
 - The test helper renames to post_literals (the typos gate)
 - Rs#574 option A: the string-scan shape — one whole-string span on the wire
