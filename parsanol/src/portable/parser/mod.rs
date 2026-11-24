@@ -350,6 +350,13 @@ pub struct PortableParser<'a> {
     /// the whole-string spec when the rule is quote-delimited.
     string_span_rules:
         std::collections::HashMap<usize, Option<crate::portable::string_shape::StringSpanSpec>>,
+    /// The internd tag indexes (the VM's tag_seq pattern): the hot
+    /// tag-store path otherwise SipHashes the tag string per array
+    /// (the profile's find_interned_string_with_offset frame — the
+    /// :sequence/:repetition stores fire per iteration/element).
+    tag_sequence_idx: Option<u32>,
+    tag_repetition_idx: Option<u32>,
+    tag_maybe_idx: Option<u32>,
     /// Dynamic dispatch outcome replay (rs#174): outer backtracking
     /// re-invokes the same dispatch at the same position with the same
     /// captures; each re-invocation re-parsed its fragment with a fresh
@@ -485,6 +492,14 @@ impl LabelHashes {
         }
         h
     }
+}
+
+/// The internd tag kinds (the cached-store dispatch).
+#[derive(Clone, Copy)]
+enum TagKind {
+    Sequence,
+    Repetition,
+    Maybe,
 }
 
 impl<'a> PortableParser<'a> {
@@ -644,6 +659,9 @@ impl<'a> PortableParser<'a> {
             pending_trivia: Vec::new(),
             trivia_drained: false,
             string_span_rules: std::collections::HashMap::new(),
+            tag_sequence_idx: None,
+            tag_repetition_idx: None,
+            tag_maybe_idx: None,
             dynamic_outcomes: std::collections::HashMap::new(),
             rollback_on_failure,
             strict_rollback_on_failure: rollback_on_failure,
@@ -738,6 +756,9 @@ impl<'a> PortableParser<'a> {
             pending_trivia: Vec::new(),
             trivia_drained: false,
             string_span_rules: std::collections::HashMap::new(),
+            tag_sequence_idx: None,
+            tag_repetition_idx: None,
+            tag_maybe_idx: None,
             dynamic_outcomes: std::collections::HashMap::new(),
             rollback_on_failure: false,
             strict_rollback_on_failure: false,
@@ -2443,7 +2464,7 @@ impl<'a> PortableParser<'a> {
         self.capture_state.commit_scope();
 
         // Tag the array with :sequence for proper transformation
-        let (pool_idx, len) = self.arena.store_tagged_array(":sequence", &items);
+        let (pool_idx, len) = self.store_tagged_cached(TagKind::Sequence, &items);
         Ok(AtomResult {
             value: AstNode::Array {
                 pool_index: pool_idx,
@@ -2739,11 +2760,10 @@ impl<'a> PortableParser<'a> {
         // marker): the flatten layers apply the named-vs-unnamed law —
         // ruby's flatten_repetition returns [] under a Named wrapper
         // and "" (the plain empty string) elsewhere.
-        let tag_str = match tag {
-            RepetitionTag::Maybe => ":maybe",
-            RepetitionTag::Repetition => ":repetition",
+        let (pool_idx, len) = match tag {
+            RepetitionTag::Maybe => self.store_tagged_cached(TagKind::Maybe, &items),
+            RepetitionTag::Repetition => self.store_tagged_cached(TagKind::Repetition, &items),
         };
-        let (pool_idx, len) = self.arena.store_tagged_array(tag_str, &items);
         Ok(AtomResult {
             value: AstNode::Array {
                 pool_index: pool_idx,
@@ -2823,7 +2843,7 @@ impl<'a> PortableParser<'a> {
             } else {
                 // Absent optional keeps the tag so downstream flattening
                 // yields nil (named) or "" (unnamed), never an empty match
-                let (pool_idx, len) = self.arena.store_tagged_array(":maybe", &[]);
+                let (pool_idx, len) = self.store_tagged_cached(TagKind::Maybe, &[]);
                 AstNode::Array {
                     pool_index: pool_idx,
                     length: len,
@@ -2835,7 +2855,7 @@ impl<'a> PortableParser<'a> {
             // apply the named-vs-unnamed law off it ([] under a Named
             // wrapper, "" elsewhere). The bare zero-length span this
             // path used to deliver broke the named law (ruby []).
-            let (pool_idx, len) = self.arena.store_tagged_array(":repetition", &[]);
+            let (pool_idx, len) = self.store_tagged_cached(TagKind::Repetition, &[]);
             AstNode::Array {
                 pool_index: pool_idx,
                 length: len,
@@ -2985,9 +3005,7 @@ impl<'a> PortableParser<'a> {
             // [lookahead => Nil, terminal => input ref] — exactly what the
             // general loop's body produces.
             let t = self.arena.input_ref(cur, len);
-            let (pool_idx, slen) = self
-                .arena
-                .store_tagged_array(":sequence", &[AstNode::Nil, t]);
+            let (pool_idx, slen) = self.store_tagged_cached(TagKind::Sequence, &[AstNode::Nil, t]);
             items.push(AstNode::Array {
                 pool_index: pool_idx,
                 length: slen,
@@ -3011,11 +3029,10 @@ impl<'a> PortableParser<'a> {
                 capture_state: None,
             }));
         }
-        let tag_str = match tag {
-            RepetitionTag::Maybe => ":maybe",
-            RepetitionTag::Repetition => ":repetition",
+        let (pool_idx, len) = match tag {
+            RepetitionTag::Maybe => self.store_tagged_cached(TagKind::Maybe, &items),
+            RepetitionTag::Repetition => self.store_tagged_cached(TagKind::Repetition, &items),
         };
-        let (pool_idx, len) = self.arena.store_tagged_array(tag_str, &items);
         Some(Ok(AtomResult {
             value: AstNode::Array {
                 pool_index: pool_idx,
@@ -3119,7 +3136,7 @@ impl<'a> PortableParser<'a> {
             // host-side flattening as an array (flatten_repetition
             // selects hash items), matching the Ruby engine's
             // comments list shape (parsanol-ruby#152 differential).
-            let (arr_idx, arr_len) = self.arena.store_tagged_array(":repetition", &units);
+            let (arr_idx, arr_len) = self.store_tagged_cached(TagKind::Repetition, &units);
             let comments = AstNode::Array {
                 pool_index: arr_idx,
                 length: arr_len,
@@ -3145,6 +3162,48 @@ impl<'a> PortableParser<'a> {
             end_pos: result.end_pos,
             capture_state: None,
         })
+    }
+
+    /// The cached tag store: the internd index per tag, the store
+    /// via the indexed variant (no per-call hash). The tag dispatch
+    /// lives INSIDE so each branch borrows its own field once.
+    #[inline]
+    fn store_tagged_cached(&mut self, tag: TagKind, items: &[AstNode]) -> (u32, u32) {
+        match tag {
+            TagKind::Sequence => {
+                let interned = match self.tag_sequence_idx {
+                    Some(i) => i,
+                    None => {
+                        let i = self.arena.intern_string_index(":sequence");
+                        self.tag_sequence_idx = Some(i);
+                        i
+                    }
+                };
+                self.arena.store_tagged_array_indexed(interned, items)
+            }
+            TagKind::Repetition => {
+                let interned = match self.tag_repetition_idx {
+                    Some(i) => i,
+                    None => {
+                        let i = self.arena.intern_string_index(":repetition");
+                        self.tag_repetition_idx = Some(i);
+                        i
+                    }
+                };
+                self.arena.store_tagged_array_indexed(interned, items)
+            }
+            TagKind::Maybe => {
+                let interned = match self.tag_maybe_idx {
+                    Some(i) => i,
+                    None => {
+                        let i = self.arena.intern_string_index(":maybe");
+                        self.tag_maybe_idx = Some(i);
+                        i
+                    }
+                };
+                self.arena.store_tagged_array_indexed(interned, items)
+            }
+        }
     }
 
     /// The string-shape memo lookup (lazily populated per rule body).
@@ -3189,7 +3248,7 @@ impl<'a> PortableParser<'a> {
                             }
                         })
                         .collect();
-                    let (arr_idx, arr_len) = self.arena.store_tagged_array(":repetition", &units);
+                    let (arr_idx, arr_len) = self.store_tagged_cached(TagKind::Repetition, &units);
                     let comments = AstNode::Array {
                         pool_index: arr_idx,
                         length: arr_len,
