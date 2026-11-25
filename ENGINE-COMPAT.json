@@ -1,9 +1,9 @@
 {
   "engine_commit": "e4f8972f34934b48af6d2b033fc9dc766e05f919",
   "crates": "1.5.20",
-  "npm": "1.5.20",
+  "npm": "1.5.21",
   "rubygems": "1.5.20",
   "pypi": "1.5.20.0",
-  "released_at": "2026-11-25T01:36:37Z",
-  "_comment": "ruby#421 -- the engine-compat manifest. Every release train updates the pairings as it rides; tools/check_engine_compat.py verifies the manifest against the live registries in CI (tag <-> engine_commit, crates, npm, rubygems, pypi). Runtime versions follow the engine-linked scheme {engine-semver}.{runtime-single-digit} (npm: the engine semver, the 4th segment is invalid there) -- the leptris precedent. The 1.5.20 train: the LR lane goes LIVE (rs#574 slice 3b \u2014 the fleet proof; the quoted-string precedence keeps the ScanUntil contract) + the classic tag cache."
+  "released_at": "2026-11-25T02:30:00Z",
+  "_comment": "ruby#421 -- the engine-compat manifest. Every release train updates the pairings as it rides; tools/check_engine_compat.py verifies the manifest against the live registries in CI (tag <-> engine_commit, crates, npm, rubygems, pypi). Runtime versions follow the engine-linked scheme {engine-semver}.{runtime-single-digit} (npm: the engine semver, the 4th segment is invalid there) -- the leptris precedent. npm 1.5.21 rides ts#95 (the per-call depth budget API) on the unchanged 1.5.20 engine wasm; the base train: the LR lane goes LIVE (rs#574 slice 3b — the fleet proof; the quoted-string precedence keeps the ScanUntil contract) + the classic tag cache."
 }
