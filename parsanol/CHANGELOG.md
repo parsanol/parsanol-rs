@@ -109,6 +109,10 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ## [Unreleased]
 
+- Release v1.5.20
+- The special-lane precedence: the quoted-string idiom owns its rules
+- Rs#574 LR slice 3b: the seam flips LIVE — the fleet proof delivered
+- The classic parser caches its internd tag indexes — the profile's lever
 - The special-lane precedence: the quoted-string idiom owns its rules
 - Rs#574 LR slice 3b: the seam flips LIVE — the fleet proof delivered
 - The classic parser caches its internd tag indexes — the profile's lever
