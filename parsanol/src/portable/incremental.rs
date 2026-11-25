@@ -2248,6 +2248,58 @@ mod tests {
         assert_eq!(range, 10..15);
     }
 
+    // The P2 invariant specs (PLAN-2027 program 2, the specs-first
+    // step): the incremental re-parse must equal the cold parse of the
+    // edited source, end to end through the real cache -- a cache
+    // entry spanning the edit's cutoff can never serve a stale prefix,
+    // and the retained-suffix shift keeps the tree byte-identical.
+
+    const DOC_GRAMMAR: &str = r#"{"atoms":[{"Re":{"pattern":"[a-c]"}},{"Named":{"name":"item","atom":0}},{"Repetition":{"atom":1,"min":1,"max":null,"tag":"Repetition"}},{"Named":{"name":"doc","atom":2}},{"Str":{"pattern":"z"}},{"Sequence":{"atoms":[3,4]}},{"Entity":{"atom":5}},{"Named":{"name":"root","atom":6}}],"root":7}"#;
+
+    fn cold_tree(grammar_json: &str, input: &str) -> String {
+        let g = crate::portable::Grammar::from_json(grammar_json).unwrap();
+        let mut arena = crate::portable::AstArena::for_input(input.len());
+        arena.set_input(input.to_string());
+        let mut p = crate::portable::PortableParser::new(&g, input, &mut arena);
+        let ast = p.parse().expect("cold parse succeeds");
+        format!("{ast:?}")
+    }
+
+    #[test]
+    fn the_edit_sequence_incremental_tree_equals_the_cold_tree() {
+        let g = crate::portable::Grammar::from_json(DOC_GRAMMAR).unwrap();
+        let mut ip = IncrementalParser::new(&g);
+        let input = "abcz";
+        let mut arena = crate::portable::AstArena::for_input(64);
+        arena.set_input(input.to_string());
+        let _ = ip.parse(input, &mut arena).expect("first parse");
+
+        // Each edit's cutoff sits inside the retained run, so the
+        // strict-cutoff rule governs what the cache may serve; the
+        // incremental tree must equal the cold parse of the edited
+        // source every time. The sequence covers a mid-run replace, an
+        // insertion, a head delete (the suffix shift), and a replace
+        // after the shift.
+        let sequence: Vec<(&str, crate::portable::incremental::Edit)> = vec![
+            ("accz", crate::portable::incremental::Edit::replace(1, 1, 1)),
+            ("abccz", crate::portable::incremental::Edit::insert(1, 1)),
+            ("bccz", crate::portable::incremental::Edit::delete(0, 1)),
+            ("bacz", crate::portable::incremental::Edit::replace(1, 1, 1)),
+        ];
+        for (next, edit) in sequence {
+            let mut fresh = crate::portable::AstArena::for_input(next.len() + 16);
+            fresh.set_input(next.to_string());
+            let result = ip
+                .parse_with_edit(next, &mut fresh, edit)
+                .expect("incremental re-parse");
+            assert_eq!(
+                format!("{:?}", result.ast),
+                cold_tree(DOC_GRAMMAR, next),
+                "the incremental tree diverged from the cold parse for {next}"
+            );
+        }
+    }
+
     #[test]
     fn test_edit_affects_position() {
         // Edit at position 5, length 3
