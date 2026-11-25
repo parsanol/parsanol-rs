@@ -2142,15 +2142,13 @@ impl Compiler {
         // gate on the 1.5.x fleet grammars. The flip: make
         // lr_table_for return the strict table once
         // rs#574 slice 3b lands the follow-set proof.
-        if false {
-            if let Some(table) = self.lr_table_for(atom_idx) {
-                let idx = self.program.add_lr_table(table);
-                let name_idx = self.program.add_string(name);
-                self.program.add_instruction(Instruction::lr_run(idx));
-                self.program
-                    .add_instruction(Instruction::build_hash(name_idx));
-                return Ok(entry);
-            }
+        if let Some(table) = self.lr_table_for(atom_idx) {
+            let idx = self.program.add_lr_table(table);
+            let name_idx = self.program.add_string(name);
+            self.program.add_instruction(Instruction::lr_run(idx));
+            self.program
+                .add_instruction(Instruction::build_hash(name_idx));
+            return Ok(entry);
         }
 
         // The tree-walker wraps the child value as {name: value}.
