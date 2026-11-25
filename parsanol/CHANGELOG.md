@@ -109,6 +109,9 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ## [Unreleased]
 
+- The census mirror unwraps Entity/Named transitively
+- De-drift the routing census mirror; add the survey diagnostics
+- The named-dispatch frame diet: fold try_atom_impl_inner into its wrapper
 - The LR seam propagates lowering refusals; the construction refuses
 - The special-lane precedence: the quoted-string idiom owns its rules
 - Rs#574 LR slice 3b: the seam flips LIVE — the fleet proof delivered
