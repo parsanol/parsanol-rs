@@ -2142,6 +2142,18 @@ impl Compiler {
         // gate on the 1.5.x fleet grammars. The flip: make
         // lr_table_for return the strict table once
         // rs#574 slice 3b lands the follow-set proof.
+        // The special-lane precedence: the quoted-string idiom's
+        // ScanUntil lowering is the MEASURED winner (the
+        // dispatch-shape gate pins ONE ScanUntil) — the LR lane
+        // never takes a rule the neg-scan owns. The idiom = the
+        // rule body `quote *(!delim term) quote`.
+        if self.rule_body_is_quoted_string_idiom(atom_idx) {
+            let name_idx = self.program.add_string(name);
+            self.compile_atom(atom_idx)?;
+            self.program
+                .add_instruction(Instruction::build_hash(name_idx));
+            return Ok(entry);
+        }
         if let Some(table) = self.lr_table_for(atom_idx) {
             let idx = self.program.add_lr_table(table);
             let name_idx = self.program.add_string(name);
@@ -2174,6 +2186,35 @@ impl Compiler {
                 .ok();
         self.lr_table_memo.insert(atom_idx, table.clone());
         table
+    }
+
+    /// The quoted-string idiom at the RULE-BODY level:
+    /// `quote *(!delim term) quote` — the middle repetition's body
+    /// matches the neg-scan spec shape. The ScanUntil lowering owns
+    /// these rules (the dispatch-shape gate).
+    fn rule_body_is_quoted_string_idiom(&self, atom_idx: usize) -> bool {
+        // The rule body hides behind Entity chains (the PARG
+        // compiler's rule refs).
+        let mut cur = atom_idx;
+        let atoms = loop {
+            match self.grammar.get_atom(cur) {
+                Some(Atom::Entity { atom }) => cur = *atom,
+                Some(Atom::Sequence { atoms }) => break atoms.clone(),
+                _ => return false,
+            }
+        };
+        if atoms.len() != 3 {
+            return false;
+        }
+        let Some(Atom::Repetition {
+            atom: rep_body,
+            min: 0,
+            ..
+        }) = self.grammar.get_atom(atoms[1])
+        else {
+            return false;
+        };
+        self.try_get_neg_scan_spec(*rep_body).is_some()
     }
 
     /// The string-shape detection, memoized per rule body.
