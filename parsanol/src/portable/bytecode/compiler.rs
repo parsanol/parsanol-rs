@@ -3133,7 +3133,19 @@ mod tests {
             }
             match grammar.get_atom(body_idx) {
                 Some(Atom::Named { atom, .. }) | Some(Atom::Entity { atom }) => {
-                    match grammar.get_atom(*atom) {
+                    // The router unwraps Entity/Named transitively
+                    // before its shape gate; the mirror does too (the
+                    // e(n:x(choice)) sites classified "other" on the
+                    // wrapped branch's single unwrap).
+                    let mut cur = *atom;
+                    for _ in 0..16 {
+                        match grammar.get_atom(cur) {
+                            Some(Atom::Named { atom: inner, .. })
+                            | Some(Atom::Entity { atom: inner }) => cur = *inner,
+                            _ => break,
+                        }
+                    }
+                    match grammar.get_atom(cur) {
                         Some(Atom::Str { .. }) | Some(Atom::Re { .. }) => "wrapped-terminal",
                         Some(Atom::Sequence { atoms }) if !atoms.is_empty() => {
                             if atoms.iter().all(|&c| plan_able(grammar, c, depth + 1)) {
@@ -3142,8 +3154,8 @@ mod tests {
                                 "seq-unplan-able"
                             }
                         }
-                        _ if choice_span_arms(grammar, *atom, depth + 1).is_some()
-                            || element_plan_tree9(grammar, *atom, depth + 1).is_some() =>
+                        _ if choice_span_arms(grammar, cur, depth + 1).is_some()
+                            || element_plan_tree9(grammar, cur, depth + 1).is_some() =>
                         {
                             "choice"
                         }
