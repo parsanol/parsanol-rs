@@ -372,59 +372,92 @@ impl Lowering {
                     return Err(LrBuildError("unroll".into()));
                 }
                 // The class-run law (the classic's merged Span run): a
-                // `*`-form repetition over a SINGLE terminal body
-                // lowers to the left-recursive merge — the whole run
+                // `*`/`+`-form repetition over a SINGLE terminal body
+                // lowers to the right-recursive merge — the whole run
                 // collapses into ONE span value, byte-identical to
                 // the classic's class-run shape.
-                if *min == 0 && max.is_none() && matches!(tag, RepetitionTag::Repetition) {
-                    if let Ok(mut syms) = self.lower_symbol(grammar, *atom, depth + 1) {
-                        if syms.len() == 1 {
-                            let sym = syms.pop().expect("one symbol");
-                            let run_nt = self.new_nt();
-                            self.rule_nt.insert(idx, run_nt);
-                            // RIGHT-recursive: run -> sym run | sym. The
-                            // Repetition fold assembles the flat span
-                            // list; the base case carries no epsilon —
-                            // the canonical construction refuses the
-                            // left-recursive merge (its epsilon reduces
-                            // at the run's own first bytes).
-                            // The Span kind merges on reduce: the
-                            // chain's value = ONE span over the whole
-                            // run (the classic's merged-run shape).
-                            self.productions.push(LrProduction {
-                                lhs: run_nt,
-                                rhs: vec![sym.clone(), Symbol::NonTerminal(run_nt)],
-                                kind: ProductionKind::Span,
-                            });
-                            self.productions.push(LrProduction {
-                                lhs: run_nt,
-                                rhs: vec![sym],
-                                kind: ProductionKind::Span,
-                            });
-                            // The zero-run: `*` = 0+. Its letter-byte
-                            // conflict with the shift resolves by the
-                            // shift-preference law (the greedy loop);
-                            // at the follow bytes the empty
-                            // `:repetition` envelope reduces.
-                            self.productions.push(LrProduction {
-                                lhs: run_nt,
-                                rhs: Vec::new(),
-                                kind: ProductionKind::Repetition,
-                            });
-                            return Ok(vec![(
-                                vec![Symbol::NonTerminal(run_nt)],
-                                ProductionKind::Pass,
-                            )]);
+                if max.is_none() && matches!(tag, RepetitionTag::Repetition) {
+                    // min == 1 lowers epsilon-free (run -> sym run |
+                    // sym): naturally conflict-free — the strict gate
+                    // takes it. min == 0 needs the epsilon (resolved;
+                    // the strict gate refuses it below).
+                    if *min == 1 {
+                        if let Ok(mut syms) = self.lower_symbol(grammar, *atom, depth + 1) {
+                            if syms.len() == 1 {
+                                let sym = syms.pop().expect("one symbol");
+                                let run_nt = self.new_nt();
+                                self.rule_nt.insert(idx, run_nt);
+                                self.productions.push(LrProduction {
+                                    lhs: run_nt,
+                                    rhs: vec![sym.clone(), Symbol::NonTerminal(run_nt)],
+                                    kind: ProductionKind::Span,
+                                });
+                                self.productions.push(LrProduction {
+                                    lhs: run_nt,
+                                    rhs: vec![sym],
+                                    kind: ProductionKind::Span,
+                                });
+                                return Ok(vec![(
+                                    vec![Symbol::NonTerminal(run_nt)],
+                                    ProductionKind::Pass,
+                                )]);
+                            }
+                        }
+                    }
+                    if *min == 0 {
+                        if let Ok(mut syms) = self.lower_symbol(grammar, *atom, depth + 1) {
+                            if syms.len() == 1 {
+                                let sym = syms.pop().expect("one symbol");
+                                let run_nt = self.new_nt();
+                                self.rule_nt.insert(idx, run_nt);
+                                // RIGHT-recursive: run -> sym run | sym. The
+                                // Repetition fold assembles the flat span
+                                // list; the base case carries no epsilon —
+                                // the canonical construction refuses the
+                                // left-recursive merge (its epsilon reduces
+                                // at the run's own first bytes).
+                                // The Span kind merges on reduce: the
+                                // chain's value = ONE span over the whole
+                                // run (the classic's merged-run shape).
+                                self.productions.push(LrProduction {
+                                    lhs: run_nt,
+                                    rhs: vec![sym.clone(), Symbol::NonTerminal(run_nt)],
+                                    kind: ProductionKind::Span,
+                                });
+                                self.productions.push(LrProduction {
+                                    lhs: run_nt,
+                                    rhs: vec![sym],
+                                    kind: ProductionKind::Span,
+                                });
+                                // The zero-run: `*` = 0+. Its letter-byte
+                                // conflict with the shift resolves by the
+                                // shift-preference law (the greedy loop);
+                                // at the follow bytes the empty
+                                // `:repetition` envelope reduces.
+                                self.productions.push(LrProduction {
+                                    lhs: run_nt,
+                                    rhs: Vec::new(),
+                                    kind: ProductionKind::Repetition,
+                                });
+                                return Ok(vec![(
+                                    vec![Symbol::NonTerminal(run_nt)],
+                                    ProductionKind::Pass,
+                                )]);
+                            }
                         }
                     }
                 }
                 let body = self.lower_fragment(grammar, *atom, depth + 1)?;
                 let mut prods = Vec::new();
-                for _ in 0..*min {
-                    prods.push((body.clone(), ProductionKind::Pass));
-                }
                 match (max, tag) {
                     (None, _) => {
+                        // The min copies live INSIDE the entry
+                        // production (the SEQUENCE semantics — the
+                        // parallel-alternative form matched ONE
+                        // iteration and stopped, the corpus parity
+                        // caught it); the aux carries the unbounded
+                        // tail. The Repetition fold flattens the
+                        // mandatory spans with the tail's envelope.
                         let aux = self.new_nt();
                         self.rule_nt.insert(idx, aux);
                         let mut rhs = body.clone();
@@ -439,9 +472,12 @@ impl Lowering {
                             rhs: Vec::new(),
                             kind: ProductionKind::Repetition,
                         });
-                        if *min == 0 {
-                            prods.push((vec![Symbol::NonTerminal(aux)], ProductionKind::Pass));
+                        let mut entry = Vec::new();
+                        for _ in 0..*min {
+                            entry.extend(body.clone());
                         }
+                        entry.push(Symbol::NonTerminal(aux));
+                        prods.push((entry, ProductionKind::Repetition));
                     }
                     (Some(m), _) => {
                         // The optional span lowers to a right-recursive
@@ -1172,17 +1208,23 @@ pub fn lr_run(table: &LrTable, input: &[u8]) -> Result<(LrValue, usize), LrRunEr
                     }
                     ProductionKind::Sequence => LrValue::Seq(popped),
                     ProductionKind::Repetition => {
-                        // The envelope fold: `aux → body aux`
-                        // prepends the body's iteration to the rest's
-                        // accumulated list; the empty production
+                        // The envelope fold: every popped value
+                        // prepends to the trailing envelope's list
+                        // (the mandatory copies + the aux's
+                        // accumulated tail); the empty production
                         // starts it.
                         let mut it = popped.into_iter();
                         let mut items = Vec::new();
-                        if let Some(head) = it.next() {
-                            items.push(head);
-                            if let Some(LrValue::Rep(rest)) = it.next() {
-                                items.extend(rest);
+                        let mut tail = None;
+                        for head in it.by_ref() {
+                            if let LrValue::Rep(rest) = head {
+                                tail = Some(rest);
+                                break;
                             }
+                            items.push(head);
+                        }
+                        if let Some(rest) = tail {
+                            items.extend(rest);
                         }
                         LrValue::Rep(items)
                     }
@@ -1437,5 +1479,61 @@ mod tests {
                 (w, l) => panic!("acceptance diverged on {input:?}: walker={w:?} lr={l:?}"),
             }
         }
+    }
+    /// The engagement census: the strict-construction take-rate over
+    /// the corpus fleet (the lane must not be vacuously refusing).
+    #[test]
+    fn lr_strict_engagement_census() {
+        use crate::PargArtifact;
+        use std::path::Path;
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("root")
+            .join("corpus/conformance");
+        if !dir.is_dir() {
+            eprintln!("skip");
+            return;
+        }
+        let mut lowered = 0;
+        let mut refused = 0;
+        let mut lowered_names = Vec::new();
+        for entry in std::fs::read_dir(&dir).expect("dir").flatten() {
+            let path = entry.path();
+            let is_json = path.extension().and_then(|e| e.to_str()) == Some("json");
+            if !is_json {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let Ok(artifact) = PargArtifact::from_json(&text) else {
+                continue;
+            };
+            let Ok(grammar) = artifact.grammar("main") else {
+                continue;
+            };
+            for atom in grammar.atoms.iter() {
+                if let Atom::Named { name, atom: body } = atom {
+                    if crate::portable::bytecode::lr_table::build_lr_table_strict(&grammar, *body)
+                        .is_ok()
+                    {
+                        lowered += 1;
+                        if lowered_names.len() < 12 {
+                            lowered_names.push(format!(
+                                "{}:{name}",
+                                path.file_stem().unwrap().to_str().unwrap_or("?")
+                            ));
+                        }
+                    } else {
+                        refused += 1;
+                    }
+                }
+            }
+        }
+        eprintln!(
+            "STRICT ENGAGEMENT: {lowered} lowered, {refused} refused; sample: {:?}",
+            lowered_names
+        );
+        assert!(lowered > 0, "the lane must not be vacuous");
     }
 }
