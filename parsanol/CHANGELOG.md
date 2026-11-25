@@ -109,6 +109,7 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ## [Unreleased]
 
+- The LR seam propagates lowering refusals; the construction refuses
 - The special-lane precedence: the quoted-string idiom owns its rules
 - Rs#574 LR slice 3b: the seam flips LIVE — the fleet proof delivered
 - The classic parser caches its internd tag indexes — the profile's lever
