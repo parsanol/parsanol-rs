@@ -1,9 +1,9 @@
 {
-  "engine_commit": "36d864dad0a03705c1d49e1db24691c5b270d7d3",
-  "crates": "1.5.21",
-  "npm": "1.5.22",
-  "rubygems": "1.5.21",
-  "pypi": "1.5.21.0",
-  "released_at": "2026-11-25T09:30:00Z",
-  "_comment": "ruby#421 -- the engine-compat manifest. Every release train updates the pairings as it rides; tools/check_engine_compat.py verifies the manifest against the live registries in CI (tag <-> engine_commit, crates, npm, rubygems, pypi). Runtime versions follow the engine-linked scheme {engine-semver}.{runtime-single-digit} (npm: the engine semver, the 4th segment is invalid there) -- the leptris precedent. The 1.5.21 train: #682 fixed -- the LR seam propagates lowering refusals + the completeness guard (the #496 short-parse regression, the 612c2ad swallowed-refusal memo poison); npm 1.5.22 (1.5.21 rides ts#95 on the unchanged 1.5.20 wasm)."
+  "engine_commit": "8a11e7f64f99cb1671bf445e1454df1116ec12ab",
+  "crates": "1.5.22",
+  "npm": "1.5.23",
+  "rubygems": "1.5.22",
+  "pypi": "1.5.22.0",
+  "released_at": "2026-11-25T13:40:00Z",
+  "_comment": "ruby#421 -- the engine-compat manifest. Every release train updates the pairings as it rides; tools/check_engine_compat.py verifies the manifest against the live registries in CI (tag <-> engine_commit, crates, npm, rubygems, pypi). Runtime versions follow the engine-linked scheme {engine-semver}.{runtime-single-digit} (npm: the engine semver, the 4th segment is invalid there) -- the leptris precedent. The 1.5.22 train: P4 landed -- the named-dispatch frame diet (the wasm depth boundary ~350 -> ~425; the ts#95 depth-400 assertion restored on both tiers + the dispose() ownership-guard pin); the census mirror de-drift (the aligned survey: 1389/1495) + the P2 edit-sequence differential spec. npm 1.5.23 (1.5.22 rides the 1.5.21-engine wasm)."
 }
