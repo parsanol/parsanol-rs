@@ -608,6 +608,39 @@ sites route-shaped (87.2%)** — 435 terminal + 606 wrapped-terminal +
 sequences inside choices) + 104 `seq-unplan-able`. The choice class
 reports the shape; the disjointness gate is the router's refinement.
 
+## The census mirror de-drifted (2026-11-25, shape-only, post-tranche-9)
+
+The survey's plan_able/body_class had drifted from the router: they
+mirrored tranche-8's choice_span_arms only and single-unwrapped the
+Entity/Named wraps, so the census undercounted what the live router
+already accepts. The mirror now consults element_plan_tree9 (the
+router's own accept walk, hoisted from compile_repetition's nested
+scope -- one definition, two consumers) and normalizes the wraps
+transitively.
+
+**Aligned census: 1389/1495 sites route-shaped (92.9%)** -- 436
+terminal + 607 wrapped-terminal + 283 choice + 57 seq + 5
+wrapped-seq. The tail narrows to **106**:
+
+- **28 `other`**: the remaining unrouteable-by-shape bodies -- the
+  copublisher-class giants (the 21-way alternatives with deeply
+  nested arms), the Lookahead-guarded bodies (the zero-width
+  predicates; no byte-DFA machinery -- the later architecture
+  slice), and the supplement/suffix shapes whose plan9 walk refuses
+  on the nested optional/repetition chains. PARG_SURVEY_DIAG=1
+  prints each site's atom tree; PARG_PLAN9_DIAG traces the refusals.
+- **78 `seq-unplan-able`**: the recursive/structured residue --
+  architecturally unrouteable by a finite DFA; the classic path
+  keeps them permanently, or Phase 2's LR tables absorb the
+  provable ones.
+
+The post-tranche-9 machinery had routed ~85 sites the census could
+not see; the remaining routeable-by-shape work inside the 28 is
+~10-15 sites (the diminishing-returns zone the strategic read
+predicted). The class labels shift marginally under the transitive
+unwrap (a wrapped wrap of a seq counts seq-shaped) -- the labels are
+informational; the router's gate stays the truth.
+
 ## The tail census (2026-11-22, shape-only, post-tranche-8)
 
 The 190 unrouted fleet sites' exact shapes (the atom-level census; the
