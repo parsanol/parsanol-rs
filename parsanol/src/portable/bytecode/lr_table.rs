@@ -164,6 +164,28 @@ fn lr_table_construction(
 ) -> Result<LrTable, LrBuildError> {
     let mut lower = Lowering::default();
     let entry_nt = lower.lower_rule(grammar, entry, 0)?;
+    // The completeness guard: every nonterminal must own at least one
+    // production. A zero-production nonterminal means the lowering
+    // aborted mid-chain and the rule_nt memo handed back a bare
+    // nonterminal (the #682 shape: the run's only path is the aux
+    // epsilon, so it accepts empty). Refuse; the classic path keeps
+    // the rule.
+    let mut defined = vec![false; lower.nonterminal_count];
+    for p in &lower.productions {
+        defined[p.lhs as usize] = true;
+    }
+    for p in &lower.productions {
+        for sym in &p.rhs {
+            if let Symbol::NonTerminal(nt) = sym {
+                if !defined[*nt as usize] {
+                    return Err(LrBuildError("lowering-incomplete".into()));
+                }
+            }
+        }
+    }
+    if !defined.get(entry_nt as usize).copied().unwrap_or(false) {
+        return Err(LrBuildError("lowering-incomplete".into()));
+    }
     let productions = lower.productions;
     let names = lower.names;
     let nt_count = lower.nonterminal_count as u32;
@@ -382,68 +404,73 @@ impl Lowering {
                     // takes it. min == 0 needs the epsilon (resolved;
                     // the strict gate refuses it below).
                     if *min == 1 {
-                        if let Ok(mut syms) = self.lower_symbol(grammar, *atom, depth + 1) {
-                            if syms.len() == 1 {
-                                let sym = syms.pop().expect("one symbol");
-                                let run_nt = self.new_nt();
-                                self.rule_nt.insert(idx, run_nt);
-                                self.productions.push(LrProduction {
-                                    lhs: run_nt,
-                                    rhs: vec![sym.clone(), Symbol::NonTerminal(run_nt)],
-                                    kind: ProductionKind::Span,
-                                });
-                                self.productions.push(LrProduction {
-                                    lhs: run_nt,
-                                    rhs: vec![sym],
-                                    kind: ProductionKind::Span,
-                                });
-                                return Ok(vec![(
-                                    vec![Symbol::NonTerminal(run_nt)],
-                                    ProductionKind::Pass,
-                                )]);
-                            }
+                        // Errors PROPAGATE: falling through on a real
+                        // refusal would retry against the poisoned
+                        // rule_nt memo (lower_rule inserts the
+                        // nonterminal before lower_body can fail) and
+                        // build a table whose run accepts empty — the
+                        // #682 short-parse construction.
+                        let mut syms = self.lower_symbol(grammar, *atom, depth + 1)?;
+                        if syms.len() == 1 {
+                            let sym = syms.pop().expect("one symbol");
+                            let run_nt = self.new_nt();
+                            self.rule_nt.insert(idx, run_nt);
+                            self.productions.push(LrProduction {
+                                lhs: run_nt,
+                                rhs: vec![sym.clone(), Symbol::NonTerminal(run_nt)],
+                                kind: ProductionKind::Span,
+                            });
+                            self.productions.push(LrProduction {
+                                lhs: run_nt,
+                                rhs: vec![sym],
+                                kind: ProductionKind::Span,
+                            });
+                            return Ok(vec![(
+                                vec![Symbol::NonTerminal(run_nt)],
+                                ProductionKind::Pass,
+                            )]);
                         }
                     }
                     if *min == 0 {
-                        if let Ok(mut syms) = self.lower_symbol(grammar, *atom, depth + 1) {
-                            if syms.len() == 1 {
-                                let sym = syms.pop().expect("one symbol");
-                                let run_nt = self.new_nt();
-                                self.rule_nt.insert(idx, run_nt);
-                                // RIGHT-recursive: run -> sym run | sym. The
-                                // Repetition fold assembles the flat span
-                                // list; the base case carries no epsilon —
-                                // the canonical construction refuses the
-                                // left-recursive merge (its epsilon reduces
-                                // at the run's own first bytes).
-                                // The Span kind merges on reduce: the
-                                // chain's value = ONE span over the whole
-                                // run (the classic's merged-run shape).
-                                self.productions.push(LrProduction {
-                                    lhs: run_nt,
-                                    rhs: vec![sym.clone(), Symbol::NonTerminal(run_nt)],
-                                    kind: ProductionKind::Span,
-                                });
-                                self.productions.push(LrProduction {
-                                    lhs: run_nt,
-                                    rhs: vec![sym],
-                                    kind: ProductionKind::Span,
-                                });
-                                // The zero-run: `*` = 0+. Its letter-byte
-                                // conflict with the shift resolves by the
-                                // shift-preference law (the greedy loop);
-                                // at the follow bytes the empty
-                                // `:repetition` envelope reduces.
-                                self.productions.push(LrProduction {
-                                    lhs: run_nt,
-                                    rhs: Vec::new(),
-                                    kind: ProductionKind::Repetition,
-                                });
-                                return Ok(vec![(
-                                    vec![Symbol::NonTerminal(run_nt)],
-                                    ProductionKind::Pass,
-                                )]);
-                            }
+                        // The same propagation law as min == 1 above.
+                        let mut syms = self.lower_symbol(grammar, *atom, depth + 1)?;
+                        if syms.len() == 1 {
+                            let sym = syms.pop().expect("one symbol");
+                            let run_nt = self.new_nt();
+                            self.rule_nt.insert(idx, run_nt);
+                            // RIGHT-recursive: run -> sym run | sym. The
+                            // Repetition fold assembles the flat span
+                            // list; the base case carries no epsilon —
+                            // the canonical construction refuses the
+                            // left-recursive merge (its epsilon reduces
+                            // at the run's own first bytes).
+                            // The Span kind merges on reduce: the
+                            // chain's value = ONE span over the whole
+                            // run (the classic's merged-run shape).
+                            self.productions.push(LrProduction {
+                                lhs: run_nt,
+                                rhs: vec![sym.clone(), Symbol::NonTerminal(run_nt)],
+                                kind: ProductionKind::Span,
+                            });
+                            self.productions.push(LrProduction {
+                                lhs: run_nt,
+                                rhs: vec![sym],
+                                kind: ProductionKind::Span,
+                            });
+                            // The zero-run: `*` = 0+. Its letter-byte
+                            // conflict with the shift resolves by the
+                            // shift-preference law (the greedy loop);
+                            // at the follow bytes the empty
+                            // `:repetition` envelope reduces.
+                            self.productions.push(LrProduction {
+                                lhs: run_nt,
+                                rhs: Vec::new(),
+                                kind: ProductionKind::Repetition,
+                            });
+                            return Ok(vec![(
+                                vec![Symbol::NonTerminal(run_nt)],
+                                ProductionKind::Pass,
+                            )]);
                         }
                     }
                 }
@@ -1535,5 +1562,51 @@ mod tests {
             lowered_names
         );
         assert!(lowered > 0, "the lane must not be vacuous");
+    }
+
+    /// The #682 regression pin: a lowering refusal inside a `0*` loop's
+    /// class-run attempt must refuse the TABLE. Pre-fix the error was
+    /// swallowed by `if let Ok(...)`, the retry hit the poisoned
+    /// `rule_nt` memo (lower_rule inserts the nonterminal before
+    /// lower_body can fail), and the built table's only derivable path
+    /// was the aux epsilon — `lr_run` accepted at zero bytes and the
+    /// VM short-parsed the compiled EXPRESS grammar to position 10.
+    #[test]
+    fn the_lowering_refusal_refuses_the_table_not_the_language() {
+        let mut grammar = Grammar::new();
+        // r = "x" then an EMPTY sequence: the empty sequence falls to
+        // the terminal path and refuses ("atom") — the refusal class
+        // the EXPRESS body carries deep inside schemaDecl.
+        let empty = grammar.add_atom(Atom::Sequence { atoms: Vec::new() });
+        let x = grammar.add_atom(Atom::Str {
+            pattern: "x".to_string(),
+        });
+        let body = grammar.add_atom(Atom::Sequence {
+            atoms: vec![x, empty],
+        });
+        let r = grammar.add_atom(Atom::Named {
+            name: "r".to_string(),
+            atom: body,
+        });
+        let loop_ref = grammar.add_atom(Atom::Entity { atom: r });
+        let rep = grammar.add_atom(Atom::Repetition {
+            atom: loop_ref,
+            min: 0,
+            max: None,
+            tag: RepetitionTag::Repetition,
+        });
+
+        // The construction refuses (the "atom" refusal propagates);
+        // pre-fix it built a broken table instead. (The guard's
+        // non-vacuity rides the fleet suite: 612 tests byte-identical
+        // and the engagement census's lowered>0 pin — under the strict
+        // gate no unbounded-loop shape lowers at all, the resolved
+        // greedy-run class, so a lowering complement here would test
+        // the conflict refuser, not this guard.)
+        let built = build_lr_table_strict(&grammar, rep);
+        assert!(
+            built.is_err(),
+            "a refused lowering must refuse, not build: {built:?}"
+        );
     }
 }
