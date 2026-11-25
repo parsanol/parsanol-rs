@@ -86,6 +86,127 @@ pub struct Compiler {
         std::collections::HashMap<usize, Option<crate::portable::bytecode::lr_table::LrTable>>,
 }
 
+// Tranche 9's plan mirror (the recursive per-arm CHOICE):
+// the SAME DFS walk order as the builder's build_plan9 —
+// children in order, slots sequential — so the per-leaf
+// slot numbering stays in lockstep by construction. The
+// envelope elements mirror as slot-less (the tranche-7
+// lane); nested choices recurse.
+pub(crate) fn element_plan_tree9(
+    grammar: &Grammar,
+    atom_idx: usize,
+    depth: u8,
+) -> Option<super::dfa_table::ElementPlanTree9> {
+    use super::dfa_table::{ElementPlanChoiceArm9, ElementPlanTree9};
+    let diag = depth <= 6 && std::env::var("PARG_PLAN9_DIAG").as_deref() == Ok("1");
+    if diag {
+        eprintln!("PLAN9 enter atom={atom_idx} depth={depth}");
+    }
+    if depth > 64 {
+        eprintln!("PLAN9-REFUSE depth atom={atom_idx} depth={depth}");
+        return None;
+    }
+    // The string-scan shape refuses the tranche-9 mirror
+    // too: the kernel owns the rule, the per-char slots
+    // are gone (rs#574 option A).
+    if crate::portable::string_shape::is_string_shaped(grammar, atom_idx) {
+        if diag {
+            eprintln!("PLAN9-REFUSE string-shape atom={atom_idx} depth={depth}");
+        }
+        return None;
+    }
+    let is_leaf = |idx: usize| match grammar.get_atom(idx) {
+        Some(Atom::Str { pattern }) => !pattern.is_empty(),
+        Some(Atom::Re { pattern }) => {
+            crate::portable::char_class::CharRanges::from_pattern(pattern).is_some()
+        }
+        _ => false,
+    };
+    let mut cur = atom_idx;
+    let mut name: Option<String> = None;
+    let plan_atom = loop {
+        match grammar.get_atom(cur)? {
+            Atom::Entity { atom } => cur = *atom,
+            Atom::Named { atom, name: n } => {
+                if name.is_none() {
+                    name = Some(n.clone());
+                }
+                cur = *atom;
+            }
+            other => break other,
+        }
+    };
+    match plan_atom {
+        Atom::Str { .. } | Atom::Re { .. } => {
+            if !is_leaf(cur) {
+                return None;
+            }
+            Some(match name {
+                Some(n) => ElementPlanTree9::Hash(n),
+                None => ElementPlanTree9::Bare,
+            })
+        }
+        Atom::Sequence { atoms } if !atoms.is_empty() => {
+            let mut children = Vec::with_capacity(atoms.len());
+            for &child in atoms {
+                children.push(element_plan_tree9(grammar, child, depth + 1)?);
+            }
+            Some(match name {
+                Some(n) => ElementPlanTree9::HashNested(n, children),
+                None => ElementPlanTree9::Nested(children),
+            })
+        }
+        Atom::Alternative { atoms } if !atoms.is_empty() => {
+            // A named wrap around a choice refuses (v1:
+            // unnamed arms only).
+            if name.is_some() {
+                return None;
+            }
+            let mut arms = Vec::with_capacity(atoms.len());
+            for &arm in atoms {
+                let plan = element_plan_tree9(grammar, arm, depth + 1)?;
+                arms.push(ElementPlanChoiceArm9 {
+                    leaf_count: plan.leaf_count(),
+                    plan: Box::new(plan),
+                });
+            }
+            Some(ElementPlanTree9::Choice(arms))
+        }
+        // The EXACT-COPY repetition (min == max) mirrors
+        // the builder's unroll: n copies of the body plan,
+        // one leaf slot each (the json escape arm's
+        // u-hexquad shape). MUST precede the envelope arm.
+        Atom::Repetition {
+            atom: body,
+            min,
+            max: Some(max),
+            tag: RepetitionTag::Repetition,
+        } if *min == *max && (1..=8).contains(min) => {
+            let mut children = Vec::with_capacity(*min);
+            for _ in 0..*min {
+                children.push(element_plan_tree9(grammar, *body, depth + 1)?);
+            }
+            Some(match name {
+                Some(n) => ElementPlanTree9::HashNested(n, children),
+                None => ElementPlanTree9::Nested(children),
+            })
+        }
+        Atom::Repetition {
+            atom: body,
+            tag: RepetitionTag::Repetition | RepetitionTag::Maybe,
+            ..
+        } => {
+            // The tranche-7 envelope lane, mirrored: the
+            // envelope occupies NO leaf slot.
+            let inner = element_plan_tree9(grammar, *body, depth + 1)?;
+            Some(match name {
+                Some(n) => ElementPlanTree9::HashEnvelope(n, Box::new(inner)),
+                None => ElementPlanTree9::Envelope(Box::new(inner)),
+            })
+        }
+        _ => None,
+    }
+}
 impl Compiler {
     /// Create a new compiler for the given grammar
     #[inline]
@@ -1392,119 +1513,6 @@ impl Compiler {
                     _ => None,
                 }
             }
-            // Tranche 9's plan mirror (the recursive per-arm CHOICE):
-            // the SAME DFS walk order as the builder's build_plan9 —
-            // children in order, slots sequential — so the per-leaf
-            // slot numbering stays in lockstep by construction. The
-            // envelope elements mirror as slot-less (the tranche-7
-            // lane); nested choices recurse.
-            fn plan9_of(
-                grammar: &Grammar,
-                atom_idx: usize,
-                depth: u8,
-            ) -> Option<super::dfa_table::ElementPlanTree9> {
-                use super::dfa_table::{ElementPlanChoiceArm9, ElementPlanTree9};
-                if depth > 64 {
-                    return None;
-                }
-                // The string-scan shape refuses the tranche-9 mirror
-                // too: the kernel owns the rule, the per-char slots
-                // are gone (rs#574 option A).
-                if crate::portable::string_shape::is_string_shaped(grammar, atom_idx) {
-                    return None;
-                }
-                let is_leaf = |idx: usize| match grammar.get_atom(idx) {
-                    Some(Atom::Str { pattern }) => !pattern.is_empty(),
-                    Some(Atom::Re { pattern }) => {
-                        crate::portable::char_class::CharRanges::from_pattern(pattern).is_some()
-                    }
-                    _ => false,
-                };
-                let mut cur = atom_idx;
-                let mut name: Option<String> = None;
-                let plan_atom = loop {
-                    match grammar.get_atom(cur)? {
-                        Atom::Entity { atom } => cur = *atom,
-                        Atom::Named { atom, name: n } => {
-                            if name.is_none() {
-                                name = Some(n.clone());
-                            }
-                            cur = *atom;
-                        }
-                        other => break other,
-                    }
-                };
-                match plan_atom {
-                    Atom::Str { .. } | Atom::Re { .. } => {
-                        if !is_leaf(cur) {
-                            return None;
-                        }
-                        Some(match name {
-                            Some(n) => ElementPlanTree9::Hash(n),
-                            None => ElementPlanTree9::Bare,
-                        })
-                    }
-                    Atom::Sequence { atoms } if !atoms.is_empty() => {
-                        let mut children = Vec::with_capacity(atoms.len());
-                        for &child in atoms {
-                            children.push(plan9_of(grammar, child, depth + 1)?);
-                        }
-                        Some(match name {
-                            Some(n) => ElementPlanTree9::HashNested(n, children),
-                            None => ElementPlanTree9::Nested(children),
-                        })
-                    }
-                    Atom::Alternative { atoms } if !atoms.is_empty() => {
-                        // A named wrap around a choice refuses (v1:
-                        // unnamed arms only).
-                        if name.is_some() {
-                            return None;
-                        }
-                        let mut arms = Vec::with_capacity(atoms.len());
-                        for &arm in atoms {
-                            let plan = plan9_of(grammar, arm, depth + 1)?;
-                            arms.push(ElementPlanChoiceArm9 {
-                                leaf_count: plan.leaf_count(),
-                                plan: Box::new(plan),
-                            });
-                        }
-                        Some(ElementPlanTree9::Choice(arms))
-                    }
-                    // The EXACT-COPY repetition (min == max) mirrors
-                    // the builder's unroll: n copies of the body plan,
-                    // one leaf slot each (the json escape arm's
-                    // u-hexquad shape). MUST precede the envelope arm.
-                    Atom::Repetition {
-                        atom: body,
-                        min,
-                        max: Some(max),
-                        tag: RepetitionTag::Repetition,
-                    } if *min == *max && (1..=8).contains(min) => {
-                        let mut children = Vec::with_capacity(*min);
-                        for _ in 0..*min {
-                            children.push(plan9_of(grammar, *body, depth + 1)?);
-                        }
-                        Some(match name {
-                            Some(n) => ElementPlanTree9::HashNested(n, children),
-                            None => ElementPlanTree9::Nested(children),
-                        })
-                    }
-                    Atom::Repetition {
-                        atom: body,
-                        tag: RepetitionTag::Repetition | RepetitionTag::Maybe,
-                        ..
-                    } => {
-                        // The tranche-7 envelope lane, mirrored: the
-                        // envelope occupies NO leaf slot.
-                        let inner = plan9_of(grammar, *body, depth + 1)?;
-                        Some(match name {
-                            Some(n) => ElementPlanTree9::HashEnvelope(n, Box::new(inner)),
-                            None => ElementPlanTree9::Envelope(Box::new(inner)),
-                        })
-                    }
-                    _ => None,
-                }
-            }
             // The flat per-leaf fallback descriptors (`DfaLoopElements`
             // keeps its published shape): the plan tree flattened, one
             // `ElementDesc` per leaf in the builder's chain order.
@@ -1590,7 +1598,7 @@ impl Compiler {
                 Some(Atom::Alternative { .. })
                     if choice_disjoint(atom_idx)
                         && (element_plan(&self.grammar, atom_idx, 0).is_some()
-                            || plan9_of(&self.grammar, atom_idx, 0).is_some()) =>
+                            || element_plan_tree9(&self.grammar, atom_idx, 0).is_some()) =>
                 {
                     Some((false, None))
                 }
@@ -1598,7 +1606,7 @@ impl Compiler {
                     if !atoms.is_empty()
                         && atoms
                             .iter()
-                            .all(|&c| plan9_of(&self.grammar, c, 0).is_some()) =>
+                            .all(|&c| element_plan_tree9(&self.grammar, c, 0).is_some()) =>
                 {
                     Some((true, None))
                 }
@@ -1608,7 +1616,7 @@ impl Compiler {
                     }
                     Some(Atom::Alternative { .. })
                         if choice_disjoint(*atom)
-                            && plan9_of(&self.grammar, *atom, 0).is_some() =>
+                            && element_plan_tree9(&self.grammar, *atom, 0).is_some() =>
                     {
                         // A Named choice: the hash wraps ONE value per
                         // iteration ({name: the matched arm's span}) —
@@ -1620,7 +1628,7 @@ impl Compiler {
                         if !atoms.is_empty()
                             && atoms
                                 .iter()
-                                .all(|&c| plan9_of(&self.grammar, c, 0).is_some()) =>
+                                .all(|&c| element_plan_tree9(&self.grammar, c, 0).is_some()) =>
                     {
                         Some((true, Some(name.clone())))
                     }
@@ -1642,9 +1650,9 @@ impl Compiler {
                         }
                         Some(Atom::Sequence { atoms })
                             if !atoms.is_empty()
-                                && atoms
-                                    .iter()
-                                    .all(|&c| plan9_of(&self.grammar, c, 0).is_some()) =>
+                                && atoms.iter().all(|&c| {
+                                    element_plan_tree9(&self.grammar, c, 0).is_some()
+                                }) =>
                         {
                             Some((true, Some(name.clone())))
                         }
@@ -1657,7 +1665,7 @@ impl Compiler {
                         if !atoms.is_empty()
                             && atoms
                                 .iter()
-                                .all(|&c| plan9_of(&self.grammar, c, 0).is_some()) =>
+                                .all(|&c| element_plan_tree9(&self.grammar, c, 0).is_some()) =>
                     {
                         Some((true, None))
                     }
@@ -1742,10 +1750,11 @@ impl Compiler {
                         match self.grammar.get_atom(unwrapped_body) {
                             Some(Atom::Sequence { atoms }) => atoms
                                 .iter()
-                                .map(|&c| plan9_of(&self.grammar, c, 0))
+                                .map(|&c| element_plan_tree9(&self.grammar, c, 0))
                                 .collect::<Option<Vec<_>>>(),
                             Some(Atom::Alternative { .. }) => {
-                                plan9_of(&self.grammar, unwrapped_body, 0).map(|p| vec![p])
+                                element_plan_tree9(&self.grammar, unwrapped_body, 0)
+                                    .map(|p| vec![p])
                             }
                             _ => None,
                         }
@@ -3133,20 +3142,69 @@ mod tests {
                                 "seq-unplan-able"
                             }
                         }
-                        _ if choice_span_arms(grammar, *atom, depth + 1).is_some() => "choice",
+                        _ if choice_span_arms(grammar, *atom, depth + 1).is_some()
+                            || element_plan_tree9(grammar, *atom, depth + 1).is_some() =>
+                        {
+                            "choice"
+                        }
                         _ => "other",
                     }
                 }
                 Some(Atom::Str { .. }) | Some(Atom::Re { .. }) => "terminal",
                 Some(Atom::Sequence { atoms }) if !atoms.is_empty() => {
-                    if atoms.iter().all(|&c| plan_able(grammar, c, depth + 1)) {
+                    if atoms.iter().all(|&c| {
+                        plan_able(grammar, c, depth + 1)
+                            || element_plan_tree9(grammar, c, depth + 1).is_some()
+                    }) {
                         "seq"
                     } else {
                         "seq-unplan-able"
                     }
                 }
-                _ if choice_span_arms(grammar, body_idx, depth + 1).is_some() => "choice",
+                _ if choice_span_arms(grammar, body_idx, depth + 1).is_some()
+                    || element_plan_tree9(grammar, body_idx, depth + 1).is_some() =>
+                {
+                    "choice"
+                }
                 _ => "other",
+            }
+        }
+        // The unrouted-shape describer: a compact atom-tree so the
+        // DIAG lines classify by eye (a survey diagnostic only).
+        fn describe_atom(grammar: &Grammar, idx: usize, depth: u8) -> String {
+            if depth > 5 {
+                return "…".to_string();
+            }
+            let child = |i: usize| describe_atom(grammar, i, depth + 1);
+            match grammar.get_atom(idx) {
+                Some(Atom::Str { pattern }) => format!("str({pattern:?})"),
+                Some(Atom::Re { pattern }) => format!("re({pattern})"),
+                Some(Atom::Entity { atom }) => format!("e({})", child(*atom)),
+                Some(Atom::Named { name, atom }) => format!("n:{name}({})", child(*atom)),
+                Some(Atom::Sequence { atoms }) => format!(
+                    "[{}]",
+                    atoms
+                        .iter()
+                        .map(|&a| child(a))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                ),
+                Some(Atom::Alternative { atoms }) => format!(
+                    "({})",
+                    atoms
+                        .iter()
+                        .map(|&a| child(a))
+                        .collect::<Vec<_>>()
+                        .join("|")
+                ),
+                Some(Atom::Repetition { atom, min, max, .. }) => format!(
+                    "rep{}..{}({})",
+                    min,
+                    max.map(|m| m.to_string())
+                        .unwrap_or_else(|| "*".to_string()),
+                    child(*atom)
+                ),
+                other => format!("{other:?}"),
             }
         }
         let mut flavors = 0usize;
@@ -3186,6 +3244,13 @@ mod tests {
                 {
                     sites_total += 1;
                     let class = body_class(&grammar, *body, 0);
+                    if class == "other" && std::env::var("PARG_SURVEY_DIAG").as_deref() == Ok("1") {
+                        eprintln!(
+                            "DIAG other {} {}",
+                            path.file_name().and_then(|n| n.to_str()).unwrap_or("?"),
+                            describe_atom(&grammar, *body, 0)
+                        );
+                    }
                     // SHAPE-ONLY: no build_loop_dfa call here — the
                     // determinization over arbitrary fleet loops can
                     // blow up the subset construction (three 100%-CPU
