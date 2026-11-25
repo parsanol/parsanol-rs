@@ -1278,7 +1278,286 @@ impl<'a> PortableParser<'a> {
         // The strict reporter deliberately retains its global deepest policy.
         let parent_failure =
             (self.compatibility == ParserCompatibility::Parslet).then(|| self.take_failure());
-        let r = self.try_atom_impl_inner(atom_id, pos, consume_all);
+        let r = 'atom_body: {
+            if let Some(counts) = &mut self.dispatch_counts {
+                counts[atom_id] += 1;
+            }
+            perf_count!(self.dispatch);
+            #[cfg(feature = "perf-counters")]
+            match self.grammar.get_atom(atom_id) {
+                Some(Atom::Str { .. }) => self.perf.dispatch_str += 1,
+                Some(Atom::Re { .. }) => self.perf.dispatch_re += 1,
+                Some(Atom::Sequence { .. }) => self.perf.dispatch_seq += 1,
+                Some(Atom::Alternative { .. }) => self.perf.dispatch_alt += 1,
+                Some(Atom::Repetition { .. }) => self.perf.dispatch_rep += 1,
+                Some(Atom::Lookahead { .. }) => self.perf.dispatch_look += 1,
+                _ => self.perf.dispatch_other += 1,
+            }
+            self.check_resources()?;
+
+            // Reference mode (TODO.sota/8 B1): the plain relation. Every
+            // memo table is bypassed — the dense cache, the capture-keyed
+            // dyn cache, and the dispatch-outcome cache below (which
+            // returns before reaching here for `Atom::Dynamic`). Only
+            // `parse_atom_uncached`'s atom evaluation runs.
+            if self.reference {
+                break 'atom_body self.parse_atom_uncached(atom_id, pos, consume_all);
+            }
+
+            // Skip cache for atoms that don't benefit from memoization
+            // (terminals, pass-through wrappers). This saves significant memory
+            // since most atoms in a grammar are Re/Str terminals.
+            //
+            // Dynamic-dependent atoms are context-dependent: their outcome
+            // varies with capture state, which the memo key ignores (GH-76).
+            let dynamic_dependent = self.dynamic_dependent.get(atom_id).is_some_and(|&dep| dep);
+            if self.compatibility == ParserCompatibility::Strict
+                && self.grammar.is_no_cache(atom_id)
+            {
+                perf_count!(self.uncached_direct);
+                break 'atom_body self.parse_atom_uncached(atom_id, pos, consume_all);
+            }
+            if self.compatibility == ParserCompatibility::Strict
+                && self.terminal_direct.get(atom_id).is_some_and(|&d| d)
+            {
+                let result = self.parse_atom_uncached(atom_id, pos, consume_all)?;
+                // consume_all is re-applied per application, as on a memo hit.
+                if consume_all && result.end_pos != self.input.len() {
+                    break 'atom_body Err(ParseError::Failed { position: pos });
+                }
+                break 'atom_body Ok(result);
+            }
+            if self
+                .state_write_dependent
+                .get(atom_id)
+                .is_some_and(|&dep| dep)
+            {
+                // A replay re-derives the value but skips the slot write
+                // (parsanol-ruby#185): the reader after it would see a
+                // stale slot. No memo at all for these atoms.
+                break 'atom_body self.parse_atom_uncached(atom_id, pos, consume_all);
+            }
+            if self
+                .capture_write_dependent
+                .get(atom_id)
+                .is_some_and(|&dep| dep)
+            {
+                // A cached value cannot replay capture writes removed by an
+                // earlier failed branch, scope, or lookahead. The pure inner
+                // value may still be memoized; only its effects must run again.
+                let result = self.parse_scoped_trivia_drain(atom_id, pos, consume_all);
+                if self.compatibility == ParserCompatibility::Parslet {
+                    break 'atom_body self.legacy_consumption_guard(result, consume_all);
+                }
+                if consume_all && result.as_ref().is_ok_and(|r| r.end_pos != self.input.len()) {
+                    break 'atom_body Err(ParseError::Failed { position: pos });
+                }
+                break 'atom_body result;
+            }
+            if self.compatibility == ParserCompatibility::Parslet {
+                // Capture/dynamic effects must execute rather than replay a
+                // value-only entry. Pure children still share the eager legacy
+                // memo. Scope itself is uncached in Parslet's protocol.
+                if dynamic_dependent
+                    || matches!(
+                        self.grammar.get_atom(atom_id),
+                        Some(Atom::Scope { .. } | Atom::Named { .. } | Atom::Ignore { .. })
+                    )
+                {
+                    let result = self.parse_scoped_trivia_drain(atom_id, pos, consume_all);
+                    break 'atom_body self.legacy_consumption_guard(result, consume_all);
+                }
+                break 'atom_body self.try_atom_legacy(atom_id, pos, consume_all);
+            }
+            if dynamic_dependent {
+                // Capture-context-dependent (GH-76): memo keyed by the
+                // capture-state version. Within a stretch with no capture
+                // mutations the version is stable, so repeated exploration
+                // of the same (atom, position) replays — the packrat
+                // absorption the dense cache provides everywhere else.
+                // rs#174 round 2: key on the capture-state CONTENT
+                // signature, not the mutation-history counter. Backtracking
+                // churns the version on every store while the visible
+                // captures converge back to identical content, so a
+                // counter key missed on every attempt and the table
+                // grammar re-explored exponentially (97.9s / 2.4GB on the
+                // coradoc 4-cell repro). Two states with identical visible
+                // captures are indistinguishable to a deterministic block,
+                // so replay is sound — the same argument as the
+                // dispatch-outcome cache below (rs#184).
+                let capture_fp = super::dynamic::capture_signature(&self.capture_state);
+                let key = (pos as u32, atom_id as u16, capture_fp, consume_all);
+                if self.dyn_cache.len() > 2_000_000 {
+                    self.dyn_cache.clear();
+                }
+                if let Some(entry) = self.dyn_cache.get(&key) {
+                    let (success, end_pos, node) = (entry.success, entry.end_pos, entry.to_node());
+                    break 'atom_body if success {
+                        if consume_all && end_pos as usize != self.input.len() {
+                            break 'atom_body Err(ParseError::Failed { position: pos });
+                        }
+                        Ok(AtomResult {
+                            value: node,
+                            end_pos: end_pos as usize,
+                            capture_state: None,
+                        })
+                    } else {
+                        break 'atom_body Err(ParseError::Failed { position: pos });
+                    };
+                }
+                let result = self.parse_scoped_trivia_drain(atom_id, pos, consume_all);
+                match &result {
+                    Ok(r) if !self.trivia_drained => {
+                        let mut entry = CacheEntry::from_node(
+                            pos as u32,
+                            atom_id as u16,
+                            r.end_pos as u32,
+                            &r.value,
+                            self.arena.generation(),
+                        );
+                        entry.set_consume_all(consume_all);
+                        self.dyn_cache.insert(key, entry);
+                    }
+                    Ok(_) => {}
+                    Err(ref e)
+                        if matches!(
+                            e,
+                            ParseError::InvalidGrammar { .. }
+                                | ParseError::RecursionLimitExceeded { .. }
+                        ) =>
+                    {
+                        // Runtime-level abort: never memoized,
+                        // never a branch outcome — see the dense-path note.
+                    }
+                    Err(_) => {
+                        let mut entry = CacheEntry::failure(pos as u32, atom_id as u16);
+                        entry.set_consume_all(consume_all);
+                        self.dyn_cache.insert(key, entry);
+                    }
+                }
+                // consume_all is re-applied per application (mirrors the
+                // dense path's outside-the-memo check); the raw result is
+                // what gets cached.
+                if consume_all && result.as_ref().is_ok_and(|r| r.end_pos != self.input.len()) {
+                    break 'atom_body Err(ParseError::Failed { position: pos });
+                }
+                break 'atom_body result;
+            }
+
+            perf_count!(self.cache_lookup);
+            let cache_hit = self
+                .cache
+                .get_ca(
+                    pos as u32,
+                    atom_id as u16,
+                    self.arena.generation(),
+                    consume_all,
+                )
+                .map(|e| (e.success, e.end_pos, e.to_node(), e.is_snapshot()));
+
+            if let Some((success, end_pos, cached_node, is_snapshot)) = cache_hit {
+                #[cfg(feature = "perf-counters")]
+                if success {
+                    self.perf.cache_hit_ok += 1;
+                } else {
+                    self.perf.cache_hit_fail += 1;
+                }
+                break 'atom_body if success {
+                    // consume_all (mirrors the interpreter's Base#apply):
+                    // ANY successful application must consume the whole
+                    // input, else it is a failure — this is what lets root
+                    // alternatives retry prefix branches. The check lives
+                    // OUTSIDE the memo: the cached raw result replays, the
+                    // requirement is re-applied per application.
+                    if consume_all && end_pos as usize != self.input.len() {
+                        break 'atom_body Err(ParseError::Failed { position: pos });
+                    }
+                    let value = if is_snapshot {
+                        if self.snapshots_in_live {
+                            // Retained data lives in this parse's arena
+                            // (session-owned persistent output arena).
+                            cached_node
+                        } else {
+                            match (self.snapshot_arena, &cached_node) {
+                                (
+                                    Some(snap),
+                                    AstNode::Array { .. }
+                                    | AstNode::Hash { .. }
+                                    | AstNode::StringRef { .. },
+                                ) => self.arena.adopt_node(snap, &cached_node),
+                                _ => cached_node,
+                            }
+                        }
+                    } else {
+                        cached_node
+                    };
+                    Ok(AtomResult {
+                        value,
+                        end_pos: end_pos as usize,
+                        capture_state: None,
+                    })
+                } else {
+                    // Cached failure - this is important for PEG performance!
+                    // Without caching failures, we'd re-parse failed alternatives every time
+                    Err(ParseError::Failed { position: pos })
+                };
+            }
+
+            // Parse uncached
+            match self.parse_scoped_trivia_drain(atom_id, pos, consume_all) {
+                Ok(result) => {
+                    // consume_all universal check (see the cache-hit path)
+                    if consume_all && result.end_pos != self.input.len() {
+                        break 'atom_body Err(ParseError::Failed { position: pos });
+                    }
+
+                    // Outcomes spanning a trivia drain are not stored: the
+                    // replay would carry the attached comments while the
+                    // pending channel refills on retry, attaching the same
+                    // unit twice (mark_cache_unsafe parity).
+                    if !self.trivia_drained {
+                        // Cache successful result with inlined node data
+                        let mut entry = CacheEntry::from_node(
+                            pos as u32,
+                            atom_id as u16,
+                            result.end_pos as u32,
+                            &result.value,
+                            self.arena.generation(),
+                        );
+                        entry.set_consume_all(consume_all);
+                        perf_count!(self.cache_insert_ok);
+                        self.cache.insert(entry);
+                    }
+
+                    Ok(result)
+                }
+                Err(e) => {
+                    // InvalidGrammar is a property of the RUNTIME, not of
+                    // this branch: reaching a CustomRef means no native
+                    // runtime can parse this artifact, and letting the
+                    // failure act as a branch outcome would silently
+                    // diverge from the Ruby interpreter (which evaluates
+                    // the custom atom). Propagate it unmemoized — the FFI
+                    // layer's interpreter recovery handles it. Resource limits
+                    // likewise abort parsing rather than representing a mismatch.
+                    if matches!(
+                        e,
+                        ParseError::InvalidGrammar { .. }
+                            | ParseError::RecursionLimitExceeded { .. }
+                    ) {
+                        break 'atom_body Err(e);
+                    }
+                    // CRITICAL: Cache failures too!
+                    // Without this, failed alternatives are re-parsed exponentially
+                    // This is the key to packrat parser performance
+                    let mut entry = CacheEntry::failure(pos as u32, atom_id as u16);
+                    entry.set_consume_all(consume_all);
+                    perf_count!(self.cache_insert_fail);
+                    self.cache.insert(entry);
+                    Err(e)
+                }
+            }
+        };
         if let Some(parent_failure) = parent_failure {
             if let Err(ParseError::Failed { position }) = &r {
                 self.ensure_legacy_failure(atom_id, *position);
@@ -1308,289 +1587,6 @@ impl<'a> PortableParser<'a> {
             self.dynamic_outcomes.clear();
         }
         r
-    }
-
-    fn try_atom_impl_inner(
-        &mut self,
-        atom_id: usize,
-        pos: usize,
-        consume_all: bool,
-    ) -> Result<AtomResult, ParseError> {
-        if let Some(counts) = &mut self.dispatch_counts {
-            counts[atom_id] += 1;
-        }
-        perf_count!(self.dispatch);
-        #[cfg(feature = "perf-counters")]
-        match self.grammar.get_atom(atom_id) {
-            Some(Atom::Str { .. }) => self.perf.dispatch_str += 1,
-            Some(Atom::Re { .. }) => self.perf.dispatch_re += 1,
-            Some(Atom::Sequence { .. }) => self.perf.dispatch_seq += 1,
-            Some(Atom::Alternative { .. }) => self.perf.dispatch_alt += 1,
-            Some(Atom::Repetition { .. }) => self.perf.dispatch_rep += 1,
-            Some(Atom::Lookahead { .. }) => self.perf.dispatch_look += 1,
-            _ => self.perf.dispatch_other += 1,
-        }
-        self.check_resources()?;
-
-        // Reference mode (TODO.sota/8 B1): the plain relation. Every
-        // memo table is bypassed — the dense cache, the capture-keyed
-        // dyn cache, and the dispatch-outcome cache below (which
-        // returns before reaching here for `Atom::Dynamic`). Only
-        // `parse_atom_uncached`'s atom evaluation runs.
-        if self.reference {
-            return self.parse_atom_uncached(atom_id, pos, consume_all);
-        }
-
-        // Skip cache for atoms that don't benefit from memoization
-        // (terminals, pass-through wrappers). This saves significant memory
-        // since most atoms in a grammar are Re/Str terminals.
-        //
-        // Dynamic-dependent atoms are context-dependent: their outcome
-        // varies with capture state, which the memo key ignores (GH-76).
-        let dynamic_dependent = self.dynamic_dependent.get(atom_id).is_some_and(|&dep| dep);
-        if self.compatibility == ParserCompatibility::Strict && self.grammar.is_no_cache(atom_id) {
-            perf_count!(self.uncached_direct);
-            return self.parse_atom_uncached(atom_id, pos, consume_all);
-        }
-        if self.compatibility == ParserCompatibility::Strict
-            && self.terminal_direct.get(atom_id).is_some_and(|&d| d)
-        {
-            let result = self.parse_atom_uncached(atom_id, pos, consume_all)?;
-            // consume_all is re-applied per application, as on a memo hit.
-            if consume_all && result.end_pos != self.input.len() {
-                return Err(ParseError::Failed { position: pos });
-            }
-            return Ok(result);
-        }
-        if self
-            .state_write_dependent
-            .get(atom_id)
-            .is_some_and(|&dep| dep)
-        {
-            // A replay re-derives the value but skips the slot write
-            // (parsanol-ruby#185): the reader after it would see a
-            // stale slot. No memo at all for these atoms.
-            return self.parse_atom_uncached(atom_id, pos, consume_all);
-        }
-        if self
-            .capture_write_dependent
-            .get(atom_id)
-            .is_some_and(|&dep| dep)
-        {
-            // A cached value cannot replay capture writes removed by an
-            // earlier failed branch, scope, or lookahead. The pure inner
-            // value may still be memoized; only its effects must run again.
-            let result = self.parse_scoped_trivia_drain(atom_id, pos, consume_all);
-            if self.compatibility == ParserCompatibility::Parslet {
-                return self.legacy_consumption_guard(result, consume_all);
-            }
-            if consume_all && result.as_ref().is_ok_and(|r| r.end_pos != self.input.len()) {
-                return Err(ParseError::Failed { position: pos });
-            }
-            return result;
-        }
-        if self.compatibility == ParserCompatibility::Parslet {
-            // Capture/dynamic effects must execute rather than replay a
-            // value-only entry. Pure children still share the eager legacy
-            // memo. Scope itself is uncached in Parslet's protocol.
-            if dynamic_dependent
-                || matches!(
-                    self.grammar.get_atom(atom_id),
-                    Some(Atom::Scope { .. } | Atom::Named { .. } | Atom::Ignore { .. })
-                )
-            {
-                let result = self.parse_scoped_trivia_drain(atom_id, pos, consume_all);
-                return self.legacy_consumption_guard(result, consume_all);
-            }
-            return self.try_atom_legacy(atom_id, pos, consume_all);
-        }
-        if dynamic_dependent {
-            // Capture-context-dependent (GH-76): memo keyed by the
-            // capture-state version. Within a stretch with no capture
-            // mutations the version is stable, so repeated exploration
-            // of the same (atom, position) replays — the packrat
-            // absorption the dense cache provides everywhere else.
-            // rs#174 round 2: key on the capture-state CONTENT
-            // signature, not the mutation-history counter. Backtracking
-            // churns the version on every store while the visible
-            // captures converge back to identical content, so a
-            // counter key missed on every attempt and the table
-            // grammar re-explored exponentially (97.9s / 2.4GB on the
-            // coradoc 4-cell repro). Two states with identical visible
-            // captures are indistinguishable to a deterministic block,
-            // so replay is sound — the same argument as the
-            // dispatch-outcome cache below (rs#184).
-            let capture_fp = super::dynamic::capture_signature(&self.capture_state);
-            let key = (pos as u32, atom_id as u16, capture_fp, consume_all);
-            if self.dyn_cache.len() > 2_000_000 {
-                self.dyn_cache.clear();
-            }
-            if let Some(entry) = self.dyn_cache.get(&key) {
-                let (success, end_pos, node) = (entry.success, entry.end_pos, entry.to_node());
-                return if success {
-                    if consume_all && end_pos as usize != self.input.len() {
-                        return Err(ParseError::Failed { position: pos });
-                    }
-                    Ok(AtomResult {
-                        value: node,
-                        end_pos: end_pos as usize,
-                        capture_state: None,
-                    })
-                } else {
-                    return Err(ParseError::Failed { position: pos });
-                };
-            }
-            let result = self.parse_scoped_trivia_drain(atom_id, pos, consume_all);
-            match &result {
-                Ok(r) if !self.trivia_drained => {
-                    let mut entry = CacheEntry::from_node(
-                        pos as u32,
-                        atom_id as u16,
-                        r.end_pos as u32,
-                        &r.value,
-                        self.arena.generation(),
-                    );
-                    entry.set_consume_all(consume_all);
-                    self.dyn_cache.insert(key, entry);
-                }
-                Ok(_) => {}
-                Err(ref e)
-                    if matches!(
-                        e,
-                        ParseError::InvalidGrammar { .. }
-                            | ParseError::RecursionLimitExceeded { .. }
-                    ) =>
-                {
-                    // Runtime-level abort: never memoized,
-                    // never a branch outcome — see the dense-path note.
-                }
-                Err(_) => {
-                    let mut entry = CacheEntry::failure(pos as u32, atom_id as u16);
-                    entry.set_consume_all(consume_all);
-                    self.dyn_cache.insert(key, entry);
-                }
-            }
-            // consume_all is re-applied per application (mirrors the
-            // dense path's outside-the-memo check); the raw result is
-            // what gets cached.
-            if consume_all && result.as_ref().is_ok_and(|r| r.end_pos != self.input.len()) {
-                return Err(ParseError::Failed { position: pos });
-            }
-            return result;
-        }
-
-        perf_count!(self.cache_lookup);
-        let cache_hit = self
-            .cache
-            .get_ca(
-                pos as u32,
-                atom_id as u16,
-                self.arena.generation(),
-                consume_all,
-            )
-            .map(|e| (e.success, e.end_pos, e.to_node(), e.is_snapshot()));
-
-        if let Some((success, end_pos, cached_node, is_snapshot)) = cache_hit {
-            #[cfg(feature = "perf-counters")]
-            if success {
-                self.perf.cache_hit_ok += 1;
-            } else {
-                self.perf.cache_hit_fail += 1;
-            }
-            return if success {
-                // consume_all (mirrors the interpreter's Base#apply):
-                // ANY successful application must consume the whole
-                // input, else it is a failure — this is what lets root
-                // alternatives retry prefix branches. The check lives
-                // OUTSIDE the memo: the cached raw result replays, the
-                // requirement is re-applied per application.
-                if consume_all && end_pos as usize != self.input.len() {
-                    return Err(ParseError::Failed { position: pos });
-                }
-                let value = if is_snapshot {
-                    if self.snapshots_in_live {
-                        // Retained data lives in this parse's arena
-                        // (session-owned persistent output arena).
-                        cached_node
-                    } else {
-                        match (self.snapshot_arena, &cached_node) {
-                            (
-                                Some(snap),
-                                AstNode::Array { .. }
-                                | AstNode::Hash { .. }
-                                | AstNode::StringRef { .. },
-                            ) => self.arena.adopt_node(snap, &cached_node),
-                            _ => cached_node,
-                        }
-                    }
-                } else {
-                    cached_node
-                };
-                Ok(AtomResult {
-                    value,
-                    end_pos: end_pos as usize,
-                    capture_state: None,
-                })
-            } else {
-                // Cached failure - this is important for PEG performance!
-                // Without caching failures, we'd re-parse failed alternatives every time
-                Err(ParseError::Failed { position: pos })
-            };
-        }
-
-        // Parse uncached
-        match self.parse_scoped_trivia_drain(atom_id, pos, consume_all) {
-            Ok(result) => {
-                // consume_all universal check (see the cache-hit path)
-                if consume_all && result.end_pos != self.input.len() {
-                    return Err(ParseError::Failed { position: pos });
-                }
-
-                // Outcomes spanning a trivia drain are not stored: the
-                // replay would carry the attached comments while the
-                // pending channel refills on retry, attaching the same
-                // unit twice (mark_cache_unsafe parity).
-                if !self.trivia_drained {
-                    // Cache successful result with inlined node data
-                    let mut entry = CacheEntry::from_node(
-                        pos as u32,
-                        atom_id as u16,
-                        result.end_pos as u32,
-                        &result.value,
-                        self.arena.generation(),
-                    );
-                    entry.set_consume_all(consume_all);
-                    perf_count!(self.cache_insert_ok);
-                    self.cache.insert(entry);
-                }
-
-                Ok(result)
-            }
-            Err(e) => {
-                // InvalidGrammar is a property of the RUNTIME, not of
-                // this branch: reaching a CustomRef means no native
-                // runtime can parse this artifact, and letting the
-                // failure act as a branch outcome would silently
-                // diverge from the Ruby interpreter (which evaluates
-                // the custom atom). Propagate it unmemoized — the FFI
-                // layer's interpreter recovery handles it. Resource limits
-                // likewise abort parsing rather than representing a mismatch.
-                if matches!(
-                    e,
-                    ParseError::InvalidGrammar { .. } | ParseError::RecursionLimitExceeded { .. }
-                ) {
-                    return Err(e);
-                }
-                // CRITICAL: Cache failures too!
-                // Without this, failed alternatives are re-parsed exponentially
-                // This is the key to packrat parser performance
-                let mut entry = CacheEntry::failure(pos as u32, atom_id as u16);
-                entry.set_consume_all(consume_all);
-                perf_count!(self.cache_insert_fail);
-                self.cache.insert(entry);
-                Err(e)
-            }
-        }
     }
 
     /// Install identities witnessed by the PARG compiler, before parsing.
