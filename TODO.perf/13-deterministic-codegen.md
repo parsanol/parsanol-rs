@@ -654,10 +654,16 @@ sites fall into three classes, each with its refusal reason:
    The P3(a) sizing (2026-11-27): of the 1448 LR-refused rules,
    **499 build under `build_lr_table_shift_preference`** (34%) — and
    the seam is ALREADY wired in the compiler behind `PARG_LR_SHIFT=1`
-   ("the default stays strict until the receipt lands"). The P3(a)
-   receipt = the A/B: the fleet differential byte-identical with the
-   gate on, the corpus 32/32, the perf A/B, then the default flips
-   and the census's lr-covered count rises with it.
+   ("the default stays strict until the receipt lands"). The first
+   A/B evidence, same day: the lib fleet 620/620 green and the
+   conformance corpus green with the gate ON (the byte-identical
+   spine holds under shift-preference on everything the suite
+   parses); the json-corpus throughput is neutral with the gate ON
+   (6.52 -> 6.77 ms total, +3.7% single-run — the class does not
+   engage on json, whose hot loops already route the DfaRun lane).
+   The remaining receipt legs: the perf A/B on a flavor whose rules
+   ARE shift-buildable (the win shows there, not on json), then the
+   default flip and the census's lr-covered count re-run.
 2. **Lookahead-guarded bodies (the zero-width architecture slice)** —
    elements like `[… Some(Lookahead { positive: false })]` (the
    digit-run terminators, the id-body guards, ~6 sites). Zero-width
