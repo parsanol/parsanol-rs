@@ -75,3 +75,20 @@ re-derivation takes it below that.
 measures the current engine at every train, and the 1.5.1 pin is
 recorded as the stale-pin trap: the measurements are only as current
 as the engine they load.
+
+
+## The string-leaf experiment (the same day): FALSIFIED
+
+The string/kernel-aware leaf -- the receipt's proposed build item --
+was implemented and A/B'd: with the leaf, the doc0 p50 = 548us;
+without, 446us. The leaf LOSES 23%: the json members are too small
+(the ~200-byte member re-parse already costs less than the leaf's
+spec-detection and double bookkeeping), so the string granularity is
+below the member granularity's break-even. The experiment is reverted
+per the negative-A/B law.
+
+**The 31x remaining gap (446us vs tree-sitter's 14.3us) is NOT the
+member parse** -- it is the splice's fixed overhead (the bounds
+chain, the arena bookkeeping, the per-edit probe). The next tranche
+is a profile of the 446us: the constant-factor diet before any
+further granularity work.
