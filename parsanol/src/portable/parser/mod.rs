@@ -348,8 +348,10 @@ pub struct PortableParser<'a> {
     trivia_drained: bool,
     /// The string-shape memo (rs#574 option A): per named-rule body,
     /// the whole-string spec when the rule is quote-delimited.
-    string_span_rules:
-        std::collections::HashMap<usize, Option<crate::portable::string_shape::StringSpanSpec>>,
+    string_span_rules: std::collections::HashMap<
+        usize,
+        Option<std::sync::Arc<crate::portable::string_shape::StringSpanSpec>>,
+    >,
     /// The internd tag indexes (the VM's tag_seq pattern): the hot
     /// tag-store path otherwise SipHashes the tag string per array
     /// (the profile's find_interned_string_with_offset frame — the
@@ -3088,7 +3090,7 @@ impl<'a> PortableParser<'a> {
         // kernel owns quote-delimited rules on this engine too — the
         // trees carry ONE span, matching the VM.
         if let Some(spec) = self.string_span_spec_for(atom_id) {
-            return self.parse_named_string_span(name, spec, pos);
+            return self.parse_named_string_span(name, &spec, pos);
         }
         // Full snapshot/restore (take_pending_trivia_snapshot parity):
         // an inner Named that succeeded empty can have drained pending
@@ -3203,12 +3205,18 @@ impl<'a> PortableParser<'a> {
     }
 
     /// The string-shape memo lookup (lazily populated per rule body).
+    /// The Arc'd spec: the clone is a pointer, not the struct -- the
+    /// parse_named frame carries 8 bytes instead of the spec's
+    /// quote+interior+escape fields (the deep-input frames grew when
+    /// this landed inline; parsanol-ts#103's depth-guard race lost to
+    /// the native stack at 1.5.21 because of it).
     fn string_span_spec_for(
         &mut self,
         atom_id: usize,
-    ) -> Option<crate::portable::string_shape::StringSpanSpec> {
+    ) -> Option<std::sync::Arc<crate::portable::string_shape::StringSpanSpec>> {
         if !self.string_span_rules.contains_key(&atom_id) {
-            let spec = crate::portable::string_shape::detect(self.grammar, atom_id);
+            let spec = crate::portable::string_shape::detect(self.grammar, atom_id)
+                .map(std::sync::Arc::new);
             self.string_span_rules.insert(atom_id, spec);
         }
         self.string_span_rules.get(&atom_id).cloned().flatten()
@@ -3222,7 +3230,7 @@ impl<'a> PortableParser<'a> {
     fn parse_named_string_span(
         &mut self,
         name: &str,
-        spec: crate::portable::string_shape::StringSpanSpec,
+        spec: &crate::portable::string_shape::StringSpanSpec,
         pos: usize,
     ) -> Result<AtomResult, ParseError> {
         let pending_snapshot = self.pending_trivia.clone();
