@@ -2079,8 +2079,8 @@ mod terminal_bypass_model {
 /// depth abort.
 mod depth_leak_pins {
     use super::super::{AstArena, Grammar, ParseError, PortableParser};
-    use crate::GrammarBuilder;
     use crate::portable::parser_dsl::{choice, dynamic, re, ref_, str, ParsletExt};
+    use crate::GrammarBuilder;
 
     fn grammar() -> Grammar {
         let item = choice([
