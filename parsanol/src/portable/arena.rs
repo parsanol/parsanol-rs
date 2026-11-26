@@ -456,6 +456,31 @@ impl AstArena {
     /// Arrays are flattened for cache efficiency.
     /// Returns the starting index and length.
     #[inline]
+    /// The splice's lazy span shift (rs#528's graft diet): every
+    /// InputRef at or after `stale_start` moves by `delta` — the
+    /// bulk equivalent of the deep `copy_shift_tree` walk. The
+    /// splice then re-references the suffix items' handles instead
+    /// of deep-restoring every node (the leaves are inline values
+    /// in these flat pools, so the pass is sequential and cheap).
+    /// Dead pool nodes (superseded trees) shift harmlessly: nothing
+    /// references them.
+    pub fn shift_input_refs(&mut self, stale_start: u32, delta: i64) {
+        let shift_node = |n: &mut AstNode| {
+            if let AstNode::InputRef { offset, length: _ } = n {
+                if *offset >= stale_start {
+                    *offset = ((*offset as i64) + delta).max(0) as u32;
+                }
+            }
+        };
+        for entry in &mut self.array_pool {
+            shift_node(&mut entry.value);
+        }
+        for entry in &mut self.hash_pool {
+            shift_node(&mut entry.value);
+        }
+    }
+
+    /// Store an untagged array; returns (start, length) in the pool.
     pub fn store_array(&mut self, items: &[AstNode]) -> (u32, u32) {
         let start = self.array_pool.len() as u32;
         for item in items {

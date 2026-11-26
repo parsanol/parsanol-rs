@@ -434,98 +434,8 @@ const OUTPUT_ARENA_BUDGET: usize = 64 * 1024 * 1024;
 /// by `delta`. The suffix bytes are byte-identical at shifted
 /// positions, so the shifted copy of a suffix item is the correct
 /// tree without re-parsing — the body atom carries no memo, and the
-/// probe replay paid a full member parse per suffix item (the
-/// incremental gate's remaining ceiling, now gone).
-fn copy_shift_tree(node: &AstNode, delta: i64, arena: &mut AstArena) -> AstNode {
-    match node {
-        AstNode::InputRef { offset, length } => AstNode::InputRef {
-            offset: ((*offset as i64) + delta).max(0) as u32,
-            length: *length,
-        },
-        AstNode::Array { pool_index, length } => {
-            let items = arena.get_array(*pool_index as usize, *length as usize);
-            let copied: Vec<AstNode> = items
-                .iter()
-                .map(|item| copy_shift_tree(item, delta, arena))
-                .collect();
-            let (start, len) = arena.store_array(&copied);
-            AstNode::Array {
-                pool_index: start,
-                length: len,
-            }
-        }
-        AstNode::Hash { pool_index, length } => {
-            let pairs = arena.get_hash_items(*pool_index as usize, *length as usize);
-            let copied: Vec<(&str, AstNode)> = pairs
-                .iter()
-                .map(|(key, item)| (key.as_str(), copy_shift_tree(item, delta, arena)))
-                .collect();
-            let (start, len) = arena.store_hash(&copied);
-            AstNode::Hash {
-                pool_index: start,
-                length: len,
-            }
-        }
-        AstNode::StringRef { pool_index } => {
-            let text = arena.get_string(*pool_index as usize).to_string();
-            arena.intern_string(&text)
-        }
-        other => other.clone(),
-    }
-}
 
 /// Copy a tree with only the leaves ABOVE the edit shifted by `delta`
-/// (the tree-surgery building block: containers straddling the edit
-/// keep their below-edit leaves untouched and shift the rest).
-fn shift_if_above(
-    node: &AstNode,
-    edit_end_old: usize,
-    delta: i64,
-    arena: &mut AstArena,
-) -> AstNode {
-    match node {
-        AstNode::InputRef { offset, length } => {
-            if (*offset as usize) >= edit_end_old {
-                AstNode::InputRef {
-                    offset: ((*offset as i64) + delta).max(0) as u32,
-                    length: *length,
-                }
-            } else {
-                node.clone()
-            }
-        }
-        AstNode::Array { pool_index, length } => {
-            let items = arena.get_array(*pool_index as usize, *length as usize);
-            let copied: Vec<AstNode> = items
-                .iter()
-                .map(|item| shift_if_above(item, edit_end_old, delta, arena))
-                .collect();
-            let (start, len) = arena.store_array(&copied);
-            AstNode::Array {
-                pool_index: start,
-                length: len,
-            }
-        }
-        AstNode::Hash { pool_index, length } => {
-            let pairs = arena.get_hash_items(*pool_index as usize, *length as usize);
-            let copied: Vec<(&str, AstNode)> = pairs
-                .iter()
-                .map(|(key, item)| {
-                    (
-                        key.as_str(),
-                        shift_if_above(item, edit_end_old, delta, arena),
-                    )
-                })
-                .collect();
-            let (start, len) = arena.store_hash(&copied);
-            AstNode::Hash {
-                pool_index: start,
-                length: len,
-            }
-        }
-        other => other.clone(),
-    }
-}
 
 /// Walk the previous tree through `steps`, collecting each container
 /// node before descending — the surgery's backward map. Named checks
@@ -981,6 +891,7 @@ impl<'a> IncrementalParser<'a> {
             earliest_dirty_offset(&self.dirty_tracker)
         };
         let root_atom = self.grammar.root as u16;
+        let old_len = self.prev_input_len;
         let input_len_changed = self.prev_input_len != input.len();
         self.prev_input_len = input.len();
 
@@ -997,6 +908,20 @@ impl<'a> IncrementalParser<'a> {
             });
         }
 
+        // The graft diet (rs#528): shift the arena's stored spans
+        // IN PLACE before the plan/parse — then the splice re-references
+        // the suffix items' handles instead of deep-restoring every
+        // node (the leaves are inline values in flat pools; the pass
+        // is sequential). Only a single-region edit has one delta;
+        // multi-region edits keep the deep per-tree shift in the
+        // graft (sound fallback).
+        let single_region = self.dirty_tracker.regions().len() == 1;
+        if single_region && !fresh {
+            let delta = input.len() as i64 - old_len as i64;
+            if delta != 0 {
+                self.output_arena.shift_input_refs(cutoff as u32, delta);
+            }
+        }
         if std::env::var("PARG_SPLICE_PHASES").as_deref() == Ok("1") && !fresh {
             eprintln!("PHASE invalidate {}us", __p0.elapsed().as_micros());
         }
@@ -1781,14 +1706,13 @@ impl<'a> IncrementalParser<'a> {
             let phase_t = std::time::Instant::now();
             self.cache = parser.into_cache();
             self.spliced_parses += 1;
-            let delta = self.last_edit.map(|(_, _, d)| d).unwrap_or(0);
             // The deep surgery runs with the session arena back: the
             // deep list's items come from the previous tree, the
             // bridge rides in from the derivation probe.
             let bridge = match deep.as_ref() {
                 Some(dp) => {
                     self.spliced_deep += 1;
-                    self.deep_patch(dp, delta)
+                    self.deep_patch(dp)
                 }
                 None => bridge,
             };
@@ -1797,8 +1721,10 @@ impl<'a> IncrementalParser<'a> {
                 suffix.push(bridge);
                 // The items above the bridge: shifted deep copies of
                 // the previous trees — no parsing, O(nodes).
+                // The pool is pre-shifted (the arena shift above):
+                // re-reference the handles instead of deep-restoring.
                 for item in &plan.items_prev[k + 1..] {
-                    suffix.push(copy_shift_tree(item, delta, &mut self.output_arena));
+                    suffix.push(item.clone());
                 }
             }
             let mut all: Vec<AstNode> = plan.items_prev.iter().take(k).cloned().collect();
@@ -1994,8 +1920,7 @@ impl<'a> IncrementalParser<'a> {
     /// clones | the deep bridge | shifted above), reassemble the
     /// containers up to the level-0 item, refresh every spine run's
     /// bounds, and hand back the patched item tree.
-    fn deep_patch(&mut self, dp: &DeepPatch, delta: i64) -> AstNode {
-        let edit_end_old = self.last_edit.map(|(_, e, _)| e as usize).unwrap_or(0);
+    fn deep_patch(&mut self, dp: &DeepPatch) -> AstNode {
         // get_array slots include the tag at slot 0 — the items are
         // slots 1..; store_tagged_array adds its own tag back.
         let prev_items: Vec<AstNode> = match &dp.prev_deep_list {
@@ -2010,8 +1935,9 @@ impl<'a> IncrementalParser<'a> {
         let bd = dp.below_d_count.min(prev_items.len());
         let mut deep_items: Vec<AstNode> = prev_items[..bd].to_vec();
         deep_items.push(dp.bridge_node.clone());
+        // The pool is pre-shifted: re-reference the handles.
         for item in &prev_items[bd + 1..] {
-            deep_items.push(copy_shift_tree(item, delta, &mut self.output_arena));
+            deep_items.push(item.clone());
         }
         let (pl, ln) = self
             .output_arena
@@ -2043,10 +1969,11 @@ impl<'a> IncrementalParser<'a> {
                             .collect();
                         let mut rebuilt: Vec<AstNode> = Vec::with_capacity(children.len());
                         for (jc, ch) in children.iter().enumerate() {
+                            // The pool is pre-shifted: re-reference.
                             rebuilt.push(if jc == *index {
                                 inner.clone()
                             } else {
-                                shift_if_above(ch, edit_end_old, delta, &mut self.output_arena)
+                                ch.clone()
                             });
                         }
                         let (pl2, ln2) =
