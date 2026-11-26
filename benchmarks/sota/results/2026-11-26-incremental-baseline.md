@@ -92,3 +92,18 @@ member parse** -- it is the splice's fixed overhead (the bounds
 chain, the arena bookkeeping, the per-edit probe). The next tranche
 is a profile of the 446us: the constant-factor diet before any
 further granularity work.
+
+## parsanol-ts#102's root cause (the same day): the canonical checksum is language-dependent
+
+The browser `fromURL` mismatch (stored `sha256:33dd4a…` vs computed
+`sha256:7a371eb…`) is the canonical tier computed over **alphabetized
+JSON** (the workspace's serde_json has no `preserve_order`, so the
+Value maps are BTreeMaps) while the compiler recorded the checksums
+over **insertion-order JSON** (the ruby hashes are ordered). The
+canonical checksum is language-dependent by construction; only the
+browser path fails because the Node entry's verification uses
+different bytes entirely. The fix is an artifact-contract decision
+(the preserve_order migration with the byte-identical outputs
+migration, the byte-tier verification, or the language-independent
+canonical spec) -- the owner's; the diagnosis is complete and the
+repro is offered by the issue author.
