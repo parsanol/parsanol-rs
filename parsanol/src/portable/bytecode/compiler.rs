@@ -3088,7 +3088,7 @@ mod tests {
             "LR survey: {flavors} flavors, {provable_total} provable rules, {refused_total} refused, {shift_preference_buildable} build under shift-preference",
         );
         let mut top: Vec<_> = per_flavor.into_iter().collect();
-        top.sort_by(|a, b| b.1.cmp(&a.1));
+        top.sort_by_key(|&(_, count)| std::cmp::Reverse(count));
         for (name, count) in top.iter().take(6) {
             eprintln!("  {count:5}  {name}");
         }
