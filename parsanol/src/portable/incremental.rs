@@ -1044,6 +1044,7 @@ impl<'a> IncrementalParser<'a> {
         }
         let mut path_plan: Option<PathPlan> = None;
         let mut spine_kept: Option<crate::portable::spine::Spine> = None;
+        let __nav = std::time::Instant::now();
         let splice_gate = !fresh
             && self.dirty_tracker.regions().len() == 1
             && !self
@@ -1150,6 +1151,7 @@ impl<'a> IncrementalParser<'a> {
                 }
             }
         }
+        let __nav_us = __nav.elapsed().as_micros();
 
         // The repetition-spine body (root Repetition, optionally behind
         // one Named) — none only when the grammar has no spine. The
@@ -1768,7 +1770,11 @@ impl<'a> IncrementalParser<'a> {
             // v1 splice's discipline), then rebuild walking the path
             // in reverse.
             if std::env::var("PARG_SPLICE_PHASES").as_deref() == Ok("1") {
-                eprintln!("PHASE probe+reparse {}us", __p1.elapsed().as_micros());
+                eprintln!(
+                    "PHASE probe+reparse {}us (nav {}us = gate+discover+prev-tree walk; parse = the remainder)",
+                    __p1.elapsed().as_micros(),
+                    __nav_us
+                );
             }
             let plan = path_plan.as_ref().expect("path data implies a plan");
             let spine = spine_kept.as_ref().expect("path data implies a spine");
