@@ -104,7 +104,11 @@ pub enum ElementPlan {
 /// and even `#[non_exhaustive]` is gated). The executor prefers this
 /// registry; the tranche-6 `ElementPlan` tree stays for bodies
 /// without envelopes.
+///
+/// Non-exhaustive by design — same additive-registry law as the
+/// tranche-9 tree: new rungs land without a semver-major.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum ElementPlanTree {
     /// A bare span from an inline Str/Re instruction.
     Bare,
@@ -164,7 +168,12 @@ pub struct ElementPlanChoiceArm9 {
 /// stays for bodies without per-arm choices. v1 scope: choice arms
 /// are unnamed (a hash-wrapped arm refuses — the classic path keeps
 /// those).
+///
+/// Non-exhaustive by design — the additive-registry law in Rust
+/// terms: the tranche ladder adds variants without a semver-major
+/// (the release-plz 2.0.0 phantom flagged the tranche-9 HashChoice).
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum ElementPlanTree9 {
     /// A bare span from an inline Str/Re instruction.
     Bare,
