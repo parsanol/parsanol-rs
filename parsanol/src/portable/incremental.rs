@@ -372,6 +372,9 @@ pub struct IncrementalParser<'a> {
     /// coordinates, delta), stashed by the shift retention for the
     /// splice's chain derivation. None when no shift applied.
     last_edit: Option<(usize, u32, i64)>,
+    /// The O(atoms) analysis computed once per session (rs#528's
+    /// splice diet): every edit's parser construction reuses it.
+    analysis: std::sync::Arc<crate::portable::parser_analysis::ParserAnalysis>,
 }
 
 /// The selected nested-run candidate: where to bridge and what the
@@ -593,6 +596,18 @@ impl<'a> IncrementalParser<'a> {
     /// Create a new incremental parser
     #[inline]
     pub fn new(grammar: &'a Grammar) -> Self {
+        let analysis = std::sync::Arc::new(
+            crate::portable::parser_analysis::ParserAnalysis::compute(grammar),
+        );
+        Self::new_with_analysis(grammar, analysis)
+    }
+
+    /// The session computes the O(atoms) analysis ONCE and reuses it
+    /// for every edit's parser construction (the splice diet).
+    pub fn new_with_analysis(
+        grammar: &'a Grammar,
+        analysis: std::sync::Arc<crate::portable::parser_analysis::ParserAnalysis>,
+    ) -> Self {
         let spine_bodies = crate::portable::spine::discover_spines(grammar)
             .iter()
             .map(|s| s.body)
@@ -617,6 +632,7 @@ impl<'a> IncrementalParser<'a> {
             applied_suffix_floor: usize::MAX,
             path_chain: Vec::new(),
             last_edit: None,
+            analysis,
         }
     }
 
@@ -624,6 +640,18 @@ impl<'a> IncrementalParser<'a> {
     /// sessions hold the grammar and the parser together).
     #[inline]
     pub fn owned(grammar: Grammar) -> IncrementalParser<'static> {
+        let analysis = std::sync::Arc::new(
+            crate::portable::parser_analysis::ParserAnalysis::compute(&grammar),
+        );
+        Self::owned_with_analysis(grammar, analysis)
+    }
+
+    /// The owned variant with the precomputed session analysis.
+    #[inline]
+    pub fn owned_with_analysis(
+        grammar: Grammar,
+        analysis: std::sync::Arc<crate::portable::parser_analysis::ParserAnalysis>,
+    ) -> IncrementalParser<'static> {
         let spine_bodies = crate::portable::spine::discover_spines(&grammar)
             .iter()
             .map(|s| s.body)
@@ -648,6 +676,7 @@ impl<'a> IncrementalParser<'a> {
             applied_suffix_floor: usize::MAX,
             path_chain: Vec::new(),
             last_edit: None,
+            analysis,
         }
     }
 
@@ -743,12 +772,13 @@ impl<'a> IncrementalParser<'a> {
             });
         }
 
-        let mut parser = super::parser::PortableParser::new_with_cache_and_snap(
+        let mut parser = super::parser::PortableParser::new_with_cache_snap_and_analysis(
             &self.grammar,
             input,
             arena,
             std::mem::take(&mut self.cache),
             Some(&self.snapshot_arena),
+            &self.analysis,
         );
         let result = parser.parse();
         self.cache = parser.into_cache();
@@ -1186,11 +1216,12 @@ impl<'a> IncrementalParser<'a> {
             (k > 0).then_some((p, k, *max))
         });
 
-        let mut parser = super::parser::PortableParser::new_with_cache_in_place(
+        let mut parser = super::parser::PortableParser::new_with_cache_in_place_and_analysis(
             &self.grammar,
             input,
             &mut self.output_arena,
             std::mem::take(&mut self.cache),
+            &self.analysis,
         );
         // The root repetition records its iteration bounds directly
         // (rs#258): repetition-body memo entries cannot serve the next

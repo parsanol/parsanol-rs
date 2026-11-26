@@ -535,7 +535,7 @@ impl<'a> PortableParser<'a> {
         // rollback flag, which keeps failed branches from leaking
         // arena data.
         let mut parser =
-            Self::with_cache_impl(grammar, input, arena, DenseCache::new(1), None, false);
+            Self::with_cache_impl(grammar, input, arena, DenseCache::new(1), None, false, None);
         parser.reference = true;
         parser
     }
@@ -563,7 +563,29 @@ impl<'a> PortableParser<'a> {
         cache: DenseCache,
         snapshot_arena: Option<&'a AstArena>,
     ) -> Self {
-        Self::with_cache_impl(grammar, input, arena, cache, snapshot_arena, false)
+        Self::with_cache_impl(grammar, input, arena, cache, snapshot_arena, false, None)
+    }
+
+    /// The session-owned variant with the precomputed analysis (see
+    /// `new_with_cache_in_place_and_analysis`).
+    #[inline]
+    pub fn new_with_cache_snap_and_analysis(
+        grammar: &'a Grammar,
+        input: &'a str,
+        arena: &'a mut AstArena,
+        cache: DenseCache,
+        snapshot_arena: Option<&'a AstArena>,
+        analysis: &std::sync::Arc<ParserAnalysis>,
+    ) -> Self {
+        Self::with_cache_impl(
+            grammar,
+            input,
+            arena,
+            cache,
+            snapshot_arena,
+            false,
+            Some(analysis),
+        )
     }
 
     /// Create a parser whose snapshot-marked cache entries reference
@@ -580,7 +602,23 @@ impl<'a> PortableParser<'a> {
         arena: &'a mut AstArena,
         cache: DenseCache,
     ) -> Self {
-        Self::with_cache_impl(grammar, input, arena, cache, None, true)
+        Self::with_cache_impl(grammar, input, arena, cache, None, true, None)
+    }
+
+    /// The session-owned variant (rs#528's splice diet): the caller
+    /// supplies the PRECOMPUTED analysis so an incremental session
+    /// computes it once instead of per edit (the per-edit
+    /// `ParserAnalysis::compute` was the parser-construction fifth of
+    /// the splice's fixed overhead).
+    #[inline]
+    pub fn new_with_cache_in_place_and_analysis(
+        grammar: &'a Grammar,
+        input: &'a str,
+        arena: &'a mut AstArena,
+        cache: DenseCache,
+        analysis: &std::sync::Arc<ParserAnalysis>,
+    ) -> Self {
+        Self::with_cache_impl(grammar, input, arena, cache, None, true, Some(analysis))
     }
 
     /// Create a parser that reads precomputed analyses instead of
@@ -613,8 +651,16 @@ impl<'a> PortableParser<'a> {
         cache: DenseCache,
         snapshot_arena: Option<&'a AstArena>,
         snapshots_in_live: bool,
+        analysis: Option<&std::sync::Arc<ParserAnalysis>>,
     ) -> Self {
-        let analysis = ParserAnalysis::compute(grammar);
+        let owned;
+        let analysis = match analysis {
+            Some(shared) => shared.as_ref(),
+            None => {
+                owned = ParserAnalysis::compute(grammar);
+                &owned
+            }
+        };
         let governor = ResourceGovernor::new()
             .with_max_input_size(DEFAULT_MAX_INPUT_SIZE)
             .with_max_recursion_depth(DEFAULT_MAX_RECURSION_DEPTH);
