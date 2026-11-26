@@ -2066,3 +2066,72 @@ mod terminal_bypass_model {
         }
     }
 }
+
+/// parsanol-ts#103 regression 2: the folded dispatch body's two `?`
+/// sites (the resource check and the terminal-direct evaluation)
+/// early-returned PAST the tail bookkeeping, leaking one dbg_depth
+/// unit per failing terminal dispatch. The leak inflated the live
+/// depth until the typed depth guard fired on small refusing inputs —
+/// the amath `α+)` repro refused as a depth abort instead of a syntax
+/// failure. Both sites now break the label; these pins hold the
+/// invariant: the counter returns to zero, and a budget well above
+/// the natural refusal depth reports the syntax failure, never the
+/// depth abort.
+mod depth_leak_pins {
+    use super::super::{AstArena, Grammar, ParseError, PortableParser};
+    use crate::GrammarBuilder;
+    use crate::portable::parser_dsl::{choice, dynamic, re, ref_, str, ParsletExt};
+
+    fn grammar() -> Grammar {
+        let item = choice([
+            dynamic(str("ab")),
+            dynamic(re("[a-z]").then(str("1").optional())),
+            dynamic(re("[0-9]")),
+            dynamic(str("(").then(ref_("list")).then(str(")"))),
+        ]);
+        GrammarBuilder::new()
+            .rule("item", item)
+            .rule(
+                "list",
+                ref_("item").then(str(",").then(ref_("item")).many()),
+            )
+            .rule("root", ref_("list").then(str(";").optional()))
+            .build()
+    }
+
+    /// Uppercase letters refuse every item arm, so the parse fails
+    /// through repeated failing Str/Re dispatches — the exact path
+    /// that leaked one depth unit per failed terminal.
+    #[test]
+    fn a_failing_parse_returns_the_depth_counter_to_zero() {
+        let g = grammar();
+        let input = "ZZ;";
+        let mut arena = AstArena::new();
+        arena.set_input(input.to_string());
+        let mut parser = PortableParser::new(&g, input, &mut arena);
+        assert!(parser.parse().is_err(), "the input refuses");
+        assert_eq!(
+            parser.dbg_depth, 0,
+            "every dispatch must run the tail bookkeeping: the \
+             counter must return to zero after the parse"
+        );
+    }
+
+    #[test]
+    fn a_budget_above_the_natural_refusal_depth_reports_syntax_not_depth() {
+        let g = grammar();
+        let input = "ZZ;";
+        let mut arena = AstArena::new();
+        arena.set_input(input.to_string());
+        let mut parser = PortableParser::new(&g, input, &mut arena);
+        parser.set_max_call_depth(6);
+        match parser.parse() {
+            Err(ParseError::RecursionLimitExceeded { depth, max_depth }) => panic!(
+                "the refusal tripped the depth guard at {depth}/{max_depth}: \
+                 leaked depth units from early returns past the tail"
+            ),
+            Err(_) => {}
+            Ok(_) => panic!("the input refuses"),
+        }
+    }
+}
