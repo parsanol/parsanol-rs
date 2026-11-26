@@ -1022,19 +1022,20 @@ impl<'a> IncrementalParser<'a> {
                 "SPLICE-GATE refuse fresh={} regions={} dynamic={} splice={}",
                 fresh,
                 self.dirty_tracker.regions().len(),
-                self.grammar.atoms.iter().any(|a| matches!(a, Atom::Dynamic { .. })),
+                self.grammar
+                    .atoms
+                    .iter()
+                    .any(|a| matches!(a, Atom::Dynamic { .. })),
                 splice.is_some()
             );
         }
-        if splice_gate
-        {
+        if splice_gate {
             let spine = crate::portable::spine::discover_spine(&self.grammar);
             if spine.is_none() && std::env::var("PARG_SPLICE_DIAG").as_deref() == Ok("1") {
                 eprintln!("SPLICE-GATE no-spine");
             }
             if let Some(spine) = spine {
-                if spine.path.is_empty()
-                    && std::env::var("PARG_SPLICE_DIAG").as_deref() == Ok("1")
+                if spine.path.is_empty() && std::env::var("PARG_SPLICE_DIAG").as_deref() == Ok("1")
                 {
                     eprintln!("SPLICE-GATE empty-path");
                 }
@@ -1732,6 +1733,7 @@ impl<'a> IncrementalParser<'a> {
             // in reverse.
             let plan = path_plan.as_ref().expect("path data implies a plan");
             let spine = spine_kept.as_ref().expect("path data implies a spine");
+            let phase_t = std::time::Instant::now();
             self.cache = parser.into_cache();
             self.spliced_parses += 1;
             let delta = self.last_edit.map(|(_, _, d)| d).unwrap_or(0);
@@ -1791,6 +1793,13 @@ impl<'a> IncrementalParser<'a> {
                     }
                     crate::portable::spine::SpineStep::Alternative { .. } => {}
                 }
+            }
+            if std::env::var("PARG_SPLICE_PHASES").as_deref() == Ok("1") {
+                eprintln!(
+                    "SPLICE-PHASES cache+setup {}us total {}us",
+                    phase_t.elapsed().as_micros(),
+                    phase_t.elapsed().as_micros()
+                );
             }
             Ok(inner)
         } else {
