@@ -31,3 +31,26 @@ per-char scan dispatch and loop constants (item 11's Scan), not in
 node building. Pooled-tree-write work is therefore deprioritized
 until the Scan round lands; this measurement method (strip `as`,
 bake, harness) is one command to re-run after each engine round.
+
+## Round 2026-11-27: the re-run after the Scan round — construction stays second-order; the item closes
+
+The note above promised a re-run once the Scan round landed; it
+landed (item 11's Entity-extraction leg, 2026-11-27). The same
+strip-`as`-and-bake method re-run on the current engine: the
+capture-free variant no longer isolates construction at all — the
+stripped grammar's loops ROUTE differently (the capture-free shapes
+take the DfaRun/bulk lanes the captured shapes refuse), so the
+delta now measures routing gains against construction cost, not
+construction alone (the json corpus: captured 6.54 ms vs stripped
+6.63 ms total — parity within noise).
+
+The conclusion stands a fortiori: construction was ~11% when
+per-char dispatch dominated; the bulk-run rounds ate the dispatch
+share, so construction's share only grew smaller relative to the
+whole. The ≥30% gate for the lean node encoding is nowhere near
+met, and the pooled-write work stays deprioritized with its
+original evidence (the incremental session already pools). The
+split method's caveat is recorded: post-routing, capture-stripping
+is no longer a valid construction isolate — a recognition-only
+runner mode (`--no-ast`) would be, and remains the method if the
+question ever reopens. The item closes.
