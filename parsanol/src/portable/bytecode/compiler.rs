@@ -182,14 +182,6 @@ pub(crate) fn element_plan_tree9(
             })
         }
         Atom::Alternative { atoms } if !atoms.is_empty() => {
-            // A named wrap around a choice refuses (v1:
-            // unnamed arms only).
-            if name.is_some() {
-                if plan9_diag_enabled() && depth <= 7 {
-                    eprintln!("PLAN9-REFUSE named-choice atom={atom_idx} depth={depth}");
-                }
-                return None;
-            }
             let mut arms = Vec::with_capacity(atoms.len());
             for &arm in atoms {
                 let plan = plan9_step(grammar, arm, depth + 1, "choice-arm")?;
@@ -198,7 +190,13 @@ pub(crate) fn element_plan_tree9(
                     plan: Box::new(plan),
                 });
             }
-            Some(ElementPlanTree9::Choice(arms))
+            // The named wrap rides the tree: the assembly picks the
+            // arm by the last-leaf cut and wraps {name: the arm's
+            // value} (the classic's BuildHash shape).
+            Some(match name {
+                Some(n) => ElementPlanTree9::HashChoice(n, arms),
+                None => ElementPlanTree9::Choice(arms),
+            })
         }
         // The EXACT-COPY repetition (min == max) mirrors
         // the builder's unroll: n copies of the body plan,

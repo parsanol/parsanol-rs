@@ -147,6 +147,9 @@ enum AsmNode {
     /// whose LAST leaf slot carries a cut (the arms' ranges are
     /// contiguous from the choice's first slot).
     Choice(Vec<AsmChoiceArm>),
+    /// The Named wrap around a choice: the pick as Choice, the value
+    /// assembled as {name: the arm's value}.
+    HashChoice(u32, Vec<AsmChoiceArm>),
 }
 
 /// One tranche-9 choice arm's resolved plan + slot count.
@@ -173,6 +176,9 @@ fn plan_tree9_envelope_count(plans: &[super::dfa_table::ElementPlanTree9]) -> us
                 children.iter().map(count).sum()
             }
             super::dfa_table::ElementPlanTree9::Choice(arms) => {
+                arms.iter().map(|arm| count(&arm.plan)).sum()
+            }
+            super::dfa_table::ElementPlanTree9::HashChoice(_, arms) => {
                 arms.iter().map(|arm| count(&arm.plan)).sum()
             }
             _ => 0,
@@ -222,6 +228,15 @@ fn resolve_plan_tree9(
                 AsmNode::HashEnvelope(arena.intern_string_index(name), ordinal)
             }
             super::dfa_table::ElementPlanTree9::Choice(arms) => AsmNode::Choice(
+                arms.iter()
+                    .map(|arm| AsmChoiceArm {
+                        plan: Box::new(resolve(&arm.plan, arena, env_counter)),
+                        leaf_count: arm.leaf_count,
+                    })
+                    .collect(),
+            ),
+            super::dfa_table::ElementPlanTree9::HashChoice(name, arms) => AsmNode::HashChoice(
+                arena.intern_string_index(name),
                 arms.iter()
                     .map(|arm| AsmChoiceArm {
                         plan: Box::new(resolve(&arm.plan, arena, env_counter)),
@@ -992,43 +1007,66 @@ impl<'a> BytecodeVM<'a> {
             // assemble the arm's plan recursively — it consumes
             // exactly its leaf_count slots.
             AsmNode::Choice(arms) => {
-                let mut offset = *cursor;
-                let mut matched: Option<&AsmChoiceArm> = None;
-                for arm in arms {
-                    let range = offset..offset + arm.leaf_count as usize;
-                    if cuts
-                        .get(range.clone())
-                        .is_some_and(|slice| slice.iter().any(|&c| c > *prev))
-                    {
-                        matched = Some(arm);
-                        break;
-                    }
-                    offset += arm.leaf_count as usize;
-                }
-                let Some(arm) = matched else {
-                    // No arm's last slot carries a cut: the walk never
-                    // matched any arm here. The gate's non-nullable
-                    // arms make this unreachable in practice; the safe
-                    // fallback is the empty span at prev (never read
-                    // unset cuts — that would underflow the span).
-                    let start = *prev;
-                    let total: usize = arms.iter().map(|a| a.leaf_count as usize).sum();
-                    *cursor += total;
-                    return self.arena.input_ref(start, 0);
-                };
-                // The parent's slot contract: the choice consumed its
-                // FULL slot range (the per-arm union), not just the
-                // matched arm's leaves — the following elements' slots
-                // were numbered past every arm's range.
-                let total: usize = arms.iter().map(|a| a.leaf_count as usize).sum();
-                let start_slots = *cursor;
-                *cursor = offset;
+                self.assemble_choice(arms, cuts, cursor, prev, tag_seq, inner_cuts, tag_rep)
+            }
+            AsmNode::HashChoice(name_idx, arms) => {
                 let value =
-                    self.assemble_node(&arm.plan, cuts, cursor, prev, tag_seq, inner_cuts, tag_rep);
-                *cursor = start_slots + total;
-                value
+                    self.assemble_choice(arms, cuts, cursor, prev, tag_seq, inner_cuts, tag_rep);
+                // The classic BuildHash shape: {name: the matched arm's value}.
+                let (pool_index, length) = self.arena.store_hash_indexed_key(*name_idx, value);
+                AstNode::Hash { pool_index, length }
             }
         }
+    }
+
+    /// The choice's shared pick: the arm whose LAST leaf slot
+    /// carries a cut (the whole-range scan), assembled against the
+    /// parent's full slot-range contract.
+    #[allow(clippy::too_many_arguments)]
+    fn assemble_choice(
+        &mut self,
+        arms: &[AsmChoiceArm],
+        cuts: &[usize],
+        cursor: &mut usize,
+        prev: &mut usize,
+        tag_seq: u32,
+        inner_cuts: &[Vec<usize>],
+        tag_rep: u32,
+    ) -> AstNode {
+        let mut offset = *cursor;
+        let mut matched: Option<&AsmChoiceArm> = None;
+        for arm in arms {
+            let range = offset..offset + arm.leaf_count as usize;
+            if cuts
+                .get(range.clone())
+                .is_some_and(|slice| slice.iter().any(|&c| c > *prev))
+            {
+                matched = Some(arm);
+                break;
+            }
+            offset += arm.leaf_count as usize;
+        }
+        let Some(arm) = matched else {
+            // No arm's last slot carries a cut: the walk never
+            // matched any arm here. The gate's non-nullable
+            // arms make this unreachable in practice; the safe
+            // fallback is the empty span at prev (never read
+            // unset cuts — that would underflow the span).
+            let start = *prev;
+            let total: usize = arms.iter().map(|a| a.leaf_count as usize).sum();
+            *cursor += total;
+            return self.arena.input_ref(start, 0);
+        };
+        // The parent's slot contract: the choice consumed its
+        // FULL slot range (the per-arm union), not just the
+        // matched arm's leaves — the following elements' slots
+        // were numbered past every arm's range.
+        let total: usize = arms.iter().map(|a| a.leaf_count as usize).sum();
+        let start_slots = *cursor;
+        *cursor = offset;
+        let value = self.assemble_node(&arm.plan, cuts, cursor, prev, tag_seq, inner_cuts, tag_rep);
+        *cursor = start_slots + total;
+        value
     }
 
     /// Push one routed-loop iteration's value: the bare span, the
