@@ -1039,4 +1039,33 @@ mod tests {
             assert!(cache.get(pos, 1, 0).is_some(), "snapshot {pos} missing");
         }
     }
+
+    /// The P2 invariant pin: a snapshot-marked entry survives a live
+    /// arena rollback (its node data lives in the stable snapshot
+    /// arena) while a plain entry of the same generation dies -- the
+    /// exemption is the boundary, not a general pass.
+    #[test]
+    fn snapshot_entries_survive_live_arena_rollbacks_and_plain_entries_do_not() {
+        let mut cache = DenseCache::new(8);
+        let node = AstNode::InputRef {
+            offset: 0,
+            length: 1,
+        };
+
+        cache.insert(CacheEntry::from_node(10, 1, 11, &node, 5));
+        let mut snap = CacheEntry::from_node(20, 1, 21, &node, 5);
+        snap.make_snapshot(7, 9);
+        cache.insert(snap);
+
+        // The arena rolled back: generation moved 5 -> 6.
+        assert!(
+            cache.get(10, 1, 6).is_none(),
+            "the plain entry must die with the rollback"
+        );
+        let hit = cache
+            .get(20, 1, 6)
+            .expect("the snapshot entry must survive the rollback");
+        assert!(hit.is_snapshot(), "the survivor is the snapshot entry");
+    }
+
 }
