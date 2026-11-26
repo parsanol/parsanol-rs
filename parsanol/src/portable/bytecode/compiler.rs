@@ -2190,9 +2190,19 @@ impl Compiler {
         if let Some(cached) = self.lr_table_memo.get(&atom_idx) {
             return cached.clone();
         }
-        let table =
+        // The P3(a) A/B gate: PARG_LR_SHIFT=1 flips the seam to the
+        // shift-preference construction (the greedy-loop class -- the
+        // PEG's own maximal-munch continuation); the default stays
+        // strict until the receipt lands.
+        let table = if std::env::var("PARG_LR_SHIFT").as_deref() == Ok("1") {
+            crate::portable::bytecode::lr_table::build_lr_table_shift_preference(
+                &self.grammar,
+                atom_idx,
+            )
+        } else {
             crate::portable::bytecode::lr_table::build_lr_table_strict(&self.grammar, atom_idx)
-                .ok();
+        }
+        .ok();
         self.lr_table_memo.insert(atom_idx, table.clone());
         table
     }

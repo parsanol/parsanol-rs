@@ -144,7 +144,7 @@ pub struct LrBuildError(pub String);
 /// build the canonical LR(1) table. Refuses anything the byte-level
 /// model can't express — the classic keeps the rule.
 pub fn build_lr_table(grammar: &Grammar, entry: usize) -> Result<LrTable, LrBuildError> {
-    lr_table_construction(grammar, entry, false)
+    lr_table_construction(grammar, entry, Strictness::Resolved)
 }
 
 /// The STRICT variant: any applied conflict resolution (the
@@ -154,13 +154,36 @@ pub fn build_lr_table(grammar: &Grammar, entry: usize) -> Result<LrTable, LrBuil
 /// only takes naturally conflict-free graphs, and the differential
 /// gates every one it takes.
 pub fn build_lr_table_strict(grammar: &Grammar, entry: usize) -> Result<LrTable, LrBuildError> {
-    lr_table_construction(grammar, entry, true)
+    lr_table_construction(grammar, entry, Strictness::Strict)
+}
+
+/// The P3(a) seam gate: the shift-preference resolutions apply (the
+/// loop's continue-shift beating a reduce at that byte is the PEG's
+/// own greedy continuation -- the maximal-munch law, not a
+/// heuristic); the greedy-direction and the reduce/reduce classes
+/// still refuse. The canonical-LR/PEG divergence classes stay out.
+pub fn build_lr_table_shift_preference(
+    grammar: &Grammar,
+    entry: usize,
+) -> Result<LrTable, LrBuildError> {
+    lr_table_construction(grammar, entry, Strictness::ShiftPreferenceOnly)
+}
+
+/// The conflict-resolution policy the construction applies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Strictness {
+    /// No resolution: any conflict refuses.
+    Strict,
+    /// The shift-preference class applies; the others refuse.
+    ShiftPreferenceOnly,
+    /// All three resolution classes apply (the analysis surface).
+    Resolved,
 }
 
 fn lr_table_construction(
     grammar: &Grammar,
     entry: usize,
-    strict: bool,
+    strict: Strictness,
 ) -> Result<LrTable, LrBuildError> {
     let mut lower = Lowering::default();
     let entry_nt = lower.lower_rule(grammar, entry, 0)?;
@@ -638,7 +661,7 @@ fn lr1_construct(
     productions: &[LrProduction],
     nonterminal_count: u32,
     entry_nt: u32,
-    strict: bool,
+    strict: Strictness,
 ) -> Result<LrTable, LrBuildError> {
     // The augmented start production: S' → entry, EOF-lookahead.
     let mut prods = productions.to_vec();
@@ -932,8 +955,9 @@ fn lr1_construct(
                 } else if actions[*slot as usize] != act {
                     match &actions[*slot as usize] {
                         // The shift arrives at a reduce-taken byte:
-                        // the greedy law — the shift replaces it.
-                        LrAction::Reduce(_) if !strict => {
+                        // the greedy direction (class b). Only the
+                        // fully-resolved analysis surface applies it.
+                        LrAction::Reduce(_) if strict == Strictness::Resolved => {
                             actions.push(act);
                             *slot = (actions.len() - 1) as u32;
                             Ok(())
@@ -1008,7 +1032,7 @@ fn lr1_construct(
                         // continue-shift beats this reduce at this
                         // byte; the reduce keeps its other bytes.
                         // STRICT: the resolution refuses.
-                        if strict {
+                        if strict == Strictness::Strict {
                             return Err(LrBuildError(format!(
                                 "resolved conflict at state {} byte {b}",
                                 worklist - 1
@@ -1022,7 +1046,7 @@ fn lr1_construct(
                         if let (LrAction::Reduce(old_p), LrAction::Reduce(new_p)) =
                             (&actions[*slot as usize], &act)
                         {
-                            if strict {
+                            if strict != Strictness::Resolved {
                                 return Err(LrBuildError(format!(
                                     "resolved conflict at state {} byte {b}",
                                     worklist - 1
