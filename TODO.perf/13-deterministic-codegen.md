@@ -608,6 +608,23 @@ sites route-shaped (87.2%)** — 435 terminal + 606 wrapped-terminal +
 sequences inside choices) + 104 `seq-unplan-able`. The choice class
 reports the shape; the disjointness gate is the router's refinement.
 
+## The named-choice tranche (2026-11-26, shape-only): 1414/1495 (94.6%)
+
+The v1 "unnamed arms only" refusal dropped: the plan tree carries
+`HashChoice` (the additive variant), the builder forks/joins the arms
+as Choice, and the executor's shared `assemble_choice` picks the arm
+by the last-leaf cut and wraps the value via
+`store_hash_indexed_key` -- the classic BuildHash shape. The 49
+named-choice loop sites route (the census's dominant residue class,
+found via the PARG_PLAN9_DIAG refusal map) and the unblock ripples
+through the sequence shapes carrying them: choice 283 -> 297, seq
+57 -> 68. **Aligned census: 1414/1495 route-shaped.** The tail = 81:
+14 `other` (the copublisher giants, the Lookahead-guarded bodies --
+the zero-width architecture slice -- and the deep refusals) + 67
+`seq-unplan-able` (the recursive residue, the documented refusals).
+Proof: the fleet 614/614 byte-identical, the all-targets battery
+green, the hash-wrap spec pinned (the named-choice tranche PR).
+
 ## The census mirror de-drifted (2026-11-25, shape-only, post-tranche-9)
 
 The survey's plan_able/body_class had drifted from the router: they
