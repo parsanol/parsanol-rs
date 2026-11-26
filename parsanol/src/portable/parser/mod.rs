@@ -1295,7 +1295,16 @@ impl<'a> PortableParser<'a> {
                 Some(Atom::Lookahead { .. }) => self.perf.dispatch_look += 1,
                 _ => self.perf.dispatch_other += 1,
             }
-            self.check_resources()?;
+            // `?` would early-return PAST the tail bookkeeping (the
+            // dbg_depth decrement, the max-end tracking, the retry cache
+            // clear): parsanol-ts#103 regression 2 — every failing
+            // terminal dispatch leaked one depth unit and the next
+            // dispatch sat one level deeper, so small refusing inputs
+            // tripped the typed depth guard. Break the label instead;
+            // the tail below owns every exit.
+            if let Err(error) = self.check_resources() {
+                break 'atom_body Err(error);
+            }
 
             // Reference mode (TODO.sota/8 B1): the plain relation. Every
             // memo table is bypassed — the dense cache, the capture-keyed
@@ -1322,7 +1331,10 @@ impl<'a> PortableParser<'a> {
             if self.compatibility == ParserCompatibility::Strict
                 && self.terminal_direct.get(atom_id).is_some_and(|&d| d)
             {
-                let result = self.parse_atom_uncached(atom_id, pos, consume_all)?;
+                let result = match self.parse_atom_uncached(atom_id, pos, consume_all) {
+                    Ok(result) => result,
+                    Err(error) => break 'atom_body Err(error),
+                };
                 // consume_all is re-applied per application, as on a memo hit.
                 if consume_all && result.end_pos != self.input.len() {
                     break 'atom_body Err(ParseError::Failed { position: pos });
