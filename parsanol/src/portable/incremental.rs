@@ -430,13 +430,6 @@ pub(crate) type SpineRun = (usize, u32, usize, Vec<(u32, u32)>);
 /// instead of growing without bound across an edit session.
 const OUTPUT_ARENA_BUDGET: usize = 64 * 1024 * 1024;
 
-/// Deep-copy a tree into the arena with every InputRef offset shifted
-/// by `delta`. The suffix bytes are byte-identical at shifted
-/// positions, so the shifted copy of a suffix item is the correct
-/// tree without re-parsing — the body atom carries no memo, and the
-
-/// Copy a tree with only the leaves ABOVE the edit shifted by `delta`
-
 /// Walk the previous tree through `steps`, collecting each container
 /// node before descending — the surgery's backward map. Named checks
 /// the hash key; Sequence takes slot `index + 1` (tagged arrays);
