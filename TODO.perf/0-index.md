@@ -11,13 +11,13 @@ decomposition of everything left on parsanol performance:
 | 3 | Codegen: shared-prefix split | TODO.max-perf/5 (JIT half) | SHIPPED (this round); cranelift deferred, see item |
 | 4 | Incremental reparsing by edit span | TODO.max-perf/7 | SHIPPED (this round) |
 | 5 | VM host-callable Dynamic contexts | TODO.max-perf/4 remainder | SHIPPED (this round) |
-| 6 | Wide scan kernels (32-byte blocks) | follow-up of 2 | this round |
+| 6 | Wide scan kernels (32-byte blocks) | follow-up of 2 | SHIPPED (verified 2026-11-27: the asm inspection + the 13.8x A/B) |
 | 7 | Dense rule-call memo for the VM | follow-up of the phase-2 wiring | measured negative; reverted (see item) |
 | 8 | Incremental latency benchmark | follow-up of 4 | SHIPPED (this round) |
 | 9 | Prefix-tree reuse | the measured ceiling of 4/8 | RECEIPT-ELEVATED (rs#528: reused 0/200 on JSON; the named fix) |
 | 10 | Success-path diagnostics overhead | rs#533 receipt (VM tracks every failed alternative) | SHIPPED (VM 6.2x) |
-| 11 | Determinism dispatch: Switch tables + Scan runs | rs#533 receipt (Lark 3.1x ahead = strategy tax) | dispatch LANDED (8.7x cum.); Scan open |
-| 12 | Recognition/construction split + pooled tree writes | rs#533 receipt | this campaign |
+| 11 | Determinism dispatch: Switch tables + Scan runs | rs#533 receipt (Lark 3.1x ahead = strategy tax) | LANDED (8.7x cum. + the charset merge + the Entity-extraction leg, 2026-11-27) |
+| 12 | Recognition/construction split + pooled tree writes | rs#533 receipt | CLOSED (2026-11-27: the post-Scan re-run keeps construction second-order; the ≥30% gate unmet) |
 | 13 | Deterministic-subset codegen (LR tables / native SM) | item 3's codegen line; the tree-sitter endgame | specced |
 
 Done items stay done: lead-byte dispatch, parser hot path, the
