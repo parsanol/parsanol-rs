@@ -942,8 +942,8 @@ mod byte_tier_tests {
             "  entry main: main\n",
             "}\n"
         );
-        let env = crate::parg::frontend::envelope::compile_source(source)
-            .expect("grammar compiles");
+        let env =
+            crate::parg::frontend::envelope::compile_source(source).expect("grammar compiles");
         let value = serde_json::to_value(&env).expect("serializes");
         let obj = value.as_object().expect("object");
 
@@ -959,13 +959,10 @@ mod byte_tier_tests {
                 ordered.insert(k.clone(), v.clone());
             }
         }
-        let text =
-            serde_json::to_string(&serde_json::Value::Object(ordered))
-                .expect("serializes");
+        let text = serde_json::to_string(&serde_json::Value::Object(ordered)).expect("serializes");
         let digest = Sha256::digest(text.as_bytes());
         let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
-        let sealed = text
-            .replace(&"0".repeat(64), &format!("sha256:{hex}"));
+        let sealed = text.replace(&"0".repeat(64), &format!("sha256:{hex}"));
 
         let artifact = PargArtifact::from_json(&sealed)
             .expect("the ruby-baked envelope loads via the byte tier");

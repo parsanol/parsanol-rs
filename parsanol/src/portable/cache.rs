@@ -1067,5 +1067,4 @@ mod tests {
             .expect("the snapshot entry must survive the rollback");
         assert!(hit.is_snapshot(), "the survivor is the snapshot entry");
     }
-
 }
