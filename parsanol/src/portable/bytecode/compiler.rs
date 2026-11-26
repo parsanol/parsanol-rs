@@ -3280,6 +3280,7 @@ mod tests {
         let mut sites_total = 0usize;
         let mut routed_total = 0usize;
         let mut lr_routed_total = 0usize;
+        let mut lr_shift_total = 0usize;
         let mut classes: std::collections::BTreeMap<&'static str, (usize, usize)> =
             Default::default();
         for entry in std::fs::read_dir(&dir).expect("artifact dir") {
@@ -3310,46 +3311,65 @@ mod tests {
             // coverage (the minimal repro `doc = 0*(item)` lowers to
             // LrRun while the DfaRun census calls it unrouted). Union
             // the reachable atoms of every provable rule; an unrouted
-            // site inside that set is lr-covered.
-            let lr_atoms: std::collections::HashSet<usize> = {
-                fn reachable(
-                    grammar: &Grammar,
-                    idx: usize,
-                    set: &mut std::collections::HashSet<usize>,
-                    depth: u8,
-                ) {
-                    if depth > 64 || !set.insert(idx) {
-                        return;
-                    }
-                    match grammar.get_atom(idx) {
-                        Some(Atom::Entity { atom }) | Some(Atom::Named { atom, .. }) => {
-                            reachable(grammar, *atom, set, depth + 1)
-                        }
-                        Some(Atom::Sequence { atoms }) | Some(Atom::Alternative { atoms }) => {
-                            for &a in atoms {
-                                reachable(grammar, a, set, depth + 1);
-                            }
-                        }
-                        Some(Atom::Repetition { atom, .. }) => {
-                            reachable(grammar, *atom, set, depth + 1)
-                        }
-                        Some(Atom::Scope { atom, .. }) | Some(Atom::Ignore { atom, .. }) => {
-                            reachable(grammar, *atom, set, depth + 1)
-                        }
-                        Some(Atom::Lookahead { atom, .. }) => {
-                            reachable(grammar, *atom, set, depth + 1)
-                        }
-                        _ => {}
-                    }
+            // site inside that set is lr-covered. The SHIFT set adds
+            // the refused rules that build under the shift-preference
+            // seam — the PARG_LR_SHIFT=1 arm routes them TODAY (the
+            // compile path consults the builder directly, so the gate
+            // covers them without any provability change).
+            fn reachable(
+                grammar: &Grammar,
+                idx: usize,
+                set: &mut std::collections::HashSet<usize>,
+                depth: u8,
+            ) {
+                if depth > 64 || !set.insert(idx) {
+                    return;
                 }
+                match grammar.get_atom(idx) {
+                    Some(Atom::Entity { atom }) | Some(Atom::Named { atom, .. }) => {
+                        reachable(grammar, *atom, set, depth + 1)
+                    }
+                    Some(Atom::Sequence { atoms }) | Some(Atom::Alternative { atoms }) => {
+                        for &a in atoms {
+                            reachable(grammar, a, set, depth + 1);
+                        }
+                    }
+                    Some(Atom::Repetition { atom, .. }) => {
+                        reachable(grammar, *atom, set, depth + 1)
+                    }
+                    Some(Atom::Scope { atom, .. }) | Some(Atom::Ignore { atom, .. }) => {
+                        reachable(grammar, *atom, set, depth + 1)
+                    }
+                    Some(Atom::Lookahead { atom, .. }) => reachable(grammar, *atom, set, depth + 1),
+                    _ => {}
+                }
+            }
+            let (lr_atoms, lr_shift_atoms): (
+                std::collections::HashSet<usize>,
+                std::collections::HashSet<usize>,
+            ) = {
                 let mut set = std::collections::HashSet::new();
+                let mut shift = std::collections::HashSet::new();
+                let grammar_for_sp = grammar.clone();
                 let compiler = Compiler::new(grammar.clone());
                 for (rule_idx, verdict) in compiler.rule_lr_provability() {
-                    if matches!(verdict, LrVerdict::Provable { .. }) {
-                        reachable(&grammar, rule_idx, &mut set, 0);
+                    match verdict {
+                        LrVerdict::Provable { .. } => {
+                            reachable(&grammar, rule_idx, &mut set, 0);
+                        }
+                        LrVerdict::Refused { .. } => {
+                            if crate::portable::bytecode::lr_table::build_lr_table_shift_preference(
+                                &grammar_for_sp,
+                                rule_idx,
+                            )
+                            .is_ok()
+                            {
+                                reachable(&grammar_for_sp, rule_idx, &mut shift, 0);
+                            }
+                        }
                     }
                 }
-                set
+                (set, shift)
             };
             for idx in 0..grammar.atoms.len() {
                 if let Some(Atom::Repetition {
@@ -3413,6 +3433,25 @@ mod tests {
                         routed_total += 1;
                     } else if lr_atoms.contains(&idx) {
                         lr_routed_total += 1;
+                    } else if lr_shift_atoms.contains(&idx) {
+                        lr_shift_total += 1;
+                    } else if std::env::var("PARG_SURVEY_DIAG").as_deref() == Ok("1") {
+                        // The both-lanes-refused residue: the SHIFT
+                        // builder's refusal reason completes the
+                        // documented-refusals leg (the DFA-lane reason
+                        // is the body_class; this is the LR side).
+                        if let Err(e) =
+                            crate::portable::bytecode::lr_table::build_lr_table_shift_preference(
+                                &grammar, idx,
+                            )
+                        {
+                            eprintln!(
+                                "DIAG both-refused {} {}: {:?}",
+                                path.file_name().and_then(|n| n.to_str()).unwrap_or("?"),
+                                idx,
+                                e
+                            );
+                        }
                     }
                     let slot = classes.entry(class).or_insert((0, 0));
                     slot.0 += 1;
@@ -3423,8 +3462,8 @@ mod tests {
             }
         }
         eprintln!(
-            "Loop-routing survey: {flavors} flavors, {sites_total} unbounded loop sites, {routed_total} dfa-routed, {lr_routed_total} lr-covered, {} refused",
-            sites_total - routed_total - lr_routed_total
+            "Loop-routing survey: {flavors} flavors, {sites_total} unbounded loop sites, {routed_total} dfa-routed, {lr_routed_total} lr-covered, {lr_shift_total} lr-covered-under-shift, {} refused",
+            sites_total - routed_total - lr_routed_total - lr_shift_total
         );
         for (class, (total, routed)) in &classes {
             eprintln!("  {routed:5}/{total:5}  {class}");

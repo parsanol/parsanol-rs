@@ -664,6 +664,20 @@ sites fall into three classes, each with its refusal reason:
    The remaining receipt legs: the perf A/B on a flavor whose rules
    ARE shift-buildable (the win shows there, not on json), then the
    default flip and the census's lr-covered count re-run.
+
+   The FINAL loop-site census (2026-11-27, both lanes): **524 sites
+   = 481 dfa-routed + 4 lr-covered + 1 lr-covered-under-shift + 38
+   refused.** The 499 shift-buildable RULES are real but they are
+   not loop sites — the LR rule coverage grows 1628 -> 2127 under
+   the gate while the loop-site residue barely moves. The 38
+   both-refused sites decompose by the shift builder's own refusal:
+   23 `LrBuildError("atom")` (the lowering hits an unsupported atom
+   — the zero-width/Lookahead architecture slice), 10 `resolved
+   conflict` (the greedy-direction and longest-reduce classes —
+   P3(b)/P3(c) exactly), 5 `depth` (the construction depth cap).
+   Every unrouted site now has a named, printed refusal reason on
+   both lanes (`PARG_SURVEY_DIAG=1`); the loop-tail exit's
+   documented-refusals leg is complete.
 2. **Lookahead-guarded bodies (the zero-width architecture slice)** —
    elements like `[… Some(Lookahead { positive: false })]` (the
    digit-run terminators, the id-body guards, ~6 sites). Zero-width
