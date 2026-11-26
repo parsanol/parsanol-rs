@@ -76,3 +76,25 @@ byte-identical; spec pins ONE Span + ZERO Choices for the ws shape. The remainin
 own iteration control (Choice/RepCount/PartialCommit) — the Scan
 instruction (bulk runs) removes it.
 Receipt: `benchmarks/sota/results/2026-11-16-charset-merge.md`.
+
+## Round 2026-11-27: the Entity-extraction leg — the Scan remainder lands
+
+The bulk Span/ScanClass machinery already owned every loop body the
+extractors could SEE; the residue was the Entity-wrapped classes (the
+fleet's paren-group shapes, `0*( (%x61-7A) )` and the e(...) rule
+chains): the extraction refused Entity, so those loops kept the
+per-char Choice machinery. The extractors now resolve Entity chains
+(VALUE-TRANSPARENT — the group's value IS the class's span, the v2
+law) and refuse Named targets (whose per-iteration {name: value}
+hashes ARE the tree — the toy `0*(letter)` with a named class rule
+stays per-char, and the dump pinning the distinction ships with the
+spec). No new instruction: Span/ScanClass own the bulk run; no
+visibility threading needed (the Named refusal is the gate).
+
+Spec: `dispatch_shape::rule_ref_class_bodies_bulk_run_inside_repetitions`
+pins ONE Span (or a DfaRun table) and ZERO choice machinery for the
+group-wrapped shape plus the acceptance set. The full battery runs
+38/38 binaries green with `-D warnings`; the lib fleet 620/620
+byte-identical. The item's Scan scope is complete: every unbounded
+single-class repetition — inline, merged-choice, or Entity-wrapped —
+lowers to a bulk run.
