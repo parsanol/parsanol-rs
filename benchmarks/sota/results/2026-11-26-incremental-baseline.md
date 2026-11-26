@@ -1,0 +1,30 @@
+# The incremental baseline receipt (2026-11-26): the gap quantified
+
+The edit-trace benchmark (200 keystrokes per document, the
+identity-checked protocol -- every incremental tree deep-equals the
+fresh parse, 0 failures on both engines):
+
+| doc | parsanol incr p50 | parsanol fresh p50 | ts incr p50 | ts fresh p50 |
+|---|---|---|---|---|
+| doc0 (13KB) | 14.3 ms | 18.1 ms | 14.3 us | 427 us |
+| doc3 (152KB) | 572.7 ms | 668.2 ms | 100.5 us | 5.4 ms |
+
+**The shipped retained-splice model is net-negative: the incremental
+path costs as much as or more than the fresh parse** (the suffix
+re-parse from the cutoff plus the arena rebuilds), while tree-sitter's
+incremental wins 30-54x over its own fresh parse. The identity
+guarantee -- every edit's tree deep-equals the fresh parse -- holds
+everywhere and is the engine's unique strength (tree-sitter's
+protocol carries no such proof).
+
+**This baseline is the concrete-tree model's charter** (the plan's
+program 2): the splice must re-parse only the affected region, the
+retained prefix's tree must be reused without an arena rebuild, and
+the target is tree-sitter's 30x+ incremental win with the identity
+proof retained. The runner's incremental mode (the missing dispatch)
+is fixed here; the repro:
+
+```
+run_parsanol <artifact> incremental corpora/traces/doc0-trace.json corpora/json/doc0.json
+run_ts incremental corpora/traces/doc0-trace.json corpora/json/doc0.json
+```
