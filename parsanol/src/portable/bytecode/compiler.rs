@@ -1699,10 +1699,20 @@ impl Compiler {
                 },
                 _ => None,
             };
+            if std::env::var("PARG_ROUTE_DIAG").as_deref() == Ok("1") {
+                match &body_shape {
+                    Some((seq_wrapped, named)) => {
+                        eprintln!("ROUTE-DIAG shape ok seq_wrapped={seq_wrapped} named={named:?}")
+                    }
+                    None => eprintln!("ROUTE-DIAG shape REFUSED"),
+                }
+            }
             if let Some((seq_wrapped, named)) = body_shape {
-                if let Some(loop_dfa) =
-                    super::dfa_build::build_loop_dfa_envelopes(&self.grammar, atom_idx)
-                {
+                let loop_dfa = super::dfa_build::build_loop_dfa_envelopes(&self.grammar, atom_idx);
+                if std::env::var("PARG_ROUTE_DIAG").as_deref() == Ok("1") && loop_dfa.is_none() {
+                    eprintln!("ROUTE-DIAG build REFUSED (the envelope builder)");
+                }
+                if let Some(loop_dfa) = loop_dfa {
                     let super::dfa_build::LoopDfa {
                         table,
                         iteration_accepts,
@@ -3258,6 +3268,7 @@ mod tests {
         let mut flavors = 0usize;
         let mut sites_total = 0usize;
         let mut routed_total = 0usize;
+        let mut lr_routed_total = 0usize;
         let mut classes: std::collections::BTreeMap<&'static str, (usize, usize)> =
             Default::default();
         for entry in std::fs::read_dir(&dir).expect("artifact dir") {
@@ -3282,6 +3293,53 @@ mod tests {
                 continue;
             };
             flavors += 1;
+            // The LR-lane mirror: a loop site whose OWNING rule is
+            // LR-provable executes via LrRun in the live engine, so the
+            // DfaRun census alone undercounts the deterministic-subset
+            // coverage (the minimal repro `doc = 0*(item)` lowers to
+            // LrRun while the DfaRun census calls it unrouted). Union
+            // the reachable atoms of every provable rule; an unrouted
+            // site inside that set is lr-covered.
+            let lr_atoms: std::collections::HashSet<usize> = {
+                fn reachable(
+                    grammar: &Grammar,
+                    idx: usize,
+                    set: &mut std::collections::HashSet<usize>,
+                    depth: u8,
+                ) {
+                    if depth > 64 || !set.insert(idx) {
+                        return;
+                    }
+                    match grammar.get_atom(idx) {
+                        Some(Atom::Entity { atom }) | Some(Atom::Named { atom, .. }) => {
+                            reachable(grammar, *atom, set, depth + 1)
+                        }
+                        Some(Atom::Sequence { atoms }) | Some(Atom::Alternative { atoms }) => {
+                            for &a in atoms {
+                                reachable(grammar, a, set, depth + 1);
+                            }
+                        }
+                        Some(Atom::Repetition { atom, .. }) => {
+                            reachable(grammar, *atom, set, depth + 1)
+                        }
+                        Some(Atom::Scope { atom, .. }) | Some(Atom::Ignore { atom, .. }) => {
+                            reachable(grammar, *atom, set, depth + 1)
+                        }
+                        Some(Atom::Lookahead { atom, .. }) => {
+                            reachable(grammar, *atom, set, depth + 1)
+                        }
+                        _ => {}
+                    }
+                }
+                let mut set = std::collections::HashSet::new();
+                let compiler = Compiler::new(grammar.clone());
+                for (rule_idx, verdict) in compiler.rule_lr_provability() {
+                    if matches!(verdict, LrVerdict::Provable { .. }) {
+                        reachable(&grammar, rule_idx, &mut set, 0);
+                    }
+                }
+                set
+            };
             for idx in 0..grammar.atoms.len() {
                 if let Some(Atom::Repetition {
                     atom: body,
@@ -3342,6 +3400,8 @@ mod tests {
                     }
                     if routed {
                         routed_total += 1;
+                    } else if lr_atoms.contains(&idx) {
+                        lr_routed_total += 1;
                     }
                     let slot = classes.entry(class).or_insert((0, 0));
                     slot.0 += 1;
@@ -3352,7 +3412,8 @@ mod tests {
             }
         }
         eprintln!(
-            "Loop-routing survey: {flavors} flavors, {sites_total} unbounded loop sites, {routed_total} routed"
+            "Loop-routing survey: {flavors} flavors, {sites_total} unbounded loop sites, {routed_total} dfa-routed, {lr_routed_total} lr-covered, {} refused",
+            sites_total - routed_total - lr_routed_total
         );
         for (class, (total, routed)) in &classes {
             eprintln!("  {routed:5}/{total:5}  {class}");

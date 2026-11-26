@@ -633,19 +633,23 @@ atom tree, env-gated) enumerates the residue. On the 47-flavor
 snapshot (524 unbounded loop sites, 481 routed): the 43 unrouted
 sites fall into three classes, each with its refusal reason:
 
-1. **Entity-wrapped loop elements in sequences (OPEN — the next
-   tranche)** — bodies like `[str("field") e(rep0..*(e(…))) e(rep1..*(…))]`
+1. **Entity-wrapped loop elements in sequences (~20 sites; converges
+   with P3)** — bodies like `[str("field") e(rep0..*(e(…))) e(rep1..*(…))]`
    (the field/literal/cond record shapes, 3 sites) and the
-   `e([e(rep0..*(…)) …])` families (~20 sites). The loop ELEMENT
-   itself has an envelope plan lane (tranche 7), so the refusal sits
-   between the plan walk and the emitted table: a minimal repro
-   (`doc = 0*(["f" 0*(letter) 0*(digit)])`) parses but compiles with
-   EMPTY tables — the plan9 walk accepts, something downstream (the
-   DFA provability gate or the assembly's inner-cut lanes) refuses
-   silently. Next tranche's steps: instrument that build-refusal
-   reason, split "absorbable by a sequential-envelope plan variant"
-   from "the deterministic-subset limit", then triage the fleet
-   sites' inner shapes against it.
+   `e([e(rep0..*(…)) …])` families. Census correction (2026-11-27):
+   the survey measured only the DfaRun lane — the minimal repro
+   (`doc = 0*(["f" 0*(letter) 0*(digit)])`) actually lowers to
+   **LrRun** (the LR lane owns it; the compiled program has no
+   DfaRun at all). The census now carries the LR mirror: 524 sites
+   = 481 dfa-routed + 4 lr-covered + 39 refused. Most class-1 sites
+   are NOT lr-covered either — their containing rules refuse LR
+   provability, and the fleet's dominant refusal reason (603 rules)
+   is "ordered choice with overlapping FIRST sets" — exactly the
+   resolved-conflict class P3(a) targets. The tranche-10 work and
+   P3(a) are the same lever: the shift-preference resolution
+   un-refuses LR provability for the overlapping-first rules, the
+   lr-covered count rises, and these seq sites ride the LR lane.
+   Until that lands they remain refused by both lanes.
 2. **Lookahead-guarded bodies (the zero-width architecture slice)** —
    elements like `[… Some(Lookahead { positive: false })]` (the
    digit-run terminators, the id-body guards, ~6 sites). Zero-width
