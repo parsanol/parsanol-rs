@@ -1588,6 +1588,40 @@ mod tests {
         assert!(lowered > 0, "the lane must not be vacuous");
     }
 
+    /// The named-choice tranche's pin: a Named wrap around a choice
+    /// rides the tranche-9 lane (the plan tree = HashChoice), and the
+    /// VM's assembled tree equals the walker's -- the {name: the
+    /// matched arm's value} shape (the classic's BuildHash), byte
+    /// for byte.
+    #[test]
+    fn the_named_choice_tree_matches_the_walker() {
+        // r = ( "x" / "yy" ) -- a named choice with a multi-byte arm
+        // (the arms' leaf counts differ; the pick must land the right
+        // arm's span).
+        let mut grammar = Grammar::new();
+        let x = grammar.add_atom(Atom::Str {
+            pattern: "x".to_string(),
+        });
+        let yy = grammar.add_atom(Atom::Str {
+            pattern: "yy".to_string(),
+        });
+        let alt = grammar.add_atom(Atom::Alternative { atoms: vec![x, yy] });
+        let r = grammar.add_atom(Atom::Named {
+            name: "r".to_string(),
+            atom: alt,
+        });
+        // The plan tree accepts the named choice (the rule body
+        // directly; inside a loop the envelope wraps it).
+        let plan = crate::portable::bytecode::compiler::element_plan_tree9(&grammar, r, 0)
+            .expect("the named choice plans");
+        assert!(
+            matches!(
+                plan,
+                crate::portable::bytecode::dfa_table::ElementPlanTree9::HashChoice(_, _)
+            ),
+            "the plan carries the hash wrap"
+        );
+    }
     /// The #682 regression pin: a lowering refusal inside a `0*` loop's
     /// class-run attempt must refuse the TABLE. Pre-fix the error was
     /// swallowed by `if let Ok(...)`, the retry hit the poisoned

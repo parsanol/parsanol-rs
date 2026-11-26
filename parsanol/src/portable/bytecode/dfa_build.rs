@@ -684,11 +684,6 @@ pub fn build_loop_dfa_envelopes(grammar: &Grammar, body_idx: usize) -> Option<Lo
                 Some((from, plan, count))
             }
             Atom::Alternative { atoms } if !atoms.is_empty() => {
-                // A named wrap around a choice refuses (v1: unnamed
-                // arms only; the classic path keeps those).
-                if name.is_some() {
-                    return None;
-                }
                 let mut arm_plans = Vec::with_capacity(atoms.len());
                 let mut total = 0u8;
                 for &arm in atoms {
@@ -711,11 +706,13 @@ pub fn build_loop_dfa_envelopes(grammar: &Grammar, body_idx: usize) -> Option<Lo
                     });
                     total = total.saturating_add(count);
                 }
-                Some((
-                    join,
-                    super::dfa_table::ElementPlanTree9::Choice(arm_plans),
-                    total,
-                ))
+                // The named wrap rides the tree: the assembly picks
+                // the arm by the last-leaf cut and wraps {name: value}.
+                let plan = match name {
+                    Some(n) => super::dfa_table::ElementPlanTree9::HashChoice(n, arm_plans),
+                    None => super::dfa_table::ElementPlanTree9::Choice(arm_plans),
+                };
+                Some((join, plan, total))
             }
             // The EXACT-COPY repetition (min == max): n chained copies
             // of the body — the json escape arm's u-hexquad

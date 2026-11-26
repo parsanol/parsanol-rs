@@ -189,6 +189,11 @@ pub enum ElementPlanTree9 {
     /// LAST leaf slot carries a cut. The gate is tranche 8's: the
     /// arms' FIRST sets pairwise-disjoint and non-nullable.
     Choice(Vec<ElementPlanChoiceArm9>),
+    /// A Named wrap around a choice (`{name: the matched arm's
+    /// tree}` -- the classic's BuildHash shape): the arms fork/join
+    /// as Choice, the assembly picks by the last-leaf cut and wraps
+    /// the value.
+    HashChoice(String, Vec<ElementPlanChoiceArm9>),
 }
 
 impl ElementPlanTree9 {
@@ -209,6 +214,9 @@ impl ElementPlanTree9 {
                 0
             }
             ElementPlanTree9::Choice(arms) => arms.iter().map(|arm| arm.leaf_count).sum::<u8>(),
+            ElementPlanTree9::HashChoice(_, arms) => {
+                arms.iter().map(|arm| arm.leaf_count).sum::<u8>()
+            }
         }
     }
 }
