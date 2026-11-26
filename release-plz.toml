@@ -7,6 +7,11 @@
 [workspace]
 # Path to the workspace root (default: ".")
 # This detects all workspace members automatically
+# The tranche-ladder plan registries add variants per rung; the house
+# law ships additive enum variants on the 1.5.x patch line, so the
+# mechanical semver-checks major must not decide the version here.
+# The advisory Semver Compatibility PR check still reports lints.
+semver_check = false
 # Enable GitHub releases
 # GitHub releases must exist: the wasm-publish workflow fires on
 # `release: published` — without them the npm @parsanol/wasm package
