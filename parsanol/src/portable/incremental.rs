@@ -939,6 +939,7 @@ impl<'a> IncrementalParser<'a> {
             self.body_chain.clear();
         }
 
+        let __p0 = std::time::Instant::now();
         let before = self.cache.len();
         let cutoff = if fresh {
             // First (or cold) parse: no edit invalidated anything.
@@ -966,6 +967,10 @@ impl<'a> IncrementalParser<'a> {
             });
         }
 
+        if std::env::var("PARG_SPLICE_PHASES").as_deref() == Ok("1") && !fresh {
+            eprintln!("PHASE invalidate {}us", __p0.elapsed().as_micros());
+        }
+        let __p1 = std::time::Instant::now();
         // Splice eligibility (v1): a repetition-spine document — root
         // Repetition, optionally behind one Named — with no Dynamic
         // atoms, one dirty region, and a previous tree to graft from.
@@ -1731,6 +1736,9 @@ impl<'a> IncrementalParser<'a> {
             // Consume the parser first so the arena borrow ends (the
             // v1 splice's discipline), then rebuild walking the path
             // in reverse.
+            if std::env::var("PARG_SPLICE_PHASES").as_deref() == Ok("1") {
+                eprintln!("PHASE probe+reparse {}us", __p1.elapsed().as_micros());
+            }
             let plan = path_plan.as_ref().expect("path data implies a plan");
             let spine = spine_kept.as_ref().expect("path data implies a spine");
             let phase_t = std::time::Instant::now();

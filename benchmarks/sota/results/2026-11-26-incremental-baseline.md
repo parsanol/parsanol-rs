@@ -91,7 +91,9 @@ per the negative-A/B law.
 member parse** -- it is the splice's fixed overhead (the bounds
 chain, the arena bookkeeping, the per-edit probe). The next tranche
 is a profile of the 446us: the constant-factor diet before any
-further granularity work.
+further granularity work. -> ANSWERED same day:
+`2026-11-26-splice-overhead-profile.md` (the phase split: probe ~46%,
+graft ~27%, invalidation ~4%, uninstrumented ~20%).
 
 ## parsanol-ts#102's root cause (the same day): the canonical checksum is language-dependent
 
