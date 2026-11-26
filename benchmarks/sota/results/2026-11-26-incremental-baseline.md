@@ -28,3 +28,21 @@ is fixed here; the repro:
 run_parsanol <artifact> incremental corpora/traces/doc0-trace.json corpora/json/doc0.json
 run_ts incremental corpora/traces/doc0-trace.json corpora/json/doc0.json
 ```
+
+
+## The splice diagnosis (the same day): engagement 0/200
+
+Instrumenting the runner (`SPLICE spliced 0 total 200`): the
+concrete-tree splice -- fully built, the deep spine surgery included
+-- engaged ZERO of the 200 doc0 edits. The cause: the string-scan
+shape (option A) makes every quoted string ONE atomic span, so a
+keystroke inside a string literal has no spine for the splice to
+walk -- the derivation probe refuses and every edit falls back to
+the full parse (the 14.3 ms p50 = the fresh parse's cost exactly).
+
+**The model work is therefore precise:** a string-aware splice. The
+spine terminates at the owning string-span rule; the span's new
+value comes from the string kernel's re-scan (O(string length), not
+O(document)); the surgery above the spine is the existing deep
+mechanism. This is the first build item of program 2 and the only
+one between the engine and tree-sitter's 30x incremental win.
