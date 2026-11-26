@@ -625,6 +625,45 @@ the zero-width architecture slice -- and the deep refusals) + 67
 Proof: the fleet 614/614 byte-identical, the all-targets battery
 green, the hash-wrap spec pinned (the named-choice tranche PR).
 
+## The tail documented (2026-11-27, post-tranche-9 + named-choice): the refusal classes
+
+The P1 exit reads "1492/1492 or documented refusals"; the survey's
+new `DIAG seq-unplan-able` line (the first-refused element and its
+atom tree, env-gated) enumerates the residue. On the 47-flavor
+snapshot (524 unbounded loop sites, 481 routed): the 43 unrouted
+sites fall into three classes, each with its refusal reason:
+
+1. **Entity-wrapped loop elements in sequences (OPEN — the next
+   tranche)** — bodies like `[str("field") e(rep0..*(e(…))) e(rep1..*(…))]`
+   (the field/literal/cond record shapes, 3 sites) and the
+   `e([e(rep0..*(…)) …])` families (~20 sites). The loop ELEMENT
+   itself has an envelope plan lane (tranche 7), so the refusal sits
+   between the plan walk and the emitted table: a minimal repro
+   (`doc = 0*(["f" 0*(letter) 0*(digit)])`) parses but compiles with
+   EMPTY tables — the plan9 walk accepts, something downstream (the
+   DFA provability gate or the assembly's inner-cut lanes) refuses
+   silently. Next tranche's steps: instrument that build-refusal
+   reason, split "absorbable by a sequential-envelope plan variant"
+   from "the deterministic-subset limit", then triage the fleet
+   sites' inner shapes against it.
+2. **Lookahead-guarded bodies (the zero-width architecture slice)** —
+   elements like `[… Some(Lookahead { positive: false })]` (the
+   digit-run terminators, the id-body guards, ~6 sites). Zero-width
+   atoms are invisible to a byte-transition table; routing them is
+   the zero-width architecture program, not a routing tranche.
+3. **The copublisher giant choice towers (the blowup guard)** —
+   nist.json's edition/revision/version tower (4 sites classified
+   `other`): a deeply nested choice of choice towers whose subset
+   construction is exactly the blowup the survey's SHAPE-ONLY note
+   documents (three 100%-CPU orphaned test binaries taught it). The
+   compile-path authority keeps its refusal.
+
+The census mirror now prints every refusal's first-refused element
+(PARG_SURVEY_DIAG=1), so future tranches read the residue without
+re-deriving it. P1's exit = these documented refusals + the routed
+481/524 on this snapshot (the ledger's 1495-site inventory counts
+the fuller fleet; the class structure is identical).
+
 ## The census mirror de-drifted (2026-11-25, shape-only, post-tranche-9)
 
 The survey's plan_able/body_class had drifted from the router: they
