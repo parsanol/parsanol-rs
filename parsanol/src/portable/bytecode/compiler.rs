@@ -3007,6 +3007,7 @@ mod tests {
         let mut provable_total = 0usize;
         let mut refused_total = 0usize;
         let mut shift_preference_buildable = 0usize;
+        let mut per_flavor: std::collections::BTreeMap<String, usize> = Default::default();
         let mut reasons: std::collections::BTreeMap<&'static str, usize> = Default::default();
         for entry in std::fs::read_dir(&dir).expect("artifact dir") {
             let path = entry.expect("entry").path();
@@ -3045,6 +3046,14 @@ mod tests {
                             .is_ok()
                         {
                             shift_preference_buildable += 1;
+                            *per_flavor
+                                .entry(
+                                    path.file_name()
+                                        .and_then(|n| n.to_str())
+                                        .unwrap_or("?")
+                                        .to_string(),
+                                )
+                                .or_insert(0usize) += 1;
                         }
                     }
                 }
@@ -3053,6 +3062,11 @@ mod tests {
         eprintln!(
             "LR survey: {flavors} flavors, {provable_total} provable rules, {refused_total} refused, {shift_preference_buildable} build under shift-preference",
         );
+        let mut top: Vec<_> = per_flavor.into_iter().collect();
+        top.sort_by(|a, b| b.1.cmp(&a.1));
+        for (name, count) in top.iter().take(6) {
+            eprintln!("  {count:5}  {name}");
+        }
         for (reason, count) in &reasons {
             eprintln!("  {count:5}  {reason}");
         }
