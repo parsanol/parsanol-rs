@@ -1009,17 +1009,35 @@ impl<'a> IncrementalParser<'a> {
         }
         let mut path_plan: Option<PathPlan> = None;
         let mut spine_kept: Option<crate::portable::spine::Spine> = None;
-        if !fresh
+        let splice_gate = !fresh
             && self.dirty_tracker.regions().len() == 1
             && !self
                 .grammar
                 .atoms
                 .iter()
                 .any(|a| matches!(a, Atom::Dynamic { .. }))
-            && splice.is_none()
+            && splice.is_none();
+        if std::env::var("PARG_SPLICE_DIAG").as_deref() == Ok("1") && !splice_gate {
+            eprintln!(
+                "SPLICE-GATE refuse fresh={} regions={} dynamic={} splice={}",
+                fresh,
+                self.dirty_tracker.regions().len(),
+                self.grammar.atoms.iter().any(|a| matches!(a, Atom::Dynamic { .. })),
+                splice.is_some()
+            );
+        }
+        if splice_gate
         {
             let spine = crate::portable::spine::discover_spine(&self.grammar);
+            if spine.is_none() && std::env::var("PARG_SPLICE_DIAG").as_deref() == Ok("1") {
+                eprintln!("SPLICE-GATE no-spine");
+            }
             if let Some(spine) = spine {
+                if spine.path.is_empty()
+                    && std::env::var("PARG_SPLICE_DIAG").as_deref() == Ok("1")
+                {
+                    eprintln!("SPLICE-GATE empty-path");
+                }
                 if !spine.path.is_empty() {
                     let mut current = self.last_root.clone();
                     let mut leading_siblings: Vec<Vec<AstNode>> = Vec::new();
@@ -1068,6 +1086,9 @@ impl<'a> IncrementalParser<'a> {
                             }
                         }
                         if !ok {
+                            if std::env::var("PARG_SPLICE_DIAG").as_deref() == Ok("1") {
+                                eprintln!("SPLICE-GATE path-step-fail step={:?}", step);
+                            }
                             break;
                         }
                     }
