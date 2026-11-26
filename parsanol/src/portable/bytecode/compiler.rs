@@ -3328,7 +3328,9 @@ mod tests {
                                     {
                                         eprintln!(
                                             "DIAG seq-unplan-able {} first-refused {}: {}",
-                                            path.file_name().and_then(|n| n.to_str()).unwrap_or("?"),
+                                            path.file_name()
+                                                .and_then(|n| n.to_str())
+                                                .unwrap_or("?"),
                                             c,
                                             describe_atom(&grammar, c, 0)
                                         );
