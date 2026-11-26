@@ -109,6 +109,18 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ## [Unreleased]
 
+- The per-flavor sizing: sort_by_key satisfies clippy
+- Item 6 closes: the wide-kernel verification receipt (the asm inspection + the 13.8x A/B); the index rows for 6/11/12 settle
+- Item 11's Scan remainder: the Entity-wrapped class loops take the bulk run; the Named refusal is the gate
+- The P3(a) A/B receipt: the ieee flavor runs the shift arm byte-identical and non-regressing; the sizing is per-flavor
+- The final loop-site census: both-lane coverage with every refusal's named reason; the 38 decompose into the zero-width, P3(b)/(c), and depth classes
+- The LR survey sizes P3(a): 499 refused rules build under shift-preference; the seam is wired behind PARG_LR_SHIFT
+- The census carries the LR lane: the survey counts lr-covered sites, and tranche 10 converges with P3(a)
+- The survey diag: drop the unused atoms binding (CI denies warnings)
+- The survey diag: rustfmt
+- The routing tail documented: three refusal classes with reasons and the next tranche scoped
+- The survey diag prints the first-refused element of every unrouted site
+- The splice fixed-overhead profile: the phase split answers the 446us demand
 - The #102 byte-tier spec: rustfmt rewrap (the CI lint's preferred layout)
 - The depth-leak pins: rustfmt import order
 - Parsanol-ts#103 regression 2: the folded dispatch's ? sites skip the tail bookkeeping
