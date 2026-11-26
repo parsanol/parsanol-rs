@@ -18,7 +18,7 @@ decomposition of everything left on parsanol performance:
 | 10 | Success-path diagnostics overhead | rs#533 receipt (VM tracks every failed alternative) | SHIPPED (VM 6.2x) |
 | 11 | Determinism dispatch: Switch tables + Scan runs | rs#533 receipt (Lark 3.1x ahead = strategy tax) | LANDED (8.7x cum. + the charset merge + the Entity-extraction leg, 2026-11-27) |
 | 12 | Recognition/construction split + pooled tree writes | rs#533 receipt | CLOSED (2026-11-27: the post-Scan re-run keeps construction second-order; the ≥30% gate unmet) |
-| 13 | Deterministic-subset codegen (LR tables / native SM) | item 3's codegen line; the tree-sitter endgame | specced |
+| 13 | Deterministic-subset codegen (LR tables / native SM) | item 3's codegen line; the tree-sitter endgame | LANDED (the DFA loop lane + the LR rule lane LIVE; the census both-lane complete 2026-11-27; the residue = P3(b)/(c) + the zero-width architecture, see 13's tail) |
 
 Done items stay done: lead-byte dispatch, parser hot path, the
 bytecode VM phases 1-4, the handle API, pure-Ruby posture, and
