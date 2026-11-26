@@ -2254,7 +2254,11 @@ impl Compiler {
         // The P3(a) A/B gate: PARG_LR_SHIFT=1 flips the seam to the
         // shift-preference construction (the greedy-loop class -- the
         // PEG's own maximal-munch continuation); the default stays
-        // strict until the receipt lands.
+        // strict until the receipt lands. The greedy-direction class
+        // (a shift at a reduce-taken byte, the Resolved analysis
+        // surface) is NOT routable: the gate probe FALSIFIED it — the
+        // resolved tables misparse valid json (the histogram probe's
+        // acceptance failure; see the P3(b) falsification receipt).
         let table = if std::env::var("PARG_LR_SHIFT").as_deref() == Ok("1") {
             crate::portable::bytecode::lr_table::build_lr_table_shift_preference(
                 &self.grammar,
@@ -3032,6 +3036,7 @@ mod tests {
         let mut provable_total = 0usize;
         let mut refused_total = 0usize;
         let mut shift_preference_buildable = 0usize;
+        let mut greedy_direction_buildable = 0usize;
         let mut per_flavor: std::collections::BTreeMap<String, usize> = Default::default();
         let mut reasons: std::collections::BTreeMap<&'static str, usize> = Default::default();
         for entry in std::fs::read_dir(&dir).expect("artifact dir") {
@@ -3079,13 +3084,18 @@ mod tests {
                                         .to_string(),
                                 )
                                 .or_insert(0usize) += 1;
+                        } else if lr_table::build_lr_table(&grammar_for_shift, rule_idx).is_ok() {
+                            // The greedy-direction class (P3(b)): the
+                            // shift-over-reduce resolution at a
+                            // reduce-taken byte — Resolved applies it.
+                            greedy_direction_buildable += 1;
                         }
                     }
                 }
             }
         }
         eprintln!(
-            "LR survey: {flavors} flavors, {provable_total} provable rules, {refused_total} refused, {shift_preference_buildable} build under shift-preference",
+            "LR survey: {flavors} flavors, {provable_total} provable rules, {refused_total} refused, {shift_preference_buildable} shift-preference, {greedy_direction_buildable} greedy-direction",
         );
         let mut top: Vec<_> = per_flavor.into_iter().collect();
         top.sort_by_key(|&(_, count)| std::cmp::Reverse(count));
