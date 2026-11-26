@@ -104,3 +104,47 @@ deep-restoring every node. The cross-arena handle tension named in
 the profile receipt is exactly this indirection's cost. Gated on
 the corpus identity, the doc0/doc3 ladder, and the byte-identical
 differential as always.
+
+## The lazy-span-shift graft SHIPPED (2026-11-27, final): lever #2 lands
+
+The scoped design above is built: `AstArena::shift_input_refs`
+shifts every stored InputRef at/after the edit start IN PLACE (one
+sequential pass over the flat array/hash pools — the leaves are
+inline values, no line/column stored, so the bulk shift is exactly
+equivalent to the deep `copy_shift_tree` walk), and the graft then
+RE-REFERENCES the suffix items' 16-byte pool handles instead of
+deep-restoring every node. `copy_shift_tree` and `shift_if_above`
+are deleted — the pool IS the shift. Multi-region edits keep the
+old deep per-tree shift (sound fallback).
+
+The ordering discipline: the shift runs after the cache invalidate
+and BEFORE the plan/parse — the plan's navigation is index-based
+(offset-free), the bridge/tails parse fresh nodes in the new
+coordinates, and the suffix handles see the shifted data. Dead pool
+nodes (superseded trees) shift harmlessly — nothing references them.
+
+## The edit-sequence receipt (the doc0/doc3 traces, identity-checked)
+
+| trace | incr p50 before | incr p50 after | the gain |
+|---|---|---|---|
+| doc0 (13KB, 200 edits) | 390 us (the corrected baseline) | 260–264 us | **−32%** |
+| doc3 (152KB, 200 edits) | 2.03 ms | 384–404 us | **5.1×** |
+
+Identity 0 failures on every round; splice 200/200 (doc0) and
+199/200 (doc3); the deep-equality protocol (every incremental tree
+vs the fresh parse) held throughout. The doc3 `reused` count jumped
+283k -> 437k — the shifted suffix entries now serve the parse's
+memo as well (a compounding bonus).
+
+**The measured tail cost**: doc0's p95 moved 1.86 -> 2.11–2.19 ms —
+the shift pass is O(POOL SIZE) and the pool accumulates dead nodes
+across the session (the budget reset is the current bound). The
+known follow-up: dead-node reclamation / pool defragmentation, a
+bounded follow-up with the same identity gates. The p95 on doc3 is
+unchanged (~21 ms; the fresh-parse leg dominates there).
+
+Tree-sitter's comparator stands at 14.3 us p50 on doc0 — the gap
+closes from 27x to 54x->18x... precisely: 264 us / 14.3 us = 18.5x
+(from 27x). The next lever after pool reclamation: the bridge
+parse's memo-warm interior (the suffix entries now serve it, which
+this change enables).
