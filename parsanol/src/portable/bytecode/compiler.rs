@@ -92,6 +92,28 @@ pub struct Compiler {
 // slot numbering stays in lockstep by construction. The
 // envelope elements mirror as slot-less (the tranche-7
 // lane); nested choices recurse.
+/// The plan9 diagnostic flag, initialized once (the compile path
+/// must not pay an env lookup per node).
+fn plan9_diag_enabled() -> bool {
+    static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FLAG.get_or_init(|| std::env::var("PARG_PLAN9_DIAG").as_deref() == Ok("1"))
+}
+
+/// One plan9 recursion step, refusing transparently and tracing the
+/// refusal site when PARG_PLAN9_DIAG is set.
+fn plan9_step(
+    grammar: &Grammar,
+    idx: usize,
+    depth: u8,
+    via: &str,
+) -> Option<super::dfa_table::ElementPlanTree9> {
+    let r = element_plan_tree9(grammar, idx, depth);
+    if r.is_none() && plan9_diag_enabled() && depth <= 7 {
+        eprintln!("PLAN9-REFUSE {via} atom={idx} depth={depth}");
+    }
+    r
+}
+
 pub(crate) fn element_plan_tree9(
     grammar: &Grammar,
     atom_idx: usize,
@@ -139,6 +161,9 @@ pub(crate) fn element_plan_tree9(
     match plan_atom {
         Atom::Str { .. } | Atom::Re { .. } => {
             if !is_leaf(cur) {
+                if plan9_diag_enabled() && depth <= 7 {
+                    eprintln!("PLAN9-REFUSE non-leaf-terminal atom={cur} depth={depth}");
+                }
                 return None;
             }
             Some(match name {
@@ -149,7 +174,7 @@ pub(crate) fn element_plan_tree9(
         Atom::Sequence { atoms } if !atoms.is_empty() => {
             let mut children = Vec::with_capacity(atoms.len());
             for &child in atoms {
-                children.push(element_plan_tree9(grammar, child, depth + 1)?);
+                children.push(plan9_step(grammar, child, depth + 1, "seq-child")?);
             }
             Some(match name {
                 Some(n) => ElementPlanTree9::HashNested(n, children),
@@ -160,11 +185,14 @@ pub(crate) fn element_plan_tree9(
             // A named wrap around a choice refuses (v1:
             // unnamed arms only).
             if name.is_some() {
+                if plan9_diag_enabled() && depth <= 7 {
+                    eprintln!("PLAN9-REFUSE named-choice atom={atom_idx} depth={depth}");
+                }
                 return None;
             }
             let mut arms = Vec::with_capacity(atoms.len());
             for &arm in atoms {
-                let plan = element_plan_tree9(grammar, arm, depth + 1)?;
+                let plan = plan9_step(grammar, arm, depth + 1, "choice-arm")?;
                 arms.push(ElementPlanChoiceArm9 {
                     leaf_count: plan.leaf_count(),
                     plan: Box::new(plan),
@@ -184,7 +212,7 @@ pub(crate) fn element_plan_tree9(
         } if *min == *max && (1..=8).contains(min) => {
             let mut children = Vec::with_capacity(*min);
             for _ in 0..*min {
-                children.push(element_plan_tree9(grammar, *body, depth + 1)?);
+                children.push(plan9_step(grammar, *body, depth + 1, "copy-body")?);
             }
             Some(match name {
                 Some(n) => ElementPlanTree9::HashNested(n, children),
