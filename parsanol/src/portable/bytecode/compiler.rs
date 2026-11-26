@@ -2105,6 +2105,20 @@ impl Compiler {
     /// a union mixing ASCII and non-ASCII branches must survive the
     /// recursion).
     fn class_ranges_union(&self, atom_idx: usize) -> Option<Vec<(u32, u32)>> {
+        // Entity calls are VALUE-TRANSPARENT (the call's value IS the
+        // target's value — the v2 law), so a loop body delivered
+        // through a rule ref to a class resolves to that class: the
+        // bulk Span/ScanClass run's tree is identical to the bare
+        // loop's (the shipped bare-class discipline). Named wraps
+        // {name: value} per iteration — refuse those (the per-char
+        // loop keeps them).
+        let mut atom_idx = atom_idx;
+        for _ in 0..16 {
+            match self.grammar.get_atom(atom_idx)? {
+                Atom::Entity { atom } => atom_idx = *atom,
+                _ => break,
+            }
+        }
         match self.grammar.get_atom(atom_idx)? {
             Atom::Re { pattern } => Some(CharRanges::from_pattern(pattern)?.codepoint_ranges()),
             Atom::Str { pattern } => {
@@ -2126,7 +2140,18 @@ impl Compiler {
 
     /// Try to get the charset index for an atom if it's a simple charset
     fn try_get_charset_for_atom(&mut self, atom_idx: usize) -> Option<u32> {
-        let atom = self.grammar.get_atom(atom_idx)?;
+        // The Entity-transparent unwrap (see class_ranges_union): an
+        // Entity chain reaching a BARE class delivers the class to the
+        // bulk Span run. A Named target refuses — its per-iteration
+        // {name: value} hashes are the tree.
+        let mut cur = atom_idx;
+        for _ in 0..16 {
+            match self.grammar.get_atom(cur)? {
+                Atom::Entity { atom } => cur = *atom,
+                _ => break,
+            }
+        }
+        let atom = self.grammar.get_atom(cur)?;
 
         match atom {
             Atom::Re { pattern } => {

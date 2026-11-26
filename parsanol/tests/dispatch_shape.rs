@@ -234,6 +234,61 @@ fn singleton_classes_decode_to_ranges() {
     }
 }
 
+/// An Entity-wrapped class inside a repetition (the fleet's paren-
+/// group shapes, `0*( (%x61-7A) )`) is VALUE-TRANSPARENT: the group's
+/// value IS the class's span (the v2 law), so the bulk run's tree is
+/// identical to the bare loop's. The extraction resolves the Entity
+/// chain — but refuses Named targets, whose per-iteration
+/// {name: value} hashes ARE the tree — and the bulk form applies;
+/// per-character choice machinery never remains.
+#[test]
+fn rule_ref_class_bodies_bulk_run_inside_repetitions() {
+    // The paren group compiles as an ENTITY wrapping the bare class —
+    // the fleet's e(...) shapes — so the loop body's extraction must
+    // resolve the chain to fire the bulk run.
+    let source = "grammar Shape version \"1.0.0\" edition 2 {
+      doc = 0*( (%x61-7A) ) \"!\"
+      entry main: doc
+    }";
+    let program = compile_program(source);
+    let mut spans = 0;
+    let mut choices = 0;
+    let mut i = 0;
+    while let Some(instr) = program.get_instruction(i) {
+        match instr {
+            Instruction::Span { .. } => spans += 1,
+            Instruction::Choice { .. } => choices += 1,
+            _ => {}
+        }
+        i += 1;
+    }
+    assert!(
+        spans == 1 || program.has_iteration_accept_tables(),
+        "the rule-ref class body must lower to ONE Span (the bulk run) or route to a DfaRun table; got {spans} spans and no table"
+    );
+    assert_eq!(
+        choices, 0,
+        "no per-character choice machinery may remain for a value-transparent rule-ref loop body"
+    );
+
+    // acceptance identical: the run consumes the letters, the bang
+    // anchors the end, and non-letters refuse the run mid-stream.
+    let artifact_text = {
+        let envelope = envelope::compile_source(source).expect("grammar compiles");
+        serde_json::to_string(&envelope).expect("envelope serializes")
+    };
+    let artifact = parsanol::PargArtifact::from_json(&artifact_text).expect("artifact loads");
+    for (input, ok) in [
+        ("abc!", true),
+        ("!", true),
+        ("a1!", false),
+        ("xyzzy!", true),
+    ] {
+        let parsed = artifact.parse_shape("main", input).is_ok();
+        assert_eq!(parsed, ok, "input {input:?} must be {ok}");
+    }
+}
+
 /// A single-byte choice inside a repetition (json's ws shape) merges to
 /// ONE charset — same bytes consumed, same span values, so it is sound
 /// at any depth (unlike ByteDispatch). The ws rule compiles with no
