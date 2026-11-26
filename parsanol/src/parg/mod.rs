@@ -456,7 +456,7 @@ impl PargArtifact {
     /// O(bytes) pass before any structural work.
     pub fn from_json(text: &str) -> Result<Self, PargError> {
         let envelope: Value = serde_json::from_str(text).map_err(PargError::Json)?;
-        verify_byte_checksum(&envelope, text)?;
+        let byte_verified = verify_byte_tier(&envelope, text)?;
         let shape = envelope
             .get("shape")
             .and_then(Value::as_str)
@@ -484,7 +484,15 @@ impl PargArtifact {
             "artifact edition is not supported -- edition 1 was removed; \
              recompile the grammar with edition \"v2\" (named trees + spans)",
         ))?;
-        verify_checksum(&envelope)?;
+        // The byte-exact tier is the superset proof: when it verifies,
+        // the artifact is byte-identical to its bake and the canonical
+        // tier is redundant -- and, cross-language, actively wrong
+        // (its JSON key ordering is the producer language's).
+        // parsanol-ts#102: ruby-baked artifacts failed the canonical
+        // tier in the wasm and could not load through the browser.
+        if !byte_verified {
+            verify_checksum(&envelope)?;
+        }
         Ok(Self {
             envelope,
             grammar_cache: Arc::new(Mutex::new(HashMap::new())),
@@ -699,9 +707,20 @@ fn decode_ascii_state_grammar(mut value: Value) -> Result<(Grammar, Vec<usize>),
 /// The byte-level checksum's fast tier: the bake hashed the file bytes
 /// with the digest's own 64-hex region zeroed (parsanol-ruby#443); the
 /// loader repeats the same substitution over the exact text it received.
-fn verify_byte_checksum(envelope: &Value, text: &str) -> Result<(), PargError> {
+/// The byte-exact tier: `Ok(true)` when the envelope carries a
+/// `byte_checksum` and it verifies over the original text (the
+/// strongest proof -- the artifact is byte-identical to the bake);
+/// `Ok(false)` when the envelope carries none (the pre-seal shape --
+/// the canonical tier covers it); `Err` on a stored-but-mismatched
+/// checksum. Verified byte-exactly, this tier is language-
+/// independent: it must replace, not merely precede, the canonical
+/// check -- whose JSON key ordering is the producer language's
+/// (parsanol-ts#102: a ruby bake canonicalizes insertion-ordered,
+/// a rust runtime alphabetized, and every ruby-baked artifact
+/// failed the canonical tier in the wasm).
+fn verify_byte_tier(envelope: &Value, text: &str) -> Result<bool, PargError> {
     let Some(stored) = envelope.get("byte_checksum").and_then(Value::as_str) else {
-        return Ok(()); // pre-seal artifact: the canonical tier covers it
+        return Ok(false); // pre-seal artifact: the canonical tier covers it
     };
     let placeholder = "0".repeat(64);
     let zeroed = text.replace(stored, &placeholder);
@@ -711,7 +730,7 @@ fn verify_byte_checksum(envelope: &Value, text: &str) -> Result<(), PargError> {
     let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
     let computed = format!("sha256:{hex}");
     if stored == computed {
-        return Ok(());
+        return Ok(true);
     }
     Err(PargError::ChecksumMismatch {
         stored: stored.to_string(),
@@ -896,6 +915,100 @@ pub fn checksum_hex(payload: &Value) -> Result<String, PargError> {
         write!(hex, "{byte:02x}").expect("writing to a String cannot fail");
     }
     Ok(format!("sha256:{hex}"))
+}
+
+#[cfg(test)]
+mod byte_tier_tests {
+    use super::*;
+
+    /// The parsanol-ts#102 pin: a ruby-shaped envelope (the
+    /// insertion-ordered keys + a byte_checksum) must LOAD via the
+    /// byte-exact tier even though the canonical tier -- recomputed
+    /// over this runtime's ALPHABETIZED serde_json payload -- would
+    /// reject it. The byte tier is the superset proof: the whole text
+    /// is byte-identical to the bake, so the canonical re-check is
+    /// redundant and, cross-language, actively wrong.
+    #[test]
+    fn a_ruby_baked_envelope_loads_via_the_byte_tier() {
+        // Compile a real artifact (the rust canonicalization), then
+        // simulate the ruby bake: re-order the top-level keys
+        // insertion-style (the ruby hashes preserve order; this
+        // runtime's serde_json alphabetizes on parse) and re-seal the
+        // byte_checksum over the reordered text. The load must succeed
+        // via the byte tier even though the canonical tier -- recomputed
+        // over this runtime's ALPHABETIZED payload -- would reject it.
+        let source = concat!(
+            "grammar T version \"1.0.0\" edition \"v2\" {\n",
+            "  main = \"a\"\n",
+            "  entry main: main\n",
+            "}\n"
+        );
+        let env = crate::parg::frontend::envelope::compile_source(source)
+            .expect("grammar compiles");
+        let original = serde_json::to_string(&env).expect("serializes");
+        let value: serde_json::Value =
+            serde_json::from_str(&original).expect("parses");
+        let obj = value.as_object().expect("object");
+        // The insertion-style order: version first, checksum second --
+        // anything that is NOT the alphabetized serde_json iteration
+        // order exercises the cross-language canonical mismatch.
+        let mut ordered = serde_json::Map::new();
+        for key in ["version", "checksum", "shape", "grammar", "entries"] {
+            if let Some(v) = obj.get(key) {
+                ordered.insert(key.to_string(), v.clone());
+            }
+        }
+        for (k, v) in obj {
+            if !ordered.contains_key(k) {
+                ordered.insert(k.clone(), v.clone());
+            }
+        }
+        let reordered_text =
+            serde_json::to_string(&serde_json::Value::Object(ordered))
+                .expect("serializes");
+        // Seal: sha256 over the text with the byte_checksum zeroed --
+        // the ruby bake's exact digest protocol.
+        let zeroed = reordered_text
+            .replace("\"byte_checksum\":null", "\"byte_checksum\":null")
+            .to_string();
+        let digest = Sha256::digest(zeroed.as_bytes());
+        let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+        let byte_checksum = format!("sha256:{hex}");
+        let sealed_text = reordered_text.replace(
+            &reordered_text[reordered_text.len() - 1..],
+            &format!(
+                ",\"byte_checksum\":\"{byte_checksum}\"}}"
+            ),
+        );
+
+        let artifact = PargArtifact::from_json(&sealed_text)
+            .expect("the ruby-baked envelope loads via the byte tier");
+        if let Err(e) = artifact.parse_shape("main", "a") {
+            panic!("the loaded artifact failed to parse: {e:?}");
+        }
+        let _ = digest;
+    }
+
+    /// The other boundary of the byte tier: a tampered byte_checksum
+    /// still refuses (the tier is not a bypass).
+    #[test]
+    fn a_tampered_byte_checksum_still_refuses() {
+        let envelope = concat!(
+            "{",
+            "\"version\":\"1.0.0\",",
+            "\"checksum\":\"sha256:0000000000000000000000000000000000000000000000000000000000000000\",",
+            "\"shape\":\"parsanol-tree/v2\",",
+            "\"edition\":\"v2\",",
+            "\"byte_checksum\":\"sha256:",
+            "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef\",",
+            "\"grammar\":{\"atoms\":[],\"root\":0}",
+            "}"
+        );
+        assert!(
+            PargArtifact::from_json(envelope).is_err(),
+            "a tampered byte_checksum must refuse"
+        );
+    }
 }
 
 #[cfg(test)]
