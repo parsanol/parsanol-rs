@@ -3312,7 +3312,7 @@ mod tests {
                         // The FIRST element the plan gates refuse, with its
                         // atom tree: the tranche work reads the residue's
                         // repeated shapes off this line.
-                        if let Some(Atom::Sequence { atoms }) = grammar.get_atom(*body) {
+                        if let Some(Atom::Sequence { .. }) = grammar.get_atom(*body) {
                             let mut unwrapped = *body;
                             for _ in 0..16 {
                                 match grammar.get_atom(unwrapped) {
