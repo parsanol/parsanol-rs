@@ -2739,6 +2739,7 @@ fn first_of_atom(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::portable::bytecode::lr_table;
     use crate::portable::grammar::Atom;
     use crate::portable::grammar::RepetitionTag;
 
@@ -3005,6 +3006,7 @@ mod tests {
         let mut flavors = 0usize;
         let mut provable_total = 0usize;
         let mut refused_total = 0usize;
+        let mut shift_preference_buildable = 0usize;
         let mut reasons: std::collections::BTreeMap<&'static str, usize> = Default::default();
         for entry in std::fs::read_dir(&dir).expect("artifact dir") {
             let path = entry.expect("entry").path();
@@ -3027,20 +3029,29 @@ mod tests {
             let Ok(grammar) = serde_json::from_value::<Grammar>(grammar_value.clone()) else {
                 continue;
             };
+            let grammar_for_shift = grammar.clone();
             let compiler = Compiler::new(grammar);
             flavors += 1;
-            for verdict in compiler.rule_lr_provability().values() {
+            for (rule_idx, verdict) in compiler.rule_lr_provability() {
                 match verdict {
                     LrVerdict::Provable { .. } => provable_total += 1,
                     LrVerdict::Refused { reason } => {
                         refused_total += 1;
-                        *reasons.entry(*reason).or_insert(0) += 1;
+                        *reasons.entry(reason).or_insert(0) += 1;
+                        // The P3(a) sizing: how many refused rules BUILD
+                        // under the shift-preference seam (the census's
+                        // convergence evidence)?
+                        if lr_table::build_lr_table_shift_preference(&grammar_for_shift, rule_idx)
+                            .is_ok()
+                        {
+                            shift_preference_buildable += 1;
+                        }
                     }
                 }
             }
         }
         eprintln!(
-            "LR survey: {flavors} flavors, {provable_total} provable rules, {refused_total} refused",
+            "LR survey: {flavors} flavors, {provable_total} provable rules, {refused_total} refused, {shift_preference_buildable} build under shift-preference",
         );
         for (reason, count) in &reasons {
             eprintln!("  {count:5}  {reason}");
