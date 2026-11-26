@@ -109,6 +109,19 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ## [Unreleased]
 
+- The #102 byte-tier spec: rustfmt rewrap (the CI lint's preferred layout)
+- The depth-leak pins: rustfmt import order
+- Parsanol-ts#103 regression 2: the folded dispatch's ? sites skip the tail bookkeeping
+- Parsanol-ts#103 regression 1: Arc the string-span spec so the typed depth guard wins
+- The splice instrumentation: the gate, the engagement, the phase timers
+- The cross-language spec: the reordered envelope loads via the byte tier
+- #102's engine fix: the byte-exact tier replaces the canonical when verified
+- The first baseline measured the registry 1.5.1 engine
+- The snapshot-recycle invariant spec: the exemption is the boundary
+- The named-choice tranche: Named(choice) rides the tranche-9 lane
+- The plan9 refusal hooks: the per-site trace completes the map
+- The three-level strictness: the shift-preference seam, A/B-gated
+- The P2 specs-first opening: the edit-sequence differential pin
 - The census mirror unwraps Entity/Named transitively
 - De-drift the routing census mirror; add the survey diagnostics
 - The named-dispatch frame diet: fold try_atom_impl_inner into its wrapper
