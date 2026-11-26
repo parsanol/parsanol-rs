@@ -930,13 +930,12 @@ mod byte_tier_tests {
     /// redundant and, cross-language, actively wrong.
     #[test]
     fn a_ruby_baked_envelope_loads_via_the_byte_tier() {
-        // Compile a real artifact (the rust canonicalization), then
-        // simulate the ruby bake: re-order the top-level keys
-        // insertion-style (the ruby hashes preserve order; this
-        // runtime's serde_json alphabetizes on parse) and re-seal the
-        // byte_checksum over the reordered text. The load must succeed
-        // via the byte tier even though the canonical tier -- recomputed
-        // over this runtime's ALPHABETIZED payload -- would reject it.
+        // Compile a real artifact, then simulate the ruby bake: insert
+        // the byte_checksum as a KEY (so the serialized JSON stays
+        // valid) and digest the text with the byte_checksum zeroed --
+        // the ruby bake's exact protocol. The reordered top-level keys
+        // exercise the cross-language canonical mismatch: this runtime
+        // alphabetizes on parse, the ruby bake preserved order.
         let source = concat!(
             "grammar T version \"1.0.0\" edition \"v2\" {\n",
             "  main = \"a\"\n",
@@ -945,48 +944,34 @@ mod byte_tier_tests {
         );
         let env = crate::parg::frontend::envelope::compile_source(source)
             .expect("grammar compiles");
-        let original = serde_json::to_string(&env).expect("serializes");
-        let value: serde_json::Value =
-            serde_json::from_str(&original).expect("parses");
+        let value = serde_json::to_value(&env).expect("serializes");
         let obj = value.as_object().expect("object");
-        // The insertion-style order: version first, checksum second --
-        // anything that is NOT the alphabetized serde_json iteration
-        // order exercises the cross-language canonical mismatch.
+
+        // The insertion-style order: the byte_checksum zeroed first
+        // (NOT the alphabetized iteration order), then the rest.
         let mut ordered = serde_json::Map::new();
-        for key in ["version", "checksum", "shape", "grammar", "entries"] {
-            if let Some(v) = obj.get(key) {
-                ordered.insert(key.to_string(), v.clone());
-            }
-        }
+        ordered.insert(
+            "byte_checksum".to_string(),
+            serde_json::Value::String("0".repeat(64)),
+        );
         for (k, v) in obj {
-            if !ordered.contains_key(k) {
+            if k != "byte_checksum" {
                 ordered.insert(k.clone(), v.clone());
             }
         }
-        let reordered_text =
+        let text =
             serde_json::to_string(&serde_json::Value::Object(ordered))
                 .expect("serializes");
-        // Seal: sha256 over the text with the byte_checksum zeroed --
-        // the ruby bake's exact digest protocol.
-        let zeroed = reordered_text
-            .replace("\"byte_checksum\":null", "\"byte_checksum\":null")
-            .to_string();
-        let digest = Sha256::digest(zeroed.as_bytes());
+        let digest = Sha256::digest(text.as_bytes());
         let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
-        let byte_checksum = format!("sha256:{hex}");
-        let sealed_text = reordered_text.replace(
-            &reordered_text[reordered_text.len() - 1..],
-            &format!(
-                ",\"byte_checksum\":\"{byte_checksum}\"}}"
-            ),
-        );
+        let sealed = text
+            .replace(&"0".repeat(64), &format!("sha256:{hex}"));
 
-        let artifact = PargArtifact::from_json(&sealed_text)
+        let artifact = PargArtifact::from_json(&sealed)
             .expect("the ruby-baked envelope loads via the byte tier");
         if let Err(e) = artifact.parse_shape("main", "a") {
             panic!("the loaded artifact failed to parse: {e:?}");
         }
-        let _ = digest;
     }
 
     /// The other boundary of the byte tier: a tampered byte_checksum
