@@ -3306,6 +3306,38 @@ mod tests {
                     // the coverage answer; the builder stays the
                     // compile-path authority.
                     let routed = class != "other" && class != "seq-unplan-able";
+                    if class == "seq-unplan-able"
+                        && std::env::var("PARG_SURVEY_DIAG").as_deref() == Ok("1")
+                    {
+                        // The FIRST element the plan gates refuse, with its
+                        // atom tree: the tranche work reads the residue's
+                        // repeated shapes off this line.
+                        if let Some(Atom::Sequence { atoms }) = grammar.get_atom(*body) {
+                            let mut unwrapped = *body;
+                            for _ in 0..16 {
+                                match grammar.get_atom(unwrapped) {
+                                    Some(Atom::Named { atom, .. })
+                                    | Some(Atom::Entity { atom }) => unwrapped = *atom,
+                                    _ => break,
+                                }
+                            }
+                            if let Some(Atom::Sequence { atoms }) = grammar.get_atom(unwrapped) {
+                                for &c in atoms.iter() {
+                                    if !plan_able(&grammar, c, 1)
+                                        && element_plan_tree9(&grammar, c, 1).is_none()
+                                    {
+                                        eprintln!(
+                                            "DIAG seq-unplan-able {} first-refused {}: {}",
+                                            path.file_name().and_then(|n| n.to_str()).unwrap_or("?"),
+                                            c,
+                                            describe_atom(&grammar, c, 0)
+                                        );
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
                     if routed {
                         routed_total += 1;
                     }
