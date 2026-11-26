@@ -12,19 +12,44 @@
 
 use parsanol::portable::bytecode::compiler::compile;
 use parsanol::portable::bytecode::parse_with_vm_diag;
-use parsanol::portable::{AstArena, Grammar, PortableParser};
+use parsanol::portable::{AstArena, PortableParser};
 use std::hint::black_box;
 use std::time::Instant;
 
+fn collect_shape_offsets(node: &serde_json::Value, out: &mut Vec<String>) {
+    // Every node with an offset field is a recovered structure node,
+    // emitted as a `start:end` byte span (the span-aware scorer
+    // matches recovered spans by containment); recurse into nested
+    // objects and arrays, dedup+sort.
+    if let Some(off) = node.get("offset").and_then(|v| v.as_u64()) {
+        let len = node.get("length").and_then(|v| v.as_u64()).unwrap_or(0);
+        out.push(format!("{}:{}", off, off + len));
+    }
+    match node {
+        serde_json::Value::Object(map) => {
+            for (_k, v) in map {
+                collect_shape_offsets(v, out);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for v in items {
+                collect_shape_offsets(v, out);
+            }
+        }
+        _ => {}
+    }
+}
+
 fn recovery_mode(corpus_dir: &str) {
-    // Per corrupted case: `<file> <diag_pos> <len> <ok>` — diag_pos is the
-    // deepest-failure position (0 = parse succeeded with full consumption
-    // when ok=true). The scorer joins against the corruption manifest.
+    // Per corrupted case: `<file> <covered> <len> <first_err>` — covered
+    // is the byte count parsed into structure (total minus the consumed
+    // junk spans, the same accounting as tree-sitter's non-ERROR bytes),
+    // so the scorer joins both engines symmetrically. A clean full parse
+    // prints covered=0 with ok=true (column 4 absent, like the old
+    // protocol's ok rows).
     let corpus = std::path::Path::new(corpus_dir);
     let artifact_text = std::fs::read_to_string("json-artifact.json").expect("artifact");
     let artifact = parsanol::PargArtifact::from_json(&artifact_text).expect("artifact loads");
-    let grammar = artifact.grammar("main").expect("the entry decodes");
-    let program = compile(grammar.clone()).expect("the program compiles");
 
     let mut paths: Vec<std::path::PathBuf> = std::fs::read_dir(corpus)
         .expect("corpus dir")
@@ -35,16 +60,62 @@ fn recovery_mode(corpus_dir: &str) {
     for path in paths {
         let input = std::fs::read_to_string(&path).expect("doc");
         let name = path.file_name().unwrap().to_string_lossy().into_owned();
-        let mut arena = AstArena::for_input(input.len());
-        let (result, diag) = parse_with_vm_diag(&program, &input, &mut arena);
-        match result {
-            Ok(r) => {
-                let full = r.end_pos == input.len();
-                println!("{name} {} {} {}", input.len(), if full { 0 } else { r.end_pos }, full);
-            }
-            Err(_) => {
-                let (pos, _labels) = diag.expect("failed parse carries diagnostics");
-                println!("{name} {} {} false", input.len(), pos);
+        match artifact.parse_shape_recovering("main", &input) {
+            Err(_) => println!("{name} {} 0 false 0", input.len()),
+            Ok(envelope) => {
+                if envelope["ok"].as_bool() == Some(true) {
+                    println!("{name} {} 0 true", input.len());
+                    continue;
+                }
+                let mut junk_end: usize = 0;
+                if let Some(spans) = envelope["resyncs"].as_array() {
+                    for span in spans {
+                        let off = span["offset"].as_u64().unwrap_or(0) as usize;
+                        let resumed = span["resumed_at"].as_u64().unwrap_or(off as u64) as usize;
+                        junk_end += resumed.saturating_sub(off);
+                    }
+                }
+                // Coverage is only what the parse actually consumed past
+                // its junk spans; without resync rounds (non-spine
+                // grammars, rs#539) nothing is consumed and the parse
+                // recovered nothing — covered 0, with the failure offset
+                // reported separately for the diagnostic metric.
+                let consumed = envelope["consumed_upto"].as_u64().unwrap_or(0) as usize;
+                // The resync rounds resume past junk: their furthest
+                // recovered span end is the coverage bound, not the
+                // original parse's consumption.
+                let mut covered_bound = consumed;
+                if let Some(spans) = envelope["recovered_spans"].as_array() {
+                    if let Some(last) = spans.last() {
+                        let end = last["end"].as_u64().unwrap_or(0) as usize;
+                        covered_bound = covered_bound.max(end);
+                    }
+                }
+                let covered = covered_bound.saturating_sub(junk_end).min(input.len());
+                let first_err = envelope["error"]["offset"].as_u64().unwrap_or(0) as usize;
+                let mut offsets = Vec::new();
+                if let Some(captures) = envelope.get("captures") {
+                    collect_shape_offsets(captures, &mut offsets);
+                }
+                // The recovered iteration spans ride "recovered_spans"
+                // (engine-side, offset-exact) as `start:end` pairs.
+                if let Some(spans) = envelope["recovered_spans"].as_array() {
+                    for span in spans {
+                        let off = span["offset"].as_u64().unwrap_or(0);
+                        let end = span["end"].as_u64().unwrap_or(off);
+                        offsets.push(format!("{off}:{end}"));
+                    }
+                }
+                offsets.sort_unstable();
+                offsets.dedup();
+                let joined: Vec<String> = offsets.iter().map(|o| o.to_string()).collect();
+                println!(
+                    "{name} {} {} false {} {}",
+                    input.len(),
+                    covered,
+                    first_err,
+                    joined.join(",")
+                );
             }
         }
     }
@@ -65,10 +136,22 @@ fn variant_name(n: &parsanol::portable::AstNode) -> &'static str {
     }
 }
 
-fn deep_eq_dbg(a: parsanol::portable::AstNode, aa: &AstArena, b: parsanol::portable::AstNode, ab: &AstArena, path: &str, depth: usize) -> bool {
+fn deep_eq_dbg(
+    a: parsanol::portable::AstNode,
+    aa: &AstArena,
+    b: parsanol::portable::AstNode,
+    ab: &AstArena,
+    path: &str,
+    depth: usize,
+) -> bool {
     use parsanol::portable::AstNode as N;
     if variant_name(&a) != variant_name(&b) {
-        eprintln!("MISMATCH at [{}] {} vs {}", path, variant_name(&a), variant_name(&b));
+        eprintln!(
+            "MISMATCH at [{}] {} vs {}",
+            path,
+            variant_name(&a),
+            variant_name(&b)
+        );
         return false;
     }
     if depth > 40 {
@@ -83,13 +166,24 @@ fn deep_eq_dbg(a: parsanol::portable::AstNode, aa: &AstArena, b: parsanol::porta
         (N::StringRef { pool_index: x }, N::StringRef { pool_index: y }) => {
             let eq = aa.get_string(*x as usize) == ab.get_string(*y as usize);
             if !eq {
-                eprintln!("MISMATCH at [{}] StringRef {:?} vs {:?}", path, aa.get_string(*x as usize), ab.get_string(*y as usize));
+                eprintln!(
+                    "MISMATCH at [{}] StringRef {:?} vs {:?}",
+                    path,
+                    aa.get_string(*x as usize),
+                    ab.get_string(*y as usize)
+                );
             }
             eq
         }
         (
-            N::InputRef { offset: o1, length: l1 },
-            N::InputRef { offset: o2, length: l2 },
+            N::InputRef {
+                offset: o1,
+                length: l1,
+            },
+            N::InputRef {
+                offset: o2,
+                length: l2,
+            },
         ) => {
             let i1 = aa.get_input();
             let i2 = ab.get_input();
@@ -99,13 +193,62 @@ fn deep_eq_dbg(a: parsanol::portable::AstNode, aa: &AstArena, b: parsanol::porta
             let o2 = *o2 as usize;
             let eq = o1 == o2 && l1 == l2 && i1.get(o1..o1 + l1) == i2.get(o2..o2 + l2);
             if !eq {
-                eprintln!("MISMATCH at [{}] InputRef {}+{} vs {}+{} ({:?} vs {:?})", path, o1, l1, o2, l2, i1.get(o1..o1 + l1), i2.get(o2..o2 + l2));
+                eprintln!(
+                    "MISMATCH at [{}] InputRef {}+{} vs {}+{} ({:?} vs {:?})",
+                    path,
+                    o1,
+                    l1,
+                    o2,
+                    l2,
+                    i1.get(o1..o1 + l1),
+                    i2.get(o2..o2 + l2)
+                );
             }
             eq
         }
-        (N::Array { pool_index: p1, length: l1 }, N::Array { pool_index: p2, length: l2 }) => {
+        (
+            N::Array {
+                pool_index: p1,
+                length: l1,
+            },
+            N::Array {
+                pool_index: p2,
+                length: l2,
+            },
+        ) => {
             if l1 != l2 {
-                eprintln!("MISMATCH at [{}] Array len {} vs {}", path, l1, l2);
+                let dump = |arena: &AstArena, node: &N, inlen: usize| -> String {
+                    match node {
+                        N::Array { pool_index, length } => {
+                            let items = arena.get_array(*pool_index as usize, *length as usize);
+                            items
+                                .iter()
+                                .map(|it| match it {
+                                    N::InputRef { offset, length } => {
+                                        format!(
+                                            "[{}..{}]={:?}",
+                                            offset,
+                                            offset + length,
+                                            &arena.get_input()[*offset as usize
+                                                ..(*offset as usize + *length as usize).min(inlen)]
+                                        )
+                                    }
+                                    other => format!("{:?}", variant_name(other)),
+                                })
+                                .collect::<Vec<_>>()
+                                .join(" ")
+                        }
+                        _ => "?".to_string(),
+                    }
+                };
+                eprintln!(
+                    "MISMATCH at [{}] Array len {} vs {}\n  incr: {}\n  fresh: {}",
+                    path,
+                    l1,
+                    l2,
+                    dump(aa, &a, aa.get_input().len()),
+                    dump(ab, &b, ab.get_input().len())
+                );
                 return false;
             }
             let a_items = aa.get_array(*p1 as usize, *l1 as usize);
@@ -118,7 +261,16 @@ fn deep_eq_dbg(a: parsanol::portable::AstNode, aa: &AstArena, b: parsanol::porta
             }
             true
         }
-        (N::Hash { pool_index: p1, length: l1 }, N::Hash { pool_index: p2, length: l2 }) => {
+        (
+            N::Hash {
+                pool_index: p1,
+                length: l1,
+            },
+            N::Hash {
+                pool_index: p2,
+                length: l2,
+            },
+        ) => {
             if l1 != l2 {
                 eprintln!("MISMATCH at [{}] Hash len {} vs {}", path, l1, l2);
                 return false;
@@ -138,7 +290,12 @@ fn deep_eq_dbg(a: parsanol::portable::AstNode, aa: &AstArena, b: parsanol::porta
             true
         }
         _ => {
-            eprintln!("MISMATCH at [{}] unmatched variants {} {}", path, variant_name(&a), variant_name(&b));
+            eprintln!(
+                "MISMATCH at [{}] unmatched variants {} {}",
+                path,
+                variant_name(&a),
+                variant_name(&b)
+            );
             false
         }
     }
@@ -153,7 +310,8 @@ fn incremental_mode(artifact_path: &str, trace_path: &str, source_path: &str) {
     let grammar = artifact.grammar("main").expect("the entry decodes");
 
     let trace: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(trace_path).expect("trace")).expect("trace json");
+        serde_json::from_str(&std::fs::read_to_string(trace_path).expect("trace"))
+            .expect("trace json");
     let mut text = std::fs::read_to_string(source_path).expect("source");
     let edits = trace["edits"].as_array().expect("edits").clone();
 
@@ -194,11 +352,23 @@ fn incremental_mode(artifact_path: &str, trace_path: &str, source_path: &str) {
         let fresh_ns = tf.elapsed().as_nanos();
         fresh_latencies.push(fresh_ns);
         let ok = fresh_res.end_pos == next.len()
-            && deep_eq_dbg(incr_root, incr_arena_snapshot, fresh_res.value, &scratch, "root", 0);
+            && deep_eq_dbg(
+                incr_root,
+                incr_arena_snapshot,
+                fresh_res.value,
+                &scratch,
+                "root",
+                0,
+            );
         if !ok {
             identity_failures += 1;
         }
-        println!("{} {} {}", i + 1, ns, if ok { "identity_ok" } else { "IDENTITY_FAIL" });
+        println!(
+            "{} {} {}",
+            i + 1,
+            ns,
+            if ok { "identity_ok" } else { "IDENTITY_FAIL" }
+        );
         text = next;
     }
 
@@ -207,7 +377,7 @@ fn incremental_mode(artifact_path: &str, trace_path: &str, source_path: &str) {
     let n = latencies.len();
     let p = |q: f64, v: &[u128]| v[((q * (v.len() - 1) as f64).round()) as usize];
     println!(
-        "SUMMARY steps {} incr_p50 {} incr_p95 {} incr_max {} fresh_p50 {} fresh_p95 {} fresh_max {} identity_failures {} reused {} invalidated {}",
+        "SUMMARY steps {} incr_p50 {} incr_p95 {} incr_max {} fresh_p50 {} fresh_p95 {} fresh_max {} identity_failures {} reused {} invalidated {} spliced {}",
         n,
         p(0.50, &latencies),
         p(0.95, &latencies),
@@ -218,21 +388,76 @@ fn incremental_mode(artifact_path: &str, trace_path: &str, source_path: &str) {
         identity_failures,
         total_reused,
         total_invalidated,
+        incr.spliced_parses(),
     );
+}
+
+/// TED scorer emission (rs#527): per corrupted case, the recovered
+/// shape tree (`partial`) plus the clean document's shape tree — the
+/// windowed tree-edit-distance inputs. One JSON line per case:
+/// {"name":..., "recovered":..., "clean":...}
+fn trees_mode(corpus_dir: &str, clean_dir: &str, manifest_path: &str, artifact_path: &str) {
+    let artifact_text = std::fs::read_to_string(artifact_path).expect("artifact");
+    let artifact = parsanol::PargArtifact::from_json(&artifact_text).expect("artifact loads");
+    let manifest: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(manifest_path).expect("manifest"))
+            .expect("manifest json");
+
+    for case in manifest["cases"].as_array().expect("cases") {
+        let name = case["file"].as_str().expect("file");
+        let source = case["source"].as_str().expect("source");
+        let recovered = std::fs::read_to_string(std::path::Path::new(corpus_dir).join(name))
+            .expect("corrupted doc");
+        let clean = std::fs::read_to_string(std::path::Path::new(clean_dir).join(source))
+            .expect("clean doc");
+
+        // A still-valid document (a 1-byte delete inside a string
+        // keeps the JSON valid) recovers to its own clean parse — the
+        // ts hole-punch equivalent. The envelope carries it under
+        // `shape`, not `partial`.
+        let recovered_tree = match artifact.parse_shape_recovering("main", &recovered) {
+            Ok(envelope) => {
+                if envelope["ok"].as_bool() == Some(true) {
+                    envelope["shape"].clone()
+                } else {
+                    envelope["partial"].clone()
+                }
+            }
+            Err(_) => serde_json::Value::Null,
+        };
+        let clean_tree = match artifact.parse_shape("main", &clean) {
+            Ok(shape) => shape,
+            Err(_) => serde_json::Value::Null,
+        };
+        println!(
+            "{}",
+            serde_json::json!({
+                "name": name,
+                "recovered": recovered_tree,
+                "clean": clean_tree,
+            })
+        );
+    }
 }
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    if args.len() == 5 && args[2] == "incremental" {
-        incremental_mode(&args[1], &args[3], &args[4]);
+    if args.len() == 5 && args[1] == "incremental" {
+        incremental_mode(&args[2], &args[3], &args[4]);
         return;
     }
     if args.len() == 3 && args[1] == "recovery" {
         recovery_mode(&args[2]);
         return;
     }
+    if args.len() == 6 && args[1] == "trees" {
+        trees_mode(&args[2], &args[3], &args[4], &args[5]);
+        return;
+    }
     if args.len() != 6 {
-        eprintln!("usage: run_parsanol <artifact.json> <entry> <corpus-dir> <rounds> <vm|interpreter>");
+        eprintln!(
+            "usage: run_parsanol <artifact.json> <entry> <corpus-dir> <rounds> <vm|interpreter>"
+        );
         std::process::exit(2);
     }
     let artifact_text = std::fs::read_to_string(&args[1]).expect("artifact");
@@ -240,7 +465,10 @@ fn main() {
     let corpus_dir = std::path::Path::new(&args[3]);
     let rounds: u32 = args[4].parse().expect("rounds");
     let engine = args[5].clone();
-    assert!(engine == "vm" || engine == "interpreter", "engine = vm|interpreter");
+    assert!(
+        engine == "vm" || engine == "interpreter",
+        "engine = vm|interpreter"
+    );
 
     let artifact = parsanol::PargArtifact::from_json(&artifact_text).expect("artifact loads");
     let grammar = artifact.grammar(&entry).expect("the entry decodes");
@@ -253,7 +481,10 @@ fn main() {
         if path.extension().is_some_and(|x| x == "json") {
             let input = std::fs::read_to_string(&path).expect("doc");
             total_bytes += input.len();
-            docs.push((path.file_name().unwrap().to_string_lossy().into_owned(), input));
+            docs.push((
+                path.file_name().unwrap().to_string_lossy().into_owned(),
+                input,
+            ));
         }
     }
     docs.sort();
@@ -266,7 +497,11 @@ fn main() {
         let end = parser
             .parse_with_end_pos()
             .unwrap_or_else(|e| panic!("the interpreter must parse every doc: {e:?}"));
-        assert_eq!(end.end_pos, input.len(), "the interpreter must consume the doc");
+        assert_eq!(
+            end.end_pos,
+            input.len(),
+            "the interpreter must consume the doc"
+        );
         let mut arena = AstArena::for_input(input.len());
         let (vm, _) = parse_with_vm_diag(&program, input, &mut arena);
         let vm = vm.expect("the VM must parse every doc");
