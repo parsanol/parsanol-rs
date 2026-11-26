@@ -1,9 +1,9 @@
 {
-  "engine_commit": "b6696e81b11a962edd7e409e5a0a4a4d75aa7376",
-  "crates": "1.5.23",
-  "npm": "1.5.24",
-  "rubygems": "1.5.23",
-  "pypi": "1.5.23.0",
-  "released_at": "2026-11-26T15:30:00Z",
-  "_comment": "ruby#421 -- the engine-compat manifest. Every release train updates the pairings as it rides; tools/check_engine_compat.py verifies the manifest against the live registries in CI (tag <-> engine_commit, crates, npm, rubygems, pypi). Runtime versions follow the engine-linked scheme {engine-semver}.{runtime-single-digit} (npm: the engine semver, the 4th segment is invalid there) -- the leptris precedent. The 1.5.23 train: parsanol-ts#103's two depth-guard fixes (the Arc'd string-span memo so the typed guard wins the native-stack race; the folded dispatch's ?-leak -- each failing terminal dispatch no longer leaks a live depth unit, so small refusing inputs refuse normally with the deepest-reporter offsets through the failure wire) + #102's byte-tier verification. release-plz semver_check=false unblocked the patch train (the additive plan-registry variants no longer compute 2.0.0). npm 1.5.24 rides the 1.5.23-engine wasm; the ruby ext lock rode to 1.5.23 BEFORE the gem bump (the freshness guard restored -- the 1.5.19-1.5.22 gems shipped on the 1.5.13 lock)."
+  "engine_commit": "9d67ce402275eedc1fb33c075e54b9d75b2f3da2",
+  "crates": "1.5.24",
+  "npm": "1.5.25",
+  "rubygems": "1.5.24",
+  "pypi": "1.5.24.0",
+  "released_at": "2026-11-26T19:45:00Z",
+  "_comment": "ruby#421 -- the engine-compat manifest. Every release train updates the pairings as it rides; tools/check_engine_compat.py verifies the manifest against the live registries in CI (tag <-> engine_commit, crates, npm, rubygems, pypi). Runtime versions follow the engine-linked scheme {engine-semver}.{runtime-single-digit} (npm: the engine semver, the 4th segment is invalid there) -- the leptris precedent. The 1.5.24 train: the splice-diet construction lever (the session computes the O(atoms) analysis once; doc0 incr p50 -9 to -12%, identity 0 failures -- rs#528's P2 receipt) + item 11's Scan remainder (the Entity-wrapped class loops take the bulk Span run; the dispatch-shape spec) + the P3(a) sizing/A-B receipts (499/1448 refused rules build under the shift seam; the ieee A/B byte-identical 10/10 with -2.3% at the minima). npm 1.5.25 rides the 1.5.24-engine wasm; the ruby ext lock rode to 1.5.24 before the bump (ruby#558/#559)."
 }
