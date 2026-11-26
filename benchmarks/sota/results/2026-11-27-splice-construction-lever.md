@@ -74,3 +74,33 @@ memo re-test", gated on the corpus identity plus the doc0/doc3
 ladder. The design care: the dense cache's key layout (pos, atom)
 determines re-key cost, and the shift must stay within the cache's
 window discipline.
+
+## The suffix re-key: FALSIFIED, and the scaling term re-diagnosed (2026-11-27, final)
+
+The scoped lever above took its A/B and failed to pay. The
+`retain_shifted` re-key (keep the pure suffix, `pos += delta` in
+place, drop only the spanning entries) ran the battery green (38/38
+binaries) with identity 0 failures — but the doc0 p50 was UNCHANGED
+(353.8µs vs the 350–357µs band), the reuse count IDENTICAL
+(382,776 before and after), and doc3 moved only ~5% (1.93 vs
+2.03 ms) with p95 slightly worse. REVERTED per the negative-A/B law.
+
+**The misdiagnosis, corrected**: the splice never re-parses the
+suffix — it CLONES the suffix items (`copy_shift_tree`, the
+shifted-copy graft). The suffix cache entries are structurally
+unconsulted, so re-keying them cannot pay. The 5.1× offset-scaling
+term is therefore the GRAFT'S SHIFTED-COPY CLONE — the receipt's
+lever #2, now confirmed as THE scaling lever by this falsification:
+the clone is O(suffix size) because every leaf's embedded span
+(offset/length) must shift with the edit.
+
+**The scoped design** (lever #2, the next build): make the suffix
+items' spans shift lazily — either a span indirection (items
+reference the retained arena and carry a base offset applied at
+read time) or a per-session shift epoch — so the graft assembles
+the new :repetition array from re-referenced handles (they are
+16-byte pool handles into the persistent arena) instead of
+deep-restoring every node. The cross-arena handle tension named in
+the profile receipt is exactly this indirection's cost. Gated on
+the corpus identity, the doc0/doc3 ladder, and the byte-identical
+differential as always.
