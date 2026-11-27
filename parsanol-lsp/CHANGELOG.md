@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Release v1.5.27
+- The LSP consumes the recovery envelope (R3): the tree preview renders the recovered partial and diagnostics carry the coverage
 - The LSP consumes the recovery envelope (R3): the tree preview renders the recovered partial and diagnostics carry the coverage
 - Release v1.5.13
 - Release v1.5.7

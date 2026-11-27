@@ -109,6 +109,8 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ## [Unreleased]
 
+- Release v1.5.27
+- P3(a)'s final step, owner-authorized: the shift-preference construction IS the default. The PARG_LR_SHIFT gate is gone — lr_table_for builds shift-preference unconditionally (a per-rule refusal still falls back to the classic lowering; the strict builder remains for the survey). The ab_shift harness is deleted (its off/on premise is dead); examples/bake_flavor.rs carries the flavor A/B forward.
 - P3(a)'s final step, owner-authorized: the shift-preference construction IS the default. The PARG_LR_SHIFT gate is gone — lr_table_for builds shift-preference unconditionally (a per-rule refusal still falls back to the classic lowering; the strict builder remains for the survey). The ab_shift harness is deleted (its off/on premise is dead); examples/bake_flavor.rs carries the flavor A/B forward.
 - Move the v1-suffix probe out of the match scrutinee (clippy: complex block in scrutinee)
 - The memo-warm interior: keep the above-edit container entries in the shift retention — doc0 p95 56ms -> 619us, reused 3.4x
