@@ -375,6 +375,22 @@ pub struct IncrementalParser<'a> {
     /// The O(atoms) analysis computed once per session (rs#528's
     /// splice diet): every edit's parser construction reuses it.
     analysis: std::sync::Arc<crate::portable::parser_analysis::ParserAnalysis>,
+
+    /// Dead-node reclamation bookkeeping: the live entry count at the
+    /// last pool compaction, and whether it has been seeded (the
+    /// first parse seeds it; compaction runs when the pool doubles
+    /// over the live set — the shift pass is O(pool), so the pool
+    /// must not grow with the session).
+    pool_live_estimate: usize,
+    pool_seeded: bool,
+    /// The last compaction's wall cost (ns). The trigger is
+    /// self-tuning against it: reclaim only when the dead entries'
+    /// per-edit shift cost repays the compaction on ONE future edit.
+    /// Sessions whose per-edit fresh nodes approach the live size
+    /// (doc3: a single edit re-derives a tree-sized item) never reach
+    /// payback and keep the 64 MiB budget reset as their bound;
+    /// small sessions converge to a tight pool after the first fire.
+    last_compact_cost_ns: u64,
 }
 
 /// The selected nested-run candidate: where to bridge and what the
@@ -536,6 +552,9 @@ impl<'a> IncrementalParser<'a> {
             path_chain: Vec::new(),
             last_edit: None,
             analysis,
+            pool_live_estimate: 0,
+            pool_seeded: false,
+            last_compact_cost_ns: 0,
         }
     }
 
@@ -580,6 +599,9 @@ impl<'a> IncrementalParser<'a> {
             path_chain: Vec::new(),
             last_edit: None,
             analysis,
+            pool_live_estimate: 0,
+            pool_seeded: false,
+            last_compact_cost_ns: 0,
         }
     }
 
@@ -870,6 +892,8 @@ impl<'a> IncrementalParser<'a> {
             // must not graft from them.
             self.last_root = None;
             self.body_chain.clear();
+            self.pool_seeded = false;
+            self.pool_live_estimate = 0;
         }
 
         let __p0 = std::time::Instant::now();
@@ -901,6 +925,65 @@ impl<'a> IncrementalParser<'a> {
             });
         }
 
+        // Pool reclamation (the lazy-span-shift's bounded follow-up):
+        // the splice stores fresh nodes per edit and nothing else
+        // frees the superseded ones — the dead entries make the span
+        // shift (and every later pool pass) walk session-accumulated
+        // garbage. Runs BEFORE the span shift so the shift pass walks
+        // the compacted pool. Roots: the retained cache entries' trees
+        // + the previous parse tree (the splice's graft source); both
+        // are rewritten to the new layout.
+        //
+        // The trigger is self-tuning (measured, not assumed): fire at
+        // the 2x-live doubling, but only when the dead entries' shift
+        // cost on ONE future edit (≈1 ns/entry, conservative against
+        // the measured 0.77) repays the compaction cost — the measured
+        // cost of the last fire, or ≈4 ns × live before the first
+        // fire (the copy is O(live)). Sessions whose per-edit fresh
+        // nodes approach the live size (doc3: one edit re-derives a
+        // tree-sized item) never reach payback and keep the 64 MiB
+        // budget reset as their bound; small sessions converge to a
+        // tight pool.
+        {
+            let (pa, ph) = self.output_arena.pool_lens();
+            if !self.pool_seeded {
+                if pa + ph > 0 {
+                    self.pool_seeded = true;
+                    self.pool_live_estimate = pa + ph;
+                }
+            } else if !fresh && pa + ph > 2 * self.pool_live_estimate {
+                let dead = (pa + ph - self.pool_live_estimate) as u64;
+                let cost_bound = self
+                    .last_compact_cost_ns
+                    .max(4u64.saturating_mul(self.pool_live_estimate as u64));
+                if dead >= cost_bound {
+                    let mut roots = self.cache.live_container_roots();
+                    let have_root = self.last_root.is_some();
+                    if have_root {
+                        roots.push(self.last_root.clone().expect("root"));
+                    }
+                    let __t = std::time::Instant::now();
+                    let compacted = self.output_arena.compact(&mut roots);
+                    self.last_compact_cost_ns = __t.elapsed().as_nanos() as u64;
+                    if let Some(remap) = compacted {
+                        if have_root {
+                            self.last_root = roots.pop();
+                        }
+                        self.cache.remap_live_entries(&remap);
+                        let (na, nh) = self.output_arena.pool_lens();
+                        self.pool_live_estimate = na + nh;
+                        if std::env::var("PARG_SPLICE_DIAG").as_deref() == Ok("1") {
+                            let roots_n = roots.len() + usize::from(have_root);
+                            eprintln!(
+                                "COMPACT before=({pa}+{ph}) after=({na}+{nh}) roots={roots_n} cost={}ns",
+                                self.last_compact_cost_ns
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
         // The graft diet (rs#528): shift the arena's stored spans
         // IN PLACE before the plan/parse — then the splice re-references
         // the suffix items' handles instead of deep-restoring every
@@ -909,14 +992,22 @@ impl<'a> IncrementalParser<'a> {
         // multi-region edits keep the deep per-tree shift in the
         // graft (sound fallback).
         let single_region = self.dirty_tracker.regions().len() == 1;
+        let mut __shift_us = 0u128;
         if single_region && !fresh {
             let delta = input.len() as i64 - old_len as i64;
             if delta != 0 {
+                let __t = std::time::Instant::now();
                 self.output_arena.shift_input_refs(cutoff as u32, delta);
+                __shift_us = __t.elapsed().as_micros();
             }
         }
         if std::env::var("PARG_SPLICE_PHASES").as_deref() == Ok("1") && !fresh {
-            eprintln!("PHASE invalidate {}us", __p0.elapsed().as_micros());
+            let (pa, ph) = self.output_arena.pool_lens();
+            eprintln!(
+                "PHASE invalidate {}us (shift {}us pool_a={pa} pool_h={ph})",
+                __p0.elapsed().as_micros(),
+                __shift_us
+            );
         }
         let __p1 = std::time::Instant::now();
         // Splice eligibility (v1): a repetition-spine document — root
@@ -1852,9 +1943,10 @@ impl<'a> IncrementalParser<'a> {
         // Retention keeps every success fully before the edit cutoff:
         // the arena is persistent, so pool-backed container entries
         // need no adoption (an identity "adopt" just marks them
-        // snapshot, which exempts them from arena-generation checks).
-        // Failures stay never-retained, exactly like the snapshot
-        // tier.
+        // retained-persistent, which exempts them from
+        // arena-generation checks while the node indices stay here in
+        // the output arena). Failures stay never-retained, exactly
+        // like the snapshot tier.
         // The repetition-body item boundaries for the NEXT splice plan
         // come straight from the root repetition's trace (full parses)
         // or from the grafted prefix plus the suffix bounds (splices):
@@ -1869,7 +1961,7 @@ impl<'a> IncrementalParser<'a> {
             self.body_chain = std::mem::take(&mut self.last_spine_trace);
         }
         let suffix_floor = self.applied_suffix_floor;
-        self.cache.retain_snapshot_adopt(
+        self.cache.retain_output_adopt(
             |entry| {
                 let entry_end = entry.end_pos as usize;
                 let is_root_at_start = entry.pos == 0 && entry.atom_id == root_atom;

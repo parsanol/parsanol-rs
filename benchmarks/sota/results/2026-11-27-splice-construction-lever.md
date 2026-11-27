@@ -148,3 +148,82 @@ closes from 27x to 54x->18x... precisely: 264 us / 14.3 us = 18.5x
 (from 27x). The next lever after pool reclamation: the bridge
 parse's memo-warm interior (the suffix entries now serve it, which
 this change enables).
+
+## The pool dead-node reclamation SHIPPED (2026-11-27): the shift's O(session) tail bounded
+
+The receipt's named follow-up, built and A/B-gated. The pool
+diagnostic (PHASE instrumentation extended with pool lens + shift
+duration) measured the accumulation first: the doc0 session's pool
+grows 9,205 entries (the initial tree) -> **405,383 by edit 200**
+(~2,000 fresh entries stored per edit, nothing freed), and the
+shift pass — O(pool) — costs **310 us at the tail** (0.77 ns/entry)
+vs 9 us at edit 2. The shift is not the whole p95 (the high-offset
+parse calls dominate it) but it is the session-scaling term: every
+pool pass (shift, later passes) walks garbage linear in the edit
+count.
+
+### The design
+
+`AstArena::compact(&mut roots) -> Option<PoolRemap>`: a mark-walk
+from the live handle holders (the retained cache entries' trees +
+the previous parse tree — the splice's graft source), an
+order-preserving positional compaction of both pools, and a
+two-pass handle rewrite (kept nodes, then roots; the maps return
+for the cache's flattened entries). Any inconsistent handle aborts
+without mutating — sound fallback. String interning untouched.
+
+**The bit split the first implementation got wrong** (caught by the
+doc0 trace's identity check, edits 39-41, then an out-of-bounds
+panic at edit 42): the retained family's post-parse retention marks
+survivors SNAPSHOT_BIT with an IDENTITY adopt — the node indices
+STAY IN THE OUTPUT ARENA (the "identity adopt just marks them
+snapshot" comment). Treating SNAPSHOT_BIT as "data lives in the
+snapshot arena" skipped exactly the live handle holders: compaction
+dropped their trees. The fix splits the semantics:
+`RETAINED_PERSISTENT_BIT` (bit 29) — exempt from generation checks
+LIKE a snapshot, but an OUTPUT-arena handle holder that compaction
+must mark and remap. `is_arena_persistent()` (either bit) covers
+the generation-check/recycle exemptions; `is_retained_persistent()`
+covers compaction. Two regression specs pin it: the compaction
+primitive (dead dropped, roots rewritten, content-identical) and
+the session (offset-0 edits re-derive the full tree every edit —
+tree-sized dead per edit, the doc0 accumulation shape — identity
+held on all 60, pool reclaimed >= 3/4 of the no-reclaim bound).
+
+### The self-tuning trigger (the doc3 falsification)
+
+The uniform "compact at 2x live" trigger **REGRESSED doc3
+catastrophically**: same-machine A/B p50 485 us -> **20.9 ms** —
+one doc3 edit re-derives a tree-sized item (~90k fresh nodes/edit),
+so the pool instantly re-doubles and the O(live) copy-compaction
+fires every edit. The falsification is the design: the trigger is
+now payback-gated — fire at the 2x-live doubling only when the dead
+entries' shift cost on ONE future edit (1 ns/entry, conservative
+vs the measured 0.77) repays the compaction cost (the measured cost
+of the last fire; ~4 ns x live before the first fire). doc3 never
+reaches payback and keeps the 64 MiB budget reset as its bound (its
+shift tail is unchanged — a separately-bounded lever); small
+sessions converge to a tight pool within a few edits. Loaded
+machines self-defer (the measured cost inflates, the gate
+tightens).
+
+### The same-machine A/B (load 34-54, 99 users — quiet re-bake pending)
+
+| trace | leg | incr p50 | incr p95 | incr max | identity |
+|---|---|---|---|---|---|
+| doc0 | before (graft only) | 316.8 us | 2.96 ms | 7.93 ms | 0 |
+| doc0 | after (reclamation) | 310.8–319.0 us | 1.99–2.59 ms | 2.14–5.45 ms | 0 |
+| doc3 | before | 485.2 us | 36.3 ms | 95.3 ms | 0 |
+| doc3 | after (tuned) | 563.4 us | (load-dominated) | 84.4 ms | 0 |
+
+doc0's session-scaling tail collapses (max −31 to −73%); the p50
+holds (±2%). doc3 returns to its pre-reclamation p50 once the
+payback gate declines (the uniform trigger's 20.9 ms is the
+recorded falsification). reused/invalidated identical on doc0
+(382,776/36,188 — the memo path untouched); splice 200/200 and
+199-200/200. The absolute numbers are a LOADED-machine session —
+the quiet-machine re-bake is the receipt-grade bake, as with P3(a).
+
+The compact-cost accounting is visible per fire under
+`PARG_SPLICE_DIAG=1` (`COMPACT before=(a+h) after=(a+h) roots=N
+cost=Ns`); the pool/shift diagnostic rides `PARG_SPLICE_PHASES=1`.

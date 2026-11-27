@@ -466,3 +466,130 @@ fn splice_engagement_holds_as_the_document_grows() {
         );
     }
 }
+
+/// The compaction primitive behind the session's dead-node
+/// reclamation: keep only the trees reachable from `roots`, drop the
+/// rest, rewrite every Array/Hash handle. Pinned against a reference
+/// copy of the same trees in a second arena — content equality, not
+/// pool indices.
+#[test]
+fn arena_compact_keeps_exactly_the_root_reachable_trees() {
+    let grammar = kv_grammar();
+    let input = kv_corpus(60);
+
+    let mut arena = AstArena::for_input(input.len());
+    arena.set_input(input.clone());
+    let mut parser = IncrementalParser::new(&grammar);
+    let tree = parser
+        .parse(&input, &mut arena)
+        .expect("the reference tree parses");
+
+    // Garbage: superseded subtrees the session would have abandoned.
+    let (dead_start, dead_len) = arena.store_array(&[AstNode::InputRef {
+        offset: 0,
+        length: 3,
+    }]);
+    let (dead_hash_start, dead_hash_len) = arena.store_hash(&[(
+        "dead",
+        AstNode::InputRef {
+            offset: 9,
+            length: 1,
+        },
+    )]);
+    let _ = (dead_start, dead_len, dead_hash_start, dead_hash_len);
+
+    let live_before = arena.pool_lens();
+    let mut roots = vec![tree.clone()];
+    let remap = arena.compact(&mut roots).expect("compaction succeeds");
+    let live_after = arena.pool_lens();
+
+    // The garbage is gone; the live trees are byte-identical in
+    // content (the roots were rewritten in place).
+    assert!(
+        live_after.0 + live_after.1 < live_before.0 + live_before.1,
+        "compaction dropped nothing: before {live_before:?} after {live_after:?}"
+    );
+    let (ref_arena, ref_tree) = full_reparse(&grammar, &input);
+    let ref_tree = ref_tree.expect("reference parse");
+    assert!(
+        trees_equal(&arena, &roots[0], &ref_arena, &ref_tree),
+        "the compacted tree diverged from the reference"
+    );
+    // Remapping is consistent: the old indices no longer resolve.
+    assert!(
+        remap
+            .array
+            .iter()
+            .all(|&m| m == u32::MAX || (m as usize) < live_after.0),
+        "array remap points past the compacted pool"
+    );
+}
+
+/// The observed regression (the lazy-span-shift's pool pass): dead
+/// nodes from superseded edits made the pool grow with the SESSION —
+/// 44x the live tree at edit 200 of the doc0 trace, shift 310us at
+/// the tail. The payback-gated compaction must reclaim at least 3/4
+/// of a session's dead while the deep-equality oracle holds on every
+/// edit (offset-0 edits invalidate the whole document, so every edit
+/// re-derives the full tree — tree-sized dead per edit, the same
+/// accumulation shape the doc0 trace exhibited).
+#[test]
+fn the_retained_session_reclaims_dead_pool_nodes_without_losing_identity() {
+    let grammar = kv_grammar();
+    let mut session = IncrementalParser::new(&grammar);
+
+    let mut input = kv_corpus(500);
+    session.parse_retained(&input).expect("initial parse");
+    let (pa0, ph0) = session.retained_arena().pool_lens();
+    let live = pa0 + ph0;
+
+    let edits = 60u32;
+    for step in 0..edits {
+        // Offset 0: the whole document invalidates; the tree
+        // re-derives every edit.
+        let (old_len, inserted) = match step % 3 {
+            0 => (0usize, "xx".to_string()),
+            1 => (1usize, String::new()),
+            _ => (1usize, "z9".to_string()),
+        };
+        let mut next = String::with_capacity(input.len() + inserted.len());
+        next.push_str(&inserted);
+        next.push_str(&input[old_len.min(input.len())..]);
+        if next.is_empty() {
+            continue;
+        }
+        let edit = Edit {
+            offset: 0,
+            old_length: old_len,
+            new_length: inserted.len(),
+        };
+        input = next;
+
+        let retained = session.parse_with_edit_retained(&input, edit);
+        let (ref_arena, reference) = full_reparse(&grammar, &input);
+        assert_same_outcome(
+            step,
+            0,
+            step % 3,
+            session.retained_arena(),
+            retained
+                .as_ref()
+                .map(|r| &r.ast)
+                .map_err(|e| format!("{e:?}")),
+            &ref_arena,
+            reference.as_ref().map_err(|e| format!("{e:?}")),
+        );
+    }
+
+    // Without reclamation the pool is ~live x (1 + edits) (every edit
+    // leaves a dead tree behind). The session must have reclaimed at
+    // least 3/4 of that dead weight by the end.
+    let (pa, ph) = session.retained_arena().pool_lens();
+    let no_reclaim = live * (1 + edits as usize);
+    assert!(
+        pa + ph < no_reclaim / 4,
+        "dead nodes accumulated unbounded: pool {} + {} vs live {live} (no-reclaim bound {no_reclaim})",
+        pa,
+        ph
+    );
+}
