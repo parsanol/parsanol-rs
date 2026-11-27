@@ -83,3 +83,12 @@ timing-sensitive test, passes in isolation — host noise at load
 100+, the same signature the ledger pinned pre-flip); the
 conformance corpus green; `P3(b)`'s greedy-direction stays
 out (the falsification receipt stands).
+
+### The census after the re-homing (56 flavors — the data-format flavors moved to parsanol/grammars, pubid-grammar#156)
+
+LR rules: 1971 provable / 1539 refused / 528 shift-preference (288
+greedy-direction documented-refused). Loop sites: **1420 = 1362
+dfa-routed + 4 lr-covered + 2 lr-covered-under-shift + 52 refused**
+— the shift-preference construction is the shipped default over the
+identifier fleet, and pubid-grammar's grammar job is green again
+(the red dated from the json commit's presence).
