@@ -57,18 +57,39 @@ impl Server {
                 if !ranked.is_empty() && ranked.len() > 1 {
                     message.push_str(&format!(" (+{} ranked failures)", ranked.len() - 1));
                 }
+                // The recovery consumption (R3): how much structure the
+                // recovering parse salvages — the editor-facing answer
+                // alongside the failure.
+                let recovery = self
+                    .artifact
+                    .parse_shape_recovering(&self.entry, text)
+                    .ok()
+                    .filter(|env| env["ok"].as_bool() == Some(false))
+                    .map(|env| {
+                        json!({
+                            "recovered": !env["partial"].is_null(),
+                            "partial_bytes": env["partial"]
+                                .get("offset")
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(0),
+                        })
+                    });
+                let mut parsanol_field = json!({
+                    "expected": expected,
+                    "ranked": ranked.iter().map(|(pos, labels)| json!({
+                        "offset": pos,
+                        "expected": labels,
+                    })).collect::<Vec<_>>(),
+                });
+                if let Some(rec) = recovery {
+                    parsanol_field["recovery"] = rec;
+                }
                 out.push(json!({
                     "range": rules::range_of(text, offset, offset),
                     "severity": 1,
                     "source": "parsanol",
                     "message": message,
-                    "parsanol": {
-                        "expected": expected,
-                        "ranked": ranked.iter().map(|(pos, labels)| json!({
-                            "offset": pos,
-                            "expected": labels,
-                        })).collect::<Vec<_>>(),
-                    },
+                    "parsanol": parsanol_field,
                 }));
             }
             Err(e) => {
@@ -208,7 +229,25 @@ impl Server {
                 render_shape(&shape, 0, &mut out);
                 json!({ "ok": true, "preview": out })
             }
-            Err(e) => json!({ "ok": false, "error": format!("{e}") }),
+            // The recovery consumption (R3, TODO.sota/1 §16): a broken
+            // document keeps its preview — the recovered partial tree
+            // renders, with the failure attached.
+            Err(e) => match self.artifact.parse_shape_recovering(&self.entry, text) {
+                Ok(envelope)
+                    if envelope["ok"].as_bool() == Some(false)
+                        && !envelope["partial"].is_null() =>
+                {
+                    let mut out = String::new();
+                    render_shape(&envelope["partial"], 0, &mut out);
+                    json!({
+                        "ok": false,
+                        "recovered": true,
+                        "preview": out,
+                        "error": format!("{e}"),
+                    })
+                }
+                _ => json!({ "ok": false, "error": format!("{e}") }),
+            },
         }
     }
 }
