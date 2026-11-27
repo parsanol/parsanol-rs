@@ -1,9 +1,9 @@
 {
-  "engine_commit": "8db9faf8d9fac331691539b0cd69fd4903",
-  "crates": "1.5.25",
-  "npm": "1.5.27",
-  "rubygems": "1.5.25",
-  "pypi": "1.5.25.0",
-  "released_at": "2026-11-27T11:55:00Z",
-  "_comment": "ruby#421 -- the engine-compat manifest. Every release train updates the pairings as it rides; tools/check_engine_compat.py verifies the manifest against the live registries in CI (tag <-> engine_commit, crates, npm, rubygems, pypi). Runtime versions follow the engine-linked scheme {engine-semver}.{runtime-single-digit} (npm: the engine semver, the 4th segment is invalid there) -- the leptris precedent. The 1.5.25 train: the pool dead-node reclamation (the session's output arena compacts behind a payback-gated trigger with a 16x-live count backstop; doc0 pool 405k -> ~9k entries, shift tail 310us -> ~9us, doc0 max -73%; the retained family's SNAPSHOT/RETAINED_PERSISTENT bit split after the identity-adopt entries corrupted identity -- caught by the trace + pinned by two regression specs) + the lazy-span-shift graft (AstArena::shift_input_refs shifts stored InputRefs in place; the splice re-references suffix handles; doc0 incr p50 -32%, doc3 5.1x, identity 0 -- #718) + the construction lever (the session computes the O(atoms) analysis once; doc0 -9 to -12%) + the Entity-extraction scan remainder. npm 1.5.26 rides the 1.5.25-engine wasm; npm 1.5.27 follows with ts#108's parsanol/wasm worker-bundle export (same engine, no wasm rebuild) (the candidate recipe, receipts re-pinned at 8db9faf); the ruby ext lock rode 1.5.25 before the bump (ruby#561)."
+  "engine_commit": "6ea40e1946c263ef9cececafb5817552f450fe20",
+  "crates": "1.5.26",
+  "npm": "1.5.28",
+  "rubygems": "1.5.26",
+  "pypi": "1.5.26.0",
+  "released_at": "2026-11-27T13:45:00Z",
+  "_comment": "ruby#421 -- the engine-compat manifest. Every release train updates the pairings as it rides; tools/check_engine_compat.py verifies the manifest against the live registries in CI (tag <-> engine_commit, crates, npm, rubygems, pypi). Runtime versions follow the engine-linked scheme {engine-semver}.{runtime-single-digit} (npm: the engine semver, the 4th segment is invalid there) -- the leptris precedent. The 1.5.26 train: the memo-warm interior (#722) -- the shift retention's shiftable predicate relaxes to the position predicate now that the span-shift moves the pool-backed containers' leaves (the restriction predated the graft); the above-edit entries stay memo-warm, so the deep derivation probe and the bridge interior hit instead of re-parsing (the parse-remainder decomposition: deep 163/200 doc0 edits, bridge 37 tail-dominated). doc0 incr p95 56ms -> 619us, max 271ms -> 2.27ms, reused 3.4x (doc3 26.6x), identity 0, spliced 200/200 (loaded-machine relative verdicts; the quiet re-bake is the receipt formality). npm 1.5.28 rides the 1.5.26-engine wasm (the candidate recipe, receipts re-pinned at 6ea40e1); the ruby ext lock rode 1.5.26 before the bump (ruby#563)."
 }
