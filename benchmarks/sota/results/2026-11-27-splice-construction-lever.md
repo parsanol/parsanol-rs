@@ -227,3 +227,21 @@ the quiet-machine re-bake is the receipt-grade bake, as with P3(a).
 The compact-cost accounting is visible per fire under
 `PARG_SPLICE_DIAG=1` (`COMPACT before=(a+h) after=(a+h) roots=N
 cost=Ns`); the pool/shift diagnostic rides `PARG_SPLICE_PHASES=1`.
+
+### The count-based backstop (the CI-debug deferral, caught by the regression spec)
+
+The first CI run of #719 failed ONE spec — the session reclamation
+spec — on every Test job: in DEBUG builds the payback gate's
+time-based measurement inflates ~10-30x, so compaction defers
+legitimately and the pool sat at 93% of the no-reclaim bound. The
+spec caught exactly the gap it was written to catch (an
+environment-dependent trigger). The fix adds the count-based half of
+the trigger: fire unconditionally when the pool exceeds **16x live**
+(the dead term's per-edit shift cost is then >= 15x the copy's ~1x
+live work — payback within one edit at ANY build mode). The payback
+term stays the tight release-mode binder (doc0 unchanged); the
+backstop makes reclamation deterministic everywhere and keeps doc3's
+memo warmer than the wholesale resets it replaces (doc3 reused
+415,541 vs main's 436,915, p50 at the receipt band 409 us).
+Debug-mode and release-mode suites both green; the spec's bound is
+now 20x live (the deterministic crest).
