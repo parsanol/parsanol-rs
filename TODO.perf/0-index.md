@@ -14,7 +14,7 @@ decomposition of everything left on parsanol performance:
 | 6 | Wide scan kernels (32-byte blocks) | follow-up of 2 | SHIPPED (verified 2026-11-27: the asm inspection + the 13.8x A/B) |
 | 7 | Dense rule-call memo for the VM | follow-up of the phase-2 wiring | measured negative; reverted (see item) |
 | 8 | Incremental latency benchmark | follow-up of 4 | SHIPPED (this round) |
-| 9 | Prefix-tree reuse | the measured ceiling of 4/8 | LANDED-ARC (rs#528 P2 2026-11-27: construction lever + lazy-span-shift graft + payback-gated pool reclamation shipped, suffix re-key falsified; the bridge-parse interior is the named remainder — see item) |
+| 9 | Prefix-tree reuse | the measured ceiling of 4/8 | LANDED-ARC COMPLETE (rs#528 P2: construction lever + span-shift graft + pool reclamation + memo-warm interior all shipped 2026-11-27; two falsifications recorded; the open formality = the quiet-machine receipt bake) |
 | 10 | Success-path diagnostics overhead | rs#533 receipt (VM tracks every failed alternative) | SHIPPED (VM 6.2x) |
 | 11 | Determinism dispatch: Switch tables + Scan runs | rs#533 receipt (Lark 3.1x ahead = strategy tax) | LANDED (8.7x cum. + the charset merge + the Entity-extraction leg, 2026-11-27) |
 | 12 | Recognition/construction split + pooled tree writes | rs#533 receipt | CLOSED (2026-11-27: the post-Scan re-run keeps construction second-order; the ≥30% gate unmet) |
