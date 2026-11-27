@@ -322,3 +322,29 @@ high-offset parse calls — the p95 driver the shift never was).
 doc0 p50 232 us vs tree-sitter's 14.3 us = 16x. The doc0/doc3
 absolute receipt bakes are quiet-machine pending (this arc's A/B
 ran at load 34-80; the RELATIVE verdicts are the gate).
+
+## Round 2026-11-27 (final): the memo-warm interior SHIPPED — the parse remainder decomposed and the retention unlocked
+
+The instrument-first gate ran: PARG_SPLICE_PHASES now decomposes the
+parse remainder per splice (v1-suffix / deep / bridge / tails). doc0:
+v1-suffix never engages (json's root is not a repetition — the
+rs#542 decode confirmed by 0 everywhere), the deep derivation probe
+fires on 163/200 edits, the level-0 bridge on 37 (tail-dominated —
+its max WAS incr_max), tails ~1.5 us.
+
+The mechanism was sitting in the code: the shift retention's
+`shiftable` predicate kept only `Nil | InputRef` entries above the
+edit — written BEFORE the span-shift existed. Post-#718 the bulk
+shift moves every stored InputRef and a cache entry's Array/Hash
+payload is a position-independent pool handle; the above-edit
+containers were being dropped and re-parsed whole. The lever relaxes
+`shiftable` to the position predicate (the re-key still shifts only
+InputRef data_a; straddlers still drop; multi-region keeps the plain
+retain).
+
+Measured (load 232-244 — the quiet re-bake remains the receipt
+formality): doc0 incr p95 56.2 ms -> **618.8 us**, max 271 ms ->
+**2.27 ms**, reused 382,776 -> 1,294,500; doc3 reused 415,541 ->
+**11,051,417**; identity 0 and splice 200/200 on both traces; 620
+lib tests + all integration suites green in debug. Shipped
+(#722); the 1.5.26 train rides it.
