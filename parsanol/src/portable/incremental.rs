@@ -630,9 +630,15 @@ impl<'a> IncrementalParser<'a> {
     /// suffix bytes are byte-identical between the old and new inputs,
     /// so a match lying wholly within the suffix is equally valid at
     /// shifted coordinates (tree-sitter's old-tree reuse, in memo-key
-    /// space). Only arena-free values shift: pool-backed entries
-    /// describe trees whose inner offsets cannot move coherently.
-    /// Consumes `pending_shift`.
+    /// space). Since the lazy-span-shift graft (#718) bulk-shifts
+    /// every stored InputRef in the output arena, pool-backed
+    /// container entries (Array/Hash — position-independent pool
+    /// handles; the leaves moved with the shift) shift coherently too:
+    /// keeping them keeps the probes ABOVE the edit memo-warm (the
+    /// deep derivation probe and the bridge's interior). StringRef
+    /// data is a string-pool index — position-independent like the
+    /// containers; only InputRef data_a carries an offset and the
+    /// re-key below shifts it. Consumes `pending_shift`.
     fn retain_suffix_shift(&mut self, cutoff: usize, root_atom: u16, input_len_changed: bool) {
         let Some((edit_end_old, delta)) = self.pending_shift.take() else {
             return;
@@ -643,8 +649,7 @@ impl<'a> IncrementalParser<'a> {
             let entry_end = entry.end_pos as usize;
             let is_root_at_start = entry.pos == 0 && entry.atom_id == root_atom;
             let below = entry_end < cutoff && !(input_len_changed && is_root_at_start);
-            let shiftable = entry.pos as i64 >= edit_end_old as i64
-                && matches!(entry.node_tag, NodeTag::Nil | NodeTag::InputRef);
+            let shiftable = entry.pos as i64 >= edit_end_old as i64;
             below || shiftable
         });
         for entry in self.cache.entries_mut() {
@@ -1017,6 +1022,14 @@ impl<'a> IncrementalParser<'a> {
             );
         }
         let __p1 = std::time::Instant::now();
+        // The parse-remainder decomposition (the bridge-parse lever's
+        // instrument): per-splice sub-phase accumulators — the v1
+        // root-splice's suffix replay, the deep derivation probe, the
+        // level-0/fallback bridge parse, and the sibling tails.
+        let mut __v1_suffix_us = 0u128;
+        let mut __deep_us = 0u128;
+        let mut __bridge_us = 0u128;
+        let mut __tails_us = 0u128;
         // Splice eligibility (v1): a repetition-spine document — root
         // Repetition, optionally behind one Named — with no Dynamic
         // atoms, one dirty region, and a previous tree to graft from.
@@ -1284,7 +1297,12 @@ impl<'a> IncrementalParser<'a> {
                             break;
                         }
                     }
-                    match parser.try_atom_impl(*body, s_pos, false) {
+                    match {
+                        let __t = std::time::Instant::now();
+                        let r = parser.try_atom_impl(*body, s_pos, false);
+                        __v1_suffix_us += __t.elapsed().as_micros();
+                        r
+                    } {
                         Ok(r) => {
                             let zero_width = r.end_pos == s_pos;
                             suffix_bounds.push((s_pos as u32, r.end_pos as u32));
@@ -1590,7 +1608,9 @@ impl<'a> IncrementalParser<'a> {
                                             // item of the nested list. The
                                             // shift identity guards it like
                                             // the level-0 bridge.
+                                            let __t = std::time::Instant::now();
                                             let probed_d = parser.try_atom_impl(body_d, pd, false);
+                                            __deep_us += __t.elapsed().as_micros();
                                             let deep_ok = probed_d.as_ref().is_ok_and(|r| {
                                                 r.end_pos as i64 == ed as i64 + delta
                                                     && r.end_pos > pd
@@ -1649,7 +1669,9 @@ impl<'a> IncrementalParser<'a> {
                                         // any other outcome means the item's
                                         // shape changed and a shifted-copy
                                         // rebuild would misalign.
+                                        let __t = std::time::Instant::now();
                                         let probed = parser.try_atom_impl(body, p0, false);
+                                        __bridge_us += __t.elapsed().as_micros();
                                         let expect_end = (e0 as i64 + delta).max(0) as usize;
                                         if let Ok(r) = probed {
                                             if r.end_pos == expect_end {
@@ -1685,7 +1707,9 @@ impl<'a> IncrementalParser<'a> {
                         // No deep surgery ran and no level-0 bridge
                         // yet (e.g. a no-straddler edit): parse the
                         // item after the cut point as the bridge.
+                        let __t = std::time::Instant::now();
                         let bridged = parser.try_atom_impl(body, splice_pos, false);
+                        __bridge_us += __t.elapsed().as_micros();
                         if let Ok(r) = bridged {
                             if r.end_pos > splice_pos {
                                 bridge = Some(r.value.clone());
@@ -1709,7 +1733,10 @@ impl<'a> IncrementalParser<'a> {
                         {
                             let mut vals = Vec::new();
                             for &atom in siblings_after.iter() {
-                                match parser.try_atom_impl(atom, tail_cursor, false) {
+                                let __t = std::time::Instant::now();
+                                let r = parser.try_atom_impl(atom, tail_cursor, false);
+                                __tails_us += __t.elapsed().as_micros();
+                                match r {
                                     Ok(r) => {
                                         vals.push(r.value.clone());
                                         tail_cursor = r.end_pos;
@@ -1787,9 +1814,13 @@ impl<'a> IncrementalParser<'a> {
             // in reverse.
             if std::env::var("PARG_SPLICE_PHASES").as_deref() == Ok("1") {
                 eprintln!(
-                    "PHASE probe+reparse {}us (nav {}us = gate+discover+prev-tree walk; parse = the remainder)",
+                    "PHASE probe+reparse {}us (nav {}us = gate+discover+prev-tree walk; parse = the remainder: v1-suffix {}us deep {}us bridge {}us tails {}us)",
                     __p1.elapsed().as_micros(),
-                    __nav_us
+                    __nav_us,
+                    __v1_suffix_us,
+                    __deep_us,
+                    __bridge_us,
+                    __tails_us
                 );
             }
             let plan = path_plan.as_ref().expect("path data implies a plan");
