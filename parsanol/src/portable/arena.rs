@@ -43,6 +43,17 @@ struct ArrayPoolEntry {
     value: AstNode,
 }
 
+/// The old→new pool-index maps `AstArena::compact` returns: the
+/// caller rewrites the handle holders it owns beyond the arena (the
+/// flattened cache entries). Slot i holds the entry's new index, or
+/// `u32::MAX` for a dropped (dead) slot.
+pub struct PoolRemap {
+    /// Array pool: old index → new index.
+    pub array: Vec<u32>,
+    /// Hash pool: old index → new index.
+    pub hash: Vec<u32>,
+}
+
 /// The arena allocator
 #[derive(Debug)]
 pub struct AstArena {
@@ -478,6 +489,159 @@ impl AstArena {
         for entry in &mut self.hash_pool {
             shift_node(&mut entry.value);
         }
+    }
+
+    /// Diagnostic pool sizes (array entries, hash entries) — the
+    /// shift pass walks both in full.
+    pub fn pool_lens(&self) -> (usize, usize) {
+        (self.array_pool.len(), self.hash_pool.len())
+    }
+
+    /// Reclaim dead pool entries: keep only the trees reachable from
+    /// `roots`, compact both pools in place (order-preserving), and
+    /// rewrite every Array/Hash handle — in the kept nodes AND in
+    /// `roots` — to the new layout. String interning is untouched.
+    ///
+    /// Trees held by the CALLER from before this call are NOT
+    /// remapped: outstanding handles are invalidated at a compaction
+    /// boundary. The incremental session re-derives everything it
+    /// keeps (the splice navigates `last_root` and the retained cache
+    /// entries, both rewritten here), so this is sound for the
+    /// retained family; consumers must not hold arena subtrees across
+    /// retained parses.
+    ///
+    /// Returns the old→new index maps for the caller's other
+    /// handle holders (the flattened cache entries), or None when the
+    /// walk found an inconsistent handle — the arena is left
+    /// untouched and the caller keeps the un-compacted layout.
+    pub fn compact(&mut self, roots: &mut [AstNode]) -> Option<PoolRemap> {
+        const UNMAPPED: u32 = u32::MAX;
+        let n_a = self.array_pool.len();
+        let n_h = self.hash_pool.len();
+        if n_a == 0 && n_h == 0 {
+            return Some(PoolRemap {
+                array: Vec::new(),
+                hash: Vec::new(),
+            });
+        }
+        let mut vis_a = vec![false; n_a];
+        let mut vis_h = vec![false; n_h];
+
+        // Mark: seed from the roots, then walk container ranges.
+        // Ranges are contiguous runs allocated by store_array /
+        // store_hash, so a marked run start means the whole run is
+        // already visited.
+        let mut ranges: Vec<(bool, u32, u32)> = Vec::new();
+        let push_container = |node: &AstNode, ranges: &mut Vec<(bool, u32, u32)>| match node {
+            AstNode::Array { pool_index, length } => ranges.push((false, *pool_index, *length)),
+            AstNode::Hash { pool_index, length } => ranges.push((true, *pool_index, *length)),
+            _ => {}
+        };
+        for r in roots.iter() {
+            push_container(r, &mut ranges);
+        }
+        while let Some((is_hash, start, len)) = ranges.pop() {
+            if is_hash {
+                let s = start as usize;
+                if s >= n_h {
+                    return None;
+                }
+                if vis_h[s] {
+                    continue;
+                }
+                let end = (s + len as usize).min(n_h);
+                for (vis, entry) in vis_h[s..end].iter_mut().zip(self.hash_pool[s..end].iter()) {
+                    *vis = true;
+                    push_container(&entry.value, &mut ranges);
+                }
+            } else {
+                let s = start as usize;
+                if s >= n_a {
+                    return None;
+                }
+                if vis_a[s] {
+                    continue;
+                }
+                let end = (s + len as usize).min(n_a);
+                for (vis, entry) in vis_a[s..end].iter_mut().zip(self.array_pool[s..end].iter()) {
+                    *vis = true;
+                    push_container(&entry.value, &mut ranges);
+                }
+            }
+        }
+
+        // Compact: order-preserving positional remap (every marked
+        // slot maps to its own new position, so any handle — run
+        // start or interior — resolves).
+        let mut map_a: Vec<u32> = vec![UNMAPPED; n_a];
+        let mut map_h: Vec<u32> = vec![UNMAPPED; n_h];
+        let mut new_a: Vec<ArrayPoolEntry> =
+            Vec::with_capacity(vis_a.iter().filter(|&&b| b).count());
+        for i in 0..n_a {
+            if vis_a[i] {
+                map_a[i] = new_a.len() as u32;
+                new_a.push(ArrayPoolEntry {
+                    value: self.array_pool[i].value.clone(),
+                });
+            }
+        }
+        let mut new_h: Vec<HashPoolEntry> =
+            Vec::with_capacity(vis_h.iter().filter(|&&b| b).count());
+        for i in 0..n_h {
+            if vis_h[i] {
+                map_h[i] = new_h.len() as u32;
+                new_h.push(HashPoolEntry {
+                    key_pool_index: self.hash_pool[i].key_pool_index,
+                    value: self.hash_pool[i].value.clone(),
+                });
+            }
+        }
+
+        // Rewrite handles in the kept nodes; every child of a marked
+        // range was marked transitively, so UNMAPPED here means an
+        // inconsistent handle — abort without mutating.
+        let rewrite = |node: &mut AstNode| -> bool {
+            match node {
+                AstNode::Array { pool_index, .. } => {
+                    let m = map_a[*pool_index as usize];
+                    if m == UNMAPPED {
+                        return false;
+                    }
+                    *pool_index = m;
+                }
+                AstNode::Hash { pool_index, .. } => {
+                    let m = map_h[*pool_index as usize];
+                    if m == UNMAPPED {
+                        return false;
+                    }
+                    *pool_index = m;
+                }
+                _ => {}
+            }
+            true
+        };
+        for entry in &mut new_a {
+            if !rewrite(&mut entry.value) {
+                return None;
+            }
+        }
+        for entry in &mut new_h {
+            if !rewrite(&mut entry.value) {
+                return None;
+            }
+        }
+        for r in roots.iter_mut() {
+            if !rewrite(r) {
+                return None;
+            }
+        }
+
+        self.array_pool = new_a;
+        self.hash_pool = new_h;
+        Some(PoolRemap {
+            array: map_a,
+            hash: map_h,
+        })
     }
 
     /// Store an untagged array; returns (start, length) in the pool.

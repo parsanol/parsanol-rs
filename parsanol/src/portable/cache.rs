@@ -70,6 +70,12 @@ impl NodeTag {
 /// in the owning parser's snapshot arena and survives across parses.
 pub const SNAPSHOT_BIT: u32 = 1 << 31;
 
+/// Bit 29 of `generation`: the entry is retained-persistent — the
+/// retained family's identity "adopt" marked it (exempt from
+/// arena-generation checks) while its node indices stay in the
+/// session's persistent OUTPUT arena, not the snapshot arena.
+pub const RETAINED_PERSISTENT_BIT: u32 = 1 << 29;
+
 /// Bit 30 of `generation`: the entry was computed under consume_all
 /// semantics (root incomplete-consumption threading). A consume_all
 /// result must never replay for a non-consume_all lookup of the same
@@ -177,6 +183,35 @@ impl CacheEntry {
         self.node_data_a = data_a;
         self.node_data_b = data_b;
         self.generation |= SNAPSHOT_BIT;
+    }
+
+    /// Mark the entry as retained-persistent: exempt from
+    /// arena-generation checks like a snapshot entry, but its node
+    /// indices stay in the session's persistent OUTPUT arena (the
+    /// retained family's identity "adopt" — the arena is
+    /// session-owned, so pool-backed nodes need no copy).
+    #[inline]
+    pub fn make_retained_persistent(&mut self, data_a: u32, data_b: u32) {
+        self.node_data_a = data_a;
+        self.node_data_b = data_b;
+        self.generation |= RETAINED_PERSISTENT_BIT;
+    }
+
+    /// Whether this entry is exempt from arena-generation checks
+    /// because its node data lives in a stable session arena — the
+    /// snapshot arena (SNAPSHOT_BIT) or the retained session's
+    /// persistent output arena (RETAINED_PERSISTENT_BIT).
+    #[inline]
+    pub fn is_arena_persistent(&self) -> bool {
+        self.generation & (SNAPSHOT_BIT | RETAINED_PERSISTENT_BIT) != 0
+    }
+
+    /// Whether this entry's node indices refer to the retained
+    /// session's OUTPUT arena (pool compaction must mark and remap
+    /// these; true snapshot entries live elsewhere and are skipped).
+    #[inline]
+    pub fn is_retained_persistent(&self) -> bool {
+        self.generation & RETAINED_PERSISTENT_BIT != 0
     }
 
     /// Create a failed cache entry
@@ -430,10 +465,12 @@ impl DenseCache {
             if entry.pos == pos && entry.atom_id == atom_id && entry.is_consume_all() == consume_all
             {
                 // Check generation to ensure arena hasn't rolled back.
-                // Snapshot entries are exempt: their node data lives
-                // in the stable snapshot arena, so live-arena
-                // rollbacks cannot have invalidated them.
-                if entry.generation != generation && !entry.is_snapshot() {
+                // Arena-persistent entries are exempt: their node data
+                // lives in a stable session arena (the snapshot arena,
+                // or the retained session's persistent output arena),
+                // so live-arena rollbacks cannot have invalidated
+                // them.
+                if entry.generation != generation && !entry.is_arena_persistent() {
                     // Stale entry - arena was rolled back since this was cached
                     self.misses += 1;
                     return None;
@@ -477,7 +514,7 @@ impl DenseCache {
             let half = before / 2;
             let mut index = 0usize;
             self.entries.retain(|e| {
-                let keep = e.is_snapshot() || index >= half;
+                let keep = e.is_arena_persistent() || index >= half;
                 index += 1;
                 keep
             });
@@ -589,6 +626,48 @@ impl DenseCache {
         self.entries.iter_mut()
     }
 
+    /// Rewrite Array/Hash pool indices on the RETAINED-PERSISTENT
+    /// entries after a pool compaction of the session's output arena.
+    /// True snapshot entries point at the snapshot arena and are
+    /// untouched.
+    pub fn remap_live_entries(&mut self, remap: &crate::portable::arena::PoolRemap) {
+        for e in &mut self.entries {
+            if !e.is_retained_persistent() {
+                continue;
+            }
+            match e.node_tag {
+                NodeTag::Array => e.node_data_a = remap.array[e.node_data_a as usize],
+                NodeTag::Hash => e.node_data_a = remap.hash[e.node_data_a as usize],
+                _ => {}
+            }
+        }
+    }
+
+    /// Materialize the container roots the RETAINED-PERSISTENT
+    /// entries hold — the output-arena compaction mark-walk's roots
+    /// (true snapshot entries live in the snapshot arena and never
+    /// root the output arena).
+    pub fn live_container_roots(&self) -> Vec<AstNode> {
+        let mut roots = Vec::new();
+        for e in &self.entries {
+            if !e.is_retained_persistent() || !e.success {
+                continue;
+            }
+            match e.node_tag {
+                NodeTag::Array => roots.push(AstNode::Array {
+                    pool_index: e.node_data_a,
+                    length: e.node_data_b,
+                }),
+                NodeTag::Hash => roots.push(AstNode::Hash {
+                    pool_index: e.node_data_a,
+                    length: e.node_data_b,
+                }),
+                _ => {}
+            }
+        }
+        roots
+    }
+
     /// Retain only entries that match a predicate, rebuilding the hash table
     pub fn retain<F>(&mut self, mut predicate: F)
     where
@@ -617,7 +696,29 @@ impl DenseCache {
     /// cross-parse retention primitive of incremental reparsing
     /// (TODO.perf/4): pool-backed nodes cannot survive a parse
     /// otherwise, because the next parse's arena is a different one.
-    pub fn retain_snapshot_adopt<F, A>(&mut self, mut keep: F, mut adopt: A)
+    pub fn retain_snapshot_adopt<F, A>(&mut self, keep: F, adopt: A)
+    where
+        F: FnMut(&CacheEntry) -> bool,
+        A: FnMut(&AstNode) -> AstNode,
+    {
+        self.retain_adopt_marked(keep, adopt, true);
+    }
+
+    /// The retained family's retention: same keep/adopt pass as
+    /// [`Self::retain_snapshot_adopt`], but survivors are marked
+    /// RETAINED_PERSISTENT — exempt from generation checks while
+    /// their node indices STAY IN THE OUTPUT ARENA (the identity
+    /// adopt; the session owns its arena, so pool-backed container
+    /// entries need no copy).
+    pub fn retain_output_adopt<F, A>(&mut self, keep: F, adopt: A)
+    where
+        F: FnMut(&CacheEntry) -> bool,
+        A: FnMut(&AstNode) -> AstNode,
+    {
+        self.retain_adopt_marked(keep, adopt, false);
+    }
+
+    fn retain_adopt_marked<F, A>(&mut self, mut keep: F, mut adopt: A, snapshot: bool)
     where
         F: FnMut(&CacheEntry) -> bool,
         A: FnMut(&AstNode) -> AstNode,
@@ -628,8 +729,8 @@ impl DenseCache {
         // late band isolates (TODO.perf/9: end-of-document edits pay
         // ~150 ms of pure maintenance over ~10^6 entries): the
         // survivors' home hashes never change here (adoption touches
-        // only node_data and the snapshot bit, never pos/atom_id), so
-        // the slots need only their INDEX VALUES remapped.
+        // only node_data and the persistence bit, never pos/atom_id),
+        // so the slots need only their INDEX VALUES remapped.
         let old_len = self.entries.len();
         let mut remap: Vec<i32> = Vec::with_capacity(old_len);
         let mut write = 0usize;
@@ -639,7 +740,7 @@ impl DenseCache {
                 remap.push(-1);
                 continue;
             }
-            if !entry.is_snapshot() {
+            if !entry.is_arena_persistent() {
                 let needs_adoption = matches!(
                     entry.to_node(),
                     AstNode::Array { .. } | AstNode::Hash { .. } | AstNode::StringRef { .. }
@@ -652,7 +753,11 @@ impl DenseCache {
                         AstNode::Hash { pool_index, length } => (pool_index, length),
                         _ => (entry.node_data_a, entry.node_data_b),
                     };
-                    entry.make_snapshot(a, b);
+                    if snapshot {
+                        entry.make_snapshot(a, b);
+                    } else {
+                        entry.make_retained_persistent(a, b);
+                    }
                 }
             }
             self.entries[write] = entry;

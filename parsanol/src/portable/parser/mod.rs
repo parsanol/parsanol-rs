@@ -1513,7 +1513,7 @@ impl<'a> PortableParser<'a> {
                     self.arena.generation(),
                     consume_all,
                 )
-                .map(|e| (e.success, e.end_pos, e.to_node(), e.is_snapshot()));
+                .map(|e| (e.success, e.end_pos, e.to_node(), e.is_arena_persistent()));
 
             if let Some((success, end_pos, cached_node, is_snapshot)) = cache_hit {
                 #[cfg(feature = "perf-counters")]
