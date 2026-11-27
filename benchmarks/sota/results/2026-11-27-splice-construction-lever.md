@@ -294,3 +294,18 @@ in debug (the incremental_retained gates included), both traces
 identity-clean. The quiet-machine receipt bake + the tree-sitter
 comparator re-run remain the pending formality; the tree-sitter gap
 closes from 18.5x toward the comparator's own per-edit cost.
+
+## The registry swap validated (2026-11-27): the sota json artifact is now parsanol/grammars' seal
+
+`benchmarks/sota/json-artifact.json` now pins the registry's
+`artifacts/json.json` (parsanol/grammars, sealed at the 1.5.26
+train) — the re-homing's last consumer leg. The validation protocol
+before the swap: both edit-sequence traces replay identity-clean
+(doc0 200/200 spliced, reused 1,294,500; doc3 200/200, reused
+11,051,417 — the memo fingerprints are BYTE-IDENTICAL to the old
+seal's), so the two artifacts are behaviorally the same grammar and
+the historical receipts' comparability holds. The absolute
+quiet-machine re-bake of the reclamation + memo-warm A/Bs remains
+gated on host quietness (this session's load: 29-244; the final
+validation round ran at 143 — the identity protocol is
+load-independent, the absolute numbers are not).
