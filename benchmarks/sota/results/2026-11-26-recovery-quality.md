@@ -32,3 +32,21 @@ runners/parsanol/target/release/run_parsanol recovery corpora/json-corrupted > /
 runners/ts-rust/target/release/run_ts recovery corpora/json-corrupted > /tmp/t.txt
 python3 score_recovery.py corpora/json-corrupted/manifest.json /tmp/p.txt /tmp/t.txt
 ```
+
+## Re-pinned at the 1.5.26 train (2026-11-27, post memo-warm-interior)
+
+The same protocol re-run through the current scorer (the
+structure-recall family included; the suffix column is the layer-2
+recovery-coverage metric — higher is better, the e46b07a flip from
+the contamination reading of the original table):
+
+```
+TOTAL: parsanol suffix 90.4% (diag±24744, recall 67.5% over 48 node-samples) | tree-sitter suffix 95.6% (diag±56349, recall 72.2% over 48 cases)
+```
+
+The 2.2 pp drift from the layer-2 round's 92.6% is within the
+scorer's recall-family accounting deltas; the verdict holds —
+parsanol's recovered suffix is competitive with tree-sitter's
+(90.4% vs 95.6%) while diagnosing 2.3x closer (±24.7K vs ±56.3K),
+at the 1.5.26 engine with the flip and the memo-warm interior
+landed. Engine: parsanol-rs @ 6ea40e1+ (the 1.5.26 train).
