@@ -1297,12 +1297,10 @@ impl<'a> IncrementalParser<'a> {
                             break;
                         }
                     }
-                    match {
-                        let __t = std::time::Instant::now();
-                        let r = parser.try_atom_impl(*body, s_pos, false);
-                        __v1_suffix_us += __t.elapsed().as_micros();
-                        r
-                    } {
+                    let __t = std::time::Instant::now();
+                    let probed = parser.try_atom_impl(*body, s_pos, false);
+                    __v1_suffix_us += __t.elapsed().as_micros();
+                    match probed {
                         Ok(r) => {
                             let zero_width = r.end_pos == s_pos;
                             suffix_bounds.push((s_pos as u32, r.end_pos as u32));
