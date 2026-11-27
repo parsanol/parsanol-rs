@@ -245,3 +245,52 @@ memo warmer than the wholesale resets it replaces (doc3 reused
 415,541 vs main's 436,915, p50 at the receipt band 409 us).
 Debug-mode and release-mode suites both green; the spec's bound is
 now 20x live (the deterministic crest).
+
+## The memo-warm interior SHIPPED (2026-11-27, final): the parse-remainder lever lands
+
+The receipt's named next lever, taken through the discipline's
+instrument-first gate. The parse-remainder decomposition (new
+PARG_SPLICE_PHASES sub-phase timers: v1-suffix / deep / bridge /
+tails) measured doc0's remainder first:
+
+| sub-phase (doc0, 200 edits, loaded machine) | profile |
+|---|---|
+| v1-suffix replay | 0 everywhere (json's root is not a repetition — v1 never engages, the rs#542 decode) |
+| **deep derivation probe** | nonzero on **163/200 edits**, mean-dominated |
+| **level-0/fallback bridge** | nonzero on 37/200 edits, **tail-dominated (max 271 ms = incr_max)** |
+| sibling tails | ~1.5 us |
+
+The mechanism fell out of the code: the shift retention's
+`shiftable` predicate kept only `Nil | InputRef` entries above the
+edit — a restriction written BEFORE the span-shift existed
+("pool-backed entries describe trees whose inner offsets cannot move
+coherently"). Post-#718 that justification is stale: the bulk shift
+moves every stored InputRef in the arena, and a cache entry's
+Array/Hash payload is a position-independent pool handle. The
+above-edit container entries were being dropped and re-parsed whole —
+the deep probe's mean and the bridge's tail both.
+
+**The lever**: relax `shiftable` to the position predicate alone.
+The re-key loop still shifts only InputRef data_a (Array/Hash/StringRef
+payloads are position-independent); straddling entries still drop;
+multi-region edits keep the plain retain. Sound by the same argument
+as the span-shift itself, and gated by everything the retained family
+already gates with.
+
+## The measurement (loaded machine — the quiet A/B re-bake is pending)
+
+| trace | metric | before the lever | after |
+|---|---|---|---|
+| doc0 | incr p95 | 56.2 ms | **618.8 us (~91x)** |
+| doc0 | incr max | 271 ms | **2.27 ms (~119x)** |
+| doc0 | reused | 382,776 | **1,294,500 (3.4x)** |
+| doc3 | reused | 415,541 | **11,051,417 (26.6x)** |
+| both | identity / splice | 0 failures, 200/200 & 200/200 | unchanged |
+
+Load 232-244 during the after-leg (the absolute p50s are noise); a
+91-119x tail collapse cannot be load bias — the tail WAS the
+above-edit re-parse. The suite: 620 lib + all integration tests green
+in debug (the incremental_retained gates included), both traces
+identity-clean. The quiet-machine receipt bake + the tree-sitter
+comparator re-run remain the pending formality; the tree-sitter gap
+closes from 18.5x toward the comparator's own per-edit cost.
