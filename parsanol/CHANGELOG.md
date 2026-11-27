@@ -109,6 +109,8 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ## [Unreleased]
 
+- Move the v1-suffix probe out of the match scrutinee (clippy: complex block in scrutinee)
+- The memo-warm interior: keep the above-edit container entries in the shift retention — doc0 p95 56ms -> 619us, reused 3.4x
 - The count-based compaction backstop: reclaim unconditionally at 16x live — the CI-debug deferral the regression spec caught
 - The pool dead-node reclamation: compact the session's output arena behind a payback-gated trigger — doc0 pool 405k -> ~9k, shift tail 310us -> ~9us, identity 0
 - Drop the orphaned doc-comment fragments left by the copy_shift_tree deletion (clippy: empty lines after doc comment)
