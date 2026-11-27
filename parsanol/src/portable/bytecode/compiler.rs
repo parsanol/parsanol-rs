@@ -2251,22 +2251,18 @@ impl Compiler {
         if let Some(cached) = self.lr_table_memo.get(&atom_idx) {
             return cached.clone();
         }
-        // The P3(a) A/B gate: PARG_LR_SHIFT=1 flips the seam to the
-        // shift-preference construction (the greedy-loop class -- the
-        // PEG's own maximal-munch continuation); the default stays
-        // strict until the receipt lands. The greedy-direction class
-        // (a shift at a reduce-taken byte, the Resolved analysis
-        // surface) is NOT routable: the gate probe FALSIFIED it — the
+        // The shift-preference construction IS the default (the P3(a)
+        // flip, owner-authorized): the greedy-loop class is the PEG's
+        // own maximal-munch continuation, and a construction refusal
+        // falls back to the classic lowering per rule. The
+        // greedy-direction class (a shift at a reduce-taken byte) is
+        // NOT in this construction: the gate probe FALSIFIED it — the
         // resolved tables misparse valid json (the histogram probe's
         // acceptance failure; see the P3(b) falsification receipt).
-        let table = if std::env::var("PARG_LR_SHIFT").as_deref() == Ok("1") {
-            crate::portable::bytecode::lr_table::build_lr_table_shift_preference(
-                &self.grammar,
-                atom_idx,
-            )
-        } else {
-            crate::portable::bytecode::lr_table::build_lr_table_strict(&self.grammar, atom_idx)
-        }
+        let table = crate::portable::bytecode::lr_table::build_lr_table_shift_preference(
+            &self.grammar,
+            atom_idx,
+        )
         .ok();
         self.lr_table_memo.insert(atom_idx, table.clone());
         table
