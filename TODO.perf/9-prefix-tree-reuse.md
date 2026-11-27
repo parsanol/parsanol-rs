@@ -291,3 +291,34 @@ path is filed as rs#542 with the full accounting; suffix key-shift
 composes with the existing spine splice. Identity held 400/400
 throughout the instrumented session; the engine is correct, the
 retention policy is the gap.
+
+## Round 2026-11-27: the P2 arc — three levers shipped, one falsified (receipts in benchmarks/sota/results/2026-11-27-splice-construction-lever.md)
+
+1. **The construction lever** — the per-edit `PortableParser`
+   construction computed the O(atoms) analysis every keystroke; the
+   session now computes it once (doc0 incr p50 −9 to −12%).
+2. **The probe-phase correction** — nav is 17 us; the parse remainder
+   scales 5.1x with the edit offset.
+3. **The suffix re-key: FALSIFIED** — the splice clones suffix items;
+   re-keyed memo entries are structurally unconsulted. The
+   falsification re-diagnosed the 5.1x term as the graft's
+   shifted-copy clone.
+4. **The lazy-span-shift graft** — `AstArena::shift_input_refs`
+   shifts stored InputRefs in place; the graft re-references pool
+   handles. doc0 p50 −32%, doc3 5.1x, identity 0 (PR #718, merged).
+5. **The pool dead-node reclamation** — the shift pass is O(pool)
+   and dead nodes made the pool grow 44x over the live tree (shift
+   310 us at edit 200). `AstArena::compact` behind a self-tuning
+   payback gate (the uniform 2x trigger FALSIFIED on doc3:
+   485 us -> 20.9 ms; tree-sized per-edit fresh never reaches
+   payback). doc0 pool ~9k at the tail, shift ~9 us, doc0 max
+   −73% (PR #719). The retained family's "snapshot" bit split
+   (RETAINED_PERSISTENT_BIT) after the identity-adopt entries
+   corrupted identity at doc0 edits 39-41; two regression specs pin
+   the primitive and the session.
+
+Remaining named lever: the bridge parse's memo-warm interior (the
+high-offset parse calls — the p95 driver the shift never was).
+doc0 p50 232 us vs tree-sitter's 14.3 us = 16x. The doc0/doc3
+absolute receipt bakes are quiet-machine pending (this arc's A/B
+ran at load 34-80; the RELATIVE verdicts are the gate).
