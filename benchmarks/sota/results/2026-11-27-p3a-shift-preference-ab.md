@@ -47,3 +47,39 @@ evidence is byte-identical trees, no regression, a measurable win on
 the class-heavy flavors; the flip should ride the quiet-machine
 bake (wider corpus set: bsi 73, nist 48 rules) and then land as the
 default with the census re-run in the same train.
+
+## The DEFAULT FLIP SHIPPED (2026-11-27, owner-authorized): shift-preference IS the construction
+
+The `PARG_LR_SHIFT` gate is gone: `lr_table_for` builds
+shift-preference unconditionally (a per-rule refusal still falls
+back to the classic lowering; the strict builder remains for the
+survey). The `ab_shift` harness is deleted — its off/on premise is
+dead; `examples/bake_flavor.rs` carries the flavor A/B forward
+(cases-file inputs, identity checksum, min-of-N).
+
+### The census re-run (the current fleet — pubid-grammar fast-forwarded 28 commits, 61 flavors)
+
+| census | before the flip (58 flavors) | after (61 flavors) |
+|---|---|---|
+| LR rules | 1973 provable / 1583 refused / 499 shift | **2033 provable / 1610 refused / 529 shift-preference** (317 greedy documented-refused) |
+| loop sites | 524 = 481 dfa + 4 lr + 1 shift + 38 refused | **1495 = 1414 dfa + 4 lr + 2 lr-covered-under-shift + 75 refused** (the 3 new flavors carry depth-refused sites; the PLAN9 depth class dominates) |
+
+### The flavor A/B with the flip (the win the receipt predicted)
+
+ieee (81 accept-cases, 2318 bytes; interleaved process pairs,
+min-of-9, load ~100-116 — relative verdict):
+
+| arm | median | min |
+|---|---|---|
+| strict (pre-flip main) | 31.4 ms | 30.2 ms |
+| **shift-preference (the flip)** | **24.2 ms (−23%)** | **20.6 ms (−32%)** |
+
+Identity: the shape-JSON checksum matches **bit-for-bit** across
+both arms on ieee (2c944ef7…) and bsi (39f796bc…) — the
+byte-identical differential holds under the flipped default. The
+full suite green (620 lib + integration; the one red =
+`single_codepoint_terminals_scale_linearly`, the recorded
+timing-sensitive test, passes in isolation — host noise at load
+100+, the same signature the ledger pinned pre-flip); the
+conformance corpus green; `P3(b)`'s greedy-direction stays
+out (the falsification receipt stands).
