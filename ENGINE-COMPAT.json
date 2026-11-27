@@ -1,9 +1,9 @@
 {
-  "engine_commit": "6ea40e1946c263ef9cececafb5817552f450fe20",
-  "crates": "1.5.26",
-  "npm": "1.5.28",
-  "rubygems": "1.5.26",
-  "pypi": "1.5.26.0",
-  "released_at": "2026-11-27T13:45:00Z",
-  "_comment": "ruby#421 -- the engine-compat manifest. Every release train updates the pairings as it rides; tools/check_engine_compat.py verifies the manifest against the live registries in CI (tag <-> engine_commit, crates, npm, rubygems, pypi). Runtime versions follow the engine-linked scheme {engine-semver}.{runtime-single-digit} (npm: the engine semver, the 4th segment is invalid there) -- the leptris precedent. The 1.5.26 train: the memo-warm interior (#722) -- the shift retention's shiftable predicate relaxes to the position predicate now that the span-shift moves the pool-backed containers' leaves (the restriction predated the graft); the above-edit entries stay memo-warm, so the deep derivation probe and the bridge interior hit instead of re-parsing (the parse-remainder decomposition: deep 163/200 doc0 edits, bridge 37 tail-dominated). doc0 incr p95 56ms -> 619us, max 271ms -> 2.27ms, reused 3.4x (doc3 26.6x), identity 0, spliced 200/200 (loaded-machine relative verdicts; the quiet re-bake is the receipt formality). npm 1.5.28 rides the 1.5.26-engine wasm (the candidate recipe, receipts re-pinned at 6ea40e1); the ruby ext lock rode 1.5.26 before the bump (ruby#563)."
+  "engine_commit": "5a8c19982d3e6b4abed8063478e742495d380ebd",
+  "crates": "1.5.27",
+  "npm": "1.5.29",
+  "rubygems": "1.5.27",
+  "pypi": "1.5.27.0",
+  "released_at": "2026-11-27T12:40:00Z",
+  "_comment": "ruby#421 -- the engine-compat manifest. Every release train updates the pairings as it rides; tools/check_engine_compat.py verifies the manifest against the live registries in CI (tag <-> engine_commit, crates, npm, rubygems, pypi). Runtime versions follow the engine-linked scheme {engine-semver}.{runtime-single-digit} (npm: the engine semver, the 4th segment is invalid there) -- the leptris precedent. The 1.5.27 train: the shift-preference LR construction IS the default (#726 -- the PARG_LR_SHIFT gate gone; the census on the 61-flavor fleet: 529 shift-buildable rules; the ieee flavor -23% median with bit-identical trees; the 56-flavor identifier fleet post-re-homing: 1420 loop sites = 1362 dfa + 4 lr + 2 shift + 52 refused) + the adoc_monospace conformance case (#727 -- the sequence-lookahead guard pinned cross-engine; ruby#555 closed resolved) + the LSP recovery consumption (#728 -- the tree preview renders the recovered partial; the recovery receipt re-pinned: suffix 90.4% vs ts 95.6%, diagnostics 2.3x closer) + the recovery contract normative (ruby#565, semantics 16) + parsanol/grammars created (the data-format registry, TODO.sota/10 landed; pubid-grammar#156: identifier-only, grammar job green). npm 1.5.29 rides the 1.5.27-engine wasm (the candidate recipe, receipts re-pinned at 5a8c199); the ruby ext lock rode 1.5.27 before the bump (ruby#566)."
 }
