@@ -109,6 +109,13 @@ New exhaustive-enum variants are semver-minor on the 0.x line (the
 
 ## [Unreleased]
 
+- The count-based compaction backstop: reclaim unconditionally at 16x live — the CI-debug deferral the regression spec caught
+- The pool dead-node reclamation: compact the session's output arena behind a payback-gated trigger — doc0 pool 405k -> ~9k, shift tail 310us -> ~9us, identity 0
+- Drop the orphaned doc-comment fragments left by the copy_shift_tree deletion (clippy: empty lines after doc comment)
+- The lazy-span-shift graft: the arena shift InputRefs in place and the splice re-references suffix handles — doc3 p50 5.1x, doc0 -32%, identity 0
+- The probe-phase correction: nav is 17us; the parse remainder scales 5.1x with the edit offset — the suffix re-key is the scoped lever
+- P3(b) falsified: the greedy-direction tables misparse valid json; the seam keeps strict->shift only and the sizing stays analysis-side
+- The splice-diet construction lever: the session computes the analysis once ([#712](https://github.com/parsanol/parsanol-rs/pull/712))
 - The per-flavor sizing: sort_by_key satisfies clippy
 - Item 6 closes: the wide-kernel verification receipt (the asm inspection + the 13.8x A/B); the index rows for 6/11/12 settle
 - Item 11's Scan remainder: the Entity-wrapped class loops take the bulk run; the Named refusal is the gate
