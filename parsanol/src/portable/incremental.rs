@@ -944,6 +944,13 @@ impl<'a> IncrementalParser<'a> {
         // tree-sized item) never reach payback and keep the 64 MiB
         // budget reset as their bound; small sessions converge to a
         // tight pool.
+        //
+        // The payback term is time-based, so slow environments (debug
+        // builds measure the first copy 10-30x) defer legitimately —
+        // the count-based backstop keeps reclamation deterministic:
+        // at 16x live the dead term's per-edit shift cost is ≥15x the
+        // copy's ~1x-live work, which pays back within one edit at
+        // any build mode.
         {
             let (pa, ph) = self.output_arena.pool_lens();
             if !self.pool_seeded {
@@ -956,7 +963,7 @@ impl<'a> IncrementalParser<'a> {
                 let cost_bound = self
                     .last_compact_cost_ns
                     .max(4u64.saturating_mul(self.pool_live_estimate as u64));
-                if dead >= cost_bound {
+                if dead >= cost_bound || pa + ph > 16 * self.pool_live_estimate {
                     let mut roots = self.cache.live_container_roots();
                     let have_root = self.last_root.is_some();
                     if have_root {

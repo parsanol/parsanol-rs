@@ -582,12 +582,16 @@ fn the_retained_session_reclaims_dead_pool_nodes_without_losing_identity() {
     }
 
     // Without reclamation the pool is ~live x (1 + edits) (every edit
-    // leaves a dead tree behind). The session must have reclaimed at
-    // least 3/4 of that dead weight by the end.
+    // leaves a dead tree behind). The count-based backstop (16x live)
+    // makes the reclaim deterministic in ANY build mode: the pool
+    // crests at ~16x live + one edit's dead, then compacts back —
+    // bound 20x live. (The time-based payback path compacts far
+    // tighter in release; debug builds defer legitimately, which is
+    // exactly why the backstop exists.)
     let (pa, ph) = session.retained_arena().pool_lens();
     let no_reclaim = live * (1 + edits as usize);
     assert!(
-        pa + ph < no_reclaim / 4,
+        pa + ph < 20 * live,
         "dead nodes accumulated unbounded: pool {} + {} vs live {live} (no-reclaim bound {no_reclaim})",
         pa,
         ph
