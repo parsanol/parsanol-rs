@@ -35,8 +35,6 @@ grammar Json version "1.0.0" edition 2 {
 }
 "#;
 
-const DOC: &str = r#"{"alpha": 1, "beta": [10, 20, 30], "gamma": {"g1": true, "g2": null}, "delta": "text", "epsilon": -2.5e1, "zeta": [4, 5]}"#;
-
 /// (description, corrupted input, the corruption site = the byte
 /// offset where valid structure ends). The classes mirror the corpus
 /// harness: junk insertion, byte deletion, truncation-free mid-value
