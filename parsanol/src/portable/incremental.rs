@@ -355,6 +355,19 @@ pub struct IncrementalParser<'a> {
     /// The spine bodies the parser watches (every unbounded run
     /// records its iteration bounds).
     spine_bodies: Vec<usize>,
+    /// The FIRST discovered spine, computed once per session — the
+    /// splice gate re-deriving it per keystroke was an O(atoms) BFS
+    /// with three heap allocations on every edit (the nav phase's
+    /// bulk; the same waste class the construction lever fixed).
+    spine_first: Option<crate::portable::spine::Spine>,
+    /// Whether the grammar carries Dynamic atoms (splice refusal),
+    /// computed once per session like the analysis.
+    has_dynamic: bool,
+    /// Memoized `path_between` results for the deep probe's
+    /// (splice body → recorded-run rep) pairs — each miss was a full
+    /// grammar BFS, re-run per spine body per keystroke.
+    deep_paths:
+        std::collections::HashMap<(usize, usize), Option<Vec<crate::portable::spine::SpineStep>>>,
     /// Body atom → the unbounded repetition atom for that body (the
     /// id spine runs are recorded under).
     body_reps: std::collections::HashMap<usize, usize>,
@@ -527,10 +540,13 @@ impl<'a> IncrementalParser<'a> {
         grammar: &'a Grammar,
         analysis: std::sync::Arc<crate::portable::parser_analysis::ParserAnalysis>,
     ) -> Self {
-        let spine_bodies = crate::portable::spine::discover_spines(grammar)
+        let spines = crate::portable::spine::discover_spines(grammar);
+        let spine_bodies = spines.iter().map(|s| s.body).collect();
+        let spine_first = spines.into_iter().next();
+        let has_dynamic = grammar
+            .atoms
             .iter()
-            .map(|s| s.body)
-            .collect();
+            .any(|a| matches!(a, Atom::Dynamic { .. }));
         let body_reps = body_reps_of(grammar);
         Self {
             grammar: std::borrow::Cow::Borrowed(grammar),
@@ -543,6 +559,9 @@ impl<'a> IncrementalParser<'a> {
             spliced_deep: 0,
             spine_runs: Vec::new(),
             spine_bodies,
+            spine_first,
+            has_dynamic,
+            deep_paths: std::collections::HashMap::new(),
             body_reps,
             last_spine_trace: Vec::new(),
             spliced_parses: 0,
@@ -574,10 +593,13 @@ impl<'a> IncrementalParser<'a> {
         grammar: Grammar,
         analysis: std::sync::Arc<crate::portable::parser_analysis::ParserAnalysis>,
     ) -> IncrementalParser<'static> {
-        let spine_bodies = crate::portable::spine::discover_spines(&grammar)
+        let spines = crate::portable::spine::discover_spines(&grammar);
+        let spine_bodies = spines.iter().map(|s| s.body).collect();
+        let spine_first = spines.into_iter().next();
+        let has_dynamic = grammar
+            .atoms
             .iter()
-            .map(|s| s.body)
-            .collect();
+            .any(|a| matches!(a, Atom::Dynamic { .. }));
         let body_reps = body_reps_of(&grammar);
         IncrementalParser {
             grammar: std::borrow::Cow::Owned(grammar),
@@ -590,6 +612,9 @@ impl<'a> IncrementalParser<'a> {
             spliced_deep: 0,
             spine_runs: Vec::new(),
             spine_bodies,
+            spine_first,
+            has_dynamic,
+            deep_paths: std::collections::HashMap::new(),
             body_reps,
             last_spine_trace: Vec::new(),
             spliced_parses: 0,
@@ -1033,11 +1058,7 @@ impl<'a> IncrementalParser<'a> {
             None
         } else {
             let single_edit = self.dirty_tracker.regions().len() == 1;
-            let has_dynamic = self
-                .grammar
-                .atoms
-                .iter()
-                .any(|a| matches!(a, Atom::Dynamic { .. }));
+            let has_dynamic = self.has_dynamic;
             let rep = match self.grammar.get_atom(root_atom as usize) {
                 Some(Atom::Repetition { atom, max, tag, .. }) => Some((*atom, *max, *tag, None)),
                 Some(Atom::Named { atom, name, .. }) => match self.grammar.get_atom(*atom) {
@@ -1072,26 +1093,22 @@ impl<'a> IncrementalParser<'a> {
         let __nav = std::time::Instant::now();
         let splice_gate = !fresh
             && self.dirty_tracker.regions().len() == 1
-            && !self
-                .grammar
-                .atoms
-                .iter()
-                .any(|a| matches!(a, Atom::Dynamic { .. }))
+            && !self.has_dynamic
             && splice.is_none();
         if std::env::var("PARG_SPLICE_DIAG").as_deref() == Ok("1") && !splice_gate {
             eprintln!(
                 "SPLICE-GATE refuse fresh={} regions={} dynamic={} splice={}",
                 fresh,
                 self.dirty_tracker.regions().len(),
-                self.grammar
-                    .atoms
-                    .iter()
-                    .any(|a| matches!(a, Atom::Dynamic { .. })),
+                self.has_dynamic,
                 splice.is_some()
             );
         }
         if splice_gate {
-            let spine = crate::portable::spine::discover_spine(&self.grammar);
+            // The session-cached spine (computed once at construction
+            // from the same discover pass that feeds spine_bodies) —
+            // the per-keystroke O(atoms) BFS was the nav phase's bulk.
+            let spine = self.spine_first.clone();
             if spine.is_none() && std::env::var("PARG_SPLICE_DIAG").as_deref() == Ok("1") {
                 eprintln!("SPLICE-GATE no-spine");
             }
@@ -1451,15 +1468,32 @@ impl<'a> IncrementalParser<'a> {
                                                 usize,
                                             )>,
                                         > = std::collections::HashMap::new();
-                                        for b in &self.spine_bodies {
-                                            let Some(&rep_d) = self.body_reps.get(b) else {
-                                                continue;
-                                            };
-                                            let Some(steps) = crate::portable::spine::path_between(
-                                                &self.grammar,
-                                                body,
-                                                rep_d,
-                                            ) else {
+                                        // The (body → rep) pairs first, so
+                                        // the spine_bodies borrow drops
+                                        // before the memoized path lookup
+                                        // mutates deep_paths.
+                                        let body_pairs: Vec<(usize, usize)> = self
+                                            .spine_bodies
+                                            .iter()
+                                            .filter_map(|b| self.body_reps.get(b).map(|r| (*b, *r)))
+                                            .collect();
+                                        for (b, rep_d) in body_pairs {
+                                            // Memoized: each miss was a full
+                                            // grammar BFS per spine body per
+                                            // keystroke; the session pair
+                                            // set is a handful of entries.
+                                            let Some(steps) = self
+                                                .deep_paths
+                                                .entry((body, rep_d))
+                                                .or_insert_with(|| {
+                                                    crate::portable::spine::path_between(
+                                                        &self.grammar,
+                                                        body,
+                                                        rep_d,
+                                                    )
+                                                })
+                                                .clone()
+                                            else {
                                                 continue;
                                             };
                                             let Some(containers) =
@@ -1505,7 +1539,7 @@ impl<'a> IncrementalParser<'a> {
                                                     .saturating_sub(1);
                                                 let list_node = node.clone().expect("node");
                                                 body_plans
-                                                    .insert(*b, Some((steps, list_node, count)));
+                                                    .insert(b, Some((steps, list_node, count)));
                                             }
                                         }
                                         // Candidate runs: contain the edit,
@@ -1924,7 +1958,7 @@ impl<'a> IncrementalParser<'a> {
                     self.spine_runs = std::mem::take(&mut parser.spine_records);
                     let spine_owned = spine_kept
                         .is_none()
-                        .then(|| crate::portable::spine::discover_spine(&self.grammar))
+                        .then(|| self.spine_first.clone())
                         .flatten();
                     if let Some(spine) = spine_kept.as_ref().or(spine_owned.as_ref()) {
                         let body = spine.body;
