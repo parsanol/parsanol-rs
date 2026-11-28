@@ -648,8 +648,13 @@ impl<'a> IncrementalParser<'a> {
         // One compaction pass (fate + key shift together), one slot
         // rebuild (keys moved), one tail seal. Was three full walks
         // with two slot rebuilds.
-        self.cache
-            .shift_and_prune(cutoff, edit_end_old as usize, delta, root_atom, input_len_changed);
+        self.cache.shift_and_prune(
+            cutoff,
+            edit_end_old as usize,
+            delta,
+            root_atom,
+            input_len_changed,
+        );
     }
 
     /// Parse against the retained cache, then convert the entries the
@@ -682,7 +687,8 @@ impl<'a> IncrementalParser<'a> {
         } else {
             self.applied_suffix_floor = usize::MAX;
             self.last_edit = None;
-            self.cache.prune_before(cutoff, root_atom, input_len_changed);
+            self.cache
+                .prune_before(cutoff, root_atom, input_len_changed);
         }
 
         let mut parser = super::parser::PortableParser::new_with_cache_snap_and_analysis(
@@ -914,7 +920,8 @@ impl<'a> IncrementalParser<'a> {
         } else {
             self.applied_suffix_floor = usize::MAX;
             self.last_edit = None;
-            self.cache.prune_before(cutoff, root_atom, input_len_changed);
+            self.cache
+                .prune_before(cutoff, root_atom, input_len_changed);
         }
 
         // Pool reclamation (the lazy-span-shift's bounded follow-up):

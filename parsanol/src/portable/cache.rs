@@ -1129,7 +1129,10 @@ mod tests {
         // cluster repair must keep surviving cluster members
         // reachable.
         let mut cache = DenseCache::new(4);
-        let node = AstNode::InputRef { offset: 0, length: 1 };
+        let node = AstNode::InputRef {
+            offset: 0,
+            length: 1,
+        };
         for i in 0..10u32 {
             cache.insert(CacheEntry::from_node(i * 8, 2, i * 8 + 1, &node, 0));
         }
@@ -1139,7 +1142,14 @@ mod tests {
         cache.retain_output_adopt(|e| e.pos % (8 * 7) != 0, |n| n.clone());
         for i in 0..10u32 {
             let hit = cache.get(i * 8, 2, 0).is_some();
-            assert_eq!(hit, i % 7 != 0, "pos {}: hit={} want kept={}", i * 8, hit, i % 7 != 0);
+            assert_eq!(
+                hit,
+                i % 7 != 0,
+                "pos {}: hit={} want kept={}",
+                i * 8,
+                hit,
+                i % 7 != 0
+            );
         }
     }
 
