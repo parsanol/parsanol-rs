@@ -309,3 +309,56 @@ quiet-machine re-bake of the reclamation + memo-warm A/Bs remains
 gated on host quietness (this session's load: 29-244; the final
 validation round ran at 143 — the identity protocol is
 load-independent, the absolute numbers are not).
+
+## The retention-band diet (2026-11-28, rs#732): the per-keystroke maintenance became O(fresh inserts)
+
+The post-#722 PARG_SPLICE_PHASES decomposition exposed the band: the
+post-parse `retain_output_adopt` scanned the ENTIRE session window
+(p50 156 us over 6,568 entries — the largest single phase, bigger
+than invalidate and probe+reparse combined) to drop ~32 tail
+failures, and the pre-parse shift prune made THREE full walks with
+TWO full slot rebuilds (invalidate 92 us). The measured drops/keystroke
+(p50 32, never zero, max 1007) justified the redesign rather than a
+loop diet.
+
+The invariant that unlocks it: every pre-parse survivor satisfies the
+post-parse keep predicate geometrically (it passed `below ||
+shiftable` before the parse and the shift moved `shiftable` keys to
+`pos >= floor`), no failure survives a parse end, and pool-backed
+entries are adopted (or rejected) at their first retention — so only
+the CURRENT parse's inserts (the tail) can fail the predicate or need
+adoption. The one old entry the tail scan cannot skip — root-at-start
+on input-length change — became an explicit O(1) removal in both key
+flavors.
+
+The changes:
+
+- `DenseCache::seal_retained` marks the parse-tail boundary;
+  `retain_adopt_marked` compacts only the tail and re-seals (both
+  tiers — the snapshot tier's old entries are all arena-free
+  successes by the same argument).
+- `DenseCache::shift_and_prune`: the pre-parse fate decision + key
+  shift in ONE compaction pass, one slot rebuild (keys moved). Was
+  three walks + two rebuilds.
+- `DenseCache::prune_before`: the no-shift prune skips the rebuild
+  when nothing dropped.
+- The lazy-remap early-out (no-drop passes skip the capacity-wide
+  slot loops entirely — drops never happen there).
+- The retention-band phase line (adopt/shrink/entries/drops) rides
+  `PARG_SPLICE_PHASES`.
+
+| phase (doc0 p50, loaded) | before | after |
+|---|---|---|
+| band adopt | 156 us | **98 us** |
+| invalidate (incl. shift) | 92 us | **67 us** |
+| probe+reparse | 99 us | 108 us (noise) |
+
+Interleaved A/B (same host minutes, 5 rounds): doc0 incr p50
+281-301 us vs base 369-396 us — **median 284 vs 390 us (-27%), every
+diet leg beats every base leg**. doc3: 2.056-2.199 ms vs 3.541-3.573
+ms — **median 2.198 vs 3.565 ms (-38%)**; the O(n) walks scale with
+the window, so the bigger document wins more. Identity: 0 failures on
+both traces, memo fingerprints unchanged (doc0 reused 1,294,500;
+doc3 11,051,417). Suite: 622 lib + integration green; clippy clean
+(-D warnings). Two new unit specs pin the tail invariants
+(no-drop reachability, drop-path probe repair).

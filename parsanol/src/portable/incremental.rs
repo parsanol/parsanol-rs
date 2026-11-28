@@ -645,24 +645,11 @@ impl<'a> IncrementalParser<'a> {
         };
         self.applied_suffix_floor = (edit_end_old as i64 + delta).max(0) as usize;
         self.last_edit = Some((cutoff, edit_end_old, delta));
-        self.cache.retain(|entry| {
-            let entry_end = entry.end_pos as usize;
-            let is_root_at_start = entry.pos == 0 && entry.atom_id == root_atom;
-            let below = entry_end < cutoff && !(input_len_changed && is_root_at_start);
-            let shiftable = entry.pos as i64 >= edit_end_old as i64;
-            below || shiftable
-        });
-        for entry in self.cache.entries_mut() {
-            if entry.pos as i64 >= edit_end_old as i64 {
-                entry.pos = (entry.pos as i64 + delta) as u32;
-                entry.end_pos = (entry.end_pos as i64 + delta) as u32;
-                if entry.node_tag == NodeTag::InputRef {
-                    entry.node_data_a = (entry.node_data_a as i64 + delta) as u32;
-                }
-            }
-        }
-        // The keys moved: rebuild the slot table.
-        self.cache.retain(|_| true);
+        // One compaction pass (fate + key shift together), one slot
+        // rebuild (keys moved), one tail seal. Was three full walks
+        // with two slot rebuilds.
+        self.cache
+            .shift_and_prune(cutoff, edit_end_old as usize, delta, root_atom, input_len_changed);
     }
 
     /// Parse against the retained cache, then convert the entries the
@@ -695,11 +682,7 @@ impl<'a> IncrementalParser<'a> {
         } else {
             self.applied_suffix_floor = usize::MAX;
             self.last_edit = None;
-            self.cache.retain(|entry| {
-                let entry_end = entry.end_pos as usize;
-                let is_root_at_start = entry.pos == 0 && entry.atom_id == root_atom;
-                entry_end < cutoff && !(input_len_changed && is_root_at_start)
-            });
+            self.cache.prune_before(cutoff, root_atom, input_len_changed);
         }
 
         let mut parser = super::parser::PortableParser::new_with_cache_snap_and_analysis(
@@ -729,6 +712,14 @@ impl<'a> IncrementalParser<'a> {
         // expensive byte-matching work, and re-walking structure
         // against terminal hits is cheap. The snapshot MARK stays: it
         // exempts retained entries from the generation check.
+        // The one old entry the tail retention cannot skip: the
+        // root-at-start tree's match boundary is the old input length,
+        // which an input-length change invalidates. O(1) removal with
+        // immediate hole repair, in both key flavors.
+        if input_len_changed {
+            self.cache.remove_entry_key(0, root_atom, false);
+            self.cache.remove_entry_key(0, root_atom, true);
+        }
         self.cache.retain_snapshot_adopt(
             |entry| {
                 let entry_end = entry.end_pos as usize;
@@ -923,11 +914,7 @@ impl<'a> IncrementalParser<'a> {
         } else {
             self.applied_suffix_floor = usize::MAX;
             self.last_edit = None;
-            self.cache.retain(|entry| {
-                let entry_end = entry.end_pos as usize;
-                let is_root_at_start = entry.pos == 0 && entry.atom_id == root_atom;
-                entry_end < cutoff && !(input_len_changed && is_root_at_start)
-            });
+            self.cache.prune_before(cutoff, root_atom, input_len_changed);
         }
 
         // Pool reclamation (the lazy-span-shift's bounded follow-up):
@@ -1030,6 +1017,8 @@ impl<'a> IncrementalParser<'a> {
         let mut __deep_us = 0u128;
         let mut __bridge_us = 0u128;
         let mut __tails_us = 0u128;
+        let mut __retain_us = 0u128;
+        let mut __shrink_us = 0u128;
         // Splice eligibility (v1): a repetition-spine document — root
         // Repetition, optionally behind one Named — with no Dynamic
         // atoms, one dirty region, and a previous tree to graft from.
@@ -1997,6 +1986,15 @@ impl<'a> IncrementalParser<'a> {
             self.body_chain = std::mem::take(&mut self.last_spine_trace);
         }
         let suffix_floor = self.applied_suffix_floor;
+        let __rt = std::time::Instant::now();
+        // The one old entry the tail retention cannot skip: the
+        // root-at-start tree's match boundary is the old input length,
+        // which an input-length change invalidates. O(1) removal with
+        // immediate hole repair, in both key flavors.
+        if input_len_changed {
+            self.cache.remove_entry_key(0, root_atom, false);
+            self.cache.remove_entry_key(0, root_atom, true);
+        }
         self.cache.retain_output_adopt(
             |entry| {
                 let entry_end = entry.end_pos as usize;
@@ -2018,7 +2016,20 @@ impl<'a> IncrementalParser<'a> {
         // SESSION-START table; shrink to the survivors so every later
         // keystroke's maintenance is O(window), not O(2M slots) — the
         // rs#464 late-band floor, now on the retained tier too.
+        __retain_us = __rt.elapsed().as_micros();
+        let __st = std::time::Instant::now();
         self.cache.shrink_to_entries();
+        __shrink_us = __st.elapsed().as_micros();
+        if std::env::var("PARG_SPLICE_PHASES").as_deref() == Ok("1") {
+            eprintln!(
+                "PHASE retain-band {}us (adopt {}us shrink {}us entries {} drops {})",
+                __retain_us + __shrink_us,
+                __retain_us,
+                __shrink_us,
+                self.cache.len(),
+                self.cache.last_retain_drops
+            );
+        }
         self.dirty_tracker.clear();
 
         if let Ok(ast) = &result {

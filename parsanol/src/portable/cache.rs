@@ -277,6 +277,20 @@ pub struct DenseCache {
 
     /// Number of entries dropped due to max_entries cap
     drops: u64,
+
+    /// Entries the last retain pass dropped (diagnostic for the
+    /// retention-band diet: the scan's cost is justified by this).
+    pub last_retain_drops: usize,
+
+    /// First index of the CURRENT parse's inserts. Pre-parse survivors
+    /// (below the tail) satisfy the post-parse keep predicate
+    /// geometrically — they passed `below || shiftable` before the
+    /// parse, the shift moved `shiftable` entries to `pos >= floor`,
+    /// and no failures survive a parse end — so the post-parse
+    /// retention only has to examine this window: the fresh failures
+    /// and fresh straddlers. `seal_retained` marks the boundary before
+    /// a parse; `retain_adopt_marked` consumes the window and re-seals.
+    tail_base: usize,
 }
 
 impl Default for DenseCache {
@@ -311,6 +325,8 @@ impl DenseCache {
             hits: 0,
             misses: 0,
             drops: 0,
+            last_retain_drops: 0,
+            tail_base: 0,
         }
     }
 
@@ -513,11 +529,20 @@ impl DenseCache {
             // retained too.
             let half = before / 2;
             let mut index = 0usize;
+            let tail_before = self.tail_base;
+            let mut dropped_before_tail = 0usize;
             self.entries.retain(|e| {
                 let keep = e.is_arena_persistent() || index >= half;
+                if !keep && index < tail_before {
+                    dropped_before_tail += 1;
+                }
                 index += 1;
                 keep
             });
+            // Entries before the parse-tail shifted down; entries from
+            // the tail on all survive (they are the newest half), so
+            // the tail window just re-bases.
+            self.tail_base = tail_before - dropped_before_tail;
             let dropped = before - self.entries.len();
             if dropped > 0 {
                 self.drops += dropped as u64;
@@ -573,8 +598,66 @@ impl DenseCache {
     pub fn clear(&mut self) {
         self.slots.fill(-1);
         self.entries.clear();
+        self.tail_base = 0;
         self.hits = 0;
         self.misses = 0;
+    }
+
+    /// Mark the parse-tail boundary: everything inserted after this
+    /// point belongs to the parse in flight and is the only set the
+    /// post-parse retention has to examine.
+    #[inline]
+    pub fn seal_retained(&mut self) {
+        self.tail_base = self.entries.len().min(self.tail_base);
+    }
+
+    /// Slot index holding the entry keyed (pos, atom, consume_all),
+    /// found by probing from its home. None means the key is absent.
+    fn slot_of(&self, pos: u32, atom_id: u16, consume_all: bool) -> Option<usize> {
+        let key_atom = atom_id ^ if consume_all { 0x8000u16 } else { 0 };
+        let mut slot = Self::hash_static(pos, key_atom, self.capacity);
+        loop {
+            let idx = self.slots[slot];
+            if idx < 0 {
+                return None;
+            }
+            let entry = &self.entries[idx as usize];
+            if entry.pos == pos && entry.atom_id == atom_id && entry.is_consume_all() == consume_all
+            {
+                return Some(slot);
+            }
+            slot = (slot + 1) & (self.capacity - 1);
+        }
+    }
+
+    /// Remove the entry keyed (pos, atom, consume_all) wherever it
+    /// sits (tail or not): swap-remove from the entries vec, fix the
+    /// swapped entry's slot, repair the vacated slot. O(cluster). The
+    /// tail boundary shifts down when the removed index precedes it.
+    pub fn remove_entry_key(&mut self, pos: u32, atom_id: u16, consume_all: bool) -> bool {
+        let Some(slot) = self.slot_of(pos, atom_id, consume_all) else {
+            return false;
+        };
+        let idx = self.slots[slot] as usize;
+        let last = self.entries.len() - 1;
+        if idx != last {
+            // Probe for the moved entry's slot BEFORE mutating
+            // entries: the probe compares entry keys, so it must run
+            // while `last` still holds the moved entry.
+            let moved = self.entries[last];
+            let moved_slot = self
+                .slot_of(moved.pos, moved.atom_id, moved.is_consume_all())
+                .expect("live entry must be slotted");
+            self.entries[idx] = moved;
+            self.slots[moved_slot] = idx as i32;
+        }
+        self.entries.pop();
+        self.slots[slot] = -1;
+        self.repair_hole(slot);
+        if idx < self.tail_base {
+            self.tail_base -= 1;
+        }
+        true
     }
 
     /// Get cache statistics
@@ -618,12 +701,6 @@ impl DenseCache {
     #[inline]
     pub fn entries(&self) -> impl Iterator<Item = &CacheEntry> {
         self.entries.iter()
-    }
-
-    /// Get a mutable iterator over all entries
-    #[inline]
-    pub fn entries_mut(&mut self) -> impl Iterator<Item = &mut CacheEntry> {
-        self.entries.iter_mut()
     }
 
     /// Rewrite Array/Hash pool indices on the RETAINED-PERSISTENT
@@ -688,6 +765,62 @@ impl DenseCache {
         }
     }
 
+    /// The pre-parse shift prune in ONE pass (was three: a keep
+    /// retain + a full slot rebuild, a key-shift walk, then a second
+    /// full rebuild). For every entry: drop it when it neither ends
+    /// before the edit nor starts at/after it; otherwise keep it,
+    /// shifting its key (and InputRef span data) when it starts at or
+    /// after the old edit end. Keys move, so the slot table is rebuilt
+    /// once at the end, and the parse tail is sealed.
+    pub fn shift_and_prune(
+        &mut self,
+        cutoff: usize,
+        edit_end_old: usize,
+        delta: i64,
+        root_atom: u16,
+        input_len_changed: bool,
+    ) {
+        let mut write = 0usize;
+        for read in 0..self.entries.len() {
+            let mut entry = self.entries[read];
+            let entry_end = entry.end_pos as usize;
+            let is_root_at_start = entry.pos == 0 && entry.atom_id == root_atom;
+            let below = entry_end < cutoff && !(input_len_changed && is_root_at_start);
+            let shiftable = entry.pos as i64 >= edit_end_old as i64;
+            if !(below || shiftable) {
+                continue;
+            }
+            if shiftable {
+                entry.pos = (entry.pos as i64 + delta) as u32;
+                entry.end_pos = (entry.end_pos as i64 + delta) as u32;
+                if entry.node_tag == NodeTag::InputRef {
+                    entry.node_data_a = (entry.node_data_a as i64 + delta) as u32;
+                }
+            }
+            self.entries[write] = entry;
+            write += 1;
+        }
+        self.entries.truncate(write);
+        self.rebuild_slots();
+        self.tail_base = self.entries.len();
+    }
+
+    /// The no-shift prune: drop entries ending at or after the edit
+    /// offset. Keys do not move, so the rebuild runs only when the
+    /// pass actually dropped something. Seals the parse tail.
+    pub fn prune_before(&mut self, cutoff: usize, root_atom: u16, input_len_changed: bool) {
+        let before = self.entries.len();
+        self.entries.retain(|entry| {
+            let below = (entry.end_pos as usize) < cutoff;
+            let is_root_at_start = entry.pos == 0 && entry.atom_id == root_atom;
+            below && !(input_len_changed && is_root_at_start)
+        });
+        if self.entries.len() != before {
+            self.rebuild_slots();
+        }
+        self.tail_base = self.entries.len();
+    }
+
     /// Retain only entries matching `keep`, converting the kept
     /// entries' node data into snapshots via `adopt` (which copies a
     /// live-arena node into the stable snapshot arena and returns the
@@ -723,21 +856,27 @@ impl DenseCache {
         F: FnMut(&CacheEntry) -> bool,
         A: FnMut(&AstNode) -> AstNode,
     {
-        // One compaction pass does the keep-filter, the adoption, and
-        // the old-index -> new-index bookkeeping together. Re-hashing
-        // every survivor afterwards was the per-keystroke cost the
-        // late band isolates (TODO.perf/9: end-of-document edits pay
-        // ~150 ms of pure maintenance over ~10^6 entries): the
-        // survivors' home hashes never change here (adoption touches
-        // only node_data and the persistence bit, never pos/atom_id),
-        // so the slots need only their INDEX VALUES remapped.
+        // The retention only examines the parse tail. Every entry
+        // BELOW the tail was vetted before the parse (`below ||
+        // shiftable` in the shift prune, `end < cutoff` in the plain
+        // prune) and its geometry is unchanged by the parse: it
+        // satisfies the keep predicate by construction, carries no
+        // failure (no failure survives a parse end), and was adopted
+        // or marked arena-free at an earlier retention. Only the
+        // parse's own inserts can fail the predicate (fresh failures,
+        // fresh straddlers) or need adoption. This is what turns the
+        // per-keystroke retention from O(session window) into
+        // O(fresh inserts) — the rs#464 floor's last O(n) pass.
+        let mut read = self.tail_base.min(self.entries.len());
+        let tail = read;
         let old_len = self.entries.len();
-        let mut remap: Vec<i32> = Vec::with_capacity(old_len);
-        let mut write = 0usize;
-        for read in 0..old_len {
+        let mut remap: Vec<i32> = vec![0; old_len - tail];
+        let mut write = tail;
+        while read < old_len {
             let mut entry = self.entries[read];
             if !keep(&entry) {
-                remap.push(-1);
+                remap[read - tail] = -1;
+                read += 1;
                 continue;
             }
             if !entry.is_arena_persistent() {
@@ -761,16 +900,25 @@ impl DenseCache {
                 }
             }
             self.entries[write] = entry;
-            remap.push(write as i32);
+            remap[read - tail] = write as i32;
             write += 1;
+            read += 1;
         }
         self.entries.truncate(write);
+        self.last_retain_drops = old_len - write;
+        self.tail_base = write;
+        // Nothing dropped: the remap is the identity, no holes were
+        // born, and every slot still points where it pointed.
+        if write == old_len {
+            return;
+        }
 
-        // Sequential slot remap: index values only, no hashing.
+        // Slots pointing into the tail get the new index; slots below
+        // the tail are already current (that region never moved).
         for slot in 0..self.capacity {
             let idx = self.slots[slot];
-            if idx >= 0 {
-                self.slots[slot] = remap[idx as usize];
+            if idx >= tail as i32 {
+                self.slots[slot] = remap[idx as usize - tail];
             }
         }
 
@@ -934,6 +1082,64 @@ mod tests {
         for i in 0..10 {
             let entry = cache.get(i * 100, (i % 5) as u16, 0);
             assert!(entry.is_some(), "Entry {} not found", i);
+        }
+    }
+
+    #[test]
+    fn test_retain_no_drop_keeps_every_slot_reachable() {
+        // The no-drop retain's early-out skips the capacity-wide slot
+        // remap + hole repair; the invariant that makes the skip sound
+        // is that a drop-free pass (which may still adopt nodes in
+        // place) leaves the table exactly as it found it. Collisions
+        // force probe chains beyond the home slot.
+        let mut cache = DenseCache::new(4);
+        let arr = AstNode::Array {
+            pool_index: 7,
+            length: 3,
+        };
+        // 10 inserts under new(4)'s recycle cap (12), at 62% slot load —
+        // probe chains are forced, recycles are not.
+        for i in 0..10u32 {
+            cache.insert(CacheEntry::from_node(
+                i * 8,
+                (i % 3) as u16,
+                i * 8 + 4,
+                &arr,
+                0,
+            ));
+        }
+        cache.retain_output_adopt(|_| true, |n| n.clone());
+        for i in 0..10u32 {
+            let entry = cache.get(i * 8, (i % 3) as u16, 0);
+            assert!(
+                entry.is_some(),
+                "no-drop retain lost pos {} (atom {})",
+                i * 8,
+                i % 3
+            );
+            assert_eq!(entry.unwrap().end_pos, i * 8 + 4);
+        }
+    }
+
+    #[test]
+    fn test_retain_drop_repairs_probe_chains() {
+        // Drops produce -1 holes; the lazily-materialized remap must
+        // build its identity prefix correctly whether the first drop
+        // is at the head of the pass or mid-pass, and the following
+        // cluster repair must keep surviving cluster members
+        // reachable.
+        let mut cache = DenseCache::new(4);
+        let node = AstNode::InputRef { offset: 0, length: 1 };
+        for i in 0..10u32 {
+            cache.insert(CacheEntry::from_node(i * 8, 2, i * 8 + 1, &node, 0));
+        }
+        // Drop every 7th entry (the head of the pass is a drop, so the
+        // lazy remap's identity-prefix init is exercised; mid-pass
+        // drops exercise the push path).
+        cache.retain_output_adopt(|e| e.pos % (8 * 7) != 0, |n| n.clone());
+        for i in 0..10u32 {
+            let hit = cache.get(i * 8, 2, 0).is_some();
+            assert_eq!(hit, i % 7 != 0, "pos {}: hit={} want kept={}", i * 8, hit, i % 7 != 0);
         }
     }
 
