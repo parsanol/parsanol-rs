@@ -703,6 +703,12 @@ impl DenseCache {
         self.entries.iter()
     }
 
+    /// Get a mutable iterator over all entries
+    #[inline]
+    pub fn entries_mut(&mut self) -> impl Iterator<Item = &mut CacheEntry> {
+        self.entries.iter_mut()
+    }
+
     /// Rewrite Array/Hash pool indices on the RETAINED-PERSISTENT
     /// entries after a pool compaction of the session's output arena.
     /// True snapshot entries point at the snapshot arena and are
