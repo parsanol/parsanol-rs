@@ -362,3 +362,37 @@ both traces, memo fingerprints unchanged (doc0 reused 1,294,500;
 doc3 11,051,417). Suite: 622 lib + integration green; clippy clean
 (-D warnings). Two new unit specs pin the tail invariants
 (no-drop reachability, drop-path probe repair).
+
+## The nav diet (2026-11-28, rs#732 lever 4): the spine re-derived once per session, not per keystroke
+
+The post-diet phase line named probe+reparse the co-floor (108 us
+p50), and its nav sub-phase was 27 us — `discover_spine` re-running
+its O(atoms) BFS (three heap allocations: HashSet, HashMap, VecDeque)
+on EVERY keystroke, re-deriving what the session's constructors
+already compute (they call the same `discover_spines` for
+`spine_bodies`). Same waste class the construction lever fixed for
+`ParserAnalysis::compute`.
+
+The changes: `spine_first` (the first discovered spine, from the
+construction pass — zero extra cost) replaces the per-keystroke
+`discover_spine`; `has_dynamic` (once per session) replaces three
+per-keystroke O(atoms) `Atom::Dynamic` scans (the v1 gate, the splice
+gate, its diagnostic); the deep probe's `path_between` calls are
+memoized per (splice body, recorded-run rep) pair in `deep_paths` —
+each miss had been a full grammar BFS per spine body per keystroke.
+
+| phase (doc0 p50, loaded) | before | after |
+|---|---|---|
+| nav | 27 us | **1 us** |
+| probe+reparse | 108 us | **36 us** |
+| invalidate | 67 us | 60 us |
+| band adopt | 98 us | 94 us |
+
+Interleaved A/B (same host minutes): doc0 incr p50 195.8-199.4 us vs
+base 232.5-238.3 us — **median 197 vs 234 us (-16%), every diet leg
+beats every base leg**; doc3 1.732-1.759 ms vs 1.764-1.790 ms (**-2.4%**
+— doc3's edits ride the deep probe, whose path_between memo is the
+smaller win). Identity 0 failures; suite 804 tests green across all
+binaries; clippy clean. doc0 now sits at ~197 us loaded ≈ ~100 us
+quiet — the #732 acceptance gate; the remaining floor is the band
+adopt (94 us, the fresh-insert count) and the invalidate walk.
