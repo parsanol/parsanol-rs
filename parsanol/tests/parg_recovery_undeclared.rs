@@ -44,13 +44,29 @@ const DOC: &str = r#"{"alpha": 1, "beta": [10, 20, 30], "gamma": {"g1": true, "g
 const CASES: &[(&str, &str, usize)] = &[
     // Junk run inside a string value: the scan must skip to the next
     // member boundary and resume the member list.
-    ("junk-in-string", r#"{"alpha": 1, "beta": "@@@@junk@@@@", "gamma": 3}"#, 13),
+    (
+        "junk-in-string",
+        r#"{"alpha": 1, "beta": "@@@@junk@@@@", "gamma": 3}"#,
+        13,
+    ),
     // Deleted structural bytes inside a value.
-    ("delete-in-value", r#"{"alpha": 1, "beta": [10, ], "gamma": 3}"#, 13),
+    (
+        "delete-in-value",
+        r#"{"alpha": 1, "beta": [10, ], "gamma": 3}"#,
+        13,
+    ),
     // A corrupted number: characters swapped for junk.
-    ("junk-in-number", r#"{"alpha": 1, "beta": @@#, "gamma": 3}"#, 13),
+    (
+        "junk-in-number",
+        r#"{"alpha": 1, "beta": @@#, "gamma": 3}"#,
+        13,
+    ),
     // Junk inside a nested object's member.
-    ("junk-in-nested", r#"{"alpha": {"x": @@@, "y": 2}, "beta": 3}"#, 11),
+    (
+        "junk-in-nested",
+        r#"{"alpha": {"x": @@@, "y": 2}, "beta": 3}"#,
+        11,
+    ),
 ];
 
 fn suffix_coverage(input_len: usize, site: usize, envelope: &serde_json::Value) -> f64 {
@@ -76,7 +92,10 @@ fn suffix_coverage(input_len: usize, site: usize, envelope: &serde_json::Value) 
     if suffix == 0 {
         return 1.0;
     }
-    (bound.saturating_sub(junk)).saturating_sub(site).min(suffix) as f64 / suffix as f64
+    (bound.saturating_sub(junk))
+        .saturating_sub(site)
+        .min(suffix) as f64
+        / suffix as f64
 }
 
 #[test]
